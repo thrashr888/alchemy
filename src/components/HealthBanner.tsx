@@ -128,7 +128,17 @@ export function HealthBanner({
             setBinding(true);
             try {
               const bound = await api.keepNotebooksOnDisk();
-              pushToast("success", `${bound} notebooks are now kept on disk.`);
+              // Starter notebooks stay off disk (RFC-okf-live.md §5.7), so a
+              // fresh install binds nothing here and the sentence has to
+              // still be true.
+              pushToast(
+                "success",
+                bound === 0
+                  ? "New notebooks will be kept on disk."
+                  : bound === 1
+                    ? "1 notebook is now kept on disk."
+                    : `${bound} notebooks are now kept on disk.`,
+              );
             } catch (err) {
               pushToast("error", err instanceof Error ? err.message : String(err));
             } finally {

@@ -311,6 +311,19 @@ code already has two places that mean "this changed":
   exception (there is nothing left to index), so `delete_notes` reads the
   owning notebooks before the rows go.
 
+**A path already held is a path kept.** §5.2 said a concept whose title
+re-slugs moves, which read as "recompute every name from the title on every
+pass" — and that is how one file got destroyed. A conflict copy carrying the
+same `title:` as an existing note made a second concept; the newcomer took the
+base slug, the older concept was renamed on top of it, and the base-slug file
+went with it while the manifest still claimed it and `index.md` still linked
+it. So placement now runs in two passes: a concept whose manifest path is
+still in its own slug's family (`orders.md`, or the `orders-2.md` a collision
+gave it) keeps that path, and only what is left picks a fresh name, avoiding
+everything already claimed. A file moves when its title genuinely re-slugs and
+at no other time. Two more rules fall out of the same reading: the writer
+never renames onto, and never removes, a path another manifest entry claims.
+
 Two smaller decisions: `write_bundle` is one function for both the seed pass
 and every write after it — a bundle nobody has written has an empty manifest,
 so everything counts as changed, which is exactly what a first export means.
@@ -349,8 +362,10 @@ non-goal until someone actually hits this.
 
 ### 5.5 Surfaces
 
-- **Notebook ⋯ menu:** "Keep on disk as OKF…" picks a folder. An empty
-  folder gets the seed pass; a folder that already is a bundle gets an
+- **Notebook ⋯ menu:** "Keep on disk as OKF…" picks a folder. A folder
+  that does not exist yet is created — the picker always makes one, but
+  `bind_notebook_okf` used to refuse a path an agent had not `mkdir`'d and
+  nothing said so. An empty folder gets the seed pass; a folder that already is a bundle gets an
   import-then-bind (duplicates skip, as import does now). Bound
   notebooks show "Show bundle in Finder" and "Stop keeping on disk"
   instead. Unbinding leaves the files where they are.
@@ -369,6 +384,14 @@ The §5.3 table is a pure function (`classify`) over the manifest, and §5.4's
 rule is another (`disk_wins`), so both are tested without a store standing
 up. Four things the RFC did not settle, decided in the writing:
 
+- **A delete is logged where the other side can read it.** §5.3's table says
+  "delete the entity, log it", and the pass recorded it with `note!`, which is
+  stderr and reaches neither `log.md` nor the app log. On a shared folder that
+  entry is the only record the other Mac has of why a concept disappeared,
+  which is the reason the table asks for it, so the reconcile pass now appends
+  one dated line naming every path it removed — beside the write lines and the
+  conflict-loser lines that were already there.
+
 - **A tie goes to disk.** §5.4 says the newer side wins but not what happens
   at equal timestamps. The file wins: it is what a person or an agent just
   saved, and it is the artifact they can see. When the app's version wins
@@ -384,6 +407,41 @@ up. Four things the RFC did not settle, decided in the writing:
 - **A source has no `updated_at`**, so the conflict clock for one is
   `max(fetched_at, created_at)` — when its text last came in, which is the
   same question.
+- **Read-back claims the file it read.** §5.3's table said "create the note"
+  and stopped there, which left the file itself unclaimed: the writer then put
+  the new note at *its* slug, the original stayed unknown to the manifest, and
+  the next pass took it in again. Three notes became fifty-five in five
+  minutes on a Dropbox bundle. So a `Create` records the path it came from as
+  that entity's path, marked `adopted` — **the file is the concept**, and the
+  writer keeps writing to it and never re-slugs it, not even when the title
+  changes. A cloud conflict copy is the same shape and gets the same
+  treatment; §5.6's "conflict copies need no code" now needs one line of it.
+  A retitle therefore moves only the files Alchemy named, which is the right
+  side to err on: renaming a file somebody else made is a surprise, and a
+  stale slug is not.
+
+- **The clock is read before the bytes.** §5.3's table is written per file,
+  which read as "hash every file every pass" — and on 26 bindings, one of them
+  holding 742 sources, a serial sweep of that took 228 s to notice an outside
+  edit on OneDrive and never finished on Google Drive inside ten minutes. The
+  manifest now records each file's own mtime alongside its hash, and a file
+  whose clock has not moved is skipped without being opened. An unchanged
+  bundle costs one stat per file; a changed one costs reads of the changed
+  files. `file_mtime: 0` — every manifest written before this — reads as
+  changed, so the upgrade costs one full pass and nothing after it.
+
+  Not the directory's mtime, which is what a first draft of this reached for.
+  APFS does not bump a directory when a file inside it is written in place, so
+  a whole-bundle skip on `sources/` and `notes/` mtimes would silently stop
+  reading back `printf >> note.md` on a closed notebook — the exact class of
+  bug this is fixing. The saving it would buy over the per-file stats is
+  microseconds against the minutes that were the actual problem.
+
+  The watcher's half is timing, not cost: `rearm` now runs on every bind as
+  well as on every open-set change, and the bound roots no longer sit behind
+  the folder-source table read, so a folder somebody just asked the app to
+  keep in step is watched from that moment rather than up to a minute later.
+
 - **Reconcile stands down while a write is in flight.** Reading a bundle
   mid-write would see half of Alchemy's own pass and call it an outside
   edit, so the reconciler returns early when the notebook has a pending or
@@ -438,6 +496,21 @@ it on B, edit it on B, read it back on A; each side's manifest stays its
 own, the log carries both actors, and neither pass echoes.
 
 ### Shared folders, as built
+
+- **Unbinding is a claim, so it has to be true.** §5.5 says unbinding leaves
+  the files where they are, and said nothing about what happens when a write
+  is in flight — so the command removed the entry, an already-running write
+  saved the whole bindings map back from the copy it had taken, and the
+  binding came back carrying a `lastWriteAt` stamped after the unbind. The
+  caller was told `okfPath: null` about a folder Alchemy was still writing.
+  Three changes, in order: every read-modify-write of the bindings file takes
+  one lock; a write records `lastWriteAt` only while the binding it belongs
+  to is still that notebook's, so a finishing write can never resurrect or
+  overwrite an entry; and the unbind removes the binding *first*, drops the
+  pending deadline, waits briefly for a running write to finish, and then
+  reports what is actually on disk — an error, if the entry somehow survived.
+  The MCP tool goes through the same function rather than reaching for the
+  sidecar itself, because the answer it prints is the thing that was wrong.
 
 - **The manifest is keyed by a binding id, not the notebook id.** Rebinding a
   notebook to a different folder has to start from a clean record; inheriting
@@ -591,17 +664,96 @@ they exist without being asked for.
   reuses a bundle's own `alchemy.id` when nothing here claims it. So the
   rebind rule needed only the *other* case: an id this machine already has
   binds that notebook to the folder rather than importing a second copy.
+- **Starter notebooks never bind by default.** §5.7 said "every active
+  notebook", which on two Macs meant both of them bound their own copies of
+  the four seeded samples — different ids per install, so each Mac's
+  Notebooks-root watcher read the other's bundles as arrivals and imported
+  them. Home ended up listing 47 notebooks, most of them twice, and the `-2`
+  folders were exactly the starters. So the offer, at-creation binding, and
+  the root watcher all skip them. The explicit ⋯ verb still binds one if a
+  person asks: the rule is about what happens without being asked. A starter
+  is recognised by its title, because that is the only thing seeding leaves
+  behind — `seed_notebook` already skips by title, and a Lance column for a
+  fact two callers read is the migration hazard the shared dev/prod store
+  policy exists to avoid.
+
+- **The root watcher opens a folder at most once, and never a notebook
+  twice.** Three rules, one decision function. It skips a folder some
+  notebook here is already bound to (two writers over one file is what §5.6
+  forbids), spelling-normalized so a symlinked or trailing-slash binding
+  still reads as the folder it is. It never *imports* a bundle whose
+  `alchemy.id` names a notebook this Mac has: that notebook is either unbound
+  — the folder is its bundle, and it rebinds — or bound elsewhere, in which
+  case the folder is a duplicate of its bundle and duplicating the notebook
+  to match is the wrong half to fix. And the bindings are re-read per folder,
+  under a one-pass-at-a-time flag: the minute tick and the watcher's debounce
+  both call this, and two overlapping passes each saw the same folder as
+  unbound, which is how a first launch imported bundles its own seed pass was
+  still writing.
+
+- **A self-heal, because the state already exists.** Rules are for what has
+  not happened yet; two Macs are already carrying the duplicates. One pass at
+  launch, before anything writes, puts right four shapes: two notebooks over
+  one folder (the older notebook keeps it — a binding carries no clock, and
+  the duplicate is always the newer row — and the other is unbound and
+  archived), a bound starter (unbound), a binding whose folder's `index.md`
+  names a notebook that is bound elsewhere (unbound), and a second copy of a
+  starter (archived). **It never deletes.** Every fix is an unbind, which
+  leaves the files where they are as §5.5 promises, or an archive, which
+  hides a notebook and keeps every row it has — a wrong guess costs a visit
+  to the archive, not somebody's notes. What it did goes through
+  `diagnostics::record` as well as `note!`: the 0.55.0 duplication left
+  nothing in the app log but the startup line, and five bundles had been
+  written since.
+
+  **Once ever, not once per launch**, stamped beside the bindings. Every rule
+  here undoes something a person may legitimately redo — bind a starter from
+  the ⋯ menu, unarchive a copy they want to keep — and a repair that keeps
+  happening is a policy. The stamp carries a number so a later pass can run
+  when there is something new to fix.
+
 - **The offer banner is a third tone.** `error` and `warning` both tint their
   container and wear a warning triangle; an invitation is neither a failure
   nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a
   hairline, no tint, and a drive glyph.
 - **The stub rule is one predicate, used three times.** `is_evicted_stub` is
-  "the file is not there and a `.name.icloud` placeholder is" — the writer
-  skips such a file and asks for it, `place_reference` will not copy over it,
-  and `extract_any_file` refuses with "Downloading from iCloud…" instead of
+  the writer's "this file is here in name only" — the writer skips such a
+  file and asks for it, `place_reference` will not copy over it, and
+  `extract_any_file` refuses with "Downloading from iCloud…" instead of
   reporting a file plainly visible in Finder as gone. The nudge had to stop
   requiring a Tokio runtime for this: the bundle writer is synchronous, so it
   spawns a blocking task on the runtime and a plain thread off it.
+
+- **A stub is a flag, not a filename — corrected.** The predicate above was
+  written as "the file is not there and a `.name.icloud` placeholder is",
+  which on macOS 26 and later is never true of anything. iCloud evicts **in
+  place**: the file stays at its own path with `SF_DATALESS` in `st_flags`
+  and `st_blocks` at zero, and no hidden sibling is written. So did every
+  FileProvider mount under `~/Library/CloudStorage` — Dropbox, Google Drive,
+  OneDrive — all along. The consequence was not one dead branch but six:
+  the hydration nudge never fired from a bound root, `evicted_concepts`
+  always returned nothing, all three writer guards were inert, and
+  `free_reference_name` called `read` on dataless originals, which forces a
+  blocking full download inside the write path. The check is now
+  `st_flags & SF_DATALESS`, one call covering all four providers, with the
+  dot-stub test kept as the secondary for systems that still write them.
+
+  Two rules follow. **Nothing reads a dataless file** in the writer or the
+  reconciler: `stat` is safe and a read is the download, so the reconciler
+  counts one as present and unchanged rather than hashing it — reading a
+  bundle to compare hashes was silently undoing the user's "free up space",
+  one file at a time. And **the nudge is iCloud's alone**: `brctl download`
+  has no equivalent for a FileProvider mount, so an evicted file there is
+  left where it is until its own client brings it back, which is safe
+  precisely because every caller already treats a stub as absent.
+
+  `fswatch::is_scannable` needed nothing after all. It is a lexical rule over
+  paths that may not exist, and an in-place eviction fires its events on the
+  real path, which the rule already allows; the `.icloud` allowance beside it
+  is still what covers the old layout. Datalessness answers through an
+  injectable probe for the same reason the hydrator does — the gate cannot
+  evict a real file, and a seam a test sets has to be the one the app runs
+  through.
 - **Asking is injectable, so the test can watch it.** `brctl` answers a
   scratch directory with "Path is outside of any CloudDocs app library", which
   every gate run printed. `set_icloud_hydrator` replaces where a request goes

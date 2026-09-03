@@ -1661,6 +1661,575 @@ fn okf_writes_unknown_keys_back_out() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A file somebody hand-added under `notes/` becomes one note and stays one
+/// file (docs/RFC-okf-live.md §5.3).
+///
+/// The 0.55.0 loop: read-back made a note from `hand-added.md`, the writer
+/// put that note at *its own* slug, `hand-added.md` stayed unclaimed, and
+/// the next pass took it in again — three notes became fifty-five in five
+/// minutes. Now the manifest claims the path the reconciler read, so the
+/// second pass sees an echo and there is nothing to import.
+#[test]
+fn okf_a_hand_added_file_lands_once() {
+    use crate::okf::{
+        adopt, classify, load_manifest, okf_hash, parse_okf_doc, write_bundle, OkfAction,
+        OkfManifest,
+    };
+    let dir = okf_scratch("handadded");
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(bundle.join("notes")).expect("notes");
+    // The name is deliberately not what the writer's slug would be.
+    let rel = "notes/hand-added.md";
+    let text = "---\ntype: Note\ntitle: \"Dropbox hand added\"\n---\n\nA body an agent wrote.\n";
+    std::fs::write(bundle.join(rel), text).expect("write");
+
+    // Pass one, the reconciler's half: a file the manifest never heard of.
+    let mut manifest = OkfManifest::default();
+    assert_eq!(
+        classify(rel, &okf_hash(text), &manifest),
+        OkfAction::Create,
+        "an unknown file is somebody's new document"
+    );
+    adopt(
+        &mut manifest,
+        "note-hand",
+        rel,
+        &okf_hash(text),
+        0,
+        &parse_okf_doc(text),
+    );
+    let manifest_at = okf_manifest(&bundle);
+    std::fs::write(
+        &manifest_at,
+        serde_json::to_string(&manifest).expect("json"),
+    )
+    .expect("save");
+
+    // Pass two, the writer's half: the note it made goes back to the file it
+    // came from, not to `notes/dropbox-hand-added.md`.
+    let note = crate::okf::OkfConcept {
+        id: "note-hand".into(),
+        title: "Dropbox hand added".into(),
+        content: "A body an agent wrote.".into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&note),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("write");
+
+    let notes: Vec<String> = std::fs::read_dir(bundle.join("notes"))
+        .expect("read notes")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "index.md")
+        .collect();
+    assert_eq!(
+        notes,
+        vec!["hand-added.md".to_string()],
+        "one note, one file, and the file keeps its own name"
+    );
+
+    // Pass three, the reconciler again: nothing new to take in, which is the
+    // whole point — the loop had no second pass that was not a duplicate.
+    let manifest = load_manifest(&manifest_at);
+    for name in &notes {
+        let rel = format!("notes/{name}");
+        let text = std::fs::read_to_string(bundle.join(&rel)).expect("read");
+        assert_eq!(
+            classify(&rel, &okf_hash(&text), &manifest),
+            OkfAction::Echo,
+            "{rel} is our own write coming back, not a new concept"
+        );
+    }
+}
+
+/// Two concepts that slug to one name keep two files (docs/RFC-okf-live.md
+/// §5.2).
+///
+/// In 0.55.0 a conflict copy carrying the same `title:` as an existing note
+/// made a second concept, the writer put the newcomer at the base slug and
+/// then renamed the older concept on top of it — so `dropbox-test-note.md`
+/// vanished, the manifest still claimed it, and `index.md` linked at a file
+/// that was not there. The older concept now keeps the path it holds and the
+/// newcomer dedupes with `-2`, the way the exporter always has.
+#[test]
+fn okf_a_slug_collision_keeps_both_files() {
+    use crate::okf::{load_manifest, write_bundle, OkfConcept};
+    let dir = okf_scratch("collision");
+    let bundle = dir.join("bundle");
+    let manifest_at = okf_manifest(&bundle);
+    let note = |id: &str, body: &str| OkfConcept {
+        id: id.into(),
+        title: "Dropbox test note".into(),
+        content: body.into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+
+    // The note that is already on disk.
+    let first = note("note-first", "The original body.");
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&first),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("seed");
+    assert!(bundle.join("notes/dropbox-test-note.md").is_file());
+
+    // The conflict copy arrives as a second concept with the same title.
+    let second = note("note-copy", "CONFLICT-MARKER the copy's body.");
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        &[first.clone(), second],
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("second pass");
+
+    let base = std::fs::read_to_string(bundle.join("notes/dropbox-test-note.md"))
+        .expect("the older concept keeps its file");
+    assert!(
+        base.contains("The original body."),
+        "and keeps its own text, not the newcomer's"
+    );
+    let copy = std::fs::read_to_string(bundle.join("notes/dropbox-test-note-2.md"))
+        .expect("the newcomer dedupes with -2");
+    assert!(copy.contains("CONFLICT-MARKER"));
+
+    // Every path the manifest claims exists, and every link in index.md
+    // resolves — the two things the collision broke.
+    let manifest = load_manifest(&manifest_at);
+    assert_eq!(manifest.concepts.len(), 2);
+    for entry in manifest.concepts.values() {
+        assert!(
+            bundle.join(&entry.path).is_file(),
+            "the manifest claims {} but it is not there",
+            entry.path
+        );
+    }
+    let index = std::fs::read_to_string(bundle.join("notes/index.md")).expect("listing");
+    for line in index.lines().filter(|l| l.starts_with("- [")) {
+        let target = line
+            .split_once("](")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(t, _)| t)
+            .expect("a link");
+        assert!(
+            bundle.join("notes").join(target).is_file(),
+            "index.md links {target}, which is not there"
+        );
+    }
+}
+
+/// The writer never removes a file another manifest entry claims
+/// (docs/RFC-okf-live.md §5.2) — the second half of the collision bug, where
+/// the prune step took the surviving concept's file with the dead one's.
+#[test]
+fn okf_never_removes_a_file_another_concept_claims() {
+    use crate::okf::{load_manifest, write_bundle, OkfConcept, OkfManifestEntry};
+    let dir = okf_scratch("claimguard");
+    let bundle = dir.join("bundle");
+    let manifest_at = okf_manifest(&bundle);
+    let keeper = OkfConcept {
+        id: "note-keeper".into(),
+        title: "Shared name".into(),
+        content: "The surviving body.".into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&keeper),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("seed");
+
+    // A stale entry pointing at the keeper's file, for a concept the
+    // notebook no longer has — exactly the state a collision left behind.
+    let mut manifest = load_manifest(&manifest_at);
+    manifest.concepts.insert(
+        "note-dead".into(),
+        OkfManifestEntry {
+            path: "notes/shared-name.md".into(),
+            hash: "0".into(),
+            ..Default::default()
+        },
+    );
+    std::fs::write(
+        &manifest_at,
+        serde_json::to_string(&manifest).expect("json"),
+    )
+    .expect("save");
+
+    let out = write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&keeper),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("third pass");
+    assert_eq!(out.removed, 0, "nothing was ours to remove");
+    assert!(
+        bundle.join("notes/shared-name.md").is_file(),
+        "the keeper's file survived the dead entry's prune"
+    );
+    assert!(!load_manifest(&manifest_at)
+        .concepts
+        .contains_key("note-dead"));
+}
+
+/// What the Notebooks-root watcher does with a folder it finds
+/// (docs/RFC-okf-live.md §5.7).
+///
+/// The 0.55.0 first launch imported bundles its own seed pass had just
+/// written, as new notebooks, and ended with two notebook ids bound to one
+/// folder. Every branch of the rule that stops that is here.
+#[test]
+fn okf_the_root_watcher_never_duplicates_a_notebook() {
+    use crate::okf::{decide_bundle, same_folder, FoundBundle, KnownNotebooks};
+    let dir = okf_scratch("found");
+    let folder = dir.join("ferrari-research");
+    std::fs::create_dir_all(&folder).expect("folder");
+    let mine = dir.join("mine");
+    std::fs::create_dir_all(&mine).expect("folder");
+
+    let known = |bound: &[(&str, &std::path::Path)], titles: &[(&str, &str)]| KnownNotebooks {
+        titles: titles
+            .iter()
+            .map(|(id, t)| (id.to_string(), t.to_string()))
+            .collect(),
+        bound: bound.iter().map(|(id, _)| id.to_string()).collect(),
+        folders: bound.iter().map(|(_, p)| same_folder(p)).collect(),
+    };
+
+    // A folder nothing here is bound to, for a notebook this Mac does not
+    // have: the arrival case, and the only one that imports.
+    assert_eq!(
+        decide_bundle(
+            &folder,
+            Some("nb-elsewhere"),
+            Some("Ferrari research"),
+            &known(&[], &[("nb-mine", "Mine")])
+        ),
+        FoundBundle::Import
+    );
+
+    // The same notebook by another route — the other Mac wrote this folder
+    // for a notebook this Mac already has, unbound. It rebinds.
+    assert_eq!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            Some("Ferrari research"),
+            &known(&[], &[("nb-mine", "Ferrari research")])
+        ),
+        FoundBundle::Rebind("nb-mine".into())
+    );
+
+    // Already ours: never opened again, whichever way it is spelled.
+    let bound = known(&[("nb-mine", folder.as_path())], &[("nb-mine", "Ferrari")]);
+    assert!(matches!(
+        decide_bundle(&folder, Some("nb-mine"), None, &bound),
+        FoundBundle::Skip(_)
+    ));
+    assert!(
+        matches!(
+            decide_bundle(
+                &dir.join("ferrari-research").join("."),
+                Some("nb-mine"),
+                None,
+                &bound
+            ),
+            FoundBundle::Skip(_)
+        ),
+        "a folder is a folder however the path is written"
+    );
+
+    // The notebook is bound somewhere else: this folder is a duplicate of
+    // its bundle, so it is left alone rather than imported as a second copy.
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            None,
+            &known(&[("nb-mine", mine.as_path())], &[("nb-mine", "Ferrari")])
+        ),
+        FoundBundle::Skip(_)
+    ));
+
+    // A starter notebook never travels: every install seeds its own copies,
+    // so opening the other Mac's is how Home ends up listing 47 notebooks.
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-theirs"),
+            Some(crate::examples::INTRO_TITLE),
+            &known(&[], &[])
+        ),
+        FoundBundle::Skip(_)
+    ));
+    assert!(matches!(
+        decide_bundle(
+            &folder,
+            Some("nb-mine"),
+            None,
+            &known(&[], &[("nb-mine", crate::examples::CURATED_TITLE)])
+        ),
+        FoundBundle::Skip(_)
+    ));
+}
+
+/// The self-heal for the state 0.55.0 already left on disk
+/// (docs/RFC-okf-live.md §5.7). Unbinds and archives, never a delete.
+#[test]
+fn okf_heals_the_duplicates_it_finds() {
+    use crate::okf::{heal_plan, HealNotebook, HealStep, OkfBinding};
+    use std::collections::HashMap;
+
+    let nb = |id: &str, title: &str, at: i64| HealNotebook {
+        id: id.into(),
+        title: title.into(),
+        created_at: at,
+        archived: false,
+    };
+    let bind = |path: &str| OkfBinding {
+        path: path.into(),
+        id: format!("binding-{path}"),
+        last_write_at: 0,
+    };
+
+    // Two notebooks over one folder: the older keeps it, the newer is
+    // unbound and hidden.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-old".into(), bind("/tmp/alchemy-heal/spider-2"));
+    bindings.insert("nb-new".into(), bind("/tmp/alchemy-heal/spider-2"));
+    let notebooks = vec![
+        nb("nb-old", "458 Spider Purchase", 100),
+        nb("nb-new", "458 Spider Purchase", 200),
+    ];
+    let steps = heal_plan(&bindings, &notebooks, &HashMap::new());
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-new")));
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == "nb-new")));
+    assert!(
+        !steps
+            .iter()
+            .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-old")),
+        "the older binding is the one that stays"
+    );
+
+    // A bound starter is unbound, and its folder is not touched.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-intro".into(), bind("/tmp/alchemy-heal/intro"));
+    let notebooks = vec![nb("nb-intro", crate::examples::INTRO_TITLE, 100)];
+    assert_eq!(
+        heal_plan(&bindings, &notebooks, &HashMap::new()),
+        vec![HealStep::Unbind {
+            notebook: "nb-intro".into(),
+            why: "a starter notebook is the app's own sample, not a document to sync".into(),
+        }]
+    );
+
+    // A folder whose index.md names a notebook that is bound elsewhere: the
+    // interloper is unbound, the folder left alone.
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-owner".into(), bind("/tmp/alchemy-heal/real"));
+    bindings.insert("nb-copy".into(), bind("/tmp/alchemy-heal/real-2"));
+    let notebooks = vec![
+        nb("nb-owner", "Ferrari", 100),
+        nb("nb-copy", "Ferrari", 200),
+    ];
+    let declared: HashMap<String, String> = [(
+        "/tmp/alchemy-heal/real-2".to_string(),
+        "nb-owner".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    let steps = heal_plan(&bindings, &notebooks, &declared);
+    assert!(steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-copy")));
+    assert!(!steps
+        .iter()
+        .any(|s| matches!(s, HealStep::Unbind { notebook, .. } if notebook == "nb-owner")));
+
+    // A second copy of a starter, imported from the other Mac: archived, and
+    // the original stays exactly as it is.
+    let notebooks = vec![
+        nb("nb-first", crate::examples::AI_RESEARCH_TITLE, 100),
+        nb("nb-second", crate::examples::AI_RESEARCH_TITLE, 200),
+        nb("nb-third", crate::examples::AI_RESEARCH_TITLE, 300),
+    ];
+    let steps = heal_plan(&HashMap::new(), &notebooks, &HashMap::new());
+    assert_eq!(
+        steps.len(),
+        2,
+        "two copies to hide, and nothing to unbind: {steps:?}"
+    );
+    for id in ["nb-second", "nb-third"] {
+        assert!(steps
+            .iter()
+            .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == id)));
+    }
+
+    // Nothing wrong: nothing done.
+    let notebooks = vec![nb("nb-plain", "Ferrari", 100)];
+    let mut bindings: HashMap<String, OkfBinding> = HashMap::new();
+    bindings.insert("nb-plain".into(), bind("/tmp/alchemy-heal/ferrari"));
+    assert!(heal_plan(&bindings, &notebooks, &HashMap::new()).is_empty());
+}
+
+/// Read-back reads only what moved (docs/RFC-okf-live.md §5.3).
+///
+/// The sweep hashed every concept file of every bound bundle on one serial
+/// tick. On this Mac that is 26 bindings and one bundle holding 742 sources,
+/// which measured 228 s to take in an outside edit on OneDrive and never
+/// landed at all on Google Drive. The writer now records each file's own
+/// clock, so an unchanged bundle costs one stat per file and no reads.
+#[test]
+fn okf_read_back_hashes_only_what_moved() {
+    use crate::okf::{is_untouched, load_manifest, write_bundle};
+    let dir = okf_scratch("mtimes");
+    let bundle = dir.join("bundle");
+    let manifest_at = okf_manifest(&bundle);
+    let (sources, notes) = okf_fixture();
+    write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("seed");
+
+    let manifest = load_manifest(&manifest_at);
+    assert!(!manifest.concepts.is_empty());
+    // Everything the writer just wrote is known down to its clock, so the
+    // first read-back pass after a write opens no file at all.
+    for entry in manifest.concepts.values() {
+        let at = bundle.join(&entry.path);
+        assert!(entry.file_mtime > 0, "{} has no clock", entry.path);
+        assert!(
+            is_untouched(&entry.path, okf_file_mtime(&at), &manifest),
+            "{} was written by this pass and has not moved since",
+            entry.path
+        );
+    }
+
+    // An outside edit moves the file's clock, and that file alone is read.
+    let edited = "notes/what-the-data-says.md";
+    let at = bundle.join(edited);
+    let text = std::fs::read_to_string(&at).expect("read");
+    std::fs::write(&at, format!("{text}\nAn agent added a line.\n")).expect("edit");
+    let moved: Vec<&str> = manifest
+        .concepts
+        .values()
+        .filter(|e| !is_untouched(&e.path, okf_file_mtime(&bundle.join(&e.path)), &manifest))
+        .map(|e| e.path.as_str())
+        .collect();
+    assert_eq!(
+        moved,
+        vec![edited],
+        "one file changed, so one file is worth reading"
+    );
+
+    // A manifest from before the clock was recorded reads as changed, which
+    // costs one full pass and never a missed edit.
+    let mut old = load_manifest(&manifest_at);
+    for entry in old.concepts.values_mut() {
+        entry.file_mtime = 0;
+    }
+    assert!(!is_untouched(edited, okf_file_mtime(&at), &old));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file's mtime in epoch ms, the way the reconciler reads it.
+fn okf_file_mtime(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// A write in flight never puts back a binding the user removed
+/// (docs/RFC-okf-live.md §5.5).
+///
+/// `unbind_notebook_okf` reported `okfPath: null` while the notebook was open
+/// and the entry stayed in `okf-bindings.json`, carrying a `lastWriteAt`
+/// stamped *after* the unbind: the writer was saving the whole map back from
+/// a copy it took before. The record of a write is conditional now — it lands
+/// only while the binding it belongs to is still the notebook's.
+#[test]
+fn okf_a_write_never_resurrects_a_binding() {
+    use crate::okf::{binding_for, set_binding, touch_last_write, OkfBinding};
+    let data = okf_scratch("unbind");
+
+    set_binding(
+        &data,
+        "nb-open",
+        Some(OkfBinding {
+            path: "/tmp/alchemy-unbind/nb".into(),
+            id: "binding-1".into(),
+            last_write_at: 0,
+        }),
+    );
+    // A write that started before the unbind, finishing after it.
+    set_binding(&data, "nb-open", None);
+    touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
+    assert!(
+        binding_for(&data, "nb-open").is_none(),
+        "the unbind is what the user asked for, and it stands"
+    );
+
+    // And a rebind is not overwritten by the old binding's write either.
+    set_binding(
+        &data,
+        "nb-open",
+        Some(OkfBinding {
+            path: "/tmp/alchemy-unbind/elsewhere".into(),
+            id: "binding-2".into(),
+            last_write_at: 0,
+        }),
+    );
+    touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
+    let now = binding_for(&data, "nb-open").expect("still bound");
+    assert_eq!(now.id, "binding-2");
+    assert_eq!(
+        now.last_write_at, 0,
+        "the old binding's write says nothing about the new one"
+    );
+
+    touch_last_write(&data, "nb-open", "binding-2", 42);
+    assert_eq!(
+        binding_for(&data, "nb-open").expect("bound").last_write_at,
+        42,
+        "its own write still counts"
+    );
+
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 /// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
 /// `index.md` and `log.md` at any level are the table of contents and the
 /// history, and neither ever becomes a source.
@@ -1882,6 +2451,7 @@ fn okf_outside_keys_survive_later_writes() {
             hash: String::new(),
             wrote_at: 0,
             extra,
+            ..Default::default()
         },
     );
     let json = serde_json::to_string(&manifest).expect("json");
@@ -3290,10 +3860,16 @@ fn okf_bundles_carry_the_notebook_id_for_rebinding() {
 /// An evicted file is not a missing one: the writer asks for it and leaves
 /// it alone rather than writing over the placeholder (§5.7).
 ///
-/// The asking is routed through the hydrator seam rather than `brctl`, so the
-/// gate neither shells out to iCloud (which answers a scratch directory with
-/// "Path is outside of any CloudDocs app library") nor has to take the
-/// request on faith — the paths the writer asked for are the assertion.
+/// Both layouts, because both exist. macOS 26 stopped writing `.name.icloud`
+/// placeholders — iCloud evicts in place now, and so does every FileProvider
+/// mount under `~/Library/CloudStorage` — which made every stub check in the
+/// module dead code on current systems.
+///
+/// The asking is routed through the hydrator seam rather than `brctl`, and
+/// datalessness through its own probe rather than `st_flags`, so the gate
+/// neither shells out to iCloud (which answers a scratch directory with
+/// "Path is outside of any CloudDocs app library") nor has to evict a real
+/// file to find out. The paths the writer asked for are the assertion.
 #[test]
 fn okf_writer_treats_a_stub_as_absent() {
     use crate::okf::{is_evicted_stub, write_bundle};
@@ -3370,5 +3946,67 @@ fn okf_writer_treats_a_stub_as_absent() {
         "the file that arrived is the one we wrote"
     );
 
+    // Now the layout current macOS actually uses: the file stays at its own
+    // path, and only `st_flags` says the bytes are elsewhere.
+    let evicted = bundle.join("notes/what-the-data-says.md");
+    let held = std::fs::read_to_string(&evicted).expect("read");
+    // A FileProvider mount evicts the same way and has nobody to ask.
+    let cloud = dir
+        .join("Library")
+        .join("CloudStorage")
+        .join("Dropbox")
+        .join("nb")
+        .join("notes")
+        .join("only-here.md");
+    std::fs::create_dir_all(cloud.parent().expect("parent")).expect("cloud bundle");
+    std::fs::write(&cloud, "---\ntitle: \"X\"\n---\n\nBody.\n").expect("write");
+    let dataless = [evicted.clone(), cloud.clone()];
+    crate::okf::set_dataless_probe(Arc::new(move |p: &std::path::Path| {
+        // An opinion about two files only: every other path in this process,
+        // in this test and any running beside it, answers for itself.
+        dataless.contains(&p.to_path_buf()).then_some(true)
+    }));
+    assert!(
+        is_evicted_stub(&evicted),
+        "a file with no data in it is a stub, whatever it is called"
+    );
+    assert!(!is_evicted_stub(&real), "and one that is downloaded is not");
+
+    let in_place = write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("in place");
+    assert_eq!(in_place.written, 0, "nothing was written over it");
+    assert_eq!(in_place.removed, 0, "and nothing counted it as deleted");
+    assert_eq!(
+        std::fs::read_to_string(&evicted).expect("still there"),
+        held,
+        "the file is untouched"
+    );
+    assert!(
+        asked
+            .lock()
+            .expect("recorder")
+            .iter()
+            .any(|p| p.ends_with("notes/what-the-data-says.md")),
+        "the file itself is what gets asked for, not a placeholder beside it"
+    );
+
+    let before = asked.lock().expect("recorder").len();
+    assert!(
+        crate::okf::hydrate_if_evicted(&cloud),
+        "it is still a stub, and the caller still has to say so"
+    );
+    assert_eq!(
+        asked.lock().expect("recorder").len(),
+        before,
+        "but brctl has nothing to say about ~/Library/CloudStorage"
+    );
+
+    crate::okf::set_dataless_probe(Arc::new(|_: &std::path::Path| None));
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -85,7 +85,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Keep a notebook on disk as an Open Knowledge Format bundle at `path`, and keep it current: every change to the notebook's sources and notes lands in the folder within seconds. An empty folder is seeded from the notebook; a folder that already holds a bundle is imported first, then bound. Once bound, the folder is the editing surface — edit a note by editing its markdown file."
+        description = "Keep a notebook on disk as an Open Knowledge Format bundle at `path`, and keep it current: every change to the notebook's sources and notes lands in the folder within seconds. A folder that is not there yet is created; an empty one is seeded from the notebook; one that already holds a bundle is imported first, then bound. Once bound, the folder is the editing surface — edit a note by editing its markdown file."
     )]
     async fn bind_notebook_okf(
         &self,
@@ -107,11 +107,12 @@ impl AlchemyMcp {
         &self,
         Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
     ) -> Result<CallToolResult, McpError> {
-        crate::okf::set_binding(
-            &crate::commands::app_data_dir(&self.state()),
-            &notebook_id,
-            None,
-        );
+        // Through the same path the menu verb takes, so the answer is the
+        // truth: a caller told `okfPath: null` while the binding was still
+        // being rewritten by an in-flight write had no way to know.
+        crate::okf::unbind_impl(&self.state(), &notebook_id)
+            .await
+            .map_err(internal)?;
         self.changed("notebooks", Some(&notebook_id));
         json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": null }))
     }

@@ -24,6 +24,28 @@ pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporation
 pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 pub(crate) const CURATED_TITLE: &str = "Curated Supply: Well-Designed Objects";
 
+/// Every notebook this file seeds, by the one thing that survives seeding.
+///
+/// A starter carries no marker of its own — no column, no sidecar — and it
+/// should not grow one for this: `seed_notebook` already skips by title, so
+/// the title *is* how the app recognises its own examples, and a Lance column
+/// on a shared dev/prod store is a release-timing hazard for a fact only two
+/// callers read. The cost is that a notebook a person renames to exactly
+/// "Curated Supply: Well-Designed Objects" reads as a starter; the benefit is
+/// that every Mac agrees on which notebooks are the samples, which is what
+/// keeps two installs from trading copies of them (RFC-okf-live.md §5.7).
+pub(crate) const STARTER_TITLES: &[&str] = &[
+    INTRO_TITLE,
+    EARNINGS_TITLE,
+    AI_RESEARCH_TITLE,
+    CURATED_TITLE,
+];
+
+/// Is this notebook one the app seeded rather than one the user made?
+pub(crate) fn is_starter_title(title: &str) -> bool {
+    STARTER_TITLES.contains(&title)
+}
+
 /// (title, url, body) — url is "" for the intro's pasted-text tour and the
 /// company's top-level investor-relations page for earnings sources.
 type ExampleSource = (&'static str, &'static str, &'static str);

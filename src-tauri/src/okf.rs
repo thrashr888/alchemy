@@ -271,6 +271,50 @@ struct OkfPlacement {
     title: String,
 }
 
+/// Does this manifest path still belong to `want`'s family — `want.md`, or
+/// the `want-2.md` a collision gave it? A path that does is this concept's
+/// own and it keeps it; a path that does not means the title re-slugged, and
+/// the file moves.
+fn keeps_slug(path: &str, dir: &str, want: &str) -> bool {
+    let Some(stem) = path
+        .strip_prefix(&format!("{dir}/"))
+        .and_then(|rest| rest.strip_suffix(".md"))
+    else {
+        return false;
+    };
+    stem == want
+        || stem
+            .strip_prefix(want)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Is some *other* concept's file at this path? The one question the writer
+/// has to ask before it renames a file or removes one.
+fn claimed_by_another(manifest: &OkfManifest, id: &str, rel: &str) -> bool {
+    manifest
+        .concepts
+        .iter()
+        .any(|(other, entry)| other != id && entry.path == rel)
+}
+
+/// A placement at a path already decided. The slug is whatever the path says
+/// it is — which for a file read-back adopted is the name its author gave it,
+/// not one the writer would have chosen.
+fn placement_at(dir: &str, path: &str, title: &str) -> OkfPlacement {
+    let slug = path
+        .strip_prefix(&format!("{dir}/"))
+        .unwrap_or(path)
+        .strip_suffix(".md")
+        .unwrap_or(path)
+        .to_string();
+    OkfPlacement {
+        slug,
+        path: path.to_string(),
+        title: title.to_string(),
+    }
+}
+
 /// Emit one concept's v0.2 frontmatter. Hand-written rather than serialized:
 /// key order is part of the document's readability, and only the values need
 /// escaping. Unknown keys go through `serde_yaml_ng` so nested maps and
@@ -403,38 +447,68 @@ pub fn write_bundle(
     let mut manifest = manifest_at.map(load_manifest).unwrap_or_default();
     let mut out = OkfWrite::default();
 
-    // Slugs are claimed per directory, so two sources called "Notes" become
-    // notes.md and notes-2.md rather than one clobbering the other.
-    let mut used: HashMap<String, u32> = HashMap::new();
-    let mut claim = |dir: &str, title: &str| -> String {
-        let s = okf_slug(title);
-        let count = used.entry(format!("{dir}/{s}")).or_insert(0);
-        *count += 1;
-        if *count == 1 {
-            s
-        } else {
-            format!("{s}-{count}")
-        }
-    };
-
     // Place everything first: a note's `sources:` entries cite bundle paths,
-    // which are only known once every slug is claimed.
+    // which are only known once every path is claimed.
     let mut placements: HashMap<String, OkfPlacement> = HashMap::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let order: Vec<(&str, Vec<&OkfConcept>)> = vec![
         ("sources", sources.iter().collect()),
         ("notes", notes.iter().collect()),
     ];
+    // Pass one: paths the manifest already holds for a concept that is still
+    // here. Two of them are pinned — a file read-back took in keeps the name
+    // it arrived under (the file is the concept, and inventing a slug for it
+    // would leave the original unclaimed for the next reconcile to import
+    // again), and a concept whose title still slugs to the file it has stays
+    // where it is. The second is what keeps a *new* concept of the same name
+    // from taking an occupied path and the older one from being renamed on
+    // top of it, which used to lose one of the two files outright.
     for (dir, concepts) in &order {
         for concept in concepts {
-            let slug = claim(dir, &concept.title);
+            let Some(entry) = manifest.concepts.get(&concept.id) else {
+                continue;
+            };
+            if !entry.path.starts_with(&format!("{dir}/")) {
+                continue;
+            }
+            if !entry.adopted && !keeps_slug(&entry.path, dir, &okf_slug(&concept.title)) {
+                continue;
+            }
+            if !taken.insert(entry.path.clone()) {
+                continue;
+            }
             placements.insert(
                 concept.id.clone(),
-                OkfPlacement {
-                    path: format!("{dir}/{slug}.md"),
-                    slug,
-                    title: concept.title.clone(),
-                },
+                placement_at(dir, &entry.path, &concept.title),
             );
+        }
+    }
+    // Pass two: everything else takes the first free slug of its title, so
+    // two sources called "Notes" become notes.md and notes-2.md rather than
+    // one clobbering the other.
+    let mut used: HashMap<String, u32> = HashMap::new();
+    for (dir, concepts) in &order {
+        for concept in concepts {
+            if placements.contains_key(&concept.id) {
+                continue;
+            }
+            let base = okf_slug(&concept.title);
+            let key = format!("{dir}/{base}");
+            let mut n = *used.get(&key).unwrap_or(&0);
+            let path = loop {
+                n += 1;
+                let slug = if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}-{n}")
+                };
+                let path = format!("{dir}/{slug}.md");
+                if taken.insert(path.clone()) {
+                    break path;
+                }
+            };
+            used.insert(key, n);
+            placements.insert(concept.id.clone(), placement_at(dir, &path, &concept.title));
         }
     }
 
@@ -510,24 +584,36 @@ pub fn write_bundle(
             );
             let hash = okf_hash(&text);
             let prior = manifest.concepts.get(&concept.id);
-            // A retitled concept moves rather than being deleted and rewritten.
+            // A retitled concept moves rather than being deleted and
+            // rewritten — but never onto a path another entry still claims.
+            // A slug collision used to rename one concept over its
+            // neighbour's file and leave the manifest pointing at nothing.
+            let mut rel = place.path.clone();
             if let Some(prior) = prior {
-                if prior.path != place.path {
-                    let from = bundle.join(&prior.path);
-                    let to = bundle.join(&place.path);
-                    if from.exists() && std::fs::rename(&from, &to).is_ok() {
-                        out.moved += 1;
+                if prior.path != rel {
+                    if claimed_by_another(&manifest, &concept.id, &rel) {
+                        crate::note!(
+                            "okf: {rel} is another concept's file; leaving {} where it is",
+                            prior.path
+                        );
+                        rel = prior.path.clone();
+                    } else {
+                        let from = bundle.join(&prior.path);
+                        if from.exists() && std::fs::rename(&from, bundle.join(&rel)).is_ok() {
+                            out.moved += 1;
+                        }
                     }
                 }
             }
-            let at = bundle.join(&place.path);
+            let at = bundle.join(&rel);
             // A file iCloud has evicted is not missing, it is not downloaded.
             // Writing over it would discard whatever the other Mac put there,
             // so the pass asks for it and leaves it alone (§5.7).
+            let slug = placement_at(dir, &rel, &concept.title).slug;
             if is_evicted_stub(&at) {
                 hydrate_if_evicted(&at);
                 still_ours.insert(concept.id.clone());
-                entries.push((place.slug.clone(), concept.title.clone(), description));
+                entries.push((slug, concept.title.clone(), description));
                 continue;
             }
             let unchanged = prior.is_some_and(|p| p.hash == hash) && at.exists();
@@ -535,17 +621,22 @@ pub fn write_bundle(
                 write(&at, &text)?;
                 out.written += 1;
             }
+            let adopted = prior.is_some_and(|p| p.adopted);
             manifest.concepts.insert(
                 concept.id.clone(),
                 OkfManifestEntry {
-                    path: place.path.clone(),
+                    path: rel,
+                    adopted,
                     hash,
+                    // What the file's clock says now that we are done with
+                    // it, so the next read-back pass can skip it on a stat.
+                    file_mtime: file_mtime_ms(&at),
                     wrote_at: concept.generated_at,
                     extra: std::mem::take(&mut concept.extra),
                 },
             );
             still_ours.insert(concept.id.clone());
-            entries.push((place.slug.clone(), concept.title.clone(), description));
+            entries.push((slug, concept.title.clone(), description));
         }
         listings.insert(dir, entries);
     }
@@ -560,6 +651,12 @@ pub fn write_bundle(
         .collect();
     for id in gone {
         if let Some(entry) = manifest.concepts.remove(&id) {
+            // Only if nothing else claims it. A collision that moved another
+            // concept onto this path would otherwise have its file deleted
+            // out from under it, leaving `index.md` linking at nothing.
+            if manifest.concepts.values().any(|e| e.path == entry.path) {
+                continue;
+            }
             if std::fs::remove_file(bundle.join(&entry.path)).is_ok() {
                 out.removed += 1;
             }
@@ -1437,7 +1534,7 @@ pub(crate) fn is_system_notebook(notebook: &Notebook) -> bool {
 /// Give a notebook its folder and seed it (§5.7). Silent and best-effort:
 /// creating a notebook must not fail because a disk did.
 pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
-    if is_system_notebook(notebook) {
+    if is_system_notebook(notebook) || crate::examples::is_starter_title(&notebook.title) {
         return;
     }
     let (root, keep) = notebooks_home(state).await;
@@ -1477,6 +1574,9 @@ pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
     if let Err(err) = write_bound(state, &notebook.id).await {
         crate::diagnostics::error("okf", format!("seed pass failed: {err}"));
     }
+    if let Some(app) = crate::commands::app_handle() {
+        crate::fswatch::rearm(&app).await;
+    }
 }
 
 /// Keep every active notebook on disk — the upgrade offer's Keep button
@@ -1486,7 +1586,14 @@ pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Res
     let total = notebooks.len();
     let mut bound = 0usize;
     for (done, nb) in notebooks.iter().enumerate() {
-        if is_system_notebook(nb) || nb.status == "archived" {
+        // A starter is the app's own sample, and every Mac seeds its own
+        // copy under its own id. Binding them means two installs trade
+        // bundles for notebooks neither person asked for (§5.7); the ⋯ verb
+        // still binds one if somebody wants it on disk.
+        if is_system_notebook(nb)
+            || nb.status == "archived"
+            || crate::examples::is_starter_title(&nb.title)
+        {
             continue;
         }
         let _ = app.emit(
@@ -1503,6 +1610,357 @@ pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Res
         serde_json::json!({ "done": total, "total": total, "title": "" }),
     );
     Ok(bound)
+}
+
+// ---- The self-heal (§5.7) ---------------------------------------------------
+//
+// Rules are for the state that has not happened yet. The duplication that
+// shipped in 0.55.0 already happened, on at least two Macs, and it leaves
+// behind exactly four shapes: two notebooks writing into one folder, a
+// starter notebook bound at all, a binding whose folder says it belongs to a
+// notebook that is bound elsewhere, and a second copy of a starter imported
+// from the other Mac's bundle. This is the pass that puts those right, once
+// per launch, before anything writes.
+//
+// It never deletes. Every fix is an unbind (which leaves the files where
+// they are, as §5.5 promises) or an archive (which hides a notebook from the
+// grid and keeps every row it has). A wrong guess here costs the user a
+// visit to the archive, not their notes.
+
+/// One thing the heal decided to do, and the sentence that explains it.
+#[derive(Debug, PartialEq)]
+pub(crate) enum HealStep {
+    /// Stop keeping this notebook on disk. The folder is left alone.
+    Unbind { notebook: String, why: String },
+    /// Hide this notebook: it is a duplicate of one that stays.
+    Archive { notebook: String, why: String },
+}
+
+/// A notebook, as the heal needs to see it.
+pub(crate) struct HealNotebook {
+    pub id: String,
+    pub title: String,
+    pub created_at: i64,
+    pub archived: bool,
+}
+
+/// The plan, as a pure function over what is on disk and in the store.
+///
+/// Age decides every tie, and age means the notebook's `created_at`, not the
+/// binding's: a binding carries no clock, and in every duplication seen the
+/// original notebook is the older row and the duplicate was minted by an
+/// import a moment ago. So the older notebook keeps the folder.
+pub(crate) fn heal_plan(
+    bindings: &HashMap<String, OkfBinding>,
+    notebooks: &[HealNotebook],
+    // `declared` maps a binding path to the `alchemy.id` that folder's
+    // `index.md` names — who the folder says it belongs to.
+    declared: &HashMap<String, String>,
+) -> Vec<HealStep> {
+    let by_id: HashMap<&str, &HealNotebook> =
+        notebooks.iter().map(|n| (n.id.as_str(), n)).collect();
+    // Oldest first, then by id, so a plan is the same plan twice.
+    let rank = |id: &str| {
+        by_id
+            .get(id)
+            .map(|n| (n.created_at, n.id.clone()))
+            .unwrap_or((i64::MAX, id.to_string()))
+    };
+    let mut steps: Vec<HealStep> = Vec::new();
+    let mut unbound: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let unbind = |steps: &mut Vec<HealStep>,
+                  unbound: &mut std::collections::HashSet<String>,
+                  id: &str,
+                  why: String| {
+        if unbound.insert(id.to_string()) {
+            steps.push(HealStep::Unbind {
+                notebook: id.to_string(),
+                why,
+            });
+        }
+    };
+
+    // 1. Two notebooks over one folder. Two manifests and two writers over
+    //    one file is the thing §5.6 forbids; the older binding keeps it and
+    //    the newcomer is a copy, so it is unbound and hidden.
+    let mut per_folder: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    for (notebook, binding) in bindings {
+        per_folder
+            .entry(same_folder(&binding.path))
+            .or_default()
+            .push(notebook.clone());
+    }
+    let mut folders: Vec<(&PathBuf, &Vec<String>)> = per_folder.iter().collect();
+    folders.sort_by(|a, b| a.0.cmp(b.0));
+    for (folder, ids) in folders {
+        if ids.len() < 2 {
+            continue;
+        }
+        let mut ids = ids.clone();
+        ids.sort_by_key(|id| rank(id));
+        let keeper = ids[0].clone();
+        for id in &ids[1..] {
+            let why = format!(
+                "{} is notebook {keeper}'s bundle, and two writers must not share one",
+                folder.display()
+            );
+            unbind(&mut steps, &mut unbound, id, why.clone());
+            if by_id.get(id.as_str()).is_some_and(|n| !n.archived) {
+                steps.push(HealStep::Archive {
+                    notebook: id.clone(),
+                    why,
+                });
+            }
+        }
+    }
+
+    // 2. A starter notebook is not kept on disk by default. Every install
+    //    seeds its own, so a bound one is a bundle two Macs will trade.
+    let mut bound: Vec<&String> = bindings.keys().collect();
+    bound.sort();
+    for id in &bound {
+        if by_id
+            .get(id.as_str())
+            .is_some_and(|n| crate::examples::is_starter_title(&n.title))
+        {
+            unbind(
+                &mut steps,
+                &mut unbound,
+                id,
+                "a starter notebook is the app's own sample, not a document to sync".into(),
+            );
+        }
+    }
+
+    // 3. A folder that says it belongs to somebody else, and that somebody
+    //    already keeps itself on disk elsewhere. The folder is a duplicate of
+    //    their bundle; this notebook has no business writing into it.
+    for id in &bound {
+        let Some(binding) = bindings.get(*id) else {
+            continue;
+        };
+        let Some(owner) = declared.get(&binding.path) else {
+            continue;
+        };
+        if owner == *id || !by_id.contains_key(owner.as_str()) {
+            continue;
+        }
+        if bindings.contains_key(owner) {
+            unbind(
+                &mut steps,
+                &mut unbound,
+                id,
+                format!("{} is notebook {owner}'s bundle", binding.path),
+            );
+        }
+    }
+
+    // 4. A second copy of a starter, imported from the other Mac's bundle
+    //    before rule 2 existed. The oldest stays; the rest are hidden, never
+    //    deleted — a person may have added to one.
+    let mut per_title: HashMap<&str, Vec<&HealNotebook>> = HashMap::new();
+    for nb in notebooks.iter().filter(|n| !n.archived) {
+        if crate::examples::is_starter_title(&nb.title) {
+            per_title.entry(nb.title.as_str()).or_default().push(nb);
+        }
+    }
+    let mut titles: Vec<&&str> = per_title.keys().collect();
+    titles.sort();
+    for title in titles {
+        let mut copies = per_title[*title].clone();
+        if copies.len() < 2 {
+            continue;
+        }
+        copies.sort_by_key(|n| (n.created_at, n.id.clone()));
+        for nb in &copies[1..] {
+            let why = format!("a second copy of the starter notebook \u{201c}{title}\u{201d}");
+            if !steps
+                .iter()
+                .any(|s| matches!(s, HealStep::Archive { notebook, .. } if notebook == &nb.id))
+            {
+                steps.push(HealStep::Archive {
+                    notebook: nb.id.clone(),
+                    why,
+                });
+            }
+        }
+    }
+    steps
+}
+
+/// What this pass understands how to repair. A machine stamped with the
+/// current number has been through it and is not put through it again.
+const HEAL_VERSION: &str = "1";
+
+/// Run the plan once, ever — not once per launch.
+///
+/// Every rule here undoes something the user can legitimately redo. Somebody
+/// who binds a starter from the ⋯ menu, or unarchives a copy they want to
+/// keep, must not find it undone at the next launch: this is a repair for a
+/// state a shipped bug created, and a repair that keeps happening is a
+/// policy. The stamp is a file beside the bindings, so a later pass can raise
+/// the number when there is something new to fix.
+///
+/// Best-effort throughout: a heal that cannot read the store leaves
+/// everything as it found it and tries again next time.
+pub(crate) async fn heal_bindings(state: &AppState) {
+    let data_dir = app_data_dir(state);
+    let stamp = data_dir.join("okf-healed");
+    if std::fs::read_to_string(&stamp).is_ok_and(|v| v.trim() == HEAL_VERSION) {
+        return;
+    }
+    let bindings = load_bindings(&data_dir);
+    let Ok(rows) = state.db.list_notebooks().await else {
+        return;
+    };
+    let notebooks: Vec<HealNotebook> = rows
+        .into_iter()
+        .map(|n| HealNotebook {
+            id: n.id,
+            title: n.title,
+            created_at: n.created_at,
+            archived: n.status == "archived",
+        })
+        .collect();
+    // What each bound folder says about itself, read once.
+    let declared: HashMap<String, String> = bindings
+        .values()
+        .filter_map(|b| {
+            let text = std::fs::read_to_string(Path::new(&b.path).join("index.md")).ok()?;
+            let id = parse_okf_doc(&text).nested("alchemy", "id")?;
+            Some((b.path.clone(), id))
+        })
+        .collect();
+    let title_of = |id: &str| {
+        notebooks
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.title.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    for step in heal_plan(&bindings, &notebooks, &declared) {
+        match step {
+            HealStep::Unbind { notebook, why } => {
+                let path = bindings
+                    .get(&notebook)
+                    .map(|b| b.path.clone())
+                    .unwrap_or_default();
+                cancel_pending_write(&notebook);
+                set_binding(&data_dir, &notebook, None);
+                okf_notice(format!(
+                    "stopped keeping \u{201c}{}\u{201d} at {path} \u{2014} {why}. The folder is untouched.",
+                    title_of(&notebook)
+                ));
+            }
+            HealStep::Archive { notebook, why } => {
+                if state
+                    .db
+                    .set_notebook_status(&notebook, "archived")
+                    .await
+                    .is_ok()
+                {
+                    okf_notice(format!(
+                        "archived \u{201c}{}\u{201d} \u{2014} {why}. Nothing was deleted.",
+                        title_of(&notebook)
+                    ));
+                }
+            }
+        }
+    }
+    if let Err(err) = std::fs::write(&stamp, HEAL_VERSION) {
+        crate::note!("okf: couldn't stamp the heal: {err}");
+    }
+}
+
+/// Say something worth reading later. `crate::note!` alone is stderr, which
+/// is where 0.55.0's duplication went: the app log's last line that day was
+/// the startup entry, and five bundles had been written since.
+fn okf_notice(message: String) {
+    crate::note!("okf: {message}");
+    crate::diagnostics::record(
+        crate::diagnostics::Event::new(crate::diagnostics::Level::Warn, "rust", "okf")
+            .message(message),
+    );
+}
+
+/// What this Mac already knows, as the found-bundle rule needs it. Read fresh
+/// per folder: a bind that landed a moment ago has to count.
+pub(crate) struct KnownNotebooks {
+    /// Notebook id → title, for every notebook here.
+    pub titles: HashMap<String, String>,
+    /// Notebooks that already keep themselves on disk somewhere.
+    pub bound: std::collections::HashSet<String>,
+    /// The bundle folders those bindings point at, normalized.
+    pub folders: std::collections::HashSet<PathBuf>,
+}
+
+fn known_notebooks(data_dir: &Path, notebooks: &[Notebook]) -> KnownNotebooks {
+    let bindings = load_bindings(data_dir);
+    KnownNotebooks {
+        titles: notebooks
+            .iter()
+            .map(|n| (n.id.clone(), n.title.clone()))
+            .collect(),
+        bound: bindings.keys().cloned().collect(),
+        folders: bindings.values().map(|b| same_folder(&b.path)).collect(),
+    }
+}
+
+/// One path spelling per folder, so a symlinked or trailing-slash binding
+/// still reads as the folder it is. Canonicalization is best-effort: a folder
+/// that is gone compares by its literal path, which is the only thing left.
+pub(crate) fn same_folder(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// What the Notebooks-root watcher should do with a bundle it found (§5.7).
+#[derive(Debug, PartialEq)]
+pub(crate) enum FoundBundle {
+    /// Leave the folder exactly as it is, and say why.
+    Skip(String),
+    /// The same notebook arriving by another route: bind it here.
+    Rebind(String),
+    /// A notebook this Mac does not have: import it, then bind.
+    Import,
+}
+
+/// The rule, as a decision, so the cases that went wrong on 0.55.0 are tested
+/// rather than reasoned about.
+///
+/// Three things it will not do. It will not open a folder some notebook here
+/// is already bound to — that is two writers over one file, which §5.6
+/// forbids outright. It will not import a bundle whose `alchemy.id` names a
+/// notebook this Mac has: that notebook is either unbound (so this folder is
+/// its bundle, and it rebinds) or bound somewhere else (so this folder is a
+/// duplicate of it, and duplicating the notebook to match would be the wrong
+/// half to fix). And it will not open a starter notebook: every install seeds
+/// its own copies under its own ids, so trading them between two Macs is a
+/// loop that ends with everybody holding everybody's samples.
+pub(crate) fn decide_bundle(
+    folder: &Path,
+    claimed_id: Option<&str>,
+    claimed_title: Option<&str>,
+    known: &KnownNotebooks,
+) -> FoundBundle {
+    if known.folders.contains(&same_folder(folder)) {
+        return FoundBundle::Skip("a notebook here is already bound to it".into());
+    }
+    let starter = claimed_id
+        .and_then(|id| known.titles.get(id))
+        .map(String::as_str)
+        .or(claimed_title)
+        .is_some_and(crate::examples::is_starter_title);
+    if starter {
+        return FoundBundle::Skip("it is one of the app's own starter notebooks".into());
+    }
+    match claimed_id {
+        Some(id) if known.bound.contains(id) => FoundBundle::Skip(format!(
+            "notebook {id} already keeps itself on disk somewhere else"
+        )),
+        Some(id) if known.titles.contains_key(id) => FoundBundle::Rebind(id.to_string()),
+        _ => FoundBundle::Import,
+    }
 }
 
 /// Bundles sitting in the Notebooks folder that no notebook here is bound to
@@ -1544,30 +2002,55 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
     if root.as_os_str().is_empty() || !root.is_dir() {
         return 0;
     }
+    // One pass at a time. The minute tick and the root watcher's debounce
+    // both call this, and two overlapping passes each see the same folder as
+    // unbound — which on the 0.55.0 first launch imported bundles the seed
+    // pass was still writing, as new notebooks.
+    if OPENING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return 0;
+    }
+    let out = open_found_bundles_inner(app, state, &root).await;
+    OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
+    out
+}
+
+static OPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path) -> usize {
     let data_dir = app_data_dir(state);
-    let bindings = load_bindings(&data_dir);
-    let bound: std::collections::HashSet<String> =
-        bindings.values().map(|b| b.path.clone()).collect();
-    let found = unopened_bundles(&root, &bound);
+    let bound: std::collections::HashSet<String> = load_bindings(&data_dir)
+        .values()
+        .map(|b| b.path.clone())
+        .collect();
+    let found = unopened_bundles(root, &bound);
     if found.is_empty() {
         return 0;
     }
-    let known: std::collections::HashSet<String> = e(state.db.list_notebooks().await)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|n| n.id)
-        .collect();
+    let notebooks = e(state.db.list_notebooks().await).unwrap_or_default();
 
     let mut opened = Vec::new();
     for folder in found {
         let path = folder.to_string_lossy().to_string();
-        // The same notebook by another route rebinds; a new one is imported.
-        let claimed = std::fs::read_to_string(folder.join("index.md"))
-            .ok()
-            .and_then(|text| parse_okf_doc(&text).nested("alchemy", "id"))
-            .filter(|id| known.contains(id) && !bindings.contains_key(id));
-        let outcome = match claimed {
-            Some(id) => {
+        // Re-read the bindings for every folder: a bind may have landed
+        // since the listing was taken, and acting on a stale map is how one
+        // folder ended up with two notebooks writing into it.
+        let known = known_notebooks(&data_dir, &notebooks);
+        let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
+        let doc = parse_okf_doc(&index);
+        let decision = decide_bundle(
+            &folder,
+            doc.nested("alchemy", "id").as_deref(),
+            doc.str("title").as_deref(),
+            &known,
+        );
+        let outcome = match decision {
+            FoundBundle::Skip(why) => {
+                crate::note!("okf: left {path} alone: {why}");
+                continue;
+            }
+            // The same notebook by another route — the other Mac's copy, a
+            // share, a folder moved — rebinds rather than duplicating.
+            FoundBundle::Rebind(id) => {
                 set_binding(
                     &data_dir,
                     &id,
@@ -1580,23 +2063,26 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
                 write_bound(state, &id).await.map(|_| id)
             }
             // Import creates the notebook — reusing the bundle's own
-            // `alchemy.id` when nothing here claims it — and then it is
-            // bound to the folder it came from.
-            None => match crate::commands::import_bundle(app, state, folder.clone(), None).await {
-                Ok(nb) => {
-                    set_binding(
-                        &data_dir,
-                        &nb.id,
-                        Some(OkfBinding {
-                            path: path.clone(),
-                            id: new_id(),
-                            last_write_at: 0,
-                        }),
-                    );
-                    write_bound(state, &nb.id).await.map(|_| nb.id)
+            // `alchemy.id` when nothing here claims it — and the binding is
+            // recorded before the first write, so the writer's own output
+            // can never read as a second arrival.
+            FoundBundle::Import => {
+                match crate::commands::import_bundle(app, state, folder.clone(), None).await {
+                    Ok(nb) => {
+                        set_binding(
+                            &data_dir,
+                            &nb.id,
+                            Some(OkfBinding {
+                                path: path.clone(),
+                                id: new_id(),
+                                last_write_at: 0,
+                            }),
+                        );
+                        write_bound(state, &nb.id).await.map(|_| nb.id)
+                    }
+                    Err(err) => Err(err),
                 }
-                Err(err) => Err(err),
-            },
+            }
         };
         match outcome {
             Ok(_) => {
@@ -1972,15 +2458,42 @@ pub fn binding_for(data_dir: &Path, notebook_id: &str) -> Option<OkfBinding> {
     load_bindings(data_dir).remove(notebook_id)
 }
 
+/// Serializes every read-modify-write of the bindings file. Without it an
+/// unbind and a write-through both read the map, both edit their copy, and
+/// the later save puts the other's change back — which is how a notebook
+/// reported as unbound kept writing its bundle (§5.5).
+fn bindings_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
 /// Bind, rebind, or (with `None`) unbind. Unbinding leaves the files where
 /// they are — the folder is the user's, and stopping the sync is not a
 /// reason to take it away.
 pub fn set_binding(data_dir: &Path, notebook_id: &str, binding: Option<OkfBinding>) {
+    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut map = load_bindings(data_dir);
     match binding {
         Some(b) => map.insert(notebook_id.to_string(), b),
         None => map.remove(notebook_id),
     };
+    save_bindings(data_dir, &map);
+}
+
+/// Note that the bundle is current — but only while this is still the
+/// notebook's binding.
+///
+/// A write that started before an unbind finishes after it, and saving the
+/// whole map back from the copy it took would resurrect the entry it was
+/// told to drop. The write already happened and the files are the user's;
+/// the record of it is what must not come back.
+pub(crate) fn touch_last_write(data_dir: &Path, notebook_id: &str, binding_id: &str, at: i64) {
+    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = load_bindings(data_dir);
+    match map.get_mut(notebook_id) {
+        Some(binding) if binding.id == binding_id => binding.last_write_at = at,
+        _ => return,
+    }
     save_bindings(data_dir, &map);
 }
 
@@ -1992,9 +2505,27 @@ pub fn set_binding(data_dir: &Path, notebook_id: &str, binding: Option<OkfBindin
 pub struct OkfManifestEntry {
     /// Bundle-relative path, so a moved bundle's manifest still reads.
     pub path: String,
+    /// The file came in from disk rather than out of the writer's slug, so
+    /// the writer keeps writing to it and never renames it (§5.3).
+    ///
+    /// A hand-added `notes/hand-added.md` used to become a note *and* a
+    /// second file at the writer's own slug, leaving the original unclaimed
+    /// for the next pass to import again — three notes became fifty-five in
+    /// five minutes. Read-back claims the path it read, and this is the flag
+    /// that says so: the file is the concept, and its name is its owner's.
+    #[serde(default)]
+    pub adopted: bool,
     /// Hash of the whole file as written. Both the "did this change" test and
     /// the echo test the reconciler needs (§5.3).
     pub hash: String,
+    /// The file's own mtime when this entry was last correct. The reconciler
+    /// reads and hashes only files whose mtime has moved since — hashing all
+    /// 742 concepts of a large bundle to discover nothing changed took 228
+    /// seconds on OneDrive and never finished on Drive. Zero means "never
+    /// recorded", which reads as changed, so an older manifest costs one
+    /// full pass and no correctness.
+    #[serde(default)]
+    pub file_mtime: i64,
     /// Epoch ms of the entity when we wrote it — the conflict clock (§5.4).
     #[serde(default)]
     pub wrote_at: i64,
@@ -2144,13 +2675,27 @@ pub fn schedule_write(notebook_id: &str) {
             map.remove(&id);
         }
         let state = app.state::<AppState>();
-        if let Err(err) = write_bound(&state, &id).await {
-            crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+        // Unbound while the debounce ran: nothing to write, and no error to
+        // report — the user asked for exactly this.
+        if binding_for(&data_dir, &id).is_some() {
+            if let Err(err) = write_bound(&state, &id).await {
+                crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+            }
         }
         if let Ok(mut running) = flushing().lock() {
             running.remove(&id);
         }
     });
+}
+
+/// Drop a notebook's pending write. The flusher checks the binding again
+/// before it writes, so a cancelled notebook costs one map lookup and no
+/// file. Used by the unbind and by the self-heal, which must not leave a
+/// writer aimed at a folder it just released.
+pub(crate) fn cancel_pending_write(notebook_id: &str) {
+    if let Ok(mut map) = pending().lock() {
+        map.remove(notebook_id);
+    }
 }
 
 /// Bring a bound notebook's bundle up to date. The seed pass and every write
@@ -2164,14 +2709,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
-    set_binding(
-        &data_dir,
-        notebook_id,
-        Some(OkfBinding {
-            last_write_at: now_ms(),
-            ..binding
-        }),
-    );
+    touch_last_write(&data_dir, notebook_id, &binding.id, now_ms());
     Ok(written)
 }
 
@@ -2200,6 +2738,13 @@ pub(crate) async fn bind_impl(
     path: &str,
 ) -> Result<String, String> {
     let bundle = PathBuf::from(path);
+    // §5.5 says an empty folder gets the seed pass, and the UI's picker always
+    // hands over one it just made. The MCP and CLI surfaces had to `mkdir`
+    // first, which nothing said — so make it here, parents and all.
+    if !bundle.exists() {
+        std::fs::create_dir_all(&bundle)
+            .map_err(|err| format!("Couldn't make the folder {path}: {err}"))?;
+    }
     if !bundle.is_dir() {
         return Err(format!("Not a folder: {path}"));
     }
@@ -2236,6 +2781,10 @@ pub(crate) async fn bind_impl(
         }),
     );
     write_bound(state, notebook_id).await?;
+    // Watch it now, not on the next minute tick: a folder somebody just
+    // asked the app to keep in step should be in step from the next save
+    // (docs/RFC-okf-live.md §5.3).
+    crate::fswatch::rearm(app).await;
     Ok(path.to_string())
 }
 
@@ -2251,13 +2800,44 @@ pub async fn bind_notebook_okf(
 
 /// Stop keeping a notebook on disk. The files stay where they are — the
 /// folder is the user's, and ending the sync is no reason to take it away.
+///
+/// The order matters. The binding goes first, so a debounced write that has
+/// not started yet finds nothing to write; then the pending deadline is
+/// dropped; then a write already inside `write_bundle` is given a moment to
+/// finish, which it may, because its record of the write is conditional and
+/// cannot bring the binding back. Only then does this say it worked — and if
+/// the entry is somehow still there, it says that instead. Reporting
+/// `okfPath: null` over a binding that is still writing is the one answer
+/// this must never give.
+pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(), String> {
+    let data_dir = app_data_dir(state);
+    set_binding(&data_dir, notebook_id, None);
+    cancel_pending_write(notebook_id);
+    for _ in 0..40 {
+        let running = flushing()
+            .lock()
+            .map(|set| set.contains(notebook_id))
+            .unwrap_or(false);
+        if !running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    if binding_for(&data_dir, notebook_id).is_some() {
+        return Err(
+            "Couldn't stop keeping this notebook on disk \u{2014} a write is still running.              Try again in a moment."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn unbind_notebook_okf(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<(), String> {
-    set_binding(&app_data_dir(&state), &notebook_id, None);
-    Ok(())
+    unbind_impl(&state, &notebook_id).await
 }
 
 /// Write a bound notebook's bundle now, rather than waiting out the debounce.
@@ -2315,6 +2895,21 @@ pub fn classify(rel: &str, hash: &str, manifest: &OkfManifest) -> OkfAction {
     }
 }
 
+/// Has this file gone untouched since the manifest last looked at it?
+///
+/// The read-back sweep's first question, and the cheap one: a file whose own
+/// mtime has not moved is the file we already know, so there is nothing to
+/// read and nothing to hash. `file_mtime: 0` is a manifest written before
+/// this was recorded, and reads as changed — one full pass, then never
+/// again.
+pub fn is_untouched(rel: &str, mtime: i64, manifest: &OkfManifest) -> bool {
+    mtime != 0
+        && manifest
+            .concepts
+            .values()
+            .any(|entry| entry.path == rel && entry.file_mtime == mtime)
+}
+
 /// Last writer wins by clock (§5.4). A tie goes to disk: the file is what a
 /// person or an agent just saved, and it is the artifact they can see.
 pub fn disk_wins(file_mtime: i64, entity_updated_at: i64) -> bool {
@@ -2364,15 +2959,18 @@ fn concept_files(bundle: &Path, dir: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Concept files iCloud has evicted, as the stub paths that stand in for
-/// them (§5.6).
+/// Concept files the cloud has evicted, as the paths to ask for (§5.6).
 ///
-/// An undownloaded file is replaced by a hidden `.name.icloud` stub, which
-/// the allowlist skips — correctly, since there is nothing to read. But then
-/// a note written on the other Mac would sit unread until someone opened the
-/// folder in Finder, which is not a sync story. Folder sources already nudge
-/// these; bound roots use the same nudge, and the file reconciles on the
-/// pass after it lands.
+/// Two layouts, because two exist: a file evicted in place (current macOS and
+/// every FileProvider mount) is asked for by its own path, and the legacy
+/// `.name.icloud` placeholder is asked for by the placeholder's. Without the
+/// first, this returned an empty vec on every provider and the whole
+/// hydration nudge was dead code — a note written on the other Mac sat
+/// unread until somebody opened the folder in Finder, which is not a sync
+/// story.
+///
+/// Paths under `~/Library/CloudStorage` are left out: there is nobody to ask
+/// there, and the writer already treats a stub as absent.
 fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(bundle.join(dir)) else {
@@ -2380,16 +2978,23 @@ fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Some(real) = name
+        let path = entry.path();
+        if let Some(real) = name
             .strip_prefix('.')
             .and_then(|n| n.strip_suffix(".icloud"))
             .filter(|n| n.ends_with(".md") && !is_okf_reserved(n))
-        else {
+        {
+            // Only a placeholder standing in for a file that is not here.
+            if !bundle.join(dir).join(real).exists() && icloud_can_hydrate(&path) {
+                out.push(path.to_string_lossy().to_string());
+            }
             continue;
-        };
-        // Only a stub standing in for a file that is genuinely not here.
-        if !bundle.join(dir).join(real).exists() {
-            out.push(entry.path().to_string_lossy().to_string());
+        }
+        if name.starts_with('.') || !name.ends_with(".md") || is_okf_reserved(&name) {
+            continue;
+        }
+        if is_dataless(&path) && icloud_can_hydrate(&path) {
+            out.push(path.to_string_lossy().to_string());
         }
     }
     out
@@ -2450,6 +3055,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     let mut out = OkfReconcile::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
+    // Did this pass change the manifest — a file taken in, or a clock moved?
+    let mut dirty = false;
 
     // Ask for anything the cloud has evicted before reading what is here, so
     // the next pass finds it (§5.6). Bounded by the same cap folder scans use.
@@ -2465,25 +3072,61 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
 
     for dir in ["sources", "notes"] {
         for path in concept_files(&bundle, dir) {
+            // The whole bundle-relative path, not just the filename: the
+            // allowlist reads `sources/**.md`, so two concepts can share a
+            // name at different depths and the manifest has to tell them
+            // apart — it claims this exact path in a moment.
+            let rel = path
+                .strip_prefix(&bundle)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{dir}/{}",
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_default()
+                    )
+                });
+            // A file with none of its data here is present and unchanged
+            // as far as anyone can tell — and reading it to find out would
+            // download it, which is the opposite of what its owner asked
+            // for. It counts as seen, so nothing deletes it either.
+            if is_dataless(&path) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                }
+                continue;
+            }
+            // One stat, and most of the time that is the whole cost. Reading
+            // and hashing every concept of every bundle on one serial tick is
+            // what made a closed notebook's read-back take minutes.
+            let mtime = file_mtime_ms(&path);
+            if is_untouched(&rel, mtime, &manifest) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                }
+                continue;
+            }
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let rel = format!(
-                "{dir}/{}",
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-            );
-            let action = classify(&rel, &okf_hash(&text), &manifest);
+            let hash = okf_hash(&text);
+            let action = classify(&rel, &hash, &manifest);
             let known = match &action {
                 OkfAction::Update(id) => {
                     seen.insert(id.clone());
                     Some(id.clone())
                 }
-                // Our own write, echoing back through the watcher.
+                // Our own write, echoing back through the watcher. Note the
+                // clock while we are here: a file whose mtime moved but whose
+                // bytes did not should cost a stat next time, not a read.
                 OkfAction::Echo => {
                     if let Some(id) = by_path.get(&rel) {
                         seen.insert(id.clone());
+                        if let Some(entry) = manifest.concepts.get_mut(id) {
+                            entry.file_mtime = mtime;
+                            dirty = true;
+                        }
                     }
                     continue;
                 }
@@ -2493,12 +3136,18 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             let mtime = file_mtime_ms(&path);
             match (dir, known) {
                 ("notes", None) => {
-                    if take_in_note(state, notebook_id, &doc, &path).await? {
+                    if let Some(id) = take_in_note(state, notebook_id, &doc, &path).await? {
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        dirty = true;
                         out.created += 1;
                     }
                 }
                 ("sources", None) => {
-                    if take_in_source(state, notebook_id, &doc, &path, &bundle).await? {
+                    if let Some(id) =
+                        take_in_source(state, notebook_id, &doc, &path, &bundle).await?
+                    {
+                        adopt(&mut manifest, &id, &rel, &hash, mtime, &doc);
+                        dirty = true;
                         out.created += 1;
                     }
                 }
@@ -2534,6 +3183,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         .filter(|(id, entry)| !seen.contains(*id) && !bundle.join(&entry.path).exists())
         .map(|(id, entry)| (id.clone(), entry.path.clone()))
         .collect();
+    let mut removed: Vec<String> = Vec::new();
     for (id, rel) in vanished {
         let deleted = if rel.starts_with("notes/") {
             state.db.delete_note(&id).await.is_ok()
@@ -2544,10 +3194,24 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             manifest.concepts.remove(&id);
             out.deleted += 1;
             crate::note!("okf: {rel} was deleted on disk; removed it here too");
+            removed.push(rel);
         }
     }
-    if out.deleted > 0 {
+    if out.deleted > 0 || dirty {
         save_manifest(&manifest_at, &manifest);
+    }
+    // §5.3 asks for the delete to be logged, and `note!` is stderr: on a
+    // shared folder `log.md` is the only record the other side has of why a
+    // concept went away.
+    if !removed.is_empty() {
+        let _ = okf_log_append(
+            &bundle,
+            &format!(
+                "{} concept(s) gone from the folder, so removed here too: {}.",
+                removed.len(),
+                removed.join(", ")
+            ),
+        );
     }
 
     // Nothing is lost silently (§5.4): the text that lost the race is written
@@ -2570,6 +3234,37 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     Ok(out)
 }
 
+/// Claim the file a `Create` came from for the entity it became.
+///
+/// This is the fix for the duplication loop (§5.3): without it the writer
+/// would put the new entity at *its* slug, leave the incoming file
+/// unclaimed, and the next reconcile would take the same file in all over
+/// again. The path the reconciler read is the entity's path from here on,
+/// and `adopted` tells the writer never to re-slug it. The hash is the file
+/// as it stands, so the very next pass reads it as an echo rather than an
+/// edit, and the frontmatter keys we do not write ride along the way an
+/// outside edit's always have.
+pub(crate) fn adopt(
+    manifest: &mut OkfManifest,
+    id: &str,
+    rel: &str,
+    hash: &str,
+    mtime: i64,
+    doc: &OkfDoc,
+) {
+    manifest.concepts.insert(
+        id.to_string(),
+        OkfManifestEntry {
+            path: rel.to_string(),
+            adopted: true,
+            hash: hash.to_string(),
+            file_mtime: mtime,
+            wrote_at: 0,
+            extra: doc.extra(),
+        },
+    );
+}
+
 /// Which side of a conflict won, and the text the loser had.
 enum Verdict {
     Applied,
@@ -2582,9 +3277,9 @@ async fn take_in_note(
     notebook_id: &str,
     doc: &OkfDoc,
     path: &Path,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     if doc.body.trim().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let ts = file_mtime_ms(path).max(1);
     let note = Note {
@@ -2614,7 +3309,7 @@ async fn take_in_note(
     };
     e(crate::commands::add_note_indexed(state, &note).await)?;
     crate::note!("okf: took in note \"{}\" from disk", note.title);
-    Ok(true)
+    Ok(Some(note.id))
 }
 
 async fn take_in_source(
@@ -2623,9 +3318,9 @@ async fn take_in_source(
     doc: &OkfDoc,
     path: &Path,
     bundle: &Path,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     if doc.body.trim().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let title = doc.str("title").unwrap_or_else(|| {
         path.file_stem()
@@ -2672,9 +3367,9 @@ async fn take_in_source(
                 let _ = state.db.set_source_tags(&landed.id, &tags).await;
             }
             crate::note!("okf: took in source \"{title}\" from disk");
-            Ok(true)
+            Ok(Some(landed.id))
         }
-        Err(_) => Ok(false),
+        Err(_) => Ok(None),
     }
 }
 
@@ -2750,10 +3445,67 @@ pub async fn reconcile_all(state: &AppState) {
     }
 }
 
-/// Is this path an iCloud eviction stub standing in for a file that is not
-/// downloaded? macOS replaces the file with a hidden `.name.icloud`
-/// placeholder, so the file itself simply is not there (§5.7).
+/// Where "are this file's bytes actually here?" is answered. `None` — the
+/// shipped state — reads `st_flags`. A test installs its own so the rule can
+/// be asserted without evicting anything real.
+pub(crate) type DatalessProbe = std::sync::Arc<dyn Fn(&Path) -> Option<bool> + Send + Sync>;
+
+static DATALESS: std::sync::Mutex<Option<DatalessProbe>> = std::sync::Mutex::new(None);
+
+/// Answer datalessness from somewhere other than the filesystem, for the
+/// rest of this process's life. `None` from the probe means "I have no
+/// opinion about this path", and the real check runs. Not behind
+/// `cfg(test)`: the seam a test sets has to be the one the app runs through.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn set_dataless_probe(probe: DatalessProbe) {
+    if let Ok(mut slot) = DATALESS.lock() {
+        *slot = Some(probe);
+    }
+}
+
+/// Is the file sitting at its own path with none of its data here?
+///
+/// This is the whole cloud-eviction question on current macOS, and the
+/// `.name.icloud` naming every stub check used to key on is not it. macOS 26
+/// stopped writing dot-stubs: iCloud evicts **in place**, leaving the file
+/// exactly where it was with `SF_DATALESS` in `st_flags` and `st_blocks` at
+/// zero, and no hidden sibling at all. Every FileProvider extension under
+/// `~/Library/CloudStorage` — Dropbox, Google Drive, OneDrive — does the
+/// same, so one flag covers all four providers where four filename rules
+/// covered none of them.
+///
+/// `stat` is safe. A *read* is what hydrates, which is why nothing in the
+/// writer or the reconciler may read one: reading an evicted bundle to
+/// compare hashes silently undoes the user's "free up space", one full
+/// download at a time.
+pub fn is_dataless(path: &Path) -> bool {
+    if let Some(probe) = DATALESS.lock().ok().and_then(|slot| slot.clone()) {
+        if let Some(answer) = probe(path) {
+            return answer;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        std::fs::metadata(path)
+            .map(|meta| meta.st_flags() & SF_DATALESS != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+/// Is this file present in name only — evicted in place, or standing behind
+/// the legacy `.name.icloud` placeholder older systems wrote (§5.7)?
+///
+/// The dot-stub check stays as the secondary: it costs a `is_file` on a path
+/// that is already known not to exist, and a Mac that has not been upgraded
+/// still writes them.
 pub fn is_evicted_stub(path: &Path) -> bool {
+    if is_dataless(path) {
+        return true;
+    }
     if path.exists() {
         return false;
     }
@@ -2763,25 +3515,33 @@ pub fn is_evicted_stub(path: &Path) -> bool {
     dir.join(format!(".{name}.icloud")).is_file()
 }
 
-/// Ask iCloud for a file that is not downloaded, and say so. Returns true
-/// when a download was started, so the caller can show "Downloading from
-/// iCloud…" instead of failing at a file that is only temporarily absent.
+/// `brctl` speaks for iCloud Drive and nothing else. A FileProvider mount
+/// under `~/Library/CloudStorage` has no equivalent to call, so an evicted
+/// file there is left alone until its own client brings it back — which is
+/// safe, because every caller already treats a stub as absent.
+fn icloud_can_hydrate(path: &Path) -> bool {
+    !path.to_string_lossy().contains("/Library/CloudStorage/")
+}
+
+/// Ask for a file that is not downloaded, and say so. Returns true when the
+/// file is a stub — the caller shows "Downloading from iCloud…" rather than
+/// reporting a file plainly visible in Finder as gone — whether or not there
+/// was anybody to ask.
 pub fn hydrate_if_evicted(path: &Path) -> bool {
     if !is_evicted_stub(path) {
         return false;
     }
-    let Some(dir) = path.parent() else {
-        return false;
+    // The legacy layout asks for the placeholder; an in-place eviction asks
+    // for the file itself, which is where the data goes.
+    let ask = match (path.parent(), path.file_name().and_then(|n| n.to_str())) {
+        (Some(dir), Some(name)) if !path.exists() => dir.join(format!(".{name}.icloud")),
+        _ => path.to_path_buf(),
     };
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    #[cfg(target_os = "macos")]
-    crate::commands::hydrate_icloud_stubs(vec![dir
-        .join(format!(".{name}.icloud"))
-        .to_string_lossy()
-        .to_string()]);
-    crate::note!("okf: asked iCloud for {path:?}");
+    if icloud_can_hydrate(&ask) {
+        #[cfg(target_os = "macos")]
+        crate::commands::hydrate_icloud_stubs(vec![ask.to_string_lossy().to_string()]);
+        crate::note!("okf: asked iCloud for {path:?}");
+    }
     true
 }
 
