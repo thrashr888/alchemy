@@ -27,6 +27,12 @@ Whatever answers, your sources stay on-device: embeddings default to the
 built-in private embedder, podcast audio is voiced locally by Kokoro, and
 image OCR runs through your own Ollama vision model.
 
+## The decisions remain yours
+
+Alchemy helps hold the thread without taking it over. Sources can be opened,
+citations lead back to the evidence, and notebooks remain portable as files.
+Night Shift writes notes and reports. It will not act outward.
+
 > Built with **Tauri 2 + React** front-end, a **Rust** backend, **LanceDB** for
 > embedded vector + relational storage, and a **Linear-inspired** UI with 23 themes.
 

@@ -9,6 +9,17 @@ Alchemy is a local-first research notebook built with React, Vite, and Tauri.
 - `src-tauri/src/tests.rs` holds the Ollama-backed integration test; `src-tauri/evals/` contains retrieval evaluation fixtures.
 - `docs/` stores RFCs and product documentation. Read `DESIGN.md` before making UI changes and `RELEASE.md` before release work.
 
+## Product Invariant: User Sovereignty
+
+Alchemy assists the user's judgment; it must not replace that judgment or
+silently expand its authority. Keep sources and generated work inspectable,
+attributed, portable, and recoverable. Automatic work inside a scope the user
+chose may be default-on, but it must be bounded, visible, reversible, and
+stoppable. Expanding beyond that scope, making a destructive change, or acting
+outside Alchemy requires explicit user intent. Prefer proposals when machine
+judgment would change the user's corpus. Access to a notebook must never depend
+on a particular model, provider, or agent.
+
 ## Build, Test, and Development Commands
 
 ```bash

@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Alchemy** — a local-first, macOS-focused research notebook inspired by NotebookLM (Tauri 2 + React 19 front-end, Rust backend, LanceDB embedded storage). Import sources, chat grounded in citations, generate documents; everything runs on-device by default. Package name is `alchemy`; the directory name `notebooklm-local` is historical.
 
+## Product Invariant: User Sovereignty
+
+Alchemy assists the user's judgment; it must not replace that judgment or
+silently expand its authority. Keep sources and generated work inspectable,
+attributed, portable, and recoverable. Automatic work inside a scope the user
+chose may be default-on, but it must be bounded, visible, reversible, and
+stoppable. Expanding beyond that scope, making a destructive change, or acting
+outside Alchemy requires explicit user intent. Prefer proposals when machine
+judgment would change the user's corpus. Access to a notebook must never depend
+on a particular model, provider, or agent.
+
 ## Commands
 
 ```bash
