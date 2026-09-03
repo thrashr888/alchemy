@@ -271,6 +271,33 @@ struct OkfPlacement {
     title: String,
 }
 
+/// Does this manifest path still belong to `want`'s family — `want.md`, or
+/// the `want-2.md` a collision gave it? A path that does is this concept's
+/// own and it keeps it; a path that does not means the title re-slugged, and
+/// the file moves.
+fn keeps_slug(path: &str, dir: &str, want: &str) -> bool {
+    let Some(stem) = path
+        .strip_prefix(&format!("{dir}/"))
+        .and_then(|rest| rest.strip_suffix(".md"))
+    else {
+        return false;
+    };
+    stem == want
+        || stem
+            .strip_prefix(want)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Is some *other* concept's file at this path? The one question the writer
+/// has to ask before it renames a file or removes one.
+fn claimed_by_another(manifest: &OkfManifest, id: &str, rel: &str) -> bool {
+    manifest
+        .concepts
+        .iter()
+        .any(|(other, entry)| other != id && entry.path == rel)
+}
+
 /// A placement at a path already decided. The slug is whatever the path says
 /// it is — which for a file read-back adopted is the name its author gave it,
 /// not one the writer would have chosen.
@@ -428,15 +455,23 @@ pub fn write_bundle(
         ("sources", sources.iter().collect()),
         ("notes", notes.iter().collect()),
     ];
-    // Pass one: a file read-back took in keeps the name it arrived under.
-    // The file is the concept — inventing a slug for it would leave the
-    // original unclaimed, and the next reconcile would import it again.
+    // Pass one: paths the manifest already holds for a concept that is still
+    // here. Two of them are pinned — a file read-back took in keeps the name
+    // it arrived under (the file is the concept, and inventing a slug for it
+    // would leave the original unclaimed for the next reconcile to import
+    // again), and a concept whose title still slugs to the file it has stays
+    // where it is. The second is what keeps a *new* concept of the same name
+    // from taking an occupied path and the older one from being renamed on
+    // top of it, which used to lose one of the two files outright.
     for (dir, concepts) in &order {
         for concept in concepts {
             let Some(entry) = manifest.concepts.get(&concept.id) else {
                 continue;
             };
-            if !entry.adopted || !entry.path.starts_with(&format!("{dir}/")) {
+            if !entry.path.starts_with(&format!("{dir}/")) {
+                continue;
+            }
+            if !entry.adopted && !keeps_slug(&entry.path, dir, &okf_slug(&concept.title)) {
                 continue;
             }
             if !taken.insert(entry.path.clone()) {
@@ -549,24 +584,36 @@ pub fn write_bundle(
             );
             let hash = okf_hash(&text);
             let prior = manifest.concepts.get(&concept.id);
-            // A retitled concept moves rather than being deleted and rewritten.
+            // A retitled concept moves rather than being deleted and
+            // rewritten — but never onto a path another entry still claims.
+            // A slug collision used to rename one concept over its
+            // neighbour's file and leave the manifest pointing at nothing.
+            let mut rel = place.path.clone();
             if let Some(prior) = prior {
-                if prior.path != place.path {
-                    let from = bundle.join(&prior.path);
-                    let to = bundle.join(&place.path);
-                    if from.exists() && std::fs::rename(&from, &to).is_ok() {
-                        out.moved += 1;
+                if prior.path != rel {
+                    if claimed_by_another(&manifest, &concept.id, &rel) {
+                        crate::note!(
+                            "okf: {rel} is another concept's file; leaving {} where it is",
+                            prior.path
+                        );
+                        rel = prior.path.clone();
+                    } else {
+                        let from = bundle.join(&prior.path);
+                        if from.exists() && std::fs::rename(&from, bundle.join(&rel)).is_ok() {
+                            out.moved += 1;
+                        }
                     }
                 }
             }
-            let at = bundle.join(&place.path);
+            let at = bundle.join(&rel);
             // A file iCloud has evicted is not missing, it is not downloaded.
             // Writing over it would discard whatever the other Mac put there,
             // so the pass asks for it and leaves it alone (§5.7).
+            let slug = placement_at(dir, &rel, &concept.title).slug;
             if is_evicted_stub(&at) {
                 hydrate_if_evicted(&at);
                 still_ours.insert(concept.id.clone());
-                entries.push((place.slug.clone(), concept.title.clone(), description));
+                entries.push((slug, concept.title.clone(), description));
                 continue;
             }
             let unchanged = prior.is_some_and(|p| p.hash == hash) && at.exists();
@@ -578,7 +625,7 @@ pub fn write_bundle(
             manifest.concepts.insert(
                 concept.id.clone(),
                 OkfManifestEntry {
-                    path: place.path.clone(),
+                    path: rel,
                     adopted,
                     hash,
                     wrote_at: concept.generated_at,
@@ -586,7 +633,7 @@ pub fn write_bundle(
                 },
             );
             still_ours.insert(concept.id.clone());
-            entries.push((place.slug.clone(), concept.title.clone(), description));
+            entries.push((slug, concept.title.clone(), description));
         }
         listings.insert(dir, entries);
     }
@@ -601,6 +648,12 @@ pub fn write_bundle(
         .collect();
     for id in gone {
         if let Some(entry) = manifest.concepts.remove(&id) {
+            // Only if nothing else claims it. A collision that moved another
+            // concept onto this path would otherwise have its file deleted
+            // out from under it, leaving `index.md` linking at nothing.
+            if manifest.concepts.values().any(|e| e.path == entry.path) {
+                continue;
+            }
             if std::fs::remove_file(bundle.join(&entry.path)).is_ok() {
                 out.removed += 1;
             }

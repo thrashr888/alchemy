@@ -311,6 +311,19 @@ code already has two places that mean "this changed":
   exception (there is nothing left to index), so `delete_notes` reads the
   owning notebooks before the rows go.
 
+**A path already held is a path kept.** §5.2 said a concept whose title
+re-slugs moves, which read as "recompute every name from the title on every
+pass" — and that is how one file got destroyed. A conflict copy carrying the
+same `title:` as an existing note made a second concept; the newcomer took the
+base slug, the older concept was renamed on top of it, and the base-slug file
+went with it while the manifest still claimed it and `index.md` still linked
+it. So placement now runs in two passes: a concept whose manifest path is
+still in its own slug's family (`orders.md`, or the `orders-2.md` a collision
+gave it) keeps that path, and only what is left picks a fresh name, avoiding
+everything already claimed. A file moves when its title genuinely re-slugs and
+at no other time. Two more rules fall out of the same reading: the writer
+never renames onto, and never removes, a path another manifest entry claims.
+
 Two smaller decisions: `write_bundle` is one function for both the seed pass
 and every write after it — a bundle nobody has written has an empty manifest,
 so everything counts as changed, which is exactly what a first export means.

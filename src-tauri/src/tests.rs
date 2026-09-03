@@ -1749,6 +1749,149 @@ fn okf_a_hand_added_file_lands_once() {
     }
 }
 
+/// Two concepts that slug to one name keep two files (docs/RFC-okf-live.md
+/// §5.2).
+///
+/// In 0.55.0 a conflict copy carrying the same `title:` as an existing note
+/// made a second concept, the writer put the newcomer at the base slug and
+/// then renamed the older concept on top of it — so `dropbox-test-note.md`
+/// vanished, the manifest still claimed it, and `index.md` linked at a file
+/// that was not there. The older concept now keeps the path it holds and the
+/// newcomer dedupes with `-2`, the way the exporter always has.
+#[test]
+fn okf_a_slug_collision_keeps_both_files() {
+    use crate::okf::{load_manifest, write_bundle, OkfConcept};
+    let dir = okf_scratch("collision");
+    let bundle = dir.join("bundle");
+    let manifest_at = okf_manifest(&bundle);
+    let note = |id: &str, body: &str| OkfConcept {
+        id: id.into(),
+        title: "Dropbox test note".into(),
+        content: body.into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+
+    // The note that is already on disk.
+    let first = note("note-first", "The original body.");
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&first),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("seed");
+    assert!(bundle.join("notes/dropbox-test-note.md").is_file());
+
+    // The conflict copy arrives as a second concept with the same title.
+    let second = note("note-copy", "CONFLICT-MARKER the copy's body.");
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        &[first.clone(), second],
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("second pass");
+
+    let base = std::fs::read_to_string(bundle.join("notes/dropbox-test-note.md"))
+        .expect("the older concept keeps its file");
+    assert!(
+        base.contains("The original body."),
+        "and keeps its own text, not the newcomer's"
+    );
+    let copy = std::fs::read_to_string(bundle.join("notes/dropbox-test-note-2.md"))
+        .expect("the newcomer dedupes with -2");
+    assert!(copy.contains("CONFLICT-MARKER"));
+
+    // Every path the manifest claims exists, and every link in index.md
+    // resolves — the two things the collision broke.
+    let manifest = load_manifest(&manifest_at);
+    assert_eq!(manifest.concepts.len(), 2);
+    for entry in manifest.concepts.values() {
+        assert!(
+            bundle.join(&entry.path).is_file(),
+            "the manifest claims {} but it is not there",
+            entry.path
+        );
+    }
+    let index = std::fs::read_to_string(bundle.join("notes/index.md")).expect("listing");
+    for line in index.lines().filter(|l| l.starts_with("- [")) {
+        let target = line
+            .split_once("](")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(t, _)| t)
+            .expect("a link");
+        assert!(
+            bundle.join("notes").join(target).is_file(),
+            "index.md links {target}, which is not there"
+        );
+    }
+}
+
+/// The writer never removes a file another manifest entry claims
+/// (docs/RFC-okf-live.md §5.2) — the second half of the collision bug, where
+/// the prune step took the surviving concept's file with the dead one's.
+#[test]
+fn okf_never_removes_a_file_another_concept_claims() {
+    use crate::okf::{load_manifest, write_bundle, OkfConcept, OkfManifestEntry};
+    let dir = okf_scratch("claimguard");
+    let bundle = dir.join("bundle");
+    let manifest_at = okf_manifest(&bundle);
+    let keeper = OkfConcept {
+        id: "note-keeper".into(),
+        title: "Shared name".into(),
+        content: "The surviving body.".into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&keeper),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("seed");
+
+    // A stale entry pointing at the keeper's file, for a concept the
+    // notebook no longer has — exactly the state a collision left behind.
+    let mut manifest = load_manifest(&manifest_at);
+    manifest.concepts.insert(
+        "note-dead".into(),
+        OkfManifestEntry {
+            path: "notes/shared-name.md".into(),
+            hash: "0".into(),
+            ..Default::default()
+        },
+    );
+    std::fs::write(
+        &manifest_at,
+        serde_json::to_string(&manifest).expect("json"),
+    )
+    .expect("save");
+
+    let out = write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&keeper),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("third pass");
+    assert_eq!(out.removed, 0, "nothing was ours to remove");
+    assert!(
+        bundle.join("notes/shared-name.md").is_file(),
+        "the keeper's file survived the dead entry's prune"
+    );
+    assert!(!load_manifest(&manifest_at)
+        .concepts
+        .contains_key("note-dead"));
+}
+
 /// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
 /// `index.md` and `log.md` at any level are the table of contents and the
 /// history, and neither ever becomes a source.
