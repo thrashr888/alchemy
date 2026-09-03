@@ -4456,7 +4456,7 @@ struct ScanOutcome {
 /// Max iCloud stubs to request a download for in a single scan pass — bounds
 /// the fire-and-forget `brctl download` fan-out on a freshly-added drive.
 #[cfg(target_os = "macos")]
-const ICLOUD_HYDRATE_CAP: usize = 32;
+pub(crate) const ICLOUD_HYDRATE_CAP: usize = 32;
 
 /// Case-insensitive extension test.
 fn has_ext(path: &std::path::Path, want: &str) -> bool {
@@ -4471,6 +4471,28 @@ fn has_ext(path: &std::path::Path, want: &str) -> bool {
 /// code by `ingest::is_code_path`, and unknown extensions by a text sniff.
 /// Cloud-evicted files come back as placeholders rather than being dropped —
 /// except unknown ones, which can't be sniffed without forcing a download.
+/// Ask iCloud to download this pass's eviction stubs so the next resync
+/// ingests them. `brctl` returns immediately — bird does the transfer in the
+/// background — and we reap in a detached blocking task so no zombies pile
+/// up across the app's lifetime. Shared with the bound-bundle reconciler
+/// (docs/RFC-okf-live.md §5.6): a note written on the other Mac has to
+/// hydrate before it can be read, and waiting for a Finder visit is not a
+/// sync story.
+#[cfg(target_os = "macos")]
+pub(crate) fn hydrate_icloud_stubs(stubs: Vec<String>) {
+    if stubs.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        for stub in stubs {
+            let _ = std::process::Command::new("brctl")
+                .arg("download")
+                .arg(&stub)
+                .status();
+        }
+    });
+}
+
 fn scan_folder(root: &std::path::Path) -> ScanOutcome {
     let pruned: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
     let pruned_rec = pruned.clone();
@@ -4894,17 +4916,7 @@ async fn rescan_one_folder_inner(
     // the transfer in the background — and we reap in a detached blocking task
     // so no zombies pile up across the app's lifetime.
     #[cfg(target_os = "macos")]
-    if !outcome.icloud_stubs.is_empty() {
-        let stubs = outcome.icloud_stubs;
-        tokio::task::spawn_blocking(move || {
-            for stub in stubs {
-                let _ = std::process::Command::new("brctl")
-                    .arg("download")
-                    .arg(&stub)
-                    .status();
-            }
-        });
-    }
+    hydrate_icloud_stubs(outcome.icloud_stubs);
     on_disk.retain(|e| !claimed.contains(e.path.as_str()));
     // The include ladder (RFC-git-sources §1): a "Docs" source lists prose
     // only — code is out of scope entirely, not merely unembedded.

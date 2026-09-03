@@ -85,10 +85,53 @@ fn link_text(s: &str) -> String {
     s.replace(['[', ']'], " ").trim().to_string()
 }
 
-/// Who wrote a concept file: the `generated.by` actor, and the attribution
-/// on every `log.md` entry (OKF v0.2 §5.2).
+/// The app acting on its own initiative: a generation, a curator move, a
+/// refresh, an import. Never a person (see `okf_human`).
 pub(crate) fn okf_writer() -> String {
     concat!("alchemy/", env!("CARGO_PKG_VERSION")).to_string()
+}
+
+/// This Mac's account, the macOS short name. `USER` is set for GUI apps by
+/// launchd as well as for shells; `id -un` is the fallback for the odd
+/// environment that clears it.
+pub(crate) fn okf_account() -> String {
+    if let Ok(user) = std::env::var("USER") {
+        if !user.trim().is_empty() {
+            return user.trim().to_string();
+        }
+    }
+    if let Ok(user) = std::env::var("LOGNAME") {
+        if !user.trim().is_empty() {
+            return user.trim().to_string();
+        }
+    }
+    std::process::Command::new("/usr/bin/id")
+        .arg("-un")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// A person, on this Mac. Two Macs sharing a folder are usually one person
+/// with one short name, which is the point: an edit made on either reads as
+/// the same human, not as a stranger to be attributed.
+pub(crate) fn okf_human() -> String {
+    format!("human:{}", okf_account())
+}
+
+/// Is this by-line one of ours — this app, or this person? Everything else
+/// is somebody else, and §5.3 attributes their edits to them.
+pub(crate) fn okf_is_ours(by: &str) -> bool {
+    by == okf_writer() || by == okf_human()
+}
+
+/// Does this actor read as a machine? `name/version` is the shape both
+/// `alchemy/<version>` and other producers use; `human:` is explicitly not.
+pub(crate) fn okf_actor_is_machine(actor: &str) -> bool {
+    actor == "auto" || (!actor.starts_with("human:") && actor.contains('/'))
 }
 
 /// One concept file's worth of what the bundle writer needs. Decoupled from
@@ -106,6 +149,10 @@ pub(crate) struct OkfConcept {
     pub tags: Vec<String>,
     /// `generated.at`: `created_at` for sources, `updated_at` for notes.
     pub generated_at: i64,
+    /// `generated.by` — who made this version. A person on this Mac
+    /// (`human:<account>`) or the app on its own (`alchemy/<version>`), per
+    /// §5.6. Empty falls back to the app.
+    pub generated_by: String,
     /// `status:` — "" | "draft" | "deprecated".
     pub status: String,
     /// `sources:` — ids of the concepts this one was derived from. Resolved
@@ -150,6 +197,7 @@ impl OkfConcept {
             resource: String::new(),
             tags: Vec::new(),
             generated_at: 0,
+            generated_by: String::new(),
             status: String::new(),
             derived_from: Vec::new(),
             alchemy: Vec::new(),
@@ -236,7 +284,11 @@ fn okf_frontmatter(
         fm.push_str(&format!("status: {}\n", concept.status));
     }
     fm.push_str("generated:\n");
-    fm.push_str(&format!("  by: {}\n", yaml_str(&okf_writer())));
+    let by = match concept.generated_by.as_str() {
+        "" => okf_writer(),
+        actor => actor.to_string(),
+    };
+    fm.push_str(&format!("  by: {}\n", yaml_str(&by)));
     fm.push_str(&format!(
         "  at: {}\n",
         yaml_str(&okf_timestamp(concept.generated_at))
@@ -277,14 +329,20 @@ fn okf_frontmatter(
     fm
 }
 
-/// Append one dated entry to the bundle's `log.md` (spec §9). A day already
-/// present gains a bullet; a new day gains a heading. The file is a history,
-/// not a stamp — which is what makes a bundle rewritten every night worth
-/// reading.
+/// Append one dated entry to the bundle's `log.md` (spec §9). The file is a
+/// history, not a stamp — which is what makes a bundle rewritten every night
+/// worth reading.
+///
+/// **The heading names the writer, not just the day** (§5.6). Two Macs
+/// sharing one folder appending under one heading is its own newest-wins
+/// race, and the entry that records a lost conflict is precisely the one
+/// that must not lose. Each install writes under `## <day> — <account>`, so
+/// the two sides append to different blocks and a cloud tool has an easy
+/// merge instead of a clash.
 pub(crate) fn okf_log_append(bundle: &std::path::Path, entry: &str) -> Result<(), String> {
     let path = bundle.join("log.md");
     let now = chrono::Utc::now();
-    let day = now.format("%Y-%m-%d").to_string();
+    let heading = format!("## {} \u{2014} {}", now.format("%Y-%m-%d"), okf_account());
     let at = now.format("%H:%M:%SZ").to_string();
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -296,9 +354,10 @@ pub(crate) fn okf_log_append(bundle: &std::path::Path, entry: &str) -> Result<()
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    // Entries arrive in order, so the newest day is always the last heading.
-    if !out.contains(&format!("\n## {day}\n")) {
-        out.push_str(&format!("\n## {day}\n\n"));
+    // This writer's newest day is always its last block, so a bullet appended
+    // at the end lands under the right heading.
+    if !out.contains(&format!("\n{heading}\n")) {
+        out.push_str(&format!("\n{heading}\n\n"));
     }
     out.push_str(&format!("- {at} {entry} ({})\n", okf_writer()));
     std::fs::write(&path, out).map_err(|err| format!("Failed to write {path:?}: {err}"))
@@ -321,12 +380,15 @@ pub fn write_bundle(
     sources: &[OkfConcept],
     notes: &[OkfConcept],
     bundle: &Path,
+    manifest_at: Option<&Path>,
 ) -> Result<OkfWrite, String> {
     std::fs::create_dir_all(bundle).map_err(|err| format!("Failed to create {bundle:?}: {err}"))?;
     let write = |path: &Path, text: &str| -> Result<(), String> {
         std::fs::write(path, text).map_err(|err| format!("Failed to write {path:?}: {err}"))
     };
-    let mut manifest = load_manifest(bundle);
+    // `None` is a one-shot export into a fresh directory: there is no last
+    // time to compare against and no record worth keeping afterwards.
+    let mut manifest = manifest_at.map(load_manifest).unwrap_or_default();
     let mut out = OkfWrite::default();
 
     // Slugs are claimed per directory, so two sources called "Notes" become
@@ -500,7 +562,9 @@ pub fn write_bundle(
 
     out.sources = listings.get("sources").map(Vec::len).unwrap_or(0);
     out.notes = listings.get("notes").map(Vec::len).unwrap_or(0);
-    save_manifest(bundle, &manifest);
+    if let Some(path) = manifest_at {
+        save_manifest(path, &manifest);
+    }
     // A pass that changed nothing says nothing: a log of "no change" every
     // night is not a history, it is noise.
     if out.changed() {
@@ -528,15 +592,54 @@ pub fn write_bundle(
 }
 
 /// A note's lifecycle in the bundle (§3): the curator's archive is the
-/// spec's `deprecated`, and anything the app wrote on its own initiative is
-/// a `draft` until a person has touched it.
+/// spec's `deprecated`, and anything a *machine* wrote on its own initiative
+/// is a `draft` until a person has touched it.
+///
+/// Since §5.3, an origin can also name a person (`human:kim`, from an edit
+/// made on another Mac). A person's note is not a draft, so only machine
+/// origins — the curator's `auto`, or a `name/version` producer — earn one.
 fn okf_note_status(note: &Note) -> String {
     if note.status == "archived" {
         "deprecated".into()
-    } else if !note.origin.is_empty() {
+    } else if okf_actor_is_machine(&note.origin) {
         "draft".into()
     } else {
         String::new()
+    }
+}
+
+/// Who last made this note, as far as the store records it (§5.6).
+///
+/// `origin` carries an outside actor verbatim once read-back has attributed
+/// one, so that wins. `auto` is the curator or the chat post-pass. A kind
+/// other than `note` is something the Studio generated. Everything left is a
+/// note a person wrote or edited in the app.
+fn okf_note_actor(note: &Note) -> String {
+    match note.origin.as_str() {
+        "" => {
+            if note.kind == "note" {
+                okf_human()
+            } else {
+                okf_writer()
+            }
+        }
+        "auto" => okf_writer(),
+        actor => actor.to_string(),
+    }
+}
+
+/// Who last made this source (§5.6).
+///
+/// Every source arrives by import, which is the app acting on its own. The
+/// one thing the store records about a person touching one afterwards is the
+/// user's own tags and their note — both documented as ground truth from the
+/// user — so those, and only those, make it a person's. A bare rename is not
+/// recorded anywhere, so it does not move the by-line; see the RFC.
+fn okf_source_actor(source: &Source) -> String {
+    if source.tags.trim().is_empty() && source.note.trim().is_empty() {
+        okf_writer()
+    } else {
+        okf_human()
     }
 }
 
@@ -578,6 +681,7 @@ pub(crate) async fn gather_bundle(
             resource,
             tags: vec![s.source_type.clone()],
             generated_at: s.created_at,
+            generated_by: okf_source_actor(s),
             // What the spec has no field for. `source_type` is the real type
             // (the top-level `tags:` is the spec-facing one); `tags` is the
             // user's own labels; `image_url` spares the gallery a refetch.
@@ -642,6 +746,7 @@ pub(crate) async fn gather_bundle(
             }
             .to_string(),
             generated_at: note.updated_at,
+            generated_by: okf_note_actor(note),
             status: okf_note_status(note),
             derived_from: cites.get(&note.id).cloned().unwrap_or_default(),
             // `type:` is a human label and several kinds share one; `kind` is
@@ -687,7 +792,7 @@ pub async fn export_notebook_okf(
         bundle = base.join(format!("{nb_slug}-{n}"));
         n += 1;
     }
-    write_bundle(&notebook, &sources, &notes, &bundle)?;
+    write_bundle(&notebook, &sources, &notes, &bundle, None)?;
     Ok(bundle.display().to_string())
 }
 
@@ -717,7 +822,17 @@ pub(crate) async fn export_all(
             format!("{base}-{count}")
         };
         let (notebook, sources, notes) = gather_bundle(state, &nb.id).await?;
-        let written = write_bundle(&notebook, &sources, &notes, &dest.join(&slug))?;
+        // The nightly copy keeps its own manifest — beside the bindings, not
+        // in the bundle — so tonight can drop the concepts last night wrote
+        // for a source that has since gone.
+        let manifest = manifest_path(&app_data_dir(state), &format!("nightly-{slug}"));
+        let written = write_bundle(
+            &notebook,
+            &sources,
+            &notes,
+            &dest.join(&slug),
+            Some(&manifest),
+        )?;
         concepts += written.sources + written.notes;
         kept.insert(slug);
     }
@@ -1134,6 +1249,12 @@ fn parse_okf_scalars(head: &str) -> serde_yaml_ng::Mapping {
 #[serde(rename_all = "camelCase")]
 pub struct OkfBinding {
     pub path: String,
+    /// This binding's own id, and the name of its manifest file. Minted per
+    /// bind rather than reusing the notebook id: rebinding to a different
+    /// folder must start from a clean record, not inherit the old one's
+    /// paths and hashes.
+    #[serde(default)]
+    pub id: String,
     /// Epoch ms of the last successful write; 0 until the seed pass lands.
     #[serde(default)]
     pub last_write_at: i64,
@@ -1204,25 +1325,51 @@ pub struct OkfManifest {
     pub concepts: HashMap<String, OkfManifestEntry>,
 }
 
-fn manifest_path(bundle: &Path) -> PathBuf {
-    bundle.join(".alchemy").join("manifest.json")
+/// Where a binding's manifest lives: `<app-data>/okf/<binding-id>.json`,
+/// outside the bundle (§5.6).
+///
+/// It used to sit in `.alchemy/manifest.json` inside the bundle, which is
+/// wrong the moment the folder is shared. Entity ids are this machine's;
+/// another Mac binding the same folder must never read them, and two writers
+/// must never contend for one file. Out here, each install keeps its own
+/// record and the bundle carries nothing machine-shaped at all.
+pub fn manifest_path(data_dir: &Path, binding_id: &str) -> PathBuf {
+    data_dir.join("okf").join(format!("{binding_id}.json"))
 }
 
-pub fn load_manifest(bundle: &Path) -> OkfManifest {
-    std::fs::read_to_string(manifest_path(bundle))
+pub fn load_manifest(path: &Path) -> OkfManifest {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
-fn save_manifest(bundle: &Path, manifest: &OkfManifest) {
-    let path = manifest_path(bundle);
+fn save_manifest(path: &Path, manifest: &OkfManifest) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(json) = serde_json::to_string_pretty(manifest) {
         let _ = std::fs::write(path, json);
     }
+}
+
+/// The in-bundle manifest this branch's earlier builds wrote. Adopted once
+/// on bind and then deleted, so an existing bound folder keeps its hashes
+/// instead of rewriting every file — and stops carrying machine state.
+pub(crate) fn adopt_legacy_manifest(bundle: &Path, manifest: &Path) {
+    let legacy = bundle.join(".alchemy");
+    let legacy_file = legacy.join("manifest.json");
+    if !legacy_file.exists() {
+        return;
+    }
+    if !manifest.exists() {
+        if let Some(dir) = manifest.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::copy(&legacy_file, manifest);
+    }
+    let _ = std::fs::remove_dir_all(&legacy);
+    crate::note!("okf: adopted the in-bundle manifest at {legacy_file:?} and removed it");
 }
 
 /// FNV-1a over the file's bytes, hex. Not a crate: this only ever compares
@@ -1321,14 +1468,15 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let binding = binding_for(&data_dir, notebook_id)
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
     let bundle = PathBuf::from(&binding.path);
+    let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle(state, notebook_id).await?;
-    let written = write_bundle(&notebook, &sources, &notes, &bundle)?;
+    let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
     set_binding(
         &data_dir,
         notebook_id,
         Some(OkfBinding {
-            path: binding.path,
             last_write_at: now_ms(),
+            ..binding
         }),
     );
     Ok(written)
@@ -1379,11 +1527,18 @@ pub(crate) async fn bind_impl(
             .await?;
     }
     let data_dir = app_data_dir(state);
+    let id = new_id();
+    let manifest = manifest_path(&data_dir, &id);
+    // Earlier builds of this branch kept the manifest inside the bundle.
+    // Take it over so a folder already bound keeps its hashes instead of
+    // rewriting every file, then leave the bundle machine-state-free.
+    adopt_legacy_manifest(&bundle, &manifest);
     set_binding(
         &data_dir,
         notebook_id,
         Some(OkfBinding {
             path: path.to_string(),
+            id,
             last_write_at: 0,
         }),
     );
@@ -1516,6 +1671,37 @@ fn concept_files(bundle: &Path, dir: &str) -> Vec<PathBuf> {
     out
 }
 
+/// Concept files iCloud has evicted, as the stub paths that stand in for
+/// them (§5.6).
+///
+/// An undownloaded file is replaced by a hidden `.name.icloud` stub, which
+/// the allowlist skips — correctly, since there is nothing to read. But then
+/// a note written on the other Mac would sit unread until someone opened the
+/// folder in Finder, which is not a sync story. Folder sources already nudge
+/// these; bound roots use the same nudge, and the file reconciles on the
+/// pass after it lands.
+fn evicted_concepts(bundle: &Path, dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(bundle.join(dir)) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(real) = name
+            .strip_prefix('.')
+            .and_then(|n| n.strip_suffix(".icloud"))
+            .filter(|n| n.ends_with(".md") && !is_okf_reserved(n))
+        else {
+            continue;
+        };
+        // Only a stub standing in for a file that is genuinely not here.
+        if !bundle.join(dir).join(real).exists() {
+            out.push(entry.path().to_string_lossy().to_string());
+        }
+    }
+    out
+}
+
 fn file_mtime_ms(path: &Path) -> i64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -1526,13 +1712,17 @@ fn file_mtime_ms(path: &Path) -> i64 {
 }
 
 /// Who a concept file says last wrote it, when that is somebody other than
-/// this app. Our own writes stamp `generated.by: alchemy/<version>` on every
-/// file, so seeing our own by-line means nobody claimed it — a person edited
-/// the body and left the frontmatter alone, which is a deliberate edit and
-/// clears the note's origin as an in-app edit would (§5.3).
+/// this app or this person.
+///
+/// Our own writes stamp `alchemy/<version>` or `human:<this account>`, so
+/// either by-line means nobody else claimed the file — a deliberate edit,
+/// which clears the note's origin exactly as an in-app edit does (§5.3).
+/// That covers the two-Mac case on purpose: the same person editing on the
+/// other machine is still that person, not a stranger to attribute. Anyone
+/// else — `human:kim`, `okf-pipeline/2.1` — keeps their name.
 fn outside_actor(doc: &OkfDoc) -> String {
     match doc.nested("generated", "by") {
-        Some(by) if by != okf_writer() => by,
+        Some(by) if !okf_is_ours(&by) => by,
         _ => String::new(),
     }
 }
@@ -1556,7 +1746,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     if !bundle.is_dir() {
         return Ok(OkfReconcile::default());
     }
-    let mut manifest = load_manifest(&bundle);
+    let manifest_at = manifest_path(&data_dir, &binding.id);
+    let mut manifest = load_manifest(&manifest_at);
     // Path → entity id, the direction the reconciler reads in.
     let by_path: HashMap<String, String> = manifest
         .concepts
@@ -1566,6 +1757,18 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     let mut out = OkfReconcile::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
+
+    // Ask for anything the cloud has evicted before reading what is here, so
+    // the next pass finds it (§5.6). Bounded by the same cap folder scans use.
+    #[cfg(target_os = "macos")]
+    {
+        let mut stubs: Vec<String> = ["sources", "notes"]
+            .iter()
+            .flat_map(|dir| evicted_concepts(&bundle, dir))
+            .collect();
+        stubs.truncate(crate::commands::ICLOUD_HYDRATE_CAP);
+        crate::commands::hydrate_icloud_stubs(stubs);
+    }
 
     for dir in ["sources", "notes"] {
         for path in concept_files(&bundle, dir) {
@@ -1651,7 +1854,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         }
     }
     if out.deleted > 0 {
-        save_manifest(&bundle, &manifest);
+        save_manifest(&manifest_at, &manifest);
     }
 
     // Nothing is lost silently (§5.4): the text that lost the race is written

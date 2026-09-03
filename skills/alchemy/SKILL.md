@@ -124,7 +124,12 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
 - Only `sources/**.md` and `notes/**.md` are read. Anything else you put in
   the folder — config, scripts, a README, whatever `ok init` adds — is
   yours and is never ingested.
-- `.alchemy/manifest.json` is Alchemy's bookkeeping. Leave it alone.
+- The folder holds no Alchemy bookkeeping at all — that record lives outside
+  it, so one folder can be shared over iCloud or Dropbox and each Mac keeps
+  its own. Everything in the bundle is knowledge or listings.
+- `generated.by` says who made a version: `human:<account>` for a person,
+  `alchemy/<version>` for the app. Put your own name there when you edit a
+  file and the attribution sticks.
 
 `bind_notebook_okf(notebook_id, path)` starts this: an empty folder is
 seeded from the notebook; a folder that already holds a bundle is imported

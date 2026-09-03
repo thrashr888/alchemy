@@ -437,6 +437,66 @@ Test: two data dirs, one folder. Bind on both, write a note on A, read
 it on B, edit it on B, read it back on A; each side's manifest stays its
 own, the log carries both actors, and neither pass echoes.
 
+### Shared folders, as built
+
+- **The manifest is keyed by a binding id, not the notebook id.** Rebinding a
+  notebook to a different folder has to start from a clean record; inheriting
+  the old folder's paths and hashes would make the first write to the new one
+  a no-op for every file. So `OkfBinding` mints an `id` and the manifest is
+  `<app-data>/okf/<id>.json`. `write_bundle` takes the manifest location as
+  an argument, and `None` means a one-shot export into a fresh directory —
+  there is no last time to compare against and no record worth keeping.
+- **The nightly copy keeps a manifest too**, under `nightly-<slug>`, because
+  it still needs to drop the concepts last night wrote for a source that has
+  since gone. It lives beside the bindings, never in the bundle.
+- **Migration** happens on bind: a `.alchemy/manifest.json` from this
+  branch's earlier builds is copied to the new location and the directory
+  removed, so an already-bound folder keeps its hashes rather than rewriting
+  every file on the next pass.
+
+**Actors, and the one thing the store does not record.** A note's actor comes
+off what is already there: an `origin` naming an outside actor wins, `auto`
+is the curator, a `kind` other than `note` is a Studio generation, and what
+is left is a note a person wrote or edited — `human:<account>`. For a source,
+every arrival is an import, and the only record of a person touching one
+afterwards is the user's own tags and their note (both documented as ground
+truth from the user), so those and only those make it a person's. **A bare
+rename is not recorded anywhere**, so it does not move the by-line. Fixing
+that means either a column or a per-source sidecar; neither is worth it until
+someone notices the by-line is wrong after a rename.
+
+Two knock-on decisions:
+
+- **`human:` origins are not drafts.** §3 says a non-empty `origin` writes
+  `status: draft`, but since §5.3 an origin can name a person. A note Kim
+  edited is not a draft, so only machine origins — `auto`, or a
+  `name/version` producer — earn one.
+- **The same person on the other Mac is not a stranger.** `okf_is_ours`
+  covers both `alchemy/<version>` and `human:<this account>`, so an edit made
+  on the other Mac by the same short name clears origin as a deliberate edit
+  rather than being attributed to a third party. That is the two-Mac case
+  §5.6 is about; a different account keeps its name.
+
+**The log heading carries the account**, not just the day, so two installs
+append to different blocks and a cloud tool has a merge instead of a clash.
+Two Macs with different short names never collide; two with the *same* short
+name still share a heading, which is the one case this does not fix and the
+case where the two writers are most likely to be the same person anyway.
+
+**The two-machine test is two manifests and two binding ids** driving one
+writer and one classifier against one folder — which is what two installs
+are. It is not two `AppState`s: one of those needs an `Ai`, a config path, a
+generation queue and a Tauri handle, none of which a unit test can stand up
+and none of which this behaviour depends on. The `Db` is not the obstacle;
+`AppState` is.
+
+**Conflict copies need no code.** `<name> (conflicted copy).md` and
+`<name> 2.md` pass the allowlist, carry no manifest entry, and so classify as
+`Create` — ordinary new concepts, which is the "keep both" outcome. Both
+copies keep the frontmatter `title:`, so they read as two notes with one
+name and the writer's slug dedup keeps both files. Tested rather than
+special-cased.
+
 ## 6. Originals travel in `references/`
 
 A PDF, an image, a `.docx` crosses today as extracted text: the other Mac
