@@ -415,18 +415,11 @@ timeline.
 - **Card parse drift.** cider output changing shape breaks the stocks card
   silently into "no card". Fallback is prose, so nothing is lost, and a
   fixture test per card pins the format.
-- **cider prints to stderr from library paths.** `watch` announces itself
-  and notes a missing store with `eprintln!`, and `watch_via`'s CLI branch
-  does the same; `eprintln!` panics on a closed stderr and has aborted this
-  app from an FFI callback before (diagnostics.rs). `macwatch.rs` therefore
-  calls `watch` only, filters the stores for presence before calling it, and
-  skips the watch when stderr is already closed. The fix belongs upstream —
-  a quiet library path, or a logging hook — and is a cider follow-up.
-
-## Decisions (2026-09-01)
-
-Three questions the draft left open, settled in review:
-
+- **cider's library paths printed to stderr** (`eprintln!`), which panics
+  on a closed stderr and has aborted this app before. Fixed upstream in
+  cider 0.6.2: the library logs through the `log` facade, and
+  `diagnostics::install_log_bridge` routes those lines into the app log.
+  Alchemy pins 0.6.2 and uses the full `watch_via(Via::Auto)` path.
 - **Feed parents hold a rolling index** of their kept entries and re-embed
   on change (§2). Reports and the wiki fold got measurably better once they
   could see indexes and prior versions of themselves; feeds start there.

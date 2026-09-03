@@ -126,6 +126,7 @@ dependencies = [
  "kamadak-exif",
  "kokoro-en",
  "lancedb",
+ "log",
  "model2vec-rs",
  "notify",
  "objc2",
@@ -1363,11 +1364,13 @@ dependencies = [
 
 [[package]]
 name = "cider-cli"
-version = "0.6.0"
-source = "git+https://github.com/thrashr888/cider?tag=v0.6.0#03def0295fc62d26ba85910c594d9a5cbe64e5fa"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab1c533503e475fdd8ac32c30f3e02eeabfc4fbc520dc910406049316a3d0b74"
 dependencies = [
  "anyhow",
  "chrono",
+ "log",
  "notify",
  "plist",
  "serde",

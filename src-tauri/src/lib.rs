@@ -314,7 +314,9 @@ pub fn run() {
             fswatch::start(app.handle().clone());
             // FSEvents over the Reminders, Calendar, and Notes stores through
             // cider's watch (docs/RFC-events.md §4, phase 5); the minute
-            // sweep's Mac cadence stays underneath it.
+            // sweep's Mac cadence stays underneath it. cider logs through
+            // the `log` facade; the bridge lands those lines in our log.
+            diagnostics::install_log_bridge();
             macwatch::start(app.handle().clone());
             // The queue worker drains generations the webview only watches;
             // jobs interrupted by the last shutdown are already re-queued.

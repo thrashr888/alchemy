@@ -155,6 +155,36 @@ impl Event {
 ///
 /// This writes through `writeln!`, which returns the error instead, and
 /// drops it. Progress chatter is never worth a crash.
+/// The `log` facade, routed into the app log. Linked crates (cider) log
+/// instead of printing since cider 0.6.2 — printing to a closed stderr
+/// aborted this app in the field — and without a logger installed those
+/// lines vanish silently. Warnings and above become notes with the
+/// crate's target as prefix; debug and trace stay off.
+struct NoteLogger;
+
+impl log::Log for NoteLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            crate::note!("{}: {}", record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static NOTE_LOGGER: NoteLogger = NoteLogger;
+
+/// Install the bridge once, at setup. A second call is a no-op.
+pub fn install_log_bridge() {
+    if log::set_logger(&NOTE_LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
 #[macro_export]
 macro_rules! note {
     ($($arg:tt)*) => {{

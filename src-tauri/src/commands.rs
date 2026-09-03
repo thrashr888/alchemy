@@ -3179,22 +3179,14 @@ pub(crate) async fn refresh_source_impl(
         });
     }
     if crate::mac::is_mac_uri(&existing.url) {
-        // Mac item — re-fetch through cider and re-embed. Like files, a
-        // failed fetch (permission prompt pending, app closed) must not wipe
-        // the working source.
-        let (_, text) = crate::mac::fetch(&existing.url).await?;
-        let mut existing = existing;
-        existing.mtime = crate::mac::content_stamp(&text);
-        let extracted = ingest::Extracted {
-            feeds: Vec::new(),
-            image_url: String::new(),
-            author: String::new(),
-            title: existing.title.clone(),
-            source_type: "mac".to_string(),
-            url: existing.url.clone(),
-            text,
-        };
-        return reingest(state, &existing, extracted, None, true).await;
+        // Mac item — the same tail every Mac refresh takes (the watch, the
+        // sweep, the write-backs): item events, no-op when unchanged, and
+        // the scan lock so a concurrent watch resync cannot double-count.
+        // Like files, a failed fetch (permission prompt pending, app
+        // closed) must not wipe the working source.
+        return resync_mac_source(state, existing)
+            .await
+            .map_err(anyhow::Error::msg);
     }
     // Git-backed singles (README/blob) refresh from their cache clone — the
     // cache dir is the definitive marker; page captures of github.com URLs
@@ -4134,10 +4126,15 @@ pub async fn complete_mac_reminder(
 }
 
 /// Post-write resync: fetch the item's current state and re-embed it.
+/// Under the scan lock: the store change this write caused wakes the Mac
+/// watch too, and two resyncs diffing the same pre-write text both wrote
+/// the item event. Serialized, the second sees the first's text and is a
+/// no-op (`resync_mac_text`).
 pub(crate) async fn resync_mac_source(
     state: &AppState,
     existing: Source,
 ) -> Result<Source, String> {
+    let _guard = state.folder_scan_lock.lock().await;
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
     resync_mac_text(state, existing, text).await
 }
@@ -4168,6 +4165,14 @@ pub(crate) async fn resync_mac_text(
             .source_content(&existing.id)
             .await
             .unwrap_or_default();
+    }
+    // Nothing changed: no reingest, no event. A manual "Sync now" on an
+    // unchanged list used to write an empty-diff `updated` every time.
+    if existing.content == text {
+        return Ok(Source {
+            content: String::new(),
+            ..existing
+        });
     }
     let events = crate::mac::item_events(&existing.url, &existing.content, &text);
     existing.mtime = crate::mac::content_stamp(&text);

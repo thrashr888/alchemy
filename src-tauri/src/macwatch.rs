@@ -11,21 +11,21 @@
 //! zero; the fifteen-minute Mac cadence in the minute sweep stays as belt
 //! to these braces.
 //!
-//! FSEvents only (`watch`, never `watch_via`): cider's CLI-bridge branch and
-//! its missing-store path print with `eprintln!`, which panics on a closed
-//! stderr and has aborted this app before (diagnostics.rs). The stores are
-//! filtered for presence here so the library never reaches that line, and
-//! the watch is skipped outright when stderr is already gone. The upstream
-//! fix — a quiet library path — is a cider follow-up.
+//! `watch_via(Via::Auto)`: when Paul's `cider-bridge` CLI is installed the
+//! Reminders and Calendar stores stream EventKit's own change notifications
+//! (item-level, framework-debounced); everything else rides FSEvents. cider
+//! 0.6.2 made its library paths quiet — they log through the `log` facade,
+//! which diagnostics.rs routes into the app log — so nothing here can hit a
+//! closed stderr. Stores are still filtered for presence: a store that is
+//! not there has nothing to watch, and would only log a warning.
 //!
 //! Best-effort throughout: a watch that cannot start is recorded once and
 //! the sweep carries detection alone. Nothing here may take the app down.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use cider::sources::watch::{self, WatchSource};
+use cider::sources::watch::{self, Via, WatchSource};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
@@ -73,20 +73,34 @@ pub fn start(app: AppHandle) {
         crate::note!("macwatch: no Apple stores readable; the minute sweep carries Mac sources");
         return;
     }
-    // This line is the log entry and the probe in one: cider announces the
-    // watch with `eprintln!`, so a stderr that refuses this write would
-    // panic the watch task on its first line.
-    if writeln!(std::io::stderr(), "macwatch: watching {}", names(&sources)).is_err() {
-        return;
-    }
+    crate::note!("macwatch: watching {}", names(&sources));
     let (tx, rx) = mpsc::unbounded_channel::<&'static str>();
     tauri::async_runtime::spawn(run(app, rx));
     tauri::async_runtime::spawn(async move {
-        let result = watch::watch(&sources, STORE_DEBOUNCE, move |event| {
-            // A closed receiver means the loop is gone; nothing to do.
-            let _ = tx.send(event.source.name());
-        })
-        .await;
+        // A closed receiver means the loop is gone; nothing to do.
+        let forward = |tx: mpsc::UnboundedSender<&'static str>| {
+            move |event: watch::WatchEvent| {
+                let _ = tx.send(event.source.name());
+            }
+        };
+        let result = match watch::watch_via(
+            &sources,
+            STORE_DEBOUNCE,
+            Via::Auto,
+            forward(tx.clone()),
+        )
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // The bridge CLI can be installed yet unable to stream:
+                // EventKit access is granted per launching app, and a
+                // denial fails cider's joined watch, FSEvents half
+                // included. Files need no permission, so watch those.
+                crate::note!("macwatch: bridge watch failed ({err:#}); falling back to FSEvents");
+                watch::watch_via(&sources, STORE_DEBOUNCE, Via::Fsevents, forward(tx)).await
+            }
+        };
         match result {
             Ok(()) => crate::note!("macwatch: watch ended; the minute sweep carries Mac sources"),
             Err(err) => crate::diagnostics::error(
