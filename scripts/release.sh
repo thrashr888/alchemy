@@ -91,6 +91,20 @@ ICLOUD_CONTAINER="iCloud.com.thrashr888.alchemy"
 ICLOUD_BUILD_FLAGS=""
 # A stale copy from an earlier run must never ride along into a plain build.
 rm -f "$PROFILE_DEST"
+# The profile may live in 1Password rather than on disk: an op:// reference
+# (op://<vault>/<item>/<file name>) is fetched with the 1Password CLI into a
+# temp file, so nothing secret has to persist on the machine or travel with
+# it. The CLI prompts the desktop app for approval and gives up on its own
+# timeout, which fails this step before the build rather than after.
+if [ "${APPLE_PROVISIONING_PROFILE#op://}" != "${APPLE_PROVISIONING_PROFILE:-}" ]; then
+  command -v op >/dev/null 2>&1 || {
+    echo "APPLE_PROVISIONING_PROFILE is an op:// reference but the 1Password CLI (op) is not installed." >&2; exit 1; }
+  PROFILE_TMP="$(mktemp -t alchemy-profile).provisionprofile"
+  echo "==> Fetching the provisioning profile from 1Password (approve the prompt)"
+  op read "$APPLE_PROVISIONING_PROFILE" --out-file "$PROFILE_TMP" --force >/dev/null || {
+    echo "Could not read $APPLE_PROVISIONING_PROFILE from 1Password (see RELEASE.md)." >&2; exit 1; }
+  APPLE_PROVISIONING_PROFILE="$PROFILE_TMP"
+fi
 if [ -n "${APPLE_PROVISIONING_PROFILE:-}" ]; then
   [ -f "$APPLE_PROVISIONING_PROFILE" ] || {
     echo "No provisioning profile at $APPLE_PROVISIONING_PROFILE (see RELEASE.md)." >&2; exit 1; }

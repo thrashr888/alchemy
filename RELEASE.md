@@ -178,20 +178,38 @@ expiry.
    certificate — the same one `security find-identity` shows. Name it
    something you will recognise (`Alchemy Developer ID iCloud`) and Generate.
 4. **Download it.** You get a `.provisionprofile` file. Keep it out of the
-   repo; `~/Library/Developer/Alchemy/Alchemy.provisionprofile` is a fine
-   home. Back it up in 1Password alongside the updater key — it is
-   regenerable, but not while you are mid-release.
+   repo. The durable home is 1Password: a Document item in the Private
+   vault named "Alchemy Developer ID provisioning profile", which the
+   release script can read directly (below), so the file never has to
+   persist on a machine. Store or replace it with
+   `op document create <file> --title "Alchemy Developer ID provisioning profile" --vault Private`
+   (or `op document edit` for a regenerated one).
+
+Check the download before trusting it. A profile generated before the
+container was assigned to the App ID decodes fine but carries an empty
+`com.apple.developer.icloud-container-identifiers`, and the release script
+refuses it. Decode and look:
+
+```bash
+security cms -D -i Alchemy.provisionprofile | plutil -p - | grep -A3 icloud-container
+```
+
+If the array is empty, redo step 2's Edit (tick the container, Save), then
+generate and download the profile again; the earlier one is invalid.
 
 ### What to set on your machine
 
 | Variable | What it is |
 | -------- | ---------- |
-| `APPLE_PROVISIONING_PROFILE` | absolute path to the `.provisionprofile` from step 4 |
+| `APPLE_PROVISIONING_PROFILE` | absolute path to the `.provisionprofile` from step 4, or an `op://` reference to the 1Password document |
 
-Same rule as the rest: shell environment, never the repo.
+Same rule as the rest: shell environment, never the repo. The `op://` form
+is `op://<vault>/<item title>/<file name as stored>`; the script fetches it
+with `op read` into a temp file, after the 1Password app approves the
+request, and fails before the build if it cannot.
 
 ```bash
-export APPLE_PROVISIONING_PROFILE="$HOME/Library/Developer/Alchemy/Alchemy.provisionprofile"
+export APPLE_PROVISIONING_PROFILE="op://Private/Alchemy Developer ID provisioning profile/Alchemy_Developer_ID_iCloud.provisionprofile"
 RELEASE_APPROVED=yes scripts/release.sh 0.56.0
 ```
 
