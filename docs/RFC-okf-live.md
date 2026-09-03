@@ -612,14 +612,24 @@ Refresh has nothing to re-read. The spec already has the place for this
 from, addressable from `resource:`. The bundle grows one:
 
 ```
-references/<sha256-16>.pdf      # one file per distinct original
-sources/<slug>.md               # resource: references/<sha256-16>.pdf
-                                # alchemy: { origin: "file:///…/original.pdf" }
+references/2018 488 Spider brochure.pdf   # the original, under its own name
+sources/<slug>.md                         # resource: references/2018 488 Spider brochure.pdf
+                                          # alchemy: { origin: "file:///…/2018 488 Spider brochure.pdf",
+                                          #            sha256: "14030e98bcc8daf5" }
 ```
 
-**Named by content hash, written once.** Two sources over the same file
-share one reference; the nightly loop and every write-through skip a
-reference that already exists; renaming a source moves nothing. The
+**Named by the original file, deduplicated by hash.** A bundle is read by
+people as well as by programs, and `2018 488 Spider brochure.pdf` says
+what `14030e98bcc8daf5.pdf` cannot. The name is the original's own, kept
+as its maker wrote it — spaces, case and unicode included — with only what
+a filesystem or a path parser would choke on taken out and the length
+capped; a source whose origin has no filename (a clipboard image, a
+captured page) falls back to its slug. Identity is still the content hash,
+which now lives in the manifest (hash → the file that holds it) and in
+`alchemy.sha256`, never in the filename: two sources over the same file
+share one reference, the nightly loop and every write-through skip an
+original already carried, and a *different* file that happens to be called
+the same thing lands as `<stem>-2.<ext>` rather than overwriting it. The
 writer removes a reference only when no manifest-claimed concept points at
 it any more, so deleting a source takes its original with it and nothing
 else does.
@@ -664,9 +674,18 @@ asks for it rather than as a default that doubles every synced folder.
   the notebook row (which carries no source text) before reading anything, so
   an export still reads every source's content exactly once.
 - **Pruning only removes names the writer chose.** A reference is dropped
-  when no manifest-claimed concept points at it *and* its stem is sixteen hex
-  characters — a `handout.pdf` someone put in `references/` by hand is not
-  ours to delete.
+  when no manifest-claimed concept points at it *and* the manifest recorded
+  the writer choosing that name — a `handout.pdf` someone put in
+  `references/` by hand is not ours to delete. The claim has to live in the
+  manifest now: a file named after its original is not self-identifying the
+  way a sixteen-character hex stem was.
+- **Migration is a rename on the next write.** A manifest reference whose
+  file is hash-named, and a hash-named file the manifest never mentioned at
+  all (which is every bundle the first build of this branch wrote), take the
+  original's name in one `rename(2)` — so git sees a move, the concept's
+  `resource:` updates in the same pass, and no duplicate is left behind. An
+  evicted original is asked for and keeps its name until the bytes land; the
+  write after that migrates it.
 - **`alchemy.origin` is always written when there is a machine path**, copied
   or not, so a bind-back can re-link. `resource:` is the one that changes
   meaning: a `references/` path means the bytes are here.
@@ -713,9 +732,12 @@ asks for it rather than as a default that doubles every synced folder.
 - The drop rule: a folder becomes a source in a notebook, a zip imports.
 - Two machines: two data dirs bound to one folder converge both ways with
   separate manifests and both actors in the log (§5.6).
-- Originals: a dragged PDF exports once under `references/` by hash, a
-  second source over the same file adds nothing, deleting the last owner
-  removes it, and import re-ingests it as pages rather than text (§6).
+- Originals: a dragged PDF exports once under `references/` by its own
+  name, a second source over the same file adds nothing, two different
+  files called the same thing become `paper.pdf` and `paper-2.pdf`, a
+  bundle left by the hash-named layout renames in one write with no
+  duplicate behind it, deleting the last owner removes it, and import
+  re-ingests it as pages rather than text (§6).
 - Notebooks on disk: default resolution with and without the iCloud root
   present; a new notebook creates and seeds its folder; a bundle dropped
   into the Notebooks folder becomes a bound notebook exactly once; a
