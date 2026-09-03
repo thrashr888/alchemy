@@ -2438,15 +2438,42 @@ pub fn binding_for(data_dir: &Path, notebook_id: &str) -> Option<OkfBinding> {
     load_bindings(data_dir).remove(notebook_id)
 }
 
+/// Serializes every read-modify-write of the bindings file. Without it an
+/// unbind and a write-through both read the map, both edit their copy, and
+/// the later save puts the other's change back — which is how a notebook
+/// reported as unbound kept writing its bundle (§5.5).
+fn bindings_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
 /// Bind, rebind, or (with `None`) unbind. Unbinding leaves the files where
 /// they are — the folder is the user's, and stopping the sync is not a
 /// reason to take it away.
 pub fn set_binding(data_dir: &Path, notebook_id: &str, binding: Option<OkfBinding>) {
+    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut map = load_bindings(data_dir);
     match binding {
         Some(b) => map.insert(notebook_id.to_string(), b),
         None => map.remove(notebook_id),
     };
+    save_bindings(data_dir, &map);
+}
+
+/// Note that the bundle is current — but only while this is still the
+/// notebook's binding.
+///
+/// A write that started before an unbind finishes after it, and saving the
+/// whole map back from the copy it took would resurrect the entry it was
+/// told to drop. The write already happened and the files are the user's;
+/// the record of it is what must not come back.
+pub(crate) fn touch_last_write(data_dir: &Path, notebook_id: &str, binding_id: &str, at: i64) {
+    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = load_bindings(data_dir);
+    match map.get_mut(notebook_id) {
+        Some(binding) if binding.id == binding_id => binding.last_write_at = at,
+        _ => return,
+    }
     save_bindings(data_dir, &map);
 }
 
@@ -2662,14 +2689,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
-    set_binding(
-        &data_dir,
-        notebook_id,
-        Some(OkfBinding {
-            last_write_at: now_ms(),
-            ..binding
-        }),
-    );
+    touch_last_write(&data_dir, notebook_id, &binding.id, now_ms());
     Ok(written)
 }
 
@@ -2753,13 +2773,44 @@ pub async fn bind_notebook_okf(
 
 /// Stop keeping a notebook on disk. The files stay where they are — the
 /// folder is the user's, and ending the sync is no reason to take it away.
+///
+/// The order matters. The binding goes first, so a debounced write that has
+/// not started yet finds nothing to write; then the pending deadline is
+/// dropped; then a write already inside `write_bundle` is given a moment to
+/// finish, which it may, because its record of the write is conditional and
+/// cannot bring the binding back. Only then does this say it worked — and if
+/// the entry is somehow still there, it says that instead. Reporting
+/// `okfPath: null` over a binding that is still writing is the one answer
+/// this must never give.
+pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(), String> {
+    let data_dir = app_data_dir(state);
+    set_binding(&data_dir, notebook_id, None);
+    cancel_pending_write(notebook_id);
+    for _ in 0..40 {
+        let running = flushing()
+            .lock()
+            .map(|set| set.contains(notebook_id))
+            .unwrap_or(false);
+        if !running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    if binding_for(&data_dir, notebook_id).is_some() {
+        return Err(
+            "Couldn't stop keeping this notebook on disk \u{2014} a write is still running.              Try again in a moment."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn unbind_notebook_okf(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<(), String> {
-    set_binding(&app_data_dir(&state), &notebook_id, None);
-    Ok(())
+    unbind_impl(&state, &notebook_id).await
 }
 
 /// Write a bound notebook's bundle now, rather than waiting out the debounce.

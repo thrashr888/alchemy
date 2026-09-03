@@ -2172,6 +2172,64 @@ fn okf_file_mtime(path: &std::path::Path) -> i64 {
         .unwrap_or(0)
 }
 
+/// A write in flight never puts back a binding the user removed
+/// (docs/RFC-okf-live.md §5.5).
+///
+/// `unbind_notebook_okf` reported `okfPath: null` while the notebook was open
+/// and the entry stayed in `okf-bindings.json`, carrying a `lastWriteAt`
+/// stamped *after* the unbind: the writer was saving the whole map back from
+/// a copy it took before. The record of a write is conditional now — it lands
+/// only while the binding it belongs to is still the notebook's.
+#[test]
+fn okf_a_write_never_resurrects_a_binding() {
+    use crate::okf::{binding_for, set_binding, touch_last_write, OkfBinding};
+    let data = okf_scratch("unbind");
+
+    set_binding(
+        &data,
+        "nb-open",
+        Some(OkfBinding {
+            path: "/tmp/alchemy-unbind/nb".into(),
+            id: "binding-1".into(),
+            last_write_at: 0,
+        }),
+    );
+    // A write that started before the unbind, finishing after it.
+    set_binding(&data, "nb-open", None);
+    touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
+    assert!(
+        binding_for(&data, "nb-open").is_none(),
+        "the unbind is what the user asked for, and it stands"
+    );
+
+    // And a rebind is not overwritten by the old binding's write either.
+    set_binding(
+        &data,
+        "nb-open",
+        Some(OkfBinding {
+            path: "/tmp/alchemy-unbind/elsewhere".into(),
+            id: "binding-2".into(),
+            last_write_at: 0,
+        }),
+    );
+    touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
+    let now = binding_for(&data, "nb-open").expect("still bound");
+    assert_eq!(now.id, "binding-2");
+    assert_eq!(
+        now.last_write_at, 0,
+        "the old binding's write says nothing about the new one"
+    );
+
+    touch_last_write(&data, "nb-open", "binding-2", 42);
+    assert_eq!(
+        binding_for(&data, "nb-open").expect("bound").last_write_at,
+        42,
+        "its own write still counts"
+    );
+
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 /// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
 /// `index.md` and `log.md` at any level are the table of contents and the
 /// history, and neither ever becomes a source.

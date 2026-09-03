@@ -107,11 +107,12 @@ impl AlchemyMcp {
         &self,
         Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
     ) -> Result<CallToolResult, McpError> {
-        crate::okf::set_binding(
-            &crate::commands::app_data_dir(&self.state()),
-            &notebook_id,
-            None,
-        );
+        // Through the same path the menu verb takes, so the answer is the
+        // truth: a caller told `okfPath: null` while the binding was still
+        // being rewritten by an in-flight write had no way to know.
+        crate::okf::unbind_impl(&self.state(), &notebook_id)
+            .await
+            .map_err(internal)?;
         self.changed("notebooks", Some(&notebook_id));
         json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": null }))
     }

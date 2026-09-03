@@ -487,6 +487,21 @@ own, the log carries both actors, and neither pass echoes.
 
 ### Shared folders, as built
 
+- **Unbinding is a claim, so it has to be true.** §5.5 says unbinding leaves
+  the files where they are, and said nothing about what happens when a write
+  is in flight — so the command removed the entry, an already-running write
+  saved the whole bindings map back from the copy it had taken, and the
+  binding came back carrying a `lastWriteAt` stamped after the unbind. The
+  caller was told `okfPath: null` about a folder Alchemy was still writing.
+  Three changes, in order: every read-modify-write of the bindings file takes
+  one lock; a write records `lastWriteAt` only while the binding it belongs
+  to is still that notebook's, so a finishing write can never resurrect or
+  overwrite an entry; and the unbind removes the binding *first*, drops the
+  pending deadline, waits briefly for a running write to finish, and then
+  reports what is actually on disk — an error, if the entry somehow survived.
+  The MCP tool goes through the same function rather than reaching for the
+  sidecar itself, because the answer it prints is the thing that was wrong.
+
 - **The manifest is keyed by a binding id, not the notebook id.** Rebinding a
   notebook to a different folder has to start from a clean record; inheriting
   the old folder's paths and hashes would make the first write to the new one
