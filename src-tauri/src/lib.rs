@@ -85,6 +85,7 @@ pub fn run() {
     // Before anything else: a panic in setup used to be a silent bounce in
     // the Dock. From here on it lands in ~/Library/Logs (docs/RFC-diagnostics.md).
     diagnostics::install_panic_hook();
+    raise_open_file_limit();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -673,4 +674,39 @@ pub fn run() {
             tauri::RunEvent::Reopen { .. } => integrations::focus_main(app),
             _ => {}
         });
+}
+
+/// macOS hands a GUI app 256 open files (`launchctl limit maxfiles`), and
+/// LanceDB opens a file per fragment per scan. Nineteen bundle writes after
+/// a rebind ran out of descriptors on a second Mac ("Too many open files"),
+/// taking the store's reads down with them. Lift the soft limit to what the
+/// kernel allows, capped at OPEN_MAX; a failure here is logged, never fatal.
+fn raise_open_file_limit() {
+    const WANT: libc::rlim_t = 10_240;
+    // SAFETY: getrlimit/setrlimit only read and write the rlimit struct we
+    // hand them; nothing outlives the calls.
+    unsafe {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return;
+        }
+        let target = if lim.rlim_max == libc::RLIM_INFINITY {
+            WANT
+        } else {
+            lim.rlim_max.min(WANT)
+        };
+        if lim.rlim_cur >= target {
+            return;
+        }
+        let before = lim.rlim_cur;
+        lim.rlim_cur = target;
+        if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) == 0 {
+            crate::note!("open files: soft limit raised {before} -> {target}");
+        } else {
+            crate::note!("open files: could not raise the soft limit above {before}");
+        }
+    }
 }

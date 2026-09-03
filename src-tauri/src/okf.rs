@@ -3419,15 +3419,59 @@ pub fn schedule_write(notebook_id: &str) {
         let state = app.state::<AppState>();
         // Unbound while the debounce ran: nothing to write, and no error to
         // report — the user asked for exactly this.
+        let mut failed = false;
         if binding_for(&data_dir, &id).is_some() {
-            if let Err(err) = write_bound(&state, &id).await {
-                crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+            // A few writers at a time, not one per notebook: each write scans
+            // the store per source, and nineteen at once after a rebind ran a
+            // second Mac out of file descriptors.
+            let _slot = write_slots().acquire().await;
+            match write_bound(&state, &id).await {
+                Ok(_) => {
+                    if let Ok(mut set) = retried().lock() {
+                        set.remove(&id);
+                    }
+                }
+                Err(err) => {
+                    crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+                    failed = true;
+                }
             }
         }
         if let Ok(mut running) = flushing().lock() {
             running.remove(&id);
         }
+        // One more try after a failure, a little later: the usual cause is a
+        // resource that comes back (descriptors, a folder mid-sync). A second
+        // failure waits for the next real change rather than looping.
+        if failed {
+            let first = retried()
+                .lock()
+                .map(|mut set| set.insert(id.clone()))
+                .unwrap_or(false);
+            if first {
+                tokio::time::sleep(std::time::Duration::from_millis(RETRY_MS)).await;
+                schedule_write(&id);
+            }
+        }
     });
+}
+
+/// How long a failed write waits before its one retry.
+const RETRY_MS: u64 = 15_000;
+
+/// Concurrent bundle writes allowed across all notebooks.
+const WRITE_SLOTS: usize = 2;
+
+fn write_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(WRITE_SLOTS))
+}
+
+/// Notebooks whose last write failed and have already used their retry.
+fn retried() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static RETRIED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    RETRIED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
 /// Drop a notebook's pending write. The flusher checks the binding again

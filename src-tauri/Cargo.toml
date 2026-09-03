@@ -122,6 +122,7 @@ rust_xlsxwriter = "0.98"
 pdf-inspector = "0.1.7"
 anydoc = "0.1.7"
 fastembed = { version = "5.17.4", default-features = false, features = ["ort-download-binaries", "hf-hub-native-tls"] }
+libc = "0.2"
 
 # Already in the tree via tauri/wry — traffic-light insets, the Services
 # provider (services.rs), and Spotlight indexing (spotlight.rs).

@@ -126,6 +126,7 @@ dependencies = [
  "kamadak-exif",
  "kokoro-en",
  "lancedb",
+ "libc",
  "log",
  "model2vec-rs",
  "notify",
