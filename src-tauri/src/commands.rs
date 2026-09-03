@@ -5102,7 +5102,12 @@ async fn rescan_one_folder_inner(
             scan.removed += 1;
         }
     }
-    note_scan_events(state, folder, &added_titles, &removed_titles).await;
+    // A folder's first population is the source itself arriving, not news
+    // inside it: nothing was there before, so nothing is "57 new from docs"
+    // the moment it was added. Later scans report every change as before.
+    if !children.is_empty() {
+        note_scan_events(state, folder, &added_titles, &removed_titles).await;
+    }
 
     // The parent's content is a folder/repo map: git provenance (when the
     // root sits in a working tree), the file tree, and the skip list — so
