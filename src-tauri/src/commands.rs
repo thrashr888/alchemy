@@ -2899,6 +2899,10 @@ async fn mark_source_failed(
     Ok(failed)
 }
 
+/// The edit form's Save: a new title, new text, or both. Either way a person
+/// did it, which is the one thing the store does not record — a rename leaves
+/// no trace at all — so the bundle's by-line reads it off a sidecar instead
+/// (docs/RFC-okf-live.md §5.6).
 #[tauri::command]
 pub async fn update_source_text(
     state: State<'_, AppState>,
@@ -2909,6 +2913,7 @@ pub async fn update_source_text(
     let existing =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
     let extracted = e(ingest::extract_pasted(&title, &text))?;
+    crate::okf::note_human_source_edit(&app_data_dir(&state), &existing);
     e(reingest(&state, &existing, extracted, None, true).await)
 }
 

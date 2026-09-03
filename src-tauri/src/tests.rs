@@ -2433,6 +2433,81 @@ fn okf_files_name_their_author() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Renaming a source is a person's edit, and the concept says so (§5.6).
+///
+/// The store records how a source arrived and what it says, never who chose
+/// its title, so before the sidecar a rename left the file crediting
+/// `alchemy/<version>` with a name a person picked. `note_human_source_edit`
+/// is the call the edit command and its MCP twin make on every save; the
+/// writer reads it back through `source_concept`, which is the pass the app
+/// runs on the way to the file asserted here.
+#[test]
+fn okf_source_rename_moves_the_by_line() {
+    use crate::okf::{
+        load_okf_human_edits, note_human_source_edit, okf_human, okf_writer, parse_okf_doc,
+        source_concept, write_bundle,
+    };
+    let dir = okf_scratch("rename");
+    let data = dir.join("data");
+    let bundle = dir.join("nb");
+    let cap = 50 * 1024 * 1024;
+    let concept_for = |src: &crate::models::Source| {
+        source_concept(
+            src,
+            "pasted body".into(),
+            &bundle,
+            cap,
+            &load_okf_human_edits(&data, &src.notebook_id),
+        )
+    };
+
+    // As imported, with nobody's tags and nobody's note on it: the app's own.
+    let mut source = okf_src("s-rename", "");
+    source.title = "Untitled source".into();
+    assert_eq!(
+        concept_for(&source).generated_by,
+        okf_writer(),
+        "an import nobody has touched is the app's doing"
+    );
+
+    // A person opens the edit form and changes only the title.
+    source.title = "Ferrari 488 brochure".into();
+    note_human_source_edit(&data, &source);
+    let concept = concept_for(&source);
+    assert_eq!(
+        concept.generated_by,
+        okf_human(),
+        "a title a person chose is a person's edit"
+    );
+
+    // And that reaches the file, which is all the other Mac ever sees.
+    write_bundle(
+        &okf_notebook("NB"),
+        std::slice::from_ref(&concept),
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+    let written =
+        std::fs::read_to_string(bundle.join("sources/ferrari-488-brochure.md")).expect("concept");
+    assert_eq!(
+        parse_okf_doc(&written).nested("generated", "by").as_deref(),
+        Some(okf_human().as_str()),
+        "the by-line in the bundle names the person"
+    );
+
+    // Only the renamed source: the record is per source, not per notebook.
+    let untouched = okf_src("s-plain", "");
+    assert_eq!(
+        concept_for(&untouched).generated_by,
+        okf_writer(),
+        "a source nobody edited still reads as the app's"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An in-bundle manifest from this branch's earlier builds is adopted once
 /// and the directory removed, so an already-bound folder keeps its hashes
 /// and stops carrying machine state (§5.6).

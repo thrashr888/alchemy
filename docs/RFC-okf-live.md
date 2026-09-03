@@ -458,12 +458,16 @@ own, the log carries both actors, and neither pass echoes.
 off what is already there: an `origin` naming an outside actor wins, `auto`
 is the curator, a `kind` other than `note` is a Studio generation, and what
 is left is a note a person wrote or edited — `human:<account>`. For a source,
-every arrival is an import, and the only record of a person touching one
-afterwards is the user's own tags and their note (both documented as ground
-truth from the user), so those and only those make it a person's. **A bare
-rename is not recorded anywhere**, so it does not move the by-line. Fixing
-that means either a column or a per-source sidecar; neither is worth it until
-someone notices the by-line is wrong after a rename.
+every arrival is an import, and the store's own record of a person touching
+one afterwards is the user's tags and their note (both documented as ground
+truth from the user). **A bare rename the store does not record at all**,
+which left the app credited with a title a person chose. It is recorded now,
+beside the store rather than in it: the edit command and its MCP twin stamp
+the source id into `<app-data>/okf_human_edits/<notebook>.json`, the same
+per-parent sidecar shape the lifecycle uses, and the writer reads it alongside
+tags and note. A column was the other option and lost — one store serves the
+installed app and every dev build, so a schema change is a release-timing
+hazard, and this is a fact only the bundle writer ever reads.
 
 Two knock-on decisions:
 

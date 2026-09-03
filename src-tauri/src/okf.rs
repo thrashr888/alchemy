@@ -711,16 +711,66 @@ fn okf_note_actor(note: &Note) -> String {
 
 /// Who last made this source (§5.6).
 ///
-/// Every source arrives by import, which is the app acting on its own. The
-/// one thing the store records about a person touching one afterwards is the
-/// user's own tags and their note — both documented as ground truth from the
-/// user — so those, and only those, make it a person's. A bare rename is not
-/// recorded anywhere, so it does not move the by-line; see the RFC.
-fn okf_source_actor(source: &Source) -> String {
-    if source.tags.trim().is_empty() && source.note.trim().is_empty() {
+/// Every source arrives by import, which is the app acting on its own. What
+/// says a person has touched one since is the user's own tags and their note
+/// — both ground truth from the user — and the sidecar the edit path writes,
+/// which is how a bare rename gets a by-line at all: the store keeps no
+/// record of who chose a title.
+fn okf_source_actor(source: &Source, edits: &OkfHumanEdits) -> String {
+    if source.tags.trim().is_empty()
+        && source.note.trim().is_empty()
+        && !edits.contains_key(&source.id)
+    {
         okf_writer()
     } else {
         okf_human()
+    }
+}
+
+/// One source as the bundle carries it. Split out of `gather_bundle_for` so
+/// the by-line rule can be asserted against a real concept without an
+/// `AppState`, which a unit test cannot stand up (§5.6, as built).
+pub(crate) fn source_concept(
+    s: &Source,
+    content: String,
+    bundle: &Path,
+    cap_bytes: u64,
+    edits: &OkfHumanEdits,
+) -> OkfConcept {
+    let resource = if s.url.is_empty() {
+        String::new()
+    } else if is_web_url(&s.url) {
+        s.url.clone()
+    } else {
+        format!("file://{}", s.url)
+    };
+    OkfConcept {
+        id: s.id.clone(),
+        title: s.title.clone(),
+        content,
+        type_label: "Source".into(),
+        resource,
+        origin_uri: if s.url.is_empty() || is_web_url(&s.url) {
+            String::new()
+        } else {
+            format!("file://{}", s.url)
+        },
+        reference: Some(plan_reference(s, bundle, cap_bytes)),
+        tags: vec![s.source_type.clone()],
+        generated_at: s.created_at,
+        generated_by: okf_source_actor(s, edits),
+        // What the spec has no field for. `source_type` is the real type
+        // (the top-level `tags:` is the spec-facing one); `tags` is the
+        // user's own labels; `image_url` spares the gallery a refetch.
+        alchemy: vec![
+            ("id".into(), s.id.clone()),
+            ("source_type".into(), s.source_type.clone()),
+            ("tags".into(), s.tags.clone()),
+            ("author".into(), s.author.clone()),
+            ("image_url".into(), s.image_url.clone()),
+        ],
+        parent: s.parent_id.clone(),
+        ..OkfConcept::blank()
     }
 }
 
@@ -753,44 +803,12 @@ pub(crate) async fn gather_bundle_for(
         let ai = state.ai.read().await;
         ai.config().okf_reference_cap_mb.saturating_mul(1024 * 1024)
     };
+    // Who has touched what, read once per pass rather than once per source.
+    let human_edits = load_okf_human_edits(&app_data_dir(state), notebook_id);
     let mut source_concepts = Vec::with_capacity(sources.len());
     for s in &sources {
         let content = e(state.db.source_content(&s.id).await)?;
-        let resource = if s.url.is_empty() {
-            String::new()
-        } else if is_web_url(&s.url) {
-            s.url.clone()
-        } else {
-            format!("file://{}", s.url)
-        };
-        source_concepts.push(OkfConcept {
-            id: s.id.clone(),
-            title: s.title.clone(),
-            content,
-            type_label: "Source".into(),
-            resource,
-            origin_uri: if s.url.is_empty() || is_web_url(&s.url) {
-                String::new()
-            } else {
-                format!("file://{}", s.url)
-            },
-            reference: Some(plan_reference(s, bundle, cap_bytes)),
-            tags: vec![s.source_type.clone()],
-            generated_at: s.created_at,
-            generated_by: okf_source_actor(s),
-            // What the spec has no field for. `source_type` is the real type
-            // (the top-level `tags:` is the spec-facing one); `tags` is the
-            // user's own labels; `image_url` spares the gallery a refetch.
-            alchemy: vec![
-                ("id".into(), s.id.clone()),
-                ("source_type".into(), s.source_type.clone()),
-                ("tags".into(), s.tags.clone()),
-                ("author".into(), s.author.clone()),
-                ("image_url".into(), s.image_url.clone()),
-            ],
-            parent: s.parent_id.clone(),
-            ..OkfConcept::blank()
-        });
+        source_concepts.push(source_concept(s, content, bundle, cap_bytes, &human_edits));
     }
 
     // One Aho-Corasick pass over the whole notebook, the same one the graph
@@ -1154,6 +1172,46 @@ fn save_okf_lifecycle(
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(json) = serde_json::to_string_pretty(map) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// Sources a person has edited in the app, by source id → when (epoch ms).
+///
+/// The store records how a source arrived and what it says, never who last
+/// touched its title, so a bare rename moved no by-line and the concept kept
+/// crediting `alchemy/<version>` with a title a person chose (§5.6). This is
+/// the missing record, in the same per-parent sidecar shape the lifecycle
+/// uses: machine-local, read only by the bundle writer, and no column in a
+/// store that older builds still append to.
+pub(crate) type OkfHumanEdits = HashMap<String, i64>;
+
+fn okf_human_edits_path(data_dir: &Path, notebook_id: &str) -> PathBuf {
+    data_dir
+        .join("okf_human_edits")
+        .join(format!("{notebook_id}.json"))
+}
+
+/// Every source in one notebook a person has edited. One file read per write
+/// pass, and a directory miss for the notebooks where nobody has.
+pub(crate) fn load_okf_human_edits(data_dir: &Path, notebook_id: &str) -> OkfHumanEdits {
+    std::fs::read_to_string(okf_human_edits_path(data_dir, notebook_id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// A person edited this source in the app — renamed it, or rewrote its text.
+/// Called by the edit command and the MCP tool behind it, never by a refresh
+/// or an import, which are the app acting on its own.
+pub(crate) fn note_human_source_edit(data_dir: &Path, source: &Source) {
+    let path = okf_human_edits_path(data_dir, &source.notebook_id);
+    let mut map = load_okf_human_edits(data_dir, &source.notebook_id);
+    map.insert(source.id.clone(), now_ms());
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
         let _ = std::fs::write(path, json);
     }
 }

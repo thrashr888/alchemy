@@ -484,6 +484,9 @@ impl AlchemyMcp {
             title.trim().to_string()
         };
         let extracted = crate::ingest::extract_pasted(&title, &text).map_err(internal)?;
+        // Same edit, same by-line: an agent renaming a source on the user's
+        // behalf is not the app acting on its own (RFC-okf-live §5.6).
+        crate::okf::note_human_source_edit(&commands::app_data_dir(&state), &existing);
         let source = commands::reingest(&state, &existing, extracted, None, true)
             .await
             .map_err(internal)?;
