@@ -188,13 +188,16 @@ two-host podcast voiced on-device.*
 - **Notes** — a **WYSIWYG** editor (Markdown under the hood), copy to clipboard,
   **Convert to source** to fold a note into the retrievable source set, and
   **Open in window** for a full-size reader (mind maps especially).
-- **Share & import notebooks (OKF)** — export a whole notebook (sources + notes) as an
+- **Notebooks live as files (OKF)** — every notebook keeps itself on disk as an
   [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-  bundle: plain markdown concepts with YAML frontmatter, indexes, and a log —
-  readable by humans and agents alike. **Share as a single `.okf.zip`** to send a
-  notebook to a coworker or another machine, and **import** a zip or bundle folder
-  (drag it onto the window, or Import… on the home screen) into a new notebook or
-  merged into an existing one — sources re-embed locally, duplicates skip.
+  folder: markdown concepts with YAML frontmatter, indexes, a log, and the
+  original PDFs and images under `references/`. New notebooks go to
+  `iCloud Drive/Alchemy` when iCloud Drive is on (`~/Documents/Alchemy`
+  otherwise; pick any folder, Dropbox included). The same folder opens on your
+  other Mac, a folder someone shares with you opens as a linked notebook, and
+  edits made in the folder by you or an agent flow back into the app. Export a
+  single `.okf.zip` to send a notebook by mail, add a bundle folder as a living
+  source, or import one as a copy.
 - **Agent access (MCP)** — an embedded MCP server (localhost-only) lets agents
   create notebooks, add sources, run hybrid search (per-notebook or across the
   whole corpus), write notes, and act on connected Mac items (update an Apple
