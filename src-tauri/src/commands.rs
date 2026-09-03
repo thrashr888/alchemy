@@ -4913,10 +4913,12 @@ async fn rescan_one_folder_inner(
     {
         on_disk.retain(|e| !ingest::is_code_path(&e.path));
     }
-    // A bundle's listings are not its knowledge (RFC-okf-live §4): index.md
-    // and log.md at any level are the table of contents and the history.
+    // A bundle's knowledge is `sources/**.md` and `notes/**.md` and nothing
+    // else (RFC-okf-live §4). An allowlist rather than a skip list, because a
+    // bundle someone ran `ok init` in grows a dozen tooling files and dot
+    // directories that no blocklist would keep up with.
     if folder.source_type == "okf" {
-        on_disk.retain(|e| !crate::okf::is_okf_reserved(&e.path));
+        on_disk.retain(|e| crate::okf::is_okf_concept(root, &e.path));
     }
     let by_path: HashMap<&str, &Source> = children.iter().map(|c| (c.url.as_str(), *c)).collect();
 
@@ -12601,11 +12603,16 @@ pub(crate) async fn import_bundle(
 ) -> Result<Notebook, String> {
     let root = find_bundle_root(root)?;
 
-    // Bundle title: index.md's H1, else the folder name.
-    let title = std::fs::read_to_string(root.join("index.md"))
-        .ok()
-        .and_then(|s| {
-            s.lines()
+    // The root index carries the notebook's own frontmatter (RFC-okf-live §3).
+    // Bundles written before that fall back to the H1, then the folder name.
+    let index = std::fs::read_to_string(root.join("index.md")).unwrap_or_default();
+    let index_doc = parse_okf_doc(&index);
+    let title = index_doc
+        .str("title")
+        .or_else(|| {
+            index_doc
+                .body
+                .lines()
                 .find(|l| l.starts_with("# "))
                 .map(|l| l[2..].trim().to_string())
         })
@@ -12625,15 +12632,28 @@ pub(crate) async fn import_bundle(
             .ok_or_else(|| "Notebook not found".to_string())?,
         None => {
             let ts = now();
-            let count = e(state.db.list_notebooks().await)?;
-            let icon = auto_notebook_icon(&title);
+            let existing = e(state.db.list_notebooks().await)?;
+            // Reuse the bundle's own id when nothing here claims it, so
+            // binding an export back to the notebook it came from lands on
+            // the same notebook instead of a second copy. A collision means
+            // this is a merge, and a merge mints.
+            let id = index_doc
+                .nested("alchemy", "id")
+                .filter(|id| !existing.iter().any(|n| &n.id == id))
+                .unwrap_or_else(new_id);
             let nb = Notebook {
-                id: new_id(),
-                title,
+                id,
                 created_at: ts,
                 updated_at: ts,
-                color: NOTEBOOK_PALETTE[count.len() % NOTEBOOK_PALETTE.len()].to_string(),
-                icon,
+                // Colour and icon are the notebook's face; a round trip that
+                // loses them hands back something the user does not recognize.
+                color: index_doc.nested("alchemy", "color").unwrap_or_else(|| {
+                    NOTEBOOK_PALETTE[existing.len() % NOTEBOOK_PALETTE.len()].to_string()
+                }),
+                icon: index_doc
+                    .nested("alchemy", "icon")
+                    .unwrap_or_else(|| auto_notebook_icon(&title)),
+                title,
                 status: String::new(),
                 growth_web: false,
                 source_count: 0,
@@ -12648,6 +12668,10 @@ pub(crate) async fn import_bundle(
     const SOURCE_TYPES: &[&str] = &["pdf", "text", "markdown", "html", "url", "image", "mac"];
     let mut imported = 0usize;
     let mut skipped = 0usize;
+    // Slug → the id it landed under, so a child can find its parent once
+    // every source is in.
+    let mut slugs: HashMap<String, String> = HashMap::new();
+    let mut children: Vec<(String, String)> = Vec::new();
     let source_docs = okf_docs(&root.join("sources"));
     let total = source_docs.len();
     for (i, doc) in source_docs.into_iter().enumerate() {
@@ -12668,9 +12692,12 @@ pub(crate) async fn import_bundle(
                 .unwrap_or("Untitled source")
                 .to_string()
         });
+        // `alchemy.source_type` is the real type; the spec-facing `tags:` is
+        // the fallback for a bundle another producer wrote.
         let source_type = parsed
-            .tags()
+            .nested("alchemy", "source_type")
             .into_iter()
+            .chain(parsed.tags())
             .find(|t| SOURCE_TYPES.contains(&t.as_str()))
             .unwrap_or_else(|| "text".to_string());
         // The resource is where the source CAME from — on this machine it's
@@ -12680,10 +12707,13 @@ pub(crate) async fn import_bundle(
             Some(r) => r.strip_prefix("file://").unwrap_or(&r).to_string(),
             None => String::new(),
         };
+        let user_tags = parsed.nested("alchemy", "tags");
+        let parent = parsed.nested("alchemy", "parent");
         let extracted = ingest::Extracted {
             feeds: Vec::new(),
-            image_url: String::new(),
-            author: String::new(),
+            // A cover the bundle already recorded spares the gallery a refetch.
+            image_url: parsed.nested("alchemy", "image_url").unwrap_or_default(),
+            author: parsed.nested("alchemy", "author").unwrap_or_default(),
             title,
             source_type,
             url,
@@ -12694,10 +12724,43 @@ pub(crate) async fn import_bundle(
             serde_json::json!({ "done": i, "total": total, "title": extracted.title }),
         );
         match store_extracted(state, &notebook.id, extracted).await {
-            Ok(_) => imported += 1,
+            Ok(landed) => {
+                imported += 1;
+                // The user's own labels are ground truth, and they feed
+                // routing and the chat manifest — restore them.
+                if let Some(tags) = user_tags {
+                    let _ = state.db.set_source_tags(&landed.id, &tags).await;
+                }
+                if let Some(slug) = doc.file_stem().and_then(|s| s.to_str()) {
+                    slugs.insert(slug.to_string(), landed.id.clone());
+                    if let Some(parent) = parent {
+                        children.push((landed.id, parent));
+                    }
+                }
+            }
             // Duplicates (merging a bundle twice) are success, not failure.
             Err(_) => skipped += 1,
         }
+    }
+
+    // Parents are resolved after the fact because a child's file can sort
+    // ahead of its parent's: the bundle names the parent by slug, and only
+    // now is every slug's landing id known.
+    for (child_id, parent_slug) in children {
+        let (Some(parent_id), Ok(Some(child))) = (
+            slugs.get(&parent_slug),
+            state.db.get_source(&child_id).await,
+        ) else {
+            continue;
+        };
+        if parent_id == &child_id {
+            continue;
+        }
+        let reparented = Source {
+            parent_id: parent_id.clone(),
+            ..child
+        };
+        let _ = state.db.replace_source_row(&reparented).await;
     }
 
     // Note dedup mirrors source dedup: re-importing the same bundle must not
@@ -12724,12 +12787,15 @@ pub(crate) async fn import_bundle(
         // Lifecycle round-trips: a concept the bundle marks deprecated comes
         // back archived, so a note retired on one machine stays retired here
         // instead of reappearing in retrieval.
-        let status = if parsed.str("status").as_deref() == Some("deprecated") {
-            "archived"
-        } else {
-            ""
+        let origin = parsed.nested("alchemy", "origin").unwrap_or_default();
+        let status = match parsed.nested("alchemy", "status") {
+            Some(recorded) => recorded,
+            None if parsed.str("status").as_deref() == Some("deprecated") => "archived".into(),
+            None => String::new(),
         };
-        let kind = note_kind_from_label(parsed.str("type").as_deref().unwrap_or("Note"));
+        let kind = parsed.nested("alchemy", "kind").unwrap_or_else(|| {
+            note_kind_from_label(parsed.str("type").as_deref().unwrap_or("Note"))
+        });
         // A note keeps the age the bundle records, not the moment it landed
         // here — otherwise every import resets the whole notebook's clock.
         let written = parsed.written_at().unwrap_or_else(now);
@@ -12745,8 +12811,8 @@ pub(crate) async fn import_bundle(
             content: parsed.body,
             kind,
             prompt: String::new(),
-            origin: String::new(),
-            status: status.to_string(),
+            origin,
+            status,
             created_at: written,
             updated_at: written,
         };

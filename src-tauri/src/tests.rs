@@ -1219,6 +1219,14 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
             generated_at: 1_756_000_000_000,
             status: String::new(),
             derived_from: Vec::new(),
+            alchemy: vec![
+                ("id".into(), "src-orders".into()),
+                ("source_type".into(), "url".into()),
+                ("tags".into(), "billing ops".into()),
+                ("author".into(), "Ops team".into()),
+                ("image_url".into(), "https://example.com/o.png".into()),
+            ],
+            parent: String::new(),
             extra: serde_yaml_ng::Mapping::new(),
         },
         OkfConcept {
@@ -1231,6 +1239,13 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
             generated_at: 1_756_000_100_000,
             status: String::new(),
             derived_from: Vec::new(),
+            alchemy: vec![
+                ("id".into(), "src-refunds".into()),
+                ("source_type".into(), "markdown".into()),
+            ],
+            // A child of the folder source above, so the bundle records the
+            // shape a folder gave the notebook.
+            parent: "src-orders".into(),
             extra: serde_yaml_ng::Mapping::new(),
         },
     ];
@@ -1245,6 +1260,12 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
             generated_at: 1_756_000_200_000,
             status: "draft".into(),
             derived_from: vec!["src-orders".into(), "src-refunds".into()],
+            alchemy: vec![
+                ("id".into(), "note-summary".into()),
+                ("kind".into(), "summary".into()),
+                ("origin".into(), "auto".into()),
+            ],
+            parent: String::new(),
             extra: serde_yaml_ng::Mapping::new(),
         },
         OkfConcept {
@@ -1257,10 +1278,27 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
             generated_at: 1_756_000_300_000,
             status: "deprecated".into(),
             derived_from: Vec::new(),
+            alchemy: vec![
+                ("id".into(), "note-retired".into()),
+                ("kind".into(), "note".into()),
+                ("status".into(), "archived".into()),
+            ],
+            parent: String::new(),
             extra: serde_yaml_ng::Mapping::new(),
         },
     ];
     (sources, notes)
+}
+
+/// The notebook a bundle describes, with an identity worth round-tripping.
+fn okf_notebook(title: &str) -> crate::okf::OkfNotebook {
+    crate::okf::OkfNotebook {
+        id: "nb-data".into(),
+        title: title.into(),
+        color: "#5e6ad2".into(),
+        icon: "beaker".into(),
+        generated_at: 1_756_000_400_000,
+    }
 }
 
 fn okf_scratch(tag: &str) -> std::path::PathBuf {
@@ -1278,7 +1316,8 @@ fn okf_bundle_is_v02() {
     let dir = okf_scratch("golden");
     let bundle = dir.join("data-notebook");
     let (sources, notes) = okf_fixture();
-    let written = write_bundle("Data notebook", &sources, &notes, &bundle).expect("write bundle");
+    let written = write_bundle(&okf_notebook("Data notebook"), &sources, &notes, &bundle)
+        .expect("write bundle");
     assert_eq!((written.sources, written.notes), (2, 2));
 
     // Sources: resource, tags, and a generated block naming this build.
@@ -1303,6 +1342,30 @@ fn okf_bundle_is_v02() {
         "timestamps carry an explicit Z: {stamp}"
     );
     assert!(doc.body.starts_with("The orders table"));
+    // Everything the spec has no field for rides under `alchemy:`, where it
+    // collides with nothing and a reader that does not know it skips it.
+    assert_eq!(doc.nested("alchemy", "id").as_deref(), Some("src-orders"));
+    assert_eq!(doc.nested("alchemy", "source_type").as_deref(), Some("url"));
+    assert_eq!(
+        doc.nested("alchemy", "tags").as_deref(),
+        Some("billing ops")
+    );
+    assert_eq!(doc.nested("alchemy", "author").as_deref(), Some("Ops team"));
+    assert_eq!(
+        doc.nested("alchemy", "image_url").as_deref(),
+        Some("https://example.com/o.png")
+    );
+    assert!(
+        doc.nested("alchemy", "parent").is_none(),
+        "a top-level source has no parent"
+    );
+    // A folder child names its parent by slug, so the shape a folder gave
+    // the notebook survives.
+    let child = std::fs::read_to_string(bundle.join("sources/refunds-policy.md")).expect("refunds");
+    assert_eq!(
+        parse_okf_doc(&child).nested("alchemy", "parent").as_deref(),
+        Some("orders-table")
+    );
 
     // Notes: status per origin, and provenance that resolves in the bundle.
     let summary =
@@ -1310,6 +1373,15 @@ fn okf_bundle_is_v02() {
     let doc = parse_okf_doc(&summary);
     assert_eq!(doc.str("type").as_deref(), Some("Summary"));
     assert_eq!(doc.str("status").as_deref(), Some("draft"));
+    assert_eq!(doc.nested("alchemy", "kind").as_deref(), Some("summary"));
+    assert_eq!(doc.nested("alchemy", "origin").as_deref(), Some("auto"));
+    // `alchemy:` is a key Alchemy owns, so it never lands in the
+    // carry-through set — otherwise the manifest would hold a stale copy and
+    // the next write would emit the block twice.
+    assert!(
+        !doc.extra().keys().any(|k| k.as_str() == Some("alchemy")),
+        "the namespace is ours, not an outside key"
+    );
     let listed = doc.get("sources").expect("sources block");
     let entries = listed.as_sequence().expect("sources is a list");
     assert_eq!(entries.len(), 2);
@@ -1336,6 +1408,19 @@ fn okf_bundle_is_v02() {
     let index = std::fs::read_to_string(bundle.join("index.md")).expect("index");
     assert!(index.contains("[Orders table](sources/orders-table.md)"));
     assert!(index.contains("[What the data says](notes/what-the-data-says.md)"));
+    // The root index carries frontmatter of its own, so the notebook's
+    // identity survives the round trip rather than being guessed from the H1.
+    let root = parse_okf_doc(&index);
+    assert_eq!(root.str("type").as_deref(), Some("Notebook"));
+    assert_eq!(root.str("title").as_deref(), Some("Data notebook"));
+    assert_eq!(root.nested("alchemy", "id").as_deref(), Some("nb-data"));
+    assert_eq!(root.nested("alchemy", "color").as_deref(), Some("#5e6ad2"));
+    assert_eq!(root.nested("alchemy", "icon").as_deref(), Some("beaker"));
+    assert!(
+        root.body.starts_with("# Data notebook"),
+        "the listing still follows the frontmatter: {}",
+        root.body
+    );
     let log = std::fs::read_to_string(bundle.join("log.md")).expect("log");
     assert!(log.starts_with("# Log\n"));
     assert!(
@@ -1355,11 +1440,11 @@ fn okf_rewrite_appends_the_log_and_drops_orphans() {
     let dir = okf_scratch("rewrite");
     let bundle = dir.join("data-notebook");
     let (sources, notes) = okf_fixture();
-    write_bundle("Data notebook", &sources, &notes, &bundle).expect("first write");
+    write_bundle(&okf_notebook("Data notebook"), &sources, &notes, &bundle).expect("first write");
 
     // The second night: one source is gone.
     let fewer = vec![sources[0].clone()];
-    write_bundle("Data notebook", &fewer, &notes, &bundle).expect("second write");
+    write_bundle(&okf_notebook("Data notebook"), &fewer, &notes, &bundle).expect("second write");
 
     assert!(bundle.join("sources/orders-table.md").exists());
     assert!(
@@ -1404,6 +1489,37 @@ fn okf_reads_v01_and_preserves_unknown_keys() {
     assert_eq!(doc.tags(), vec!["url".to_string()]);
     assert_eq!(doc.body.trim(), "The orders table.");
     assert!(doc.extra().is_empty(), "v0.1 writes nothing we don't own");
+    // No `alchemy:` block, and the readers fall back rather than failing:
+    // the source type comes off the spec-facing `tags:`, and there is simply
+    // no user tag, author, or cover to restore.
+    assert!(doc.nested("alchemy", "source_type").is_none());
+    assert!(doc.nested("alchemy", "tags").is_none());
+    assert!(doc.nested("alchemy", "id").is_none());
+
+    // A v0.1 root index.md has no frontmatter at all, so the notebook's title
+    // still comes off the H1 and its colour and icon are simply not there.
+    let v01_index = "# Orders notebook\n\nA research notebook exported from Alchemy as an Open Knowledge Format bundle.\n\n# Sources\n\n- [Orders table](sources/orders-table.md) — One row per order\n";
+    let root = parse_okf_doc(v01_index);
+    assert!(root.str("title").is_none(), "no frontmatter to read");
+    assert!(root.nested("alchemy", "color").is_none());
+    assert_eq!(
+        root.body
+            .lines()
+            .find(|l| l.starts_with("# "))
+            .map(|l| l[2..].trim()),
+        Some("Orders notebook"),
+        "the H1 fallback still names the notebook"
+    );
+
+    // And a v0.2 note without an `alchemy:` block still resolves its kind
+    // from the human `type:` label, which is the pre-namespace behaviour.
+    let note = "---\ntype: Study Guide\ntitle: \"Guide\"\n---\n\nBody.\n";
+    let doc = parse_okf_doc(note);
+    assert!(doc.nested("alchemy", "kind").is_none());
+    assert_eq!(
+        crate::commands::note_kind_from_label(doc.str("type").as_deref().unwrap_or("Note")),
+        "study_guide"
+    );
 
     // A v0.2 file from somewhere else: nested maps, a list of verified
     // entries, and a key Alchemy has never heard of.
@@ -1459,9 +1575,11 @@ fn okf_writes_unknown_keys_back_out() {
         generated_at: 1_756_000_000_000,
         status: String::new(),
         derived_from: Vec::new(),
+        alchemy: Vec::new(),
+        parent: String::new(),
         extra,
     };
-    write_bundle("NB", &[concept], &[], &bundle).expect("write");
+    write_bundle(&okf_notebook("NB"), &[concept], &[], &bundle).expect("write");
     let text = std::fs::read_to_string(bundle.join("sources/kept.md")).expect("read");
     let doc = parse_okf_doc(&text);
     assert_eq!(
@@ -1561,7 +1679,7 @@ fn okf_unchanged_write_is_a_no_op() {
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
 
-    let first = write_bundle("NB", &sources, &notes, &bundle).expect("first");
+    let first = write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("first");
     assert_eq!(first.written, 4, "the seed pass writes everything");
     let stamps: Vec<std::time::SystemTime> = ["sources/orders-table.md", "notes/old-thinking.md"]
         .iter()
@@ -1572,7 +1690,7 @@ fn okf_unchanged_write_is_a_no_op() {
         })
         .collect();
 
-    let second = write_bundle("NB", &sources, &notes, &bundle).expect("second");
+    let second = write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("second");
     assert_eq!(
         (second.written, second.moved, second.removed),
         (0, 0, 0),
@@ -1607,12 +1725,12 @@ fn okf_retitle_moves_the_file() {
     let dir = okf_scratch("rename");
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
-    write_bundle("NB", &sources, &notes, &bundle).expect("first");
+    write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("first");
     assert!(bundle.join("notes/old-thinking.md").exists());
 
     let mut renamed = notes.clone();
     renamed[1].title = "New thinking".into();
-    let out = write_bundle("NB", &sources, &renamed, &bundle).expect("second");
+    let out = write_bundle(&okf_notebook("NB"), &sources, &renamed, &bundle).expect("second");
     assert_eq!(out.moved, 1, "one rename(2), not a delete and an add");
     assert_eq!(out.removed, 0, "a move is never a removal");
     assert!(!bundle.join("notes/old-thinking.md").exists());
@@ -1635,7 +1753,7 @@ fn okf_outside_keys_survive_later_writes() {
     let dir = okf_scratch("preserve2");
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
-    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+    write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("seed");
 
     // Stand in for the reconciler: an outside edit added `verified:`, and the
     // manifest is where it is remembered.
@@ -1664,7 +1782,7 @@ fn okf_outside_keys_survive_later_writes() {
 
     // Two more writes: the key is still there after both.
     for pass in 1..=2 {
-        write_bundle("NB", &sources, &notes, &bundle).expect("rewrite");
+        write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("rewrite");
         let text = std::fs::read_to_string(bundle.join("sources/orders-table.md")).expect("read");
         let doc = parse_okf_doc(&text);
         assert!(
@@ -1689,11 +1807,11 @@ fn okf_leaves_files_it_did_not_write() {
     let dir = okf_scratch("foreign");
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
-    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+    write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("seed");
 
     std::fs::write(bundle.join("notes/theirs.md"), "# Not ours\n").expect("write");
     let fewer = vec![sources[0].clone()];
-    write_bundle("NB", &fewer, &notes, &bundle).expect("second");
+    write_bundle(&okf_notebook("NB"), &fewer, &notes, &bundle).expect("second");
 
     assert!(
         bundle.join("notes/theirs.md").exists(),
@@ -1750,7 +1868,7 @@ fn okf_write_through_never_reads_back() {
     let dir = okf_scratch("echo");
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
-    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+    write_bundle(&okf_notebook("NB"), &sources, &notes, &bundle).expect("seed");
     let manifest = load_manifest(&bundle);
 
     for rel in [
@@ -1809,4 +1927,141 @@ fn okf_hash_is_stable_and_content_sensitive() {
     assert_ne!(okf_hash("hello"), okf_hash("hello "));
     assert_eq!(okf_hash(""), "cbf29ce484222325", "the FNV-1a offset basis");
     assert_eq!(okf_hash("a").len(), 16);
+}
+
+/// A bundle someone ran `ok init` in: `.ok/`, `.claude/`, `.github/`,
+/// `.mcp.json`, `opencode.json`, and the rest. None of it is knowledge, and
+/// only `sources/**.md` and `notes/**.md` are read (RFC-okf-live §4).
+#[test]
+fn okf_skips_openknowledge_scaffolding() {
+    use crate::okf::is_okf_concept;
+    let root = std::path::Path::new("/bundle");
+    let concept = |rel: &str| is_okf_concept(root, &format!("/bundle/{rel}"));
+
+    assert!(concept("sources/orders.md"));
+    assert!(concept("notes/summary.md"));
+    // Nested is still knowledge; `sources/**.md` is the rule, not one level.
+    assert!(concept("sources/tables/orders.md"));
+
+    // Listings, not concepts.
+    assert!(!concept("index.md"));
+    assert!(!concept("log.md"));
+    assert!(!concept("sources/index.md"));
+    assert!(!concept("notes/index.md"));
+
+    // Everything `ok init` adds. The dot entries and the plain ones alike:
+    // a .gitignore would have caught almost none of these.
+    for rel in [
+        ".ok/config.yml",
+        ".ok/local/state.json",
+        ".okignore",
+        ".claude/skills/open-knowledge/SKILL.md",
+        ".codex/config.toml",
+        ".cursor/rules.md",
+        ".pi/config.json",
+        ".opencode/agent.md",
+        ".github/workflows/ok.yml",
+        ".mcp.json",
+        "opencode.json",
+        ".gitignore",
+        ".alchemy/manifest.json",
+    ] {
+        assert!(!concept(rel), "{rel} is tooling, not knowledge");
+    }
+
+    // Nor is anything else at the root, whatever its extension.
+    assert!(!concept("README.md"));
+    assert!(!concept("sources/notes.txt"));
+    // A hidden directory *under* sources/ is still hidden.
+    assert!(!concept("sources/.drafts/wip.md"));
+    // And a path outside the bundle never qualifies.
+    assert!(!is_okf_concept(root, "/elsewhere/sources/orders.md"));
+}
+
+/// The same rule against the real thing: a copy of an exported bundle that
+/// was later `ok init`ed. Read-only — the fixture is copied, never bound.
+#[test]
+fn okf_reads_only_concepts_from_a_real_ok_project() {
+    use crate::okf::is_okf_concept;
+    let src = std::path::Path::new("/Users/thrashr888/Downloads/ferrari-458-488-research");
+    if !src.is_dir() {
+        // The fixture is one developer's Downloads folder; skip elsewhere.
+        return;
+    }
+    let root = okf_scratch("okproject").join("bundle");
+    let copied = std::process::Command::new("/bin/cp")
+        .arg("-R")
+        .arg(src)
+        .arg(&root)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(copied, "copy the fixture aside rather than touching it");
+
+    // Walk it with every ignore mechanism switched off. `ok init` writes its
+    // scaffolding into `.git/info/exclude`, which the real walker honours —
+    // so a walk that respected it would prove nothing about the rule. The
+    // allowlist has to stand on its own: in a folder that is not a git repo,
+    // or for the entries OK does not exclude (`.github/`, `.pi/extensions/`),
+    // it is the only thing standing between tooling and the corpus.
+    let mut kept: Vec<String> = Vec::new();
+    let mut rejected: Vec<String> = Vec::new();
+    for entry in ignore::WalkBuilder::new(&root)
+        .hidden(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .git_global(false)
+        .ignore(false)
+        .parents(false)
+        .build()
+        .flatten()
+    {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path().to_string_lossy().to_string();
+        let rel = entry
+            .path()
+            .strip_prefix(&root)
+            .map(|r| r.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if is_okf_concept(&root, &path) {
+            kept.push(rel);
+        } else {
+            rejected.push(rel);
+        }
+    }
+    kept.sort();
+
+    assert!(
+        kept.iter()
+            .all(|r| r.starts_with("sources/") || r.starts_with("notes/")),
+        "only sources/ and notes/ survive: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|r| r.starts_with("sources/")),
+        "found sources"
+    );
+    assert!(kept.iter().any(|r| r.starts_with("notes/")), "found notes");
+    assert!(
+        !kept
+            .iter()
+            .any(|r| r.ends_with("index.md") || r.ends_with("log.md")),
+        "no listings: {kept:?}"
+    );
+    // The scaffolding really is present in the fixture, and really is out.
+    for tooling in [".mcp.json", "opencode.json", ".okignore", ".gitignore"] {
+        assert!(
+            rejected.iter().any(|r| r == tooling),
+            "{tooling} should be in the fixture and rejected; rejected: {rejected:?}"
+        );
+    }
+    for dir in [".ok/", ".claude/", ".github/", ".pi/", ".git/"] {
+        assert!(
+            rejected.iter().any(|r| r.starts_with(dir)),
+            "{dir} is in the fixture and rejected; rejected: {rejected:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root.parent().unwrap_or(&root));
 }

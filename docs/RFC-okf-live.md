@@ -98,6 +98,49 @@ actually there. Notes that name nothing get no `sources:` key rather than
 an invented one. If a note ever grows a real provenance column, the
 exporter should prefer it and keep the graph as the fallback.
 
+### `alchemy:` — what the spec has no field for
+
+The spec lets a producer add its own keys (§4.1), and a round trip was losing
+everything ours has no home for: a notebook's colour and icon, a source's
+real type and the user's own tags, a note's kind. All of it now travels under
+a single `alchemy:` map, so it collides with nothing the spec defines and
+nothing another producer writes. A reader that does not know the key ignores
+it; ours reads it back.
+
+- **Root `index.md`** gets frontmatter for the first time — it was the one
+  concept document in the bundle without any, so the notebook's own identity
+  had to be guessed back from the H1. It now carries `type: Notebook`,
+  `title`, `description`, `generated`, and `alchemy: { id, color, icon }`.
+- **Sources** carry `alchemy: { id, source_type, tags, author, image_url,
+  parent }`. `source_type` is the real type — the spec-facing `tags:` stays
+  what it was — and `tags` is the user's own labels, which are ground truth
+  and feed routing. `parent` is the folder/git/notion parent's **slug**, so a
+  folder source's shape survives; it resolves at emission, where every other
+  cross-reference does, and import resolves it back in a second pass because
+  a child's file can sort ahead of its parent's.
+- **Notes** carry `alchemy: { id, kind, origin, status }`. `type:` is a human
+  label and several kinds share one, so `kind` is what makes a Study Guide
+  come back a study guide.
+
+Two decisions inside that:
+
+- **The notebook id is reused; entity ids are not.** Importing into a new
+  notebook takes the bundle's `alchemy.id` when nothing here already claims
+  it, so binding an export back to the notebook it came from lands on that
+  notebook rather than a second copy. A collision means this is a merge, and
+  a merge mints. Sources and notes always mint — reusing their ids would
+  collide the moment a bundle is merged into a notebook that already holds
+  them, and the manifest already carries the id→path mapping that matters.
+  The ids are still emitted, so an outside tool can correlate.
+- **`alchemy` is one of Alchemy's own keys**, not an unknown one. Otherwise
+  the manifest would carry a stale copy through as "somebody else's key" and
+  the next write would emit the block twice.
+
+Bundles written before this still import: no frontmatter on the root index
+means the H1 names the notebook, no `alchemy.source_type` means the
+spec-facing `tags:` decides, and no `alchemy.kind` means the `type:` label
+does — which is exactly the pre-namespace behaviour.
+
 ### Two other decisions phase 0 had to make
 
 - **Where the nightly loop sits relative to the gate.** RFC-night-shift-area
@@ -155,6 +198,27 @@ through Add Source, or added from a Spotlight hit) becomes an `okf`
 source. An `.okf.zip` dropped anywhere still imports — a zip cannot stay
 live. Home's Import… dialog keeps importing folders one-shot for people
 who want a copy rather than a link, and gains the binding checkbox in §5.5.
+
+### An allowlist, because a bundle is usually a repository
+
+Reserved-file skipping is not enough. An exported bundle someone then runs
+`ok init` in grows `.ok/`, `.okignore`, `.claude/`, `.codex/`, `.cursor/`,
+`.pi/`, `.opencode/`, `.github/`, `.mcp.json`, `opencode.json`, and
+`.gitignore` — tooling, not knowledge, and a list that will keep growing. A
+skip list cannot be maintained against that.
+
+So both readers use the same allowlist instead: a bundle's knowledge is
+`sources/**.md` and `notes/**.md`, nothing hidden anywhere along the path,
+and never `index.md` or `log.md`. Everything else in the folder belongs to
+somebody else. The reconciler walks the same rule to any depth, so the ingest
+side and the read-back side agree on what a bundle contains.
+
+Ignore files are not load-bearing here, and must not become so. `ok init`
+writes its scaffolding into `.git/info/exclude`, which ripgrep's walker does
+honour — but that only helps in a git repository, and it does not cover
+`.github/` or `.pi/extensions/` even there. The test walks a real OK project
+with every ignore mechanism switched off, so it measures the rule rather than
+the exclude file.
 
 ### Where the lifecycle lives — as built
 

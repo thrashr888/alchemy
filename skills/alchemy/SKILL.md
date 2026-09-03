@@ -118,6 +118,12 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
   write regenerates the listings, and `log.md` is the bundle's history.
 - Frontmatter keys Alchemy does not write (`verified`, `stale_after`, your
   own) survive every rewrite. `title:` names the concept.
+- The `alchemy:` block holds what the spec has no field for — a source's
+  real type and the user's tags, a note's `kind`, the notebook's colour and
+  icon on the root `index.md`. Edit it only when you mean to change those.
+- Only `sources/**.md` and `notes/**.md` are read. Anything else you put in
+  the folder — config, scripts, a README, whatever `ok init` adds — is
+  yours and is never ingested.
 - `.alchemy/manifest.json` is Alchemy's bookkeeping. Leave it alone.
 
 `bind_notebook_okf(notebook_id, path)` starts this: an empty folder is
