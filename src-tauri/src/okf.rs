@@ -1788,10 +1788,27 @@ pub(crate) fn heal_plan(
     steps
 }
 
-/// Run the plan, once, at launch. Best-effort: a heal that cannot read the
-/// store leaves everything as it found it.
+/// What this pass understands how to repair. A machine stamped with the
+/// current number has been through it and is not put through it again.
+const HEAL_VERSION: &str = "1";
+
+/// Run the plan once, ever — not once per launch.
+///
+/// Every rule here undoes something the user can legitimately redo. Somebody
+/// who binds a starter from the ⋯ menu, or unarchives a copy they want to
+/// keep, must not find it undone at the next launch: this is a repair for a
+/// state a shipped bug created, and a repair that keeps happening is a
+/// policy. The stamp is a file beside the bindings, so a later pass can raise
+/// the number when there is something new to fix.
+///
+/// Best-effort throughout: a heal that cannot read the store leaves
+/// everything as it found it and tries again next time.
 pub(crate) async fn heal_bindings(state: &AppState) {
     let data_dir = app_data_dir(state);
+    let stamp = data_dir.join("okf-healed");
+    if std::fs::read_to_string(&stamp).is_ok_and(|v| v.trim() == HEAL_VERSION) {
+        return;
+    }
     let bindings = load_bindings(&data_dir);
     let Ok(rows) = state.db.list_notebooks().await else {
         return;
@@ -1849,6 +1866,9 @@ pub(crate) async fn heal_bindings(state: &AppState) {
                 }
             }
         }
+    }
+    if let Err(err) = std::fs::write(&stamp, HEAL_VERSION) {
+        crate::note!("okf: couldn't stamp the heal: {err}");
     }
 }
 

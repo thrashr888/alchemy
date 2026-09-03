@@ -706,6 +706,12 @@ they exist without being asked for.
   nothing in the app log but the startup line, and five bundles had been
   written since.
 
+  **Once ever, not once per launch**, stamped beside the bindings. Every rule
+  here undoes something a person may legitimately redo — bind a starter from
+  the ⋯ menu, unarchive a copy they want to keep — and a repair that keeps
+  happening is a policy. The stamp carries a number so a later pass can run
+  when there is something new to fix.
+
 - **The offer banner is a third tone.** `error` and `warning` both tint their
   container and wear a warning triangle; an invitation is neither a failure
   nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a
