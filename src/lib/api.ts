@@ -146,8 +146,14 @@ async function run<A>(effect: Effect.Effect<A, AppError>): Promise<A> {
 export const api = {
   // Notebooks
   listNotebooks: () => run(query<Notebook[]>("list_notebooks")),
-  createNotebook: (title: string) =>
-    run(cmd<Notebook>("create_notebook", { title })),
+  createNotebook: (title: string, look?: { icon?: string; color?: string }) =>
+    run(
+      cmd<Notebook>("create_notebook", {
+        title,
+        icon: look?.icon ?? null,
+        color: look?.color ?? null,
+      }),
+    ),
   renameNotebook: (id: string, title: string) =>
     run(cmd<void>("rename_notebook", { id, title })),
   setNotebookColor: (id: string, color: string) =>

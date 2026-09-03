@@ -1019,8 +1019,21 @@ pub async fn list_notebooks(state: State<'_, AppState>) -> Result<Vec<Notebook>,
 pub async fn create_notebook(
     state: State<'_, AppState>,
     title: String,
+    icon: Option<String>,
+    color: Option<String>,
 ) -> Result<Notebook, String> {
-    new_notebook(&state, title).await
+    let mut nb = new_notebook(&state, title).await?;
+    // The New notebook dialog offers the look up front; absent, the palette
+    // rotation and the title-derived icon stand.
+    if let Some(icon) = icon.filter(|i| !i.is_empty()) {
+        e(state.db.set_notebook_icon(&nb.id, &icon).await)?;
+        nb.icon = icon;
+    }
+    if let Some(color) = color.filter(|c| !c.is_empty()) {
+        e(state.db.set_notebook_color(&nb.id, &color).await)?;
+        nb.color = color;
+    }
+    Ok(nb)
 }
 
 /// Mint a notebook. The command above is this plus the IPC signature; chat
@@ -5135,7 +5148,12 @@ async fn rescan_one_folder_inner(
             scan.removed += 1;
         }
     }
-    note_scan_events(state, folder, &added_titles, &removed_titles).await;
+    // A folder's first population is the source itself arriving, not news
+    // inside it: nothing was there before, so nothing is "57 new from docs"
+    // the moment it was added. Later scans report every change as before.
+    if !children.is_empty() {
+        note_scan_events(state, folder, &added_titles, &removed_titles).await;
+    }
 
     // The parent's content is a folder/repo map: git provenance (when the
     // root sits in a working tree), the file tree, and the skip list — so
