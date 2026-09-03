@@ -1228,6 +1228,8 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
                 ("image_url".into(), "https://example.com/o.png".into()),
             ],
             parent: String::new(),
+            origin_uri: String::new(),
+            reference: None,
             extra: serde_yaml_ng::Mapping::new(),
         },
         OkfConcept {
@@ -1248,6 +1250,8 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
             // A child of the folder source above, so the bundle records the
             // shape a folder gave the notebook.
             parent: "src-orders".into(),
+            origin_uri: String::new(),
+            reference: None,
             extra: serde_yaml_ng::Mapping::new(),
         },
     ];
@@ -1269,6 +1273,8 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
                 ("origin".into(), "auto".into()),
             ],
             parent: String::new(),
+            origin_uri: String::new(),
+            reference: None,
             extra: serde_yaml_ng::Mapping::new(),
         },
         OkfConcept {
@@ -1289,6 +1295,8 @@ fn okf_fixture() -> (Vec<crate::okf::OkfConcept>, Vec<crate::okf::OkfConcept>) {
                 ("status".into(), "archived".into()),
             ],
             parent: String::new(),
+            origin_uri: String::new(),
+            reference: None,
             extra: serde_yaml_ng::Mapping::new(),
         },
     ];
@@ -1310,6 +1318,27 @@ fn okf_notebook(title: &str) -> crate::okf::OkfNotebook {
 /// it: since §5.6 a bundle carries no machine state at all.
 fn okf_manifest(bundle: &std::path::Path) -> std::path::PathBuf {
     bundle.with_extension("manifest.json")
+}
+
+/// A concept with nothing set, for tests that care about one field.
+fn okf_blank_concept() -> crate::okf::OkfConcept {
+    crate::okf::OkfConcept {
+        id: String::new(),
+        title: String::new(),
+        content: String::new(),
+        type_label: "Source".into(),
+        resource: String::new(),
+        tags: Vec::new(),
+        generated_at: 0,
+        generated_by: String::new(),
+        status: String::new(),
+        derived_from: Vec::new(),
+        alchemy: Vec::new(),
+        parent: String::new(),
+        origin_uri: String::new(),
+        reference: None,
+        extra: serde_yaml_ng::Mapping::new(),
+    }
 }
 
 fn okf_scratch(tag: &str) -> std::path::PathBuf {
@@ -1611,6 +1640,8 @@ fn okf_writes_unknown_keys_back_out() {
         derived_from: Vec::new(),
         alchemy: Vec::new(),
         parent: String::new(),
+        origin_uri: String::new(),
+        reference: None,
         extra,
     };
     write_bundle(
@@ -2445,6 +2476,282 @@ fn okf_adopts_and_retires_the_in_bundle_manifest() {
     )
     .expect("rewrite");
     assert_eq!((again.written, again.moved, again.removed), (0, 0, 0));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A source as the reference planner reads it.
+fn okf_src(id: &str, url: &str) -> crate::models::Source {
+    crate::models::Source {
+        id: id.into(),
+        notebook_id: "nb".into(),
+        title: id.into(),
+        source_type: "pdf".into(),
+        url: url.into(),
+        content: String::new(),
+        char_count: 0,
+        chunk_count: 0,
+        created_at: 0,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        author: String::new(),
+        image_url: String::new(),
+        tags: String::new(),
+        note: String::new(),
+        fetched_at: 0,
+        fetch_failures: 0,
+    }
+}
+
+/// §6's table, decided: whether the bundle is the sensible home for the bytes.
+#[test]
+fn okf_reference_plan_follows_the_table() {
+    use crate::okf::{plan_reference, ReferencePlan};
+    let dir = okf_scratch("refplan");
+    let bundle = dir.join("nb");
+    std::fs::create_dir_all(&bundle).expect("mkdir");
+    let cap = 50 * 1024 * 1024;
+
+    // A file the user dragged in: the notebook is its only home in Alchemy,
+    // and the other Mac cannot reach this path.
+    let pdf = dir.join("paper.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4 pretend").expect("write");
+    match plan_reference(&okf_src("s1", &pdf.to_string_lossy()), &bundle, cap) {
+        ReferencePlan::Copy { name, .. } => {
+            assert!(name.ends_with(".pdf"));
+            assert_eq!(name.len(), 16 + 4, "sixteen hex characters plus the suffix");
+        }
+        other => panic!("a dragged PDF copies, got {other:?}"),
+    }
+
+    // Pasted text and clipped pages are their own capture; a URL re-fetches.
+    assert!(matches!(
+        plan_reference(&okf_src("s2", ""), &bundle, cap),
+        ReferencePlan::Link { .. }
+    ));
+    assert!(matches!(
+        plan_reference(&okf_src("s3", "https://example.com/a"), &bundle, cap),
+        ReferencePlan::Link { .. }
+    ));
+
+    // A folder child's parent is the origin and resyncs; copying a synced
+    // folder into a synced folder duplicates it forever.
+    let mut child = okf_src("s4", &pdf.to_string_lossy());
+    child.parent_id = "folder-1".into();
+    assert!(matches!(
+        plan_reference(&child, &bundle, cap),
+        ReferencePlan::Link { .. }
+    ));
+
+    // A file already inside the bundle is cited where it lies.
+    let inside = bundle.join("attachments").join("here.pdf");
+    std::fs::create_dir_all(inside.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&inside, b"%PDF here").expect("write");
+    assert_eq!(
+        plan_reference(&okf_src("s5", &inside.to_string_lossy()), &bundle, cap),
+        ReferencePlan::Inside {
+            rel: "attachments/here.pdf".into()
+        }
+    );
+
+    // Over the cap, one video does not make a bundle undeliverable.
+    match plan_reference(&okf_src("s6", &pdf.to_string_lossy()), &bundle, 4) {
+        ReferencePlan::Link { reason } => assert_eq!(reason, "over the size cap"),
+        other => panic!("expected a link, got {other:?}"),
+    }
+    // And the cap set to zero turns copying off entirely.
+    assert!(matches!(
+        plan_reference(&okf_src("s7", &pdf.to_string_lossy()), &bundle, 0),
+        ReferencePlan::Link { .. }
+    ));
+
+    // Markdown and text are their own extraction: copying only duplicates
+    // the concept body.
+    let md = dir.join("notes.md");
+    std::fs::write(&md, b"# hi").expect("write");
+    assert!(matches!(
+        plan_reference(&okf_src("s8", &md.to_string_lossy()), &bundle, cap),
+        ReferencePlan::Link { .. }
+    ));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One original per distinct file, written once, and removed only when the
+/// last concept pointing at it goes (§6, §8's "Originals" bullet).
+#[test]
+fn okf_originals_are_written_once_and_shared_by_hash() {
+    use crate::okf::{parse_okf_doc, plan_reference, write_bundle, OkfConcept};
+    let dir = okf_scratch("refs");
+    let bundle = dir.join("nb");
+    let pdf = dir.join("paper.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4 the same bytes").expect("write");
+    let cap = 50 * 1024 * 1024;
+    let uri = format!("file://{}", pdf.display());
+
+    let concept = |id: &str, title: &str| OkfConcept {
+        id: id.into(),
+        title: title.into(),
+        content: "Extracted text.".into(),
+        type_label: "Source".into(),
+        generated_at: 1_756_000_000_000,
+        generated_by: "alchemy/test".into(),
+        origin_uri: uri.clone(),
+        reference: Some(plan_reference(
+            &okf_src(id, &pdf.to_string_lossy()),
+            &bundle,
+            cap,
+        )),
+        ..okf_blank_concept()
+    };
+
+    // Two sources over the same file share one copy.
+    let both = vec![concept("s1", "First read"), concept("s2", "Second read")];
+    let first = write_bundle(
+        &okf_notebook("NB"),
+        &both,
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+    assert_eq!(first.referenced, 1, "one original, not two");
+    let refs: Vec<String> = std::fs::read_dir(bundle.join("references"))
+        .expect("references/")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(refs.len(), 1, "one file on disk: {refs:?}");
+
+    // `resource:` says the bytes are here; `alchemy.origin` keeps the path.
+    let doc =
+        parse_okf_doc(&std::fs::read_to_string(bundle.join("sources/first-read.md")).unwrap());
+    let resource = doc.str("resource").expect("resource");
+    assert!(resource.starts_with("references/"), "got {resource}");
+    assert!(bundle.join(&resource).exists(), "and it resolves");
+    assert_eq!(
+        doc.nested("alchemy", "origin").as_deref(),
+        Some(uri.as_str())
+    );
+    assert_eq!(
+        parse_okf_doc(&std::fs::read_to_string(bundle.join("sources/second-read.md")).unwrap())
+            .str("resource")
+            .as_deref(),
+        Some(resource.as_str()),
+        "the second source cites the same original"
+    );
+
+    // A second pass adds nothing: a reference that exists is skipped.
+    let mtime = std::fs::metadata(bundle.join(&resource))
+        .and_then(|m| m.modified())
+        .expect("mtime");
+    let again = write_bundle(
+        &okf_notebook("NB"),
+        &both,
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("rewrite");
+    assert_eq!((again.written, again.removed), (0, 0), "nothing to redo");
+    assert_eq!(
+        std::fs::metadata(bundle.join(&resource))
+            .and_then(|m| m.modified())
+            .expect("mtime"),
+        mtime,
+        "the original was not recopied"
+    );
+
+    // One owner leaving is not enough — the other still points at it.
+    let one = vec![both[0].clone()];
+    write_bundle(
+        &okf_notebook("NB"),
+        &one,
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("drop one");
+    assert!(bundle.join(&resource).exists(), "still claimed");
+
+    // The last owner takes it with them.
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("drop both");
+    assert!(
+        !bundle.join(&resource).exists(),
+        "no concept points at it any more"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file a person put in `references/` themselves is not the writer's to
+/// remove — only the content-addressed names it wrote are.
+#[test]
+fn okf_leaves_references_it_did_not_name() {
+    use crate::okf::write_bundle;
+    let dir = okf_scratch("refkeep");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("seed");
+
+    std::fs::create_dir_all(bundle.join("references")).expect("mkdir");
+    std::fs::write(bundle.join("references/handout.pdf"), b"theirs").expect("write");
+    write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("rewrite");
+    assert!(
+        bundle.join("references/handout.pdf").exists(),
+        "a name the writer never chose is somebody else's file"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only a reference the bundle actually holds is a file to read; everything
+/// else in `resource:` is provenance, and a path climbing out of the bundle
+/// is refused (§6).
+#[test]
+fn okf_reference_paths_resolve_inside_the_bundle() {
+    use crate::commands::okf_reference_path;
+    let dir = okf_scratch("refpath");
+    let bundle = dir.join("nb");
+    std::fs::create_dir_all(bundle.join("references")).expect("mkdir");
+    std::fs::write(bundle.join("references/abc.pdf"), b"bytes").expect("write");
+    std::fs::write(dir.join("outside.pdf"), b"bytes").expect("write");
+
+    assert_eq!(
+        okf_reference_path(&bundle, "references/abc.pdf"),
+        Some(bundle.join("references/abc.pdf"))
+    );
+    // Provenance, not files here.
+    assert!(okf_reference_path(&bundle, "").is_none());
+    assert!(okf_reference_path(&bundle, "https://example.com/a.pdf").is_none());
+    assert!(okf_reference_path(&bundle, "/Users/someone/paper.pdf").is_none());
+    // A reference the bundle does not carry falls back to the concept body.
+    assert!(okf_reference_path(&bundle, "references/missing.pdf").is_none());
+    // And no climbing out.
+    assert!(okf_reference_path(&bundle, "../outside.pdf").is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

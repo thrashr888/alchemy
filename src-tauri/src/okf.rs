@@ -169,6 +169,13 @@ pub(crate) struct OkfConcept {
     /// of, as an entity id here and the parent's slug in the file, so a
     /// folder source's shape survives a round trip.
     pub parent: String,
+    /// The machine path this concept was made from, if any. Stays in
+    /// `alchemy.origin` whether or not the bytes travel, so a bind-back can
+    /// re-link (§6).
+    pub origin_uri: String,
+    /// What to do with the original. Resolved at gather time, acted on at
+    /// write time — only the writer knows where the bundle is.
+    pub reference: Option<ReferencePlan>,
     /// Frontmatter keys Alchemy does not itself write, carried in from an
     /// outside edit and re-emitted verbatim — the spec's round-trip rule.
     pub extra: serde_yaml_ng::Mapping,
@@ -202,6 +209,8 @@ impl OkfConcept {
             derived_from: Vec::new(),
             alchemy: Vec::new(),
             parent: String::new(),
+            origin_uri: String::new(),
+            reference: None,
             extra: serde_yaml_ng::Mapping::new(),
         }
     }
@@ -242,6 +251,9 @@ pub struct OkfWrite {
     pub written: usize,
     pub moved: usize,
     pub removed: usize,
+    /// Originals copied in, and originals left where they were (§6).
+    pub referenced: usize,
+    pub linked: usize,
 }
 
 impl OkfWrite {
@@ -428,6 +440,10 @@ pub fn write_bundle(
 
     let mut listings: HashMap<&str, Vec<(String, String, String)>> = HashMap::new();
     let mut still_ours: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // References this pass's concepts point at, so the ones nothing points at
+    // any more can go; and the originals that stayed behind, for the log.
+    let mut references: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut linked: Vec<String> = Vec::new();
     for (dir, concepts) in &order {
         if concepts.is_empty() {
             continue;
@@ -448,6 +464,39 @@ pub fn write_bundle(
                     .map(|m| m.extra.clone())
                     .unwrap_or_default(),
             );
+            // The original, if the bundle is its sensible home (§6).
+            // `resource:` says which way it went — a `references/` path means
+            // the bytes are here, anything else is provenance to a place this
+            // bundle does not own — and `alchemy.origin` keeps the machine
+            // path either way, so a bind-back can re-link.
+            match concept.reference.clone() {
+                Some(ReferencePlan::Copy { name, from }) => {
+                    match place_reference(bundle, &name, &from) {
+                        Ok(rel) => {
+                            references.insert(name);
+                            concept.resource = rel;
+                        }
+                        Err(err) => {
+                            crate::note!("okf: {err}");
+                            out.linked += 1;
+                        }
+                    }
+                }
+                Some(ReferencePlan::Inside { rel }) => concept.resource = rel,
+                // Only worth saying when the bytes could have travelled and
+                // deliberately did not; the rest are links by their nature.
+                Some(ReferencePlan::Link { reason }) if reason == "over the size cap" => {
+                    linked.push(format!("{} ({reason})", concept.title));
+                    out.linked += 1;
+                }
+                Some(ReferencePlan::Link { .. }) => {}
+                None => {}
+            }
+            if !concept.origin_uri.is_empty() {
+                concept
+                    .alchemy
+                    .push(("origin".into(), concept.origin_uri.clone()));
+            }
             let text = format!(
                 "{}{}\n",
                 okf_frontmatter(&concept, &description, &placements),
@@ -560,6 +609,10 @@ pub fn write_bundle(
     }
     write(&bundle.join("index.md"), &index)?;
 
+    // An original nothing claims any more goes with the source that owned it.
+    let dropped = prune_references(bundle, &references);
+    out.removed += dropped;
+    out.referenced = references.len();
     out.sources = listings.get("sources").map(Vec::len).unwrap_or(0);
     out.notes = listings.get("notes").map(Vec::len).unwrap_or(0);
     if let Some(path) = manifest_at {
@@ -578,6 +631,9 @@ pub fn write_bundle(
         if out.removed > 0 {
             parts.push(format!("{} removed", out.removed));
         }
+        if out.referenced > 0 {
+            parts.push(format!("{} originals", out.referenced));
+        }
         okf_log_append(
             bundle,
             &format!(
@@ -587,6 +643,16 @@ pub fn write_bundle(
                 out.notes
             ),
         )?;
+        if !linked.is_empty() {
+            okf_log_append(
+                bundle,
+                &format!(
+                    "Left {} original(s) where they were: {}.",
+                    linked.len(),
+                    linked.join("; ")
+                ),
+            )?;
+        }
     }
     Ok(out)
 }
@@ -652,9 +718,13 @@ fn okf_source_actor(source: &Source) -> String {
 /// same URLs, filenames, and wikilinks the link graph already reads. So
 /// `sources:` is the graph's outbound source edges for each note — the
 /// citations that are actually there, never a guess at what was in scope.
-pub(crate) async fn gather_bundle(
+/// Told where the bundle will land, so each source's original can be planned
+/// against it (§6): a file already inside the bundle is cited where it lies
+/// rather than copied beside itself.
+pub(crate) async fn gather_bundle_for(
     state: &AppState,
     notebook_id: &str,
+    bundle: &Path,
 ) -> Result<(OkfNotebook, Vec<OkfConcept>, Vec<OkfConcept>), String> {
     let notebook = e(state.db.list_notebooks().await)?
         .into_iter()
@@ -663,6 +733,11 @@ pub(crate) async fn gather_bundle(
     let sources = e(state.db.list_sources(notebook_id).await)?;
     let notes = e(state.db.list_notes(notebook_id).await)?;
 
+    // One setting, read once per pass.
+    let cap_bytes = {
+        let ai = state.ai.read().await;
+        ai.config().okf_reference_cap_mb.saturating_mul(1024 * 1024)
+    };
     let mut source_concepts = Vec::with_capacity(sources.len());
     for s in &sources {
         let content = e(state.db.source_content(&s.id).await)?;
@@ -679,6 +754,12 @@ pub(crate) async fn gather_bundle(
             content,
             type_label: "Source".into(),
             resource,
+            origin_uri: if s.url.is_empty() || is_web_url(&s.url) {
+                String::new()
+            } else {
+                format!("file://{}", s.url)
+            },
+            reference: Some(plan_reference(s, bundle, cap_bytes)),
             tags: vec![s.source_type.clone()],
             generated_at: s.created_at,
             generated_by: okf_source_actor(s),
@@ -780,18 +861,26 @@ pub async fn export_notebook_okf(
     notebook_id: String,
     dest_dir: String,
 ) -> Result<String, String> {
-    let (notebook, sources, notes) = gather_bundle(&state, &notebook_id).await?;
+    // Where it lands is settled before anything is read: originals are
+    // planned against the bundle path (§6), and the notebook row alone —
+    // which carries no source text — is enough to name the directory.
+    let title = e(state.db.list_notebooks().await)?
+        .into_iter()
+        .find(|n| n.id == notebook_id)
+        .map(|n| n.title)
+        .ok_or_else(|| "Notebook not found".to_string())?;
 
     // A fresh directory per export — never merge into (or clobber) one the
     // user already has.
     let base = std::path::Path::new(&dest_dir);
-    let nb_slug = okf_slug(&notebook.title);
+    let nb_slug = okf_slug(&title);
     let mut bundle = base.join(&nb_slug);
     let mut n = 2;
     while bundle.exists() {
         bundle = base.join(format!("{nb_slug}-{n}"));
         n += 1;
     }
+    let (notebook, sources, notes) = gather_bundle_for(&state, &notebook_id, &bundle).await?;
     write_bundle(&notebook, &sources, &notes, &bundle, None)?;
     Ok(bundle.display().to_string())
 }
@@ -821,18 +910,13 @@ pub(crate) async fn export_all(
         } else {
             format!("{base}-{count}")
         };
-        let (notebook, sources, notes) = gather_bundle(state, &nb.id).await?;
+        let dir = dest.join(&slug);
+        let (notebook, sources, notes) = gather_bundle_for(state, &nb.id, &dir).await?;
         // The nightly copy keeps its own manifest — beside the bindings, not
         // in the bundle — so tonight can drop the concepts last night wrote
         // for a source that has since gone.
         let manifest = manifest_path(&app_data_dir(state), &format!("nightly-{slug}"));
-        let written = write_bundle(
-            &notebook,
-            &sources,
-            &notes,
-            &dest.join(&slug),
-            Some(&manifest),
-        )?;
+        let written = write_bundle(&notebook, &sources, &notes, &dir, Some(&manifest))?;
         concepts += written.sources + written.notes;
         kept.insert(slug);
     }
@@ -1241,6 +1325,138 @@ fn parse_okf_scalars(head: &str) -> serde_yaml_ng::Mapping {
     map
 }
 
+// ---- Originals in `references/` (docs/RFC-okf-live.md §6) -------------------
+
+/// Types worth carrying: the ones whose bytes say something the extracted
+/// text cannot. A PDF has pages, an image has a picture, a deck has slides.
+/// Plain text and markdown are their own extraction, so copying them would
+/// only duplicate the concept body.
+const REFERENCE_EXTENSIONS: &[&str] = &[
+    "pdf", "docx", "docm", "doc", "rtf", "odt", "pptx", "pptm", "ppt", "odp", "epub", "xlsx",
+    "xls", "xlsm", "xlsb", "ods", "png", "jpg", "jpeg", "jpe", "webp", "gif", "bmp", "tif", "tiff",
+    "heic", "heif", "avif", "jp2", "m4a", "mp3", "wav", "aiff",
+];
+
+/// The first 16 hex characters of the file's SHA-256 — 64 bits, which for a
+/// notebook's worth of documents is a collision nobody will see, and short
+/// enough that the filename stays readable.
+pub fn reference_hash(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Why a source's original is, or is not, in the bundle (§6's table).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReferencePlan {
+    /// Copy the bytes in under this name.
+    Copy { name: String, from: PathBuf },
+    /// Already inside the bundle: cite it where it lies.
+    Inside { rel: String },
+    /// Leave the bytes where they are; `resource:` stays provenance.
+    Link { reason: &'static str },
+}
+
+/// Decide what to do with one source's original.
+///
+/// The question the table answers is whether the bundle is the sensible home
+/// for the bytes. A file the user dragged in has no other home the far side
+/// can reach. A clipped page or pasted text *is* its capture, and a URL is
+/// re-fetchable. A folder or repo child belongs to a parent that resyncs, and
+/// copying a synced folder into a synced folder duplicates it forever.
+pub fn plan_reference(source: &Source, bundle: &Path, cap_bytes: u64) -> ReferencePlan {
+    if !source.parent_id.is_empty() {
+        return ReferencePlan::Link {
+            reason: "a folder child; its parent is the origin and resyncs",
+        };
+    }
+    if source.url.is_empty() || is_web_url(&source.url) {
+        return ReferencePlan::Link {
+            reason: "the concept body is the capture",
+        };
+    }
+    let path = Path::new(&source.url);
+    // A file already in the bundle is already here.
+    if let Ok(rel) = path.strip_prefix(bundle) {
+        return ReferencePlan::Inside {
+            rel: rel.to_string_lossy().to_string(),
+        };
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !REFERENCE_EXTENSIONS.contains(&ext.as_str()) {
+        return ReferencePlan::Link {
+            reason: "the text is the whole document",
+        };
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return ReferencePlan::Link {
+            reason: "the original is not on this machine",
+        };
+    };
+    if cap_bytes == 0 || meta.len() > cap_bytes {
+        return ReferencePlan::Link {
+            reason: "over the size cap",
+        };
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return ReferencePlan::Link {
+            reason: "the original could not be read",
+        };
+    };
+    ReferencePlan::Copy {
+        name: format!("{}.{ext}", reference_hash(&bytes)),
+        from: path.to_path_buf(),
+    }
+}
+
+/// Copy an original into `references/`, unless it is already there.
+///
+/// Named by content, so two sources over the same file share one copy, a
+/// rename moves nothing, and every write after the first is a `exists()`
+/// check rather than a copy. Returns the bundle-relative path.
+fn place_reference(bundle: &Path, name: &str, from: &Path) -> Result<String, String> {
+    let dir = bundle.join("references");
+    std::fs::create_dir_all(&dir).map_err(|err| format!("Failed to create {dir:?}: {err}"))?;
+    let dest = dir.join(name);
+    if !dest.exists() {
+        std::fs::copy(from, &dest)
+            .map_err(|err| format!("Failed to copy {from:?} into the bundle: {err}"))?;
+    }
+    Ok(format!("references/{name}"))
+}
+
+/// Drop references nothing points at any more.
+///
+/// "Points at" means a concept the manifest claims, so deleting a source
+/// takes its original with it and nothing else does — a file a person put in
+/// `references/` by hand is not ours to remove.
+fn prune_references(bundle: &Path, claimed: &std::collections::HashSet<String>) -> usize {
+    let dir = bundle.join("references");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || claimed.contains(&name) {
+            continue;
+        }
+        // Only the content-addressed names are the writer's to remove.
+        let stem = name.split('.').next().unwrap_or_default();
+        if stem.len() == 16
+            && stem.chars().all(|c| c.is_ascii_hexdigit())
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 // ---- The binding (docs/RFC-okf-live.md §5.1) --------------------------------
 
 /// Where a notebook keeps itself on disk. Machine-local: a path means nothing
@@ -1469,7 +1685,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
     let bundle = PathBuf::from(&binding.path);
     let manifest = manifest_path(&data_dir, &binding.id);
-    let (notebook, sources, notes) = gather_bundle(state, notebook_id).await?;
+    let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
     set_binding(
         &data_dir,
@@ -1805,7 +2021,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
                     }
                 }
                 ("sources", None) => {
-                    if take_in_source(state, notebook_id, &doc, &path).await? {
+                    if take_in_source(state, notebook_id, &doc, &path, &bundle).await? {
                         out.created += 1;
                     }
                 }
@@ -1929,32 +2145,49 @@ async fn take_in_source(
     notebook_id: &str,
     doc: &OkfDoc,
     path: &Path,
+    bundle: &Path,
 ) -> Result<bool, String> {
     if doc.body.trim().is_empty() {
         return Ok(false);
     }
-    let extracted = ingest::Extracted {
+    let title = doc.str("title").unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled source")
+            .to_string()
+    });
+    let resource = match doc.str("resource") {
+        Some(r) if is_web_url(&r) => r,
+        Some(r) => r.strip_prefix("file://").unwrap_or(&r).to_string(),
+        None => String::new(),
+    };
+    // The bundle may carry the original (§6): re-extract it through the
+    // ordinary file path so pages stay pages, and point the source at the
+    // reference so Refresh and Show in Finder work. A reference the bundle
+    // does not actually hold falls back to the concept body.
+    let reference = crate::commands::okf_reference_path(bundle, &resource);
+    let rich = match &reference {
+        Some(file) => crate::commands::extract_any_file(state, &file.to_string_lossy())
+            .await
+            .ok()
+            .map(|mut rich| {
+                rich.title = title.clone();
+                rich
+            }),
+        None => None,
+    };
+    let extracted = rich.unwrap_or(ingest::Extracted {
         feeds: Vec::new(),
         image_url: doc.nested("alchemy", "image_url").unwrap_or_default(),
         author: doc.nested("alchemy", "author").unwrap_or_default(),
-        title: doc.str("title").unwrap_or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Untitled source")
-                .to_string()
-        }),
+        title: title.clone(),
         source_type: doc
             .nested("alchemy", "source_type")
             .unwrap_or_else(|| "markdown".into()),
         // The resource is provenance, and a web one stays refreshable.
-        url: match doc.str("resource") {
-            Some(r) if is_web_url(&r) => r,
-            Some(r) => r.strip_prefix("file://").unwrap_or(&r).to_string(),
-            None => String::new(),
-        },
+        url: resource,
         text: doc.body.clone(),
-    };
-    let title = extracted.title.clone();
+    });
     // A duplicate is success, not failure — the same rule import follows.
     match crate::commands::store_extracted(state, notebook_id, extracted).await {
         Ok(landed) => {

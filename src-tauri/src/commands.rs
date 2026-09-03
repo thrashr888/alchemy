@@ -12379,6 +12379,27 @@ pub async fn activity_stats(
 
 // ---- OKF import ------------------------------------------------------------
 
+/// A `resource:` that names an original inside this bundle, as a real path
+/// (RFC-okf-live §6). Anything else — a URL, a machine path from another Mac,
+/// a reference the bundle does not actually carry — is provenance, not a file
+/// to read, and comes back `None`.
+pub(crate) fn okf_reference_path(
+    root: &std::path::Path,
+    resource: &str,
+) -> Option<std::path::PathBuf> {
+    if resource.is_empty() || is_web_url(resource) || resource.starts_with('/') {
+        return None;
+    }
+    // Bundle-relative and refusing to climb out of it.
+    let candidate = root.join(resource);
+    let inside = candidate
+        .canonicalize()
+        .ok()
+        .zip(root.canonicalize().ok())
+        .is_some_and(|(c, r)| c.starts_with(r));
+    (inside && candidate.is_file()).then_some(candidate)
+}
+
 /// Map an exported note's `type:` label back to its kind.
 pub(crate) fn note_kind_from_label(label: &str) -> String {
     if label.eq_ignore_ascii_case("report") {
@@ -12419,10 +12440,16 @@ struct OkfZipLimits {
     max_compression_ratio: u64,
 }
 
+/// A bundle zip now carries `references/` as well as markdown (§6), so the
+/// budget has to fit real documents rather than only their text. The
+/// per-entry cap matches the 50 MB copy cap with room for a scan that only
+/// just fits, and the total allows a notebook of them; the entry count and
+/// the compression ratio are unchanged, because neither has anything to do
+/// with originals and both are what stop a zip bomb.
 const OKF_ZIP_LIMITS: OkfZipLimits = OkfZipLimits {
     max_entries: 10_000,
-    max_entry_bytes: 64 * 1024 * 1024,
-    max_total_bytes: 512 * 1024 * 1024,
+    max_entry_bytes: 128 * 1024 * 1024,
+    max_total_bytes: 2 * 1024 * 1024 * 1024,
     max_compression_ratio: 1_000,
 };
 
@@ -12721,7 +12748,30 @@ pub(crate) async fn import_bundle(
         };
         let user_tags = parsed.nested("alchemy", "tags");
         let parent = parsed.nested("alchemy", "parent");
-        let extracted = ingest::Extracted {
+        // The bundle may carry the original (RFC-okf-live §6). Re-extract it
+        // through the ordinary file path so a PDF arrives as pages and an
+        // image as a picture, rather than as the text the far side flattened
+        // it to — and point the source at the reference, so Refresh and Show
+        // in Finder work here too. A missing reference falls back to the
+        // concept body, which is what a bundle without originals has always
+        // been.
+        let reference = okf_reference_path(&root, &url);
+        let extracted = match &reference {
+            Some(path) => match extract_any_file(state, &path.to_string_lossy()).await {
+                Ok(mut rich) => {
+                    rich.title = title.clone();
+                    Some(rich)
+                }
+                Err(err) => {
+                    crate::note!(
+                        "okf import: {path:?} would not re-extract ({err}); using the text"
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
+        let extracted = extracted.unwrap_or(ingest::Extracted {
             feeds: Vec::new(),
             // A cover the bundle already recorded spares the gallery a refetch.
             image_url: parsed.nested("alchemy", "image_url").unwrap_or_default(),
@@ -12730,7 +12780,7 @@ pub(crate) async fn import_bundle(
             source_type,
             url,
             text: parsed.body,
-        };
+        });
         let _ = app.emit(
             "import://progress",
             serde_json::json!({ "done": i, "total": total, "title": extracted.title }),

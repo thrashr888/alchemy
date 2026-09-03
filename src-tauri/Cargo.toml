@@ -28,6 +28,9 @@ serde_json = "1"
 # `generated`, lists of `verified` entries, and unknown keys preserved.
 # Already in the tree transitively; serde_yaml itself is unmaintained.
 serde_yaml_ng = "0.10"
+# Content-addressed names for the originals a bundle carries
+# (docs/RFC-okf-live.md §6). Already in the tree via rustls.
+sha2 = "0.10"
 lancedb = "0.37.1"
 tokio = { version = "1.52.3", features = ["full"] }
 anyhow = "1.0.103"

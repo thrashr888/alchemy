@@ -545,6 +545,38 @@ Folder children stay text-only on the far side. That is the same result
 as today, and a per-folder "copy originals" opt-in can come when someone
 asks for it rather than as a default that doubles every synced folder.
 
+### Originals, as built
+
+- **Which extensions travel.** §6's table names the categories; the list is
+  the rich types whose bytes say something the extracted text cannot — PDFs,
+  Office documents, images, audio. Plain text, markdown, HTML and CSV are
+  their own extraction, so copying one would only duplicate the concept body.
+- **The plan is made at gather time and acted on at write time**, because
+  only the writer knows where the bundle is — which is also what lets "a file
+  already inside the bundle" be a case at all. `gather_bundle` therefore
+  takes the destination, and `export_notebook_okf` settles its directory from
+  the notebook row (which carries no source text) before reading anything, so
+  an export still reads every source's content exactly once.
+- **Pruning only removes names the writer chose.** A reference is dropped
+  when no manifest-claimed concept points at it *and* its stem is sixteen hex
+  characters — a `handout.pdf` someone put in `references/` by hand is not
+  ours to delete.
+- **`alchemy.origin` is always written when there is a machine path**, copied
+  or not, so a bind-back can re-link. `resource:` is the one that changes
+  meaning: a `references/` path means the bytes are here.
+- **Originals left behind are logged**, but only when they could have
+  travelled and deliberately did not — over the cap. A link because the
+  source is a URL or a folder child is that source's nature, not an event.
+- **Zip limits.** A bundle zip now carries binaries, so the per-entry cap
+  goes to 128 MB (the 50 MB copy cap with room for a scan that only just
+  fits) and the total to 2 GB. The entry count and the compression ratio are
+  unchanged: neither has anything to do with originals, and both are what
+  actually stop a zip bomb.
+- **Reference paths are refused if they climb out of the bundle.** A
+  `resource:` is untrusted text from a file someone else may have written, so
+  `okf_reference_path` canonicalizes and checks containment before returning
+  anything to read.
+
 ## 7. Plumbing
 
 - `okf` source type: `add_source_folder` detection beside the `.obsidian`

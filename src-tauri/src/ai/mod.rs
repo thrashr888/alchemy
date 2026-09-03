@@ -110,6 +110,12 @@ pub struct AiConfig {
     /// Off means on-demand only — Run Now and manual Refresh still work.
     #[serde(default = "default_true")]
     pub background_enabled: bool,
+    /// Largest original, in megabytes, that a bound bundle copies into
+    /// `references/` (docs/RFC-okf-live.md §6). Anything bigger is linked by
+    /// its machine path and logged: one video should not make a bundle
+    /// undeliverable. 0 turns copying off entirely.
+    #[serde(default = "default_reference_cap_mb")]
+    pub okf_reference_cap_mb: u64,
     /// How much overnight work to do: "light" | "standard" | "generous".
     /// One notch rather than a slider, because a token count is not a unit
     /// anyone has intuitions about. Cost control, not an opt-in gate - the
@@ -221,6 +227,12 @@ fn default_provider() -> String {
 /// Standard is a night's work on a normal corpus without the fans coming on.
 fn default_budget() -> String {
     "standard".to_string()
+}
+
+/// 50 MB: comfortably every PDF, scan, and deck a research notebook holds,
+/// and short of the video that would make a bundle unshareable.
+fn default_reference_cap_mb() -> u64 {
+    50
 }
 
 fn default_true() -> bool {
@@ -468,6 +480,7 @@ impl Default for AiConfig {
             clip_port: default_clip_port(),
             tray_enabled: default_true(),
             background_enabled: default_true(),
+            okf_reference_cap_mb: default_reference_cap_mb(),
             background_budget: default_budget(),
             show_notifications: default_true(),
             quiet_when_focused: default_true(),

@@ -121,6 +121,10 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
 - The `alchemy:` block holds what the spec has no field for — a source's
   real type and the user's tags, a note's `kind`, the notebook's colour and
   icon on the root `index.md`. Edit it only when you mean to change those.
+- `references/` holds the originals a concept was made from, named by
+  content hash. A source's `resource:` pointing there means the bundle
+  carries the bytes; anything else is provenance. Do not rename or delete
+  those files — the writer removes one when its last source goes.
 - Only `sources/**.md` and `notes/**.md` are read. Anything else you put in
   the folder — config, scripts, a README, whatever `ok init` adds — is
   yours and is never ingested.
