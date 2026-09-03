@@ -390,7 +390,102 @@ up. Four things the RFC did not settle, decided in the writing:
   running write. The hash is still the real echo suppressor; this only
   avoids the window where the manifest and the files disagree.
 
-## 6. Plumbing
+### 5.6 Shared folders: iCloud, Dropbox, two Macs
+
+A bound bundle in iCloud Drive (or Dropbox, Google Drive, a git remote
+pulled on both ends) is the free tier of RFC-sync-backend: the folder is
+the transport, every Mac runs the same writer and reconciler, and nothing
+new moves over a wire we own. It covers one person with two Macs and one
+household sharing a notebook; it does not cover chat history, the ledger,
+or a coworker without the same cloud account — those stay with the relay
+in that RFC. It is the sync RFC's option (d) done at the layer where it
+works: markdown concepts merge per file, a LanceDB directory does not.
+
+The rules that make it hold:
+
+- **The manifest is per machine and lives outside the bundle.** Entity
+  ids are this machine's; another Mac binding the same folder must never
+  read them, and two writers must never fight over one file. The manifest
+  moves to `<app-data>/okf/<binding-id>.json`, keyed by the binding, and
+  `.alchemy/` inside the bundle is retired. A bundle then carries nothing
+  machine-shaped at all.
+- **Log entries are per writer.** Both Macs appending to one `log.md` is
+  its own newest-wins race, and the entry that records a lost conflict is
+  the one that must not lose. Each writer appends under its own dated
+  heading with the actor in the line, and a reconcile takes a log change
+  from the other side as text, never as a concept.
+- **Writes carry a person, not just the app.** `generated.by` becomes
+  `human:<account>` (the macOS short name) when a person edited the
+  entity in the app, and `alchemy/<version>` only for what the app made
+  on its own — a generation, a curator move, a refresh. Read-back keeps
+  the same distinction: an outside `human:` by-line is a person, and
+  §5.3's origin rule treats it as one.
+- **Cloud stubs hydrate, then reconcile.** An undownloaded iCloud file is
+  a dot-stub, which the allowlist skips; folder sources already nudge
+  stubs to hydrate in the background, and bound roots use the same nudge
+  so a note written on the other Mac lands here without a Finder visit.
+- **Conflict copies are notes.** Dropbox and Drive resolve a clash by
+  writing `<name> (conflicted copy).md` beside the original; iCloud keeps
+  the newer mtime and stashes the other as a version, which is the same
+  policy as §5.4, so both layers pick the same winner. A conflict-copy
+  file is a new concept and imports as a note with that title — the
+  "keep both" outcome, for free. If §5.4's overwrite ever bites for
+  notes, the cheap upgrade is to make the app's loser a sibling note
+  titled the same way rather than a log entry; not a three-way merge.
+
+Test: two data dirs, one folder. Bind on both, write a note on A, read
+it on B, edit it on B, read it back on A; each side's manifest stays its
+own, the log carries both actors, and neither pass echoes.
+
+## 6. Originals travel in `references/`
+
+A PDF, an image, a `.docx` crosses today as extracted text: the other Mac
+gets the words and none of the pages, the gallery there is empty, and
+Refresh has nothing to re-read. The spec already has the place for this
+— §6 names a `references/` subdirectory for the artifacts concepts derive
+from, addressable from `resource:`. The bundle grows one:
+
+```
+references/<sha256-16>.pdf      # one file per distinct original
+sources/<slug>.md               # resource: references/<sha256-16>.pdf
+                                # alchemy: { origin: "file:///…/original.pdf" }
+```
+
+**Named by content hash, written once.** Two sources over the same file
+share one reference; the nightly loop and every write-through skip a
+reference that already exists; renaming a source moves nothing. The
+writer removes a reference only when no manifest-claimed concept points at
+it any more, so deleting a source takes its original with it and nothing
+else does.
+
+**What is copied, and what is only linked.** The distinction is whether
+the bundle is the sensible home for the bytes:
+
+| Source | In `references/` | Why |
+| --- | --- | --- |
+| a file the user dragged or picked (pdf, image, docx, pptx, xlsx, audio) | copied | the notebook is its only home in Alchemy; the other Mac cannot reach the path |
+| pasted text, clipped pages, `url` sources | no | the concept body is the capture; a URL is re-fetchable |
+| folder, git, Notion, Mac children | linked only | the parent is the origin and resyncs; copying a synced folder into a synced folder duplicates it forever |
+| a file already inside the bundle folder | linked, bundle-relative | it is already there |
+| anything over the size cap (50 MB, one setting) | linked, logged | one video should not make a bundle undeliverable |
+
+`resource:` says which it was: a `references/` path means the bytes are in
+the bundle, anything else is provenance to a place this bundle does not
+own. `alchemy.origin` keeps the original machine path either way so a
+bind-back can re-link.
+
+**Import and read-back** ingest a `references/` original through the
+ordinary file path — pdfium pages, image gallery, docx — and fall back to
+the concept body when the reference is missing (evicted, over the cap,
+stripped by a tool). The source's own path on the importing Mac is the
+reference file, so Refresh and Show in Finder work there too. Zips carry
+`references/` under the existing `OkfZipLimits`.
+
+Folder children stay text-only on the far side. That is the same result
+as today, and a per-folder "copy originals" opt-in can come when someone
+asks for it rather than as a default that doubles every synced folder.
+
+## 7. Plumbing
 
 - `okf` source type: `add_source_folder` detection beside the `.obsidian`
   check; reserved-file skip and frontmatter strip in the folder ingest
@@ -407,7 +502,7 @@ up. Four things the RFC did not settle, decided in the writing:
   YAML parse for reading (nested `generated`, lists of `verified`
   entries), keep hand-written emission for what we write.
 
-## 7. Tests
+## 8. Tests
 
 - Round trip: seed → bind → edit a note file → note updates; edit a note
   in-app → file updates; the second write of an unchanged note is a no-op.
@@ -418,14 +513,22 @@ up. Four things the RFC did not settle, decided in the writing:
 - Deprecated and stale concepts in an `okf` source start hidden and
   badged; `index.md` and `log.md` never become sources.
 - The drop rule: a folder becomes a source in a notebook, a zip imports.
+- Two machines: two data dirs bound to one folder converge both ways with
+  separate manifests and both actors in the log (§5.6).
+- Originals: a dragged PDF exports once under `references/` by hash, a
+  second source over the same file adds nothing, deleting the last owner
+  removes it, and import re-ingests it as pages rather than text (§6).
 
-## 8. Phasing
+## 9. Phasing
 
 0. The v0.2 exporter and the nightly loop (§3). Every later phase writes
    through it.
 1. Shape B — the `okf` source type and the drop rule. Small, ships alone.
 2. Shape A write-through — bindings, manifest, writer, chip, menu, MCP.
 3. Shape A read-back — watcher roots and the reconciler.
+4. Shared folders (§5.6) — manifest out of the bundle, per-writer log,
+   actors, stub hydration, the two-machine test.
+5. Originals in `references/` (§6) — writer, import, read-back, zip.
 
 Each phase is useful on its own: a bound notebook that only writes is
 already an always-current export.
