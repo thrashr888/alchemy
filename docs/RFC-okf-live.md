@@ -299,6 +299,33 @@ non-goal until someone actually hits this.
   `okf_path`. The skill's OKF section tells agents the folder is the
   editing surface once a notebook is bound.
 
+### Read-back, as built
+
+The §5.3 table is a pure function (`classify`) over the manifest, and §5.4's
+rule is another (`disk_wins`), so both are tested without a store standing
+up. Four things the RFC did not settle, decided in the writing:
+
+- **A tie goes to disk.** §5.4 says the newer side wins but not what happens
+  at equal timestamps. The file wins: it is what a person or an agent just
+  saved, and it is the artifact they can see. When the app's version wins
+  instead, the disk text goes into `log.md` and a write is scheduled to put
+  the app's version back — the overwrite is recorded before it happens.
+- **`generated.by` means an outside actor, not any actor.** Every file
+  Alchemy writes carries `generated.by: alchemy/<version>`, so "an edit that
+  carries `generated.by`" would match a person editing the body and leaving
+  the frontmatter alone. Our own by-line therefore reads as *nobody claimed
+  this*: origin clears, exactly as an in-app edit does. Another actor's
+  by-line becomes the note's origin, which also takes it off the curator's
+  list — a note an agent maintains is not the curator's to archive.
+- **A source has no `updated_at`**, so the conflict clock for one is
+  `max(fetched_at, created_at)` — when its text last came in, which is the
+  same question.
+- **Reconcile stands down while a write is in flight.** Reading a bundle
+  mid-write would see half of Alchemy's own pass and call it an outside
+  edit, so the reconciler returns early when the notebook has a pending or
+  running write. The hash is still the real echo suppressor; this only
+  avoids the window where the manifest and the files disagree.
+
 ## 6. Plumbing
 
 - `okf` source type: `add_source_folder` detection beside the `.obsidian`

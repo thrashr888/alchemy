@@ -235,6 +235,21 @@ async fn run(app: AppHandle, mut rx: mpsc::UnboundedReceiver<String>) {
         }
         for nb in deb.due(Instant::now()) {
             let state = app.state::<AppState>();
+            // A bound notebook's bundle root is in the watched set too, so a
+            // change under it means "read the folder back" as well as "rescan
+            // the folder sources" (docs/RFC-okf-live.md §5.3). Unbound
+            // notebooks return immediately.
+            match crate::okf::reconcile(&state, &nb).await {
+                Ok(r) if r.changed() => crate::note!(
+                    "okf: {nb}: +{} ~{} -{} ({} overruled)",
+                    r.created,
+                    r.updated,
+                    r.deleted,
+                    r.overruled
+                ),
+                Ok(_) => {}
+                Err(err) => crate::diagnostics::error("okf", format!("{nb}: reconcile: {err}")),
+            }
             match commands::resync_sources_filtered(&app, &state, Some(&nb), Sweep::All).await {
                 Ok(Some(scan)) => {
                     if scan.changed() {
@@ -282,6 +297,21 @@ pub async fn rearm(app: &AppHandle) {
             Err(err) => {
                 crate::note!("fswatch: folder list failed: {err:#}");
                 return;
+            }
+        }
+        // A bound notebook's bundle is watched for the same reason its folder
+        // sources are: it is the notebook's shared surface, and an edit made
+        // in a text editor should land here in seconds, not on the next sweep
+        // (docs/RFC-okf-live.md §5.3).
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            for (notebook_id, binding) in crate::okf::load_bindings(&data_dir) {
+                if !open.contains(&notebook_id) {
+                    continue;
+                }
+                let root = PathBuf::from(&binding.path);
+                if root.is_dir() {
+                    desired.insert(root, notebook_id);
+                }
             }
         }
     }

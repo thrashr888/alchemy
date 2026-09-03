@@ -1740,3 +1740,73 @@ fn okf_bindings_round_trip() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A write-through never looks like an outside edit (§7, echo): every file
+/// the writer just laid down classifies as our own echo, so the watcher event
+/// it causes reconciles to nothing.
+#[test]
+fn okf_write_through_never_reads_back() {
+    use crate::okf::{classify, load_manifest, okf_hash, write_bundle, OkfAction};
+    let dir = okf_scratch("echo");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle("NB", &sources, &notes, &bundle).expect("seed");
+    let manifest = load_manifest(&bundle);
+
+    for rel in [
+        "sources/orders-table.md",
+        "sources/refunds-policy.md",
+        "notes/what-the-data-says.md",
+        "notes/old-thinking.md",
+    ] {
+        let text = std::fs::read_to_string(bundle.join(rel)).expect(rel);
+        assert_eq!(
+            classify(rel, &okf_hash(&text), &manifest),
+            OkfAction::Echo,
+            "{rel} should read as our own write"
+        );
+    }
+
+    // An outside edit to one of them is not an echo — it is an update to the
+    // entity the manifest already knows.
+    let rel = "notes/what-the-data-says.md";
+    let edited = format!(
+        "{}\n\nSomeone appended a line.\n",
+        std::fs::read_to_string(bundle.join(rel)).expect("read")
+    );
+    match classify(rel, &okf_hash(&edited), &manifest) {
+        OkfAction::Update(id) => assert_eq!(id, "note-summary"),
+        other => panic!("expected an update, got {other:?}"),
+    }
+
+    // And a file nobody wrote is somebody's new document.
+    assert_eq!(
+        classify("notes/theirs.md", "whatever", &manifest),
+        OkfAction::Create
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Last writer wins by clock, and a tie goes to disk (§5.4).
+#[test]
+fn okf_conflicts_go_to_the_newer_side() {
+    use crate::okf::disk_wins;
+    assert!(disk_wins(2_000, 1_000), "the file is newer");
+    assert!(!disk_wins(1_000, 2_000), "the entity is newer");
+    assert!(
+        disk_wins(1_000, 1_000),
+        "a tie goes to the file: it is what someone just saved"
+    );
+}
+
+/// The hash is stable across runs, which is the whole basis of echo
+/// suppression — a `DefaultHasher` would not be.
+#[test]
+fn okf_hash_is_stable_and_content_sensitive() {
+    use crate::okf::okf_hash;
+    assert_eq!(okf_hash("hello"), okf_hash("hello"));
+    assert_ne!(okf_hash("hello"), okf_hash("hello "));
+    assert_eq!(okf_hash(""), "cbf29ce484222325", "the FNV-1a offset basis");
+    assert_eq!(okf_hash("a").len(), 16);
+}

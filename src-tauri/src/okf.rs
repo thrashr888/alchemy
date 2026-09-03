@@ -1288,3 +1288,396 @@ pub async fn write_notebook_okf(
     write_bound(&state, &notebook_id).await?;
     Ok(now_ms())
 }
+
+// ---- Read-back (§5.3, §5.4) -------------------------------------------------
+
+/// What one reconcile pass took in from disk.
+#[derive(Debug, Default, PartialEq)]
+pub struct OkfReconcile {
+    pub created: usize,
+    pub updated: usize,
+    pub deleted: usize,
+    /// Files that changed on disk but lost the conflict — their text is in
+    /// `log.md`, and the next write puts the app's version back.
+    pub overruled: usize,
+}
+
+impl OkfReconcile {
+    pub fn changed(&self) -> bool {
+        self.created + self.updated + self.deleted + self.overruled > 0
+    }
+}
+
+/// What one file on disk asks the reconciler to do — the table in §5.3,
+/// pulled out as a decision so it can be tested without a store.
+#[derive(Debug, PartialEq)]
+pub enum OkfAction {
+    /// Not in the manifest: this is somebody's new document.
+    Create,
+    /// In the manifest, hash moved: an outside edit to a known entity.
+    Update(String),
+    /// In the manifest, hash matches: our own write echoing back.
+    Echo,
+}
+
+/// Classify one bundle-relative file against the manifest.
+pub fn classify(rel: &str, hash: &str, manifest: &OkfManifest) -> OkfAction {
+    match manifest
+        .concepts
+        .iter()
+        .find(|(_, entry)| entry.path == rel)
+    {
+        Some((_, entry)) if entry.hash == hash => OkfAction::Echo,
+        Some((id, _)) => OkfAction::Update(id.clone()),
+        None => OkfAction::Create,
+    }
+}
+
+/// Last writer wins by clock (§5.4). A tie goes to disk: the file is what a
+/// person or an agent just saved, and it is the artifact they can see.
+pub fn disk_wins(file_mtime: i64, entity_updated_at: i64) -> bool {
+    file_mtime >= entity_updated_at
+}
+
+/// Is Alchemy's own write for this notebook still in flight? Reconciling
+/// mid-write would read half a bundle and call it an outside edit.
+fn write_in_flight(notebook_id: &str) -> bool {
+    pending()
+        .lock()
+        .map(|m| m.contains_key(notebook_id))
+        .unwrap_or(true)
+        || flushing()
+            .lock()
+            .map(|s| s.contains(notebook_id))
+            .unwrap_or(true)
+}
+
+/// Every concept file under a bundle directory, in a stable order.
+fn concept_files(bundle: &Path, dir: &str) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(bundle.join(dir))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|x| x.to_str()) == Some("md")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| !n.starts_with('.') && !is_okf_reserved(n))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn file_mtime_ms(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Who a concept file says last wrote it, when that is somebody other than
+/// this app. Our own writes stamp `generated.by: alchemy/<version>` on every
+/// file, so seeing our own by-line means nobody claimed it — a person edited
+/// the body and left the frontmatter alone, which is a deliberate edit and
+/// clears the note's origin as an in-app edit would (§5.3).
+fn outside_actor(doc: &OkfDoc) -> String {
+    match doc.nested("generated", "by") {
+        Some(by) if by != okf_writer() => by,
+        _ => String::new(),
+    }
+}
+
+/// Reconcile a bound notebook against its bundle (§5.3).
+///
+/// Echo suppression is the hash, not a timer: the writer records what it
+/// wrote before it writes, so a watcher event for our own file compares equal
+/// and stops here. Everything else is the table in §5.3 — a file the manifest
+/// has never heard of becomes an entity, a file whose hash moved updates one,
+/// and a file that is gone deletes one.
+pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconcile, String> {
+    let data_dir = app_data_dir(state);
+    let Some(binding) = binding_for(&data_dir, notebook_id) else {
+        return Ok(OkfReconcile::default());
+    };
+    if write_in_flight(notebook_id) {
+        return Ok(OkfReconcile::default());
+    }
+    let bundle = PathBuf::from(&binding.path);
+    if !bundle.is_dir() {
+        return Ok(OkfReconcile::default());
+    }
+    let mut manifest = load_manifest(&bundle);
+    // Path → entity id, the direction the reconciler reads in.
+    let by_path: HashMap<String, String> = manifest
+        .concepts
+        .iter()
+        .map(|(id, entry)| (entry.path.clone(), id.clone()))
+        .collect();
+    let mut out = OkfReconcile::default();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut losers: Vec<String> = Vec::new();
+
+    for dir in ["sources", "notes"] {
+        for path in concept_files(&bundle, dir) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let rel = format!(
+                "{dir}/{}",
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+            );
+            let action = classify(&rel, &okf_hash(&text), &manifest);
+            let known = match &action {
+                OkfAction::Update(id) => {
+                    seen.insert(id.clone());
+                    Some(id.clone())
+                }
+                // Our own write, echoing back through the watcher.
+                OkfAction::Echo => {
+                    if let Some(id) = by_path.get(&rel) {
+                        seen.insert(id.clone());
+                    }
+                    continue;
+                }
+                OkfAction::Create => None,
+            };
+            let doc = parse_okf_doc(&text);
+            let mtime = file_mtime_ms(&path);
+            match (dir, known) {
+                ("notes", None) => {
+                    if take_in_note(state, notebook_id, &doc, &path).await? {
+                        out.created += 1;
+                    }
+                }
+                ("sources", None) => {
+                    if take_in_source(state, notebook_id, &doc, &path).await? {
+                        out.created += 1;
+                    }
+                }
+                ("notes", Some(id)) => {
+                    match update_note_from_disk(state, &id, &doc, mtime).await? {
+                        Verdict::Applied => out.updated += 1,
+                        Verdict::Overruled(text) => {
+                            out.overruled += 1;
+                            losers.push(format!("{rel}\n\n{text}"));
+                        }
+                        Verdict::Gone => {}
+                    }
+                }
+                ("sources", Some(id)) => {
+                    match update_source_from_disk(state, &id, &doc, &path, mtime).await? {
+                        Verdict::Applied => out.updated += 1,
+                        Verdict::Overruled(text) => {
+                            out.overruled += 1;
+                            losers.push(format!("{rel}\n\n{text}"));
+                        }
+                        Verdict::Gone => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // A concept file that is gone takes its entity with it.
+    let vanished: Vec<(String, String)> = manifest
+        .concepts
+        .iter()
+        .filter(|(id, entry)| !seen.contains(*id) && !bundle.join(&entry.path).exists())
+        .map(|(id, entry)| (id.clone(), entry.path.clone()))
+        .collect();
+    for (id, rel) in vanished {
+        let deleted = if rel.starts_with("notes/") {
+            state.db.delete_note(&id).await.is_ok()
+        } else {
+            state.db.delete_source(&id).await.is_ok()
+        };
+        if deleted {
+            manifest.concepts.remove(&id);
+            out.deleted += 1;
+            crate::note!("okf: {rel} was deleted on disk; removed it here too");
+        }
+    }
+    if out.deleted > 0 {
+        save_manifest(&bundle, &manifest);
+    }
+
+    // Nothing is lost silently (§5.4): the text that lost the race is written
+    // into the log beside the entry that recorded the overwrite.
+    if !losers.is_empty() {
+        let _ = okf_log_append(
+            &bundle,
+            &format!(
+                "Kept the app's newer version of {} file(s); the disk text follows.\n\n```\n{}\n```",
+                losers.len(),
+                losers.join("\n\n---\n\n")
+            ),
+        );
+        // The app's version wins, so put it back on disk.
+        schedule_write(notebook_id);
+    }
+    if out.changed() {
+        crate::commands::notify_changed("sources", Some(notebook_id));
+    }
+    Ok(out)
+}
+
+/// Which side of a conflict won, and the text the loser had.
+enum Verdict {
+    Applied,
+    Overruled(String),
+    Gone,
+}
+
+async fn take_in_note(
+    state: &AppState,
+    notebook_id: &str,
+    doc: &OkfDoc,
+    path: &Path,
+) -> Result<bool, String> {
+    if doc.body.trim().is_empty() {
+        return Ok(false);
+    }
+    let ts = file_mtime_ms(path).max(1);
+    let note = Note {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title: doc.str("title").unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled note")
+                .to_string()
+        }),
+        content: doc.body.clone(),
+        kind: crate::commands::note_kind_from_label(doc.str("type").as_deref().unwrap_or("Note")),
+        prompt: String::new(),
+        origin: outside_actor(doc),
+        status: if doc.str("status").as_deref() == Some("deprecated") {
+            "archived".into()
+        } else {
+            String::new()
+        },
+        created_at: ts,
+        updated_at: ts,
+    };
+    e(crate::commands::add_note_indexed(state, &note).await)?;
+    crate::note!("okf: took in note \"{}\" from disk", note.title);
+    Ok(true)
+}
+
+async fn take_in_source(
+    state: &AppState,
+    notebook_id: &str,
+    doc: &OkfDoc,
+    path: &Path,
+) -> Result<bool, String> {
+    if doc.body.trim().is_empty() {
+        return Ok(false);
+    }
+    let extracted = ingest::Extracted {
+        feeds: Vec::new(),
+        image_url: String::new(),
+        author: String::new(),
+        title: doc.str("title").unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled source")
+                .to_string()
+        }),
+        source_type: "markdown".into(),
+        // The resource is provenance, and a web one stays refreshable.
+        url: match doc.str("resource") {
+            Some(r) if is_web_url(&r) => r,
+            Some(r) => r.strip_prefix("file://").unwrap_or(&r).to_string(),
+            None => String::new(),
+        },
+        text: doc.body.clone(),
+    };
+    let title = extracted.title.clone();
+    // A duplicate is success, not failure — the same rule import follows.
+    match crate::commands::store_extracted(state, notebook_id, extracted).await {
+        Ok(_) => {
+            crate::note!("okf: took in source \"{title}\" from disk");
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+async fn update_note_from_disk(
+    state: &AppState,
+    id: &str,
+    doc: &OkfDoc,
+    mtime: i64,
+) -> Result<Verdict, String> {
+    let Some(note) = e(state.db.get_note(id).await)? else {
+        return Ok(Verdict::Gone);
+    };
+    // Last writer wins by clock (§5.4). A tie goes to disk: the file is what
+    // a person or an agent just saved, and it is the visible artifact.
+    if !disk_wins(mtime, note.updated_at) {
+        return Ok(Verdict::Overruled(doc.body.clone()));
+    }
+    let title = doc.str("title").unwrap_or_else(|| note.title.clone());
+    e(state.db.update_note(id, &title, &doc.body, mtime).await)?;
+    // An edit that names its author keeps that attribution; one that does not
+    // is a deliberate edit and takes ownership, exactly as an in-app edit does.
+    e(state.db.set_note_origin(id, &outside_actor(doc)).await)?;
+    e(state.db.set_note_status(id, "").await)?;
+    if let Some(fresh) = e(state.db.get_note(id).await)? {
+        crate::commands::index_note(state, &fresh).await;
+    }
+    crate::note!("okf: took in an edit to note \"{title}\"");
+    Ok(Verdict::Applied)
+}
+
+async fn update_source_from_disk(
+    state: &AppState,
+    id: &str,
+    doc: &OkfDoc,
+    path: &Path,
+    mtime: i64,
+) -> Result<Verdict, String> {
+    let Some(source) = e(state.db.get_source(id).await)? else {
+        return Ok(Verdict::Gone);
+    };
+    // A source has no `updated_at`; `fetched_at` is when its text last came
+    // in, which is the same question here.
+    if !disk_wins(mtime, source.fetched_at.max(source.created_at)) {
+        return Ok(Verdict::Overruled(doc.body.clone()));
+    }
+    let extracted = ingest::Extracted {
+        feeds: Vec::new(),
+        image_url: source.image_url.clone(),
+        author: source.author.clone(),
+        title: doc.str("title").unwrap_or_else(|| source.title.clone()),
+        source_type: source.source_type.clone(),
+        url: source.url.clone(),
+        text: doc.body.clone(),
+    };
+    let title = extracted.title.clone();
+    e(crate::commands::reingest(state, &source, extracted, None, true).await)?;
+    crate::note!(
+        "okf: re-read source \"{title}\" from disk ({})",
+        path.display()
+    );
+    Ok(Verdict::Applied)
+}
+
+/// Reconcile every bound notebook. The closed sweep's share of the work
+/// (§5.3): open notebooks get FSEvents, everything else gets the ten-minute
+/// window the folder sweep already runs on.
+pub async fn reconcile_all(state: &AppState) {
+    let data_dir = app_data_dir(state);
+    for notebook_id in load_bindings(&data_dir).keys() {
+        if let Err(err) = reconcile(state, notebook_id).await {
+            crate::diagnostics::error("okf", format!("reconcile failed: {err}"));
+        }
+    }
+}

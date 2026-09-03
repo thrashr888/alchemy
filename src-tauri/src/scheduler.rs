@@ -582,6 +582,11 @@ async fn run_pass(app: &AppHandle) {
             LAST_CLOSED_SWEEP.store(now_ms(), Ordering::Relaxed);
         }
     }
+    // Bound notebooks nobody has open ride the same ten-minute window
+    // (docs/RFC-okf-live.md §5.3) — the open ones are on FSEvents already.
+    if closed_due {
+        crate::okf::reconcile_all(&state).await;
+    }
     // Folder sources added or removed since the last tick change what the
     // watcher should cover; the recompute is one folder-table read.
     crate::fswatch::rearm(app).await;

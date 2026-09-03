@@ -12354,7 +12354,7 @@ pub async fn activity_stats(
 // ---- OKF import ------------------------------------------------------------
 
 /// Map an exported note's `type:` label back to its kind.
-fn note_kind_from_label(label: &str) -> String {
+pub(crate) fn note_kind_from_label(label: &str) -> String {
     if label.eq_ignore_ascii_case("report") {
         return "report".into();
     }
