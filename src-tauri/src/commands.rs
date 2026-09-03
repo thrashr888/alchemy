@@ -4507,6 +4507,12 @@ pub(crate) fn hydrate_icloud_stubs(stubs: Vec<String>) {
     if stubs.is_empty() {
         return;
     }
+    // Somebody else owns asking, so hand the paths over and stop here — the
+    // request still happened, it just did not become a subprocess.
+    if let Some(hydrator) = ICLOUD_HYDRATOR.lock().ok().and_then(|slot| slot.clone()) {
+        hydrator(stubs);
+        return;
+    }
     let nudge = move || {
         for stub in stubs {
             let _ = std::process::Command::new("brctl")
@@ -4525,6 +4531,27 @@ pub(crate) fn hydrate_icloud_stubs(stubs: Vec<String>) {
         Err(_) => {
             std::thread::spawn(nudge);
         }
+    }
+}
+
+/// Where a hydration request goes. `None` — the shipped state — is `brctl`.
+/// A caller that must not shell out installs its own and is handed the paths
+/// instead, which is how the writer's "a stub is absent, ask for it and wait"
+/// rule is asserted without a gate run talking to `bird` (§5.7).
+#[cfg(target_os = "macos")]
+pub(crate) type IcloudHydrator = std::sync::Arc<dyn Fn(Vec<String>) + Send + Sync>;
+
+#[cfg(target_os = "macos")]
+static ICLOUD_HYDRATOR: std::sync::Mutex<Option<IcloudHydrator>> = std::sync::Mutex::new(None);
+
+/// Send this process's hydration requests somewhere other than `brctl`, for
+/// the rest of its life. Not behind `cfg(test)`: the seam a test sets has to
+/// be the one the app runs through, or it proves nothing about the app.
+#[cfg(target_os = "macos")]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn set_icloud_hydrator(hydrator: IcloudHydrator) {
+    if let Ok(mut slot) = ICLOUD_HYDRATOR.lock() {
+        *slot = Some(hydrator);
     }
 }
 

@@ -595,6 +595,13 @@ they exist without being asked for.
   reporting a file plainly visible in Finder as gone. The nudge had to stop
   requiring a Tokio runtime for this: the bundle writer is synchronous, so it
   spawns a blocking task on the runtime and a plain thread off it.
+- **Asking is injectable, so the test can watch it.** `brctl` answers a
+  scratch directory with "Path is outside of any CloudDocs app library", which
+  every gate run printed. `set_icloud_hydrator` replaces where a request goes
+  for the life of the process — not a `cfg(test)` shim, because a seam a test
+  sets has to be the one the app runs through — and the stub test installs a
+  recorder, so the assertion is now the paths the writer asked for rather than
+  the absence of a write.
 - **Agent reachability rides the existing `settings` tool** — `notebooksDir`
   and `keepOnDisk` join `SETTABLE_FIELDS`, `settings_set`, and the `get`
   snapshot, so no new tool was needed. Setting a path that is not a directory

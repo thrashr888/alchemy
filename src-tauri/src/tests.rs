@@ -3058,9 +3058,22 @@ fn okf_bundles_carry_the_notebook_id_for_rebinding() {
 
 /// An evicted file is not a missing one: the writer asks for it and leaves
 /// it alone rather than writing over the placeholder (§5.7).
+///
+/// The asking is routed through the hydrator seam rather than `brctl`, so the
+/// gate neither shells out to iCloud (which answers a scratch directory with
+/// "Path is outside of any CloudDocs app library") nor has to take the
+/// request on faith — the paths the writer asked for are the assertion.
 #[test]
 fn okf_writer_treats_a_stub_as_absent() {
     use crate::okf::{is_evicted_stub, write_bundle};
+    use std::sync::{Arc, Mutex};
+    let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = asked.clone();
+    crate::commands::set_icloud_hydrator(Arc::new(move |stubs: Vec<String>| {
+        if let Ok(mut seen) = recorder.lock() {
+            seen.extend(stubs);
+        }
+    }));
     let dir = okf_scratch("stub");
     let bundle = dir.join("nb");
     let (sources, notes) = okf_fixture();
@@ -3101,6 +3114,14 @@ fn okf_writer_treats_a_stub_as_absent() {
     assert_eq!(out.written, 0, "nothing was written over the placeholder");
     assert!(!real.exists(), "and the file is still not downloaded");
     assert_eq!(out.removed, 0, "the concept was not treated as deleted");
+    assert!(
+        asked
+            .lock()
+            .expect("recorder")
+            .iter()
+            .any(|p| p.ends_with("notes/.old-thinking.md.icloud")),
+        "waiting is not enough — the writer asked iCloud for the file"
+    );
 
     // Once it lands, the next pass sees it unchanged.
     std::fs::write(&real, &kept).expect("hydrate");
