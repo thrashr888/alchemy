@@ -6,6 +6,7 @@ import {
   Loader2,
   MoreHorizontal,
   X,
+  ChevronDown,
   CheckCircle2,
   AlertTriangle,
   Info,
@@ -749,6 +750,49 @@ export function Modal({
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * The one select. A native `<select>` with `appearance-none` and a lucide
+ * chevron drawn over it: WKWebView ignores padding and height on a styled
+ * native control otherwise, so every hand-rolled select in the app came out
+ * flush against its border. Same 32px height and fill as `Input`.
+ */
+export function Select({
+  id,
+  value,
+  onChange,
+  options,
+  className,
+  ...rest
+}: {
+  id?: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  className?: string;
+} & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "value" | "onChange">) {
+  return (
+    <div className={cn("relative", className)}>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 pl-2.5 pr-8 text-body text-foreground outline-none transition-colors focus:border-ring/60"
+        {...rest}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        aria-hidden
+        className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+      />
+    </div>
   );
 }
 

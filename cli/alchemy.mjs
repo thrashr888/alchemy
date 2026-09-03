@@ -24,11 +24,14 @@ Usage:
   alchemy add <file-or-url>... --notebook <id-or-title> [--title <title>] [--json]
   alchemy add - --notebook <id-or-title> [--title <title>] [--json]
   alchemy search <query...> [--notebook <id-or-title>] [--limit <1-20>] [--json]
+  alchemy events [--notebook <id-or-title>] [--kinds <k,k>] [--since <ms|24h|7d>] [--follow] [--json]
 
 Commands:
   notebooks  List notebooks and their ids (--all includes archived).
   add        Add local files, web URLs, or stdin (use - or pipe with no input).
   search     Search one notebook, or all notebooks when --notebook is omitted.
+  events     Source-change events (added, updated, removed, unreachable,
+             completed, moved). --follow tails the app's live stream.
 
 Connection:
   The Alchemy app must be running with MCP enabled. The CLI discovers the
@@ -40,7 +43,60 @@ Examples:
   alchemy add report.pdf https://example.com --notebook "Project Atlas"
   pbpaste | alchemy add --notebook "Project Atlas" --title "Meeting notes"
   alchemy search "renewal risk" --notebook "Project Atlas"
-  alchemy search "where did I save the contractor agreement?" --json`;
+  alchemy search "where did I save the contractor agreement?" --json
+  alchemy events --kinds added --since 7d
+  alchemy events --follow --json | jq -c 'select(.kind == "added")'`;
+
+export const EVENT_KINDS = ["added", "updated", "removed", "unreachable", "completed", "moved"];
+
+/** "24h" / "7d" / "90m" / a raw epoch-millisecond number → epoch ms floor. */
+export function parseSince(value, now = Date.now()) {
+  const m = /^(\d+)([mhd])$/.exec(value);
+  if (m) {
+    const unit = { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]];
+    return now - Number(m[1]) * unit;
+  }
+  if (/^\d{10,}$/.test(value)) return Number(value);
+  throw new CliError("--since takes a duration like 24h, 7d, 90m, or an epoch-millisecond timestamp");
+}
+
+/** The live stream sits beside the MCP endpoint: …/mcp → …/events. */
+export function eventsUrl(mcpUrl) {
+  const url = new URL(mcpUrl);
+  url.pathname = url.pathname.replace(/\/mcp\/?$/, "/events");
+  if (!url.pathname.endsWith("/events")) url.pathname = "/events";
+  url.search = "";
+  return url.toString();
+}
+
+/** Incremental Server-Sent Events decoder: feed it chunks, get back the
+ *  parsed `data:` payloads of every complete event, keeping the tail. */
+export function sseEvents(buffer, chunk) {
+  const text = buffer + chunk;
+  const events = [];
+  const blocks = text.split(/\r?\n\r?\n/);
+  const rest = blocks.pop();
+  for (const block of blocks) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) continue;
+    try {
+      events.push(JSON.parse(data));
+    } catch {
+      /* comments and keep-alives carry no JSON */
+    }
+  }
+  return { events, rest };
+}
+
+export function formatEvent(e) {
+  const at = new Date(e.at);
+  const stamp = `${at.getHours().toString().padStart(2, "0")}:${at.getMinutes().toString().padStart(2, "0")}`;
+  return `${stamp}  ${e.kind.padEnd(11)} ${e.sourceTitle} — ${e.detail}`;
+}
 
 export class CliError extends Error {}
 
@@ -121,6 +177,23 @@ export function parseArgs(argv) {
       }
     }
     return { command, mcpUrl, mcpToken, json, notebook, query, limit };
+  }
+
+  if (command === "events") {
+    const notebook = takeOption(args, "--notebook");
+    const rawKinds = takeOption(args, "--kinds");
+    const rawSince = takeOption(args, "--since");
+    const follow = takeFlag(args, "--follow");
+    if (args.length) throw new CliError(`unexpected argument: ${args[0]}`);
+    const kinds = rawKinds
+      ? rawKinds
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean)
+      : undefined;
+    const bad = kinds?.find((k) => !EVENT_KINDS.includes(k));
+    if (bad) throw new CliError(`unknown event kind: ${bad} (one of ${EVENT_KINDS.join(", ")})`);
+    return { command, mcpUrl, mcpToken, json, notebook, kinds, since: rawSince, follow };
   }
 
   throw new CliError(`unknown command: ${command}`);
@@ -432,6 +505,54 @@ export async function run(argv = process.argv.slice(2)) {
       sources.push(await client.call("add_source", { notebook_id: notebook.id, ...args }));
     }
     options.json ? console.log(JSON.stringify(sources, null, 2)) : printAdded(sources);
+    return;
+  }
+
+  if (options.command === "events") {
+    const notebook = options.notebook ? await resolveNotebook(client, options.notebook) : null;
+    const since = options.since ? parseSince(options.since) : undefined;
+    const filter = {
+      ...(notebook ? { notebook_id: notebook.id } : {}),
+      ...(options.kinds ? { kinds: options.kinds } : {}),
+    };
+    const events = await client.call("list_source_events", {
+      ...filter,
+      ...(since !== undefined ? { since } : {}),
+    });
+    const emit = (e) => console.log(options.json ? JSON.stringify(e) : formatEvent(e));
+    // Newest first from the tool; a log reads oldest first.
+    let newest = since ?? 0;
+    for (const e of [...events].reverse()) {
+      emit(e);
+      newest = Math.max(newest, e.at);
+    }
+    if (!options.follow) return;
+    // The live stream replays from the newest event already printed, so
+    // nothing lands twice and nothing between the read and the connect is
+    // lost. Filters apply client-side; the stream carries everything.
+    const url = new URL(eventsUrl(connection.url));
+    url.searchParams.set("since", String(newest));
+    const headers = { accept: "text/event-stream" };
+    if (connection.token) headers.authorization = `Bearer ${connection.token}`;
+    let response;
+    try {
+      response = await fetch(url, { headers });
+    } catch (error) {
+      throw new CliError(`could not open the event stream at ${url} (${error.message})`);
+    }
+    if (!response.ok || !response.body) {
+      throw new CliError(`event stream refused: HTTP ${response.status} (this app may predate /events)`);
+    }
+    let buffer = "";
+    for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
+      const parsed = sseEvents(buffer, chunk);
+      buffer = parsed.rest;
+      for (const e of parsed.events) {
+        if (notebook && e.notebookId !== notebook.id) continue;
+        if (options.kinds && !options.kinds.includes(e.kind)) continue;
+        emit(e);
+      }
+    }
     return;
   }
 

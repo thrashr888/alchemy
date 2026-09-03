@@ -9,9 +9,13 @@ import {
   McpClient,
   discoverMcpConnection,
   discoverMcpUrl,
+  eventsUrl,
+  formatEvent,
   parseArgs,
+  parseSince,
   resolveNotebook,
   sourceArguments,
+  sseEvents,
   visibleNotebooks,
 } from "./alchemy.mjs";
 
@@ -165,4 +169,34 @@ test("MCP client ignores SSE progress and returns the matching response", async 
   const client = new McpClient("http://127.0.0.1:41414/mcp", fetchImpl);
   assert.deepEqual(await client.call("search", {}), []);
   assert.equal(initialized, true);
+});
+
+test("events: parses filters, rejects unknown kinds, and derives the stream URL", () => {
+  assert.deepEqual(parseArgs(["events", "--kinds", "added,removed", "--since", "7d", "--follow"]), {
+    command: "events",
+    mcpUrl: undefined,
+    mcpToken: undefined,
+    json: false,
+    notebook: undefined,
+    kinds: ["added", "removed"],
+    since: "7d",
+    follow: true,
+  });
+  assert.throws(() => parseArgs(["events", "--kinds", "bogus"]), /unknown event kind: bogus/);
+  assert.throws(() => parseArgs(["events", "extra"]), /unexpected argument/);
+  assert.equal(parseSince("24h", 100_000_000), 100_000_000 - 86_400_000);
+  assert.equal(parseSince("1788300000000"), 1_788_300_000_000);
+  assert.throws(() => parseSince("yesterday"), CliError);
+  assert.equal(eventsUrl("http://127.0.0.1:41415/mcp"), "http://127.0.0.1:41415/events");
+  assert.equal(eventsUrl("http://127.0.0.1:41414/mcp/"), "http://127.0.0.1:41414/events");
+});
+
+test("events: decodes SSE frames incrementally and formats a line", () => {
+  const first = sseEvents("", ": keep-alive\n\ndata: {\"kind\":\"added\",\"at\":1}\n\ndata: {\"ki");
+  assert.deepEqual(first.events, [{ kind: "added", at: 1 }]);
+  const second = sseEvents(first.rest, "nd\":\"removed\",\"at\":2}\n\n");
+  assert.deepEqual(second.events, [{ kind: "removed", at: 2 }]);
+  assert.equal(second.rest, "");
+  const line = formatEvent({ kind: "added", at: Date.UTC(2026, 8, 2, 12, 0), sourceTitle: "Tauri Blog", detail: "2 new entries" });
+  assert.match(line, /^\d\d:\d\d  added       Tauri Blog — 2 new entries$/);
 });

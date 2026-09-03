@@ -33,6 +33,12 @@ const T_REPORTS: &str = "report_schedules";
 const T_ROUTES: &str = "routes";
 const T_SOURCE_EVENTS: &str = "source_events";
 const T_RECEIPTS: &str = "run_receipts";
+/// Small app state that used to live in JSON sidecars and localStorage:
+/// feed poll state, discovered feeds, robots.txt caches, the Arrivals
+/// watermark. One row per key, JSON or a scalar in `value`. The database
+/// is single-tenant by design; a second store beside it is a second
+/// source of truth.
+const T_KV: &str = "app_state";
 const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
@@ -453,7 +459,12 @@ impl Db {
         // Commissions (docs/RFC-night-shift-area.md §1). Zero means "the next
         // pass", which is the right reading for every schedule that predates
         // the column.
-        self.add_i64_column(T_REPORTS, "not_before", "0").await
+        self.add_i64_column(T_REPORTS, "not_before", "0").await?;
+        // Standing-question filters (docs/RFC-events.md §5). Empty means
+        // "any", which is exactly what every pre-filter schedule meant.
+        self.add_string_column(T_REPORTS, "watch_sources", "")
+            .await?;
+        self.add_string_column(T_REPORTS, "watch_kinds", "").await
     }
 
     /// Lateness came after receipts did; 0 reads as "not recorded", which is
@@ -1319,6 +1330,13 @@ impl Db {
         Ok(out)
     }
 
+    /// Living Mac sources — `cider://` origins (mac.rs) of every status: the
+    /// store watch re-fetches these by provider, and an errored one (a
+    /// permission denied at add time) deserves the retry a change brings.
+    pub async fn all_mac_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'mac'"), false).await
+    }
+
     /// Top-level ready sources that aren't folder-like parents (folders and
     /// git repos sweep via rescan) — the resync sweep filters these down to
     /// file- or git-backed ones and re-embeds any whose backing changed.
@@ -1357,6 +1375,12 @@ impl Db {
     /// hygiene sweep's worklist (docs/RFC-source-hygiene.md).
     pub async fn all_url_sources(&self) -> Result<Vec<Source>> {
         self.query_sources(Some("source_type = 'url'"), false).await
+    }
+
+    /// Feed parents (docs/RFC-events.md §2) — the poller's work list.
+    pub async fn all_feed_sources(&self) -> Result<Vec<Source>> {
+        self.query_sources(Some("source_type = 'feed'"), false)
+            .await
     }
 
     /// Update a source's recorded file mtime without touching its chunks.
@@ -3854,8 +3878,15 @@ impl Db {
             let enabled = i64_col(b, "enabled")?;
             let last = i64_col(b, "last_run_at")?;
             let created = i64_col(b, "created_at")?;
+            let watch_sources = opt_str_col(b, "watch_sources");
+            let watch_kinds = opt_str_col(b, "watch_kinds");
+            let opt = |col: Option<&StringArray>, i: usize| {
+                col.map(|c| c.value(i).to_string()).unwrap_or_default()
+            };
             for i in 0..b.num_rows() {
                 out.push(ReportSchedule {
+                    watch_sources: opt(watch_sources, i),
+                    watch_kinds: opt(watch_kinds, i),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     name: name.value(i).to_string(),
@@ -3903,7 +3934,11 @@ impl Db {
     pub async fn add_source_event(&self, event: &SourceEvent) -> Result<()> {
         let schema = source_events_schema();
         let batch = source_event_batch(&schema, event)?;
-        self.add_batch(T_SOURCE_EVENTS, schema, batch).await
+        self.add_batch(T_SOURCE_EVENTS, schema, batch).await?;
+        // The one write point doubles as the live stream's fan-out
+        // (docs/RFC-events.md §8): agents tailing /events see it now.
+        crate::events::publish(event);
+        Ok(())
     }
 
     /// Events newer than `since`, newest first. Prunes the rolling window on
@@ -3941,6 +3976,45 @@ impl Db {
         }
         out.sort_by_key(|e| std::cmp::Reverse(e.at));
         Ok(out)
+    }
+
+    // ---- App state (key → value) -------------------------------------------
+
+    /// One value by key; `None` when unset (or before the table exists).
+    pub async fn kv_get(&self, key: &str) -> Result<Option<String>> {
+        if !self.table_exists(T_KV).await? {
+            return Ok(None);
+        }
+        let batches = self
+            .collect(T_KV, Some(&format!("key = '{}'", esc(key))))
+            .await?;
+        for b in &batches {
+            if b.num_rows() > 0 {
+                let value = str_col(b, "value")?;
+                return Ok(Some(value.value(0).to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Set (replace) one value. Delete-then-append: the table is tiny and
+    /// a key is written far less often than it is read.
+    pub async fn kv_set(&self, key: &str, value: &str) -> Result<()> {
+        // Created on first write: unlike the entity tables, nothing needs
+        // this one at startup.
+        self.ensure_table(T_KV, kv_schema()).await?;
+        self.delete_where(T_KV, &format!("key = '{}'", esc(key)))
+            .await?;
+        let schema = kv_schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![key.to_string()])),
+                Arc::new(StringArray::from(vec![value.to_string()])),
+                Arc::new(Int64Array::from(vec![crate::commands::now()])),
+            ],
+        )?;
+        self.add_batch(T_KV, schema, batch).await
     }
 
     /// Record one run. Best-effort by contract: a receipt that fails to
@@ -4281,6 +4355,8 @@ impl Db {
         trigger: &str,
         interval_secs: i64,
         enabled: bool,
+        watch_sources: &str,
+        watch_kinds: &str,
     ) -> Result<()> {
         let tbl = self.conn.open_table(T_REPORTS).execute().await?;
         tbl.update()
@@ -4291,6 +4367,8 @@ impl Db {
             .column("trigger", format!("'{}'", esc(trigger)))
             .column("interval_secs", interval_secs.to_string())
             .column("enabled", i64::from(enabled).to_string())
+            .column("watch_sources", format!("'{}'", esc(watch_sources)))
+            .column("watch_kinds", format!("'{}'", esc(watch_kinds)))
             .execute()
             .await?;
         Ok(())
@@ -4861,6 +4939,14 @@ fn notes_schema() -> SchemaRef {
     ]))
 }
 
+fn kv_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+        Field::new("updated_at", DataType::Int64, false),
+    ]))
+}
+
 fn receipts_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -5023,6 +5109,8 @@ fn reports_schema() -> SchemaRef {
         Field::new("enabled", DataType::Int64, false),
         Field::new("last_run_at", DataType::Int64, false),
         Field::new("created_at", DataType::Int64, false),
+        Field::new("watch_sources", DataType::Utf8, false),
+        Field::new("watch_kinds", DataType::Utf8, false),
     ]))
 }
 
@@ -5041,6 +5129,8 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(Int64Array::from(vec![i64::from(r.enabled)])),
             Arc::new(Int64Array::from(vec![r.last_run_at])),
             Arc::new(Int64Array::from(vec![r.created_at])),
+            Arc::new(StringArray::from(vec![r.watch_sources.clone()])),
+            Arc::new(StringArray::from(vec![r.watch_kinds.clone()])),
         ],
     )?)
 }

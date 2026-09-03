@@ -66,6 +66,8 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
         return; // transient — retry next pass, marker unwritten
     };
     let schedule = ReportSchedule {
+        watch_sources: String::new(),
+        watch_kinds: String::new(),
         id: new_id(),
         notebook_id: nb.id,
         name: DEFAULT_BRIEF_NAME.into(),

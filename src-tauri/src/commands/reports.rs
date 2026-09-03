@@ -16,7 +16,20 @@ fn resolve_trigger(trigger: Option<String>) -> String {
     }
 }
 
+/// The change-trigger filters (docs/RFC-events.md §5), normalized: source
+/// ids as given, kinds restricted to `EVENT_KINDS`. Empty means "any".
+pub(crate) fn resolve_watch(sources: Option<String>, kinds: Option<String>) -> (String, String) {
+    (
+        crate::models::normalize_watch_list(sources.as_deref().unwrap_or(""), None),
+        crate::models::normalize_watch_list(
+            kinds.as_deref().unwrap_or(""),
+            Some(&crate::models::EVENT_KINDS),
+        ),
+    )
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_report_schedule(
     state: State<'_, AppState>,
     notebook_id: String,
@@ -25,8 +38,13 @@ pub async fn create_report_schedule(
     prompt: String,
     trigger: Option<String>,
     interval_secs: i64,
+    watch_sources: Option<String>,
+    watch_kinds: Option<String>,
 ) -> Result<ReportSchedule, String> {
+    let (watch_sources, watch_kinds) = resolve_watch(watch_sources, watch_kinds);
     let schedule = ReportSchedule {
+        watch_sources,
+        watch_kinds,
         id: new_id(),
         notebook_id,
         name: name.trim().to_string(),
@@ -54,7 +72,10 @@ pub async fn update_report_schedule(
     trigger: Option<String>,
     interval_secs: i64,
     enabled: bool,
+    watch_sources: Option<String>,
+    watch_kinds: Option<String>,
 ) -> Result<(), String> {
+    let (watch_sources, watch_kinds) = resolve_watch(watch_sources, watch_kinds);
     e(state
         .db
         .update_report_schedule(
@@ -65,6 +86,8 @@ pub async fn update_report_schedule(
             &resolve_trigger(trigger),
             interval_secs,
             enabled,
+            &watch_sources,
+            &watch_kinds,
         )
         .await)
 }

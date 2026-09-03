@@ -2965,11 +2965,20 @@ export const useStore = create<AppState>((set, get) => {
       if (nb) await get().selectNotebook(nb.id);
     },
 
-    createReport: (name, kind, prompt, trigger, intervalSecs) =>
+    createReport: (name, kind, prompt, trigger, intervalSecs, watchSources = "", watchKinds = "") =>
       guard(async () => {
         const id = get().currentId;
         if (!id) return;
-        await api.createReportSchedule(id, name, kind, prompt, trigger, intervalSecs);
+        await api.createReportSchedule(
+          id,
+          name,
+          kind,
+          prompt,
+          trigger,
+          intervalSecs,
+          watchSources,
+          watchKinds,
+        );
         set({ reportSchedules: await api.listReportSchedules(id) });
         get().pushToast("success", `Scheduled “${name}”`);
       }),
@@ -2984,6 +2993,8 @@ export const useStore = create<AppState>((set, get) => {
           r.trigger,
           r.intervalSecs,
           r.enabled,
+          r.watchSources,
+          r.watchKinds,
         );
         const id = get().currentId;
         if (id) set({ reportSchedules: await api.listReportSchedules(id) });
@@ -3013,6 +3024,8 @@ export const useStore = create<AppState>((set, get) => {
               gone.prompt,
               gone.trigger,
               gone.intervalSecs,
+              gone.watchSources,
+              gone.watchKinds,
             );
             restoredId = restored.id;
             if (!gone.enabled)
@@ -3024,6 +3037,8 @@ export const useStore = create<AppState>((set, get) => {
                 gone.trigger,
                 gone.intervalSecs,
                 false,
+                gone.watchSources,
+                gone.watchKinds,
               );
             const id = get().currentId;
             if (id) set({ reportSchedules: await api.listReportSchedules(id) });

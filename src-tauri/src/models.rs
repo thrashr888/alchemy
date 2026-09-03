@@ -291,7 +291,7 @@ pub struct SourceEvent {
     pub notebook_id: String,
     pub source_id: String,
     pub source_title: String,
-    /// "updated" (more kinds as watcher classes land).
+    /// One of `EVENT_KINDS` (docs/RFC-events.md §1).
     pub kind: String,
     /// Short human line ("page re-fetched · +12 −3 lines", …).
     #[serde(default)]
@@ -302,6 +302,38 @@ pub struct SourceEvent {
     #[serde(default)]
     pub diff: String,
     pub at: i64,
+}
+
+/// Every `SourceEvent.kind` a producer may write (docs/RFC-events.md §1).
+/// `updated` is a re-fetch or re-read of something already held; `added`
+/// and `removed` come from reconcilers (folder scans, git pulls, feed
+/// polls); `unreachable` is the hygiene strike that crosses the threshold;
+/// `completed` and `moved` are Mac item states (Reminders, Calendar).
+pub const EVENT_KINDS: [&str; 6] = [
+    "updated",
+    "added",
+    "removed",
+    "unreachable",
+    "completed",
+    "moved",
+];
+
+/// Normalize a space-separated watch list (`ReportSchedule::watch_sources`,
+/// `watch_kinds`): trim, drop empties and repeats, keep first-seen order.
+/// With `allowed`, anything outside the set is dropped too — an unknown
+/// event kind would make a standing question that never fires.
+pub fn normalize_watch_list(raw: &str, allowed: Option<&[&str]>) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for token in raw.split_whitespace() {
+        if seen.contains(&token) {
+            continue;
+        }
+        if allowed.is_some_and(|ok| !ok.contains(&token)) {
+            continue;
+        }
+        seen.push(token);
+    }
+    seen.join(" ")
 }
 
 /// What one Night Shift run did (docs/RFC-night-shift-area.md §2). Written
@@ -384,6 +416,14 @@ pub struct ReportSchedule {
     pub not_before: i64,
     pub interval_secs: i64,
     pub enabled: bool,
+    /// Event filter for `trigger == "change"` (docs/RFC-events.md §5):
+    /// space-separated source ids this standing question watches. Empty
+    /// means any source in the notebook — the pre-filter behaviour.
+    #[serde(default)]
+    pub watch_sources: String,
+    /// Space-separated `EVENT_KINDS` that pull the trigger; empty means any.
+    #[serde(default)]
+    pub watch_kinds: String,
     /// Unix millis of the last successful run; 0 = never run.
     pub last_run_at: i64,
     pub created_at: i64,

@@ -28,6 +28,7 @@ import {
 import { sourceIcon } from "@/lib/sourceIcon";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
+import { ArrivalsStrip, useArrivals } from "./ArrivalsStrip";
 import type { GrowthProposal, Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -134,7 +135,7 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-const FOLDER_TYPES = ["folder", "git", "notion", "obsidian"];
+const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "feed"];
 
 /** Facet kinds: coarse buckets a narrow panel can offer as chips. */
 type SourceKind = "web" | "files" | "images" | "apple" | "folders";
@@ -255,6 +256,8 @@ export function SourcesPanel() {
   const refreshSourcesBatch = useStore((s) => s.refreshSourcesBatch);
   const hygiene = useStore((s) => s.hygiene);
   const refreshHygiene = useStore((s) => s.refreshHygiene);
+  // Arrivals (RFC-events §6): what the watchers saw since the last dismiss.
+  const arrivals = useArrivals(currentId);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // One source, one menu: the row verbs and every modal they open come
@@ -880,6 +883,9 @@ export function SourcesPanel() {
           </EmptyState>
         ) : (
           <>
+            {/* What changed since the reader last looked — one line of
+                tallies, the events on click, gone on "Mark seen". */}
+            <ArrivalsStrip unseen={arrivals.unseen} onDismiss={arrivals.dismiss} />
             {/* Master selection row: which sources feed chat & Studio. Always
                 labeled — a bare checkbox over empty space read as a blank,
                 menu-less source row in every notebook. */}
@@ -1153,6 +1159,16 @@ export function SourcesPanel() {
                             (s.url && hostname(s.url)) ||
                             "Untitled"}
                         </span>
+                        {/* New-dot: an unseen arrival landed here (folder
+                            children roll up to their parent). Cleared by
+                            the strip's Mark seen. */}
+                        {arrivals.sourceIds.has(s.id) && (
+                          <span
+                            aria-label="Changed since you last looked"
+                            title="Changed since you last looked"
+                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                          />
+                        )}
                         {issueBySource.has(s.id) && (
                           <Badge
                             className="shrink-0"

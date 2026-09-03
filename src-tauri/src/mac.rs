@@ -105,7 +105,7 @@ pub fn open_privacy_settings() -> Result<(), String> {
 pub async fn mac_connect(provider: String) -> Result<(), String> {
     match provider.as_str() {
         "reminders" => cider(cider_lib::reminders::list(None)).await,
-        "calendar" => cider(cider_lib::calendar::list(Some(0), Some(1), None)).await,
+        "calendar" => cider(cider_lib::calendar::list(Some(0), Some(1), None, None)).await,
         "notes" => cider(cider_lib::notes::folders()).await,
         "stocks" => cider(cider_lib::stocks::watchlists()).await,
         other => return Err(format!("Unknown Mac provider: {other}")),
@@ -152,7 +152,7 @@ pub async fn list_mac_collections(provider: String) -> Result<Vec<MacCollection>
         // library fast; the picker searches and groups it by folder
         // client-side.
         "notes" => {
-            let data = cider(cider_lib::notes::list_brief(None))
+            let data = cider(cider_lib::notes::list_brief(None, None))
                 .await
                 .map_err(|e| format!("{e:#}"))?;
             Ok(data
@@ -212,69 +212,17 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
             Some(0),
             Some(days.parse().unwrap_or(7)),
             None,
+            None,
         ))
         .await?;
-        let mut out = format!("# Calendar — next {days} days\n\n");
-        let mut last_day = String::new();
-        for e in data.as_array().unwrap_or(&vec![]) {
-            let start = e["start_date"].as_str().unwrap_or("");
-            let day = start.chars().take(10).collect::<String>();
-            if day != last_day && !day.is_empty() {
-                out.push_str(&format!("## {day}\n"));
-                last_day = day;
-            }
-            let time = if e["is_all_day"].as_bool() == Some(true) {
-                "all day".to_string()
-            } else {
-                start.chars().skip(11).take(5).collect()
-            };
-            out.push_str(&format!(
-                "- {} — {} ({})",
-                time,
-                e["title"].as_str().unwrap_or("Untitled"),
-                e["calendar"].as_str().unwrap_or("Calendar"),
-            ));
-            if let Some(loc) = e["location"].as_str() {
-                out.push_str(&format!(" at {loc}"));
-            }
-            out.push('\n');
-            if let Some(notes) = e["notes"].as_str() {
-                if !notes.trim().is_empty() {
-                    out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
-                }
-            }
-        }
-        return Ok((format!("Calendar: next {days} days"), out));
+        return Ok((
+            format!("Calendar: next {days} days"),
+            render_calendar(days, &data),
+        ));
     }
     if let Some(list) = uri.strip_prefix("cider://reminders/list/") {
         let data = cider(cider_lib::reminders::list(Some(list))).await?;
-        let mut out = format!("# Reminders — {list}\n\n");
-        for r in data.as_array().unwrap_or(&vec![]) {
-            out.push_str(&format!(
-                "- [ ] {}",
-                r["title"].as_str().unwrap_or("Untitled")
-            ));
-            // Carry the id into the text: titles repeat (two identical bug
-            // reports is the case that prompted this), so it is the only way
-            // for a reader — or an agent — to name one reminder exactly when
-            // asking to complete it.
-            if let Some(id) = r["id"].as_str() {
-                out.push_str(&format!(" `{id}`"));
-            }
-            if let Some(due) = r["due_date"].as_str() {
-                out.push_str(&format!(
-                    " — due {}",
-                    due.chars().take(10).collect::<String>()
-                ));
-            }
-            out.push('\n');
-            if let Some(notes) = r["notes"].as_str() {
-                if !notes.trim().is_empty() {
-                    out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
-                }
-            }
-        }
-        return Ok((format!("Reminders: {list}"), out));
+        return Ok((format!("Reminders: {list}"), render_reminders(list, &data)));
     }
     if let Some(id) = uri.strip_prefix("cider://notes/note/") {
         let n = cider(cider_lib::notes::get(id)).await?;
@@ -314,49 +262,14 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
             anyhow::bail!("Watchlist \"{list}\" not found in Apple Stocks (was it renamed?)");
         }
         let quotes = cider(cider_lib::stocks::fetch()).await?;
-        let mut out = format!("# Stocks — {list}\n\n");
-        let mut as_of = "";
-        let empty = vec![];
-        let rows = quotes.as_array().unwrap_or(&empty);
-        out.push_str("| Symbol | Name | Price | Change | Status |\n");
-        out.push_str("|---|---|---|---|---|\n");
-        for sym in &symbols {
-            let q = rows.iter().find(|q| q["symbol"].as_str() == Some(sym));
-            let (name, price, pct, status) = match q {
-                Some(q) => {
-                    if let Some(t) = q["as_of"].as_str() {
-                        if t > as_of {
-                            as_of = t;
-                        }
-                    }
-                    (
-                        q["name"].as_str().unwrap_or("").to_string(),
-                        q["price"]
-                            .as_f64()
-                            .map(|p| format!("{p:.2} {}", q["currency"].as_str().unwrap_or("")))
-                            .unwrap_or_default(),
-                        q["change_percent"]
-                            .as_f64()
-                            .map(|c| format!("{c:+.2}%"))
-                            .unwrap_or_default(),
-                        q["exchange_status"].as_str().unwrap_or("").to_string(),
-                    )
-                }
-                None => (String::new(), String::new(), String::new(), String::new()),
-            };
-            out.push_str(&format!(
-                "| {sym} | {name} | {price} | {pct} | {status} |\n"
-            ));
-        }
-        let as_of = as_of.to_string();
-        if !as_of.is_empty() {
-            out.push_str(&format!("\n_Prices as of {as_of} (Apple Stocks cache)._\n"));
-        }
-        return Ok((format!("Stocks: {list}"), out));
+        return Ok((
+            format!("Stocks: {list}"),
+            render_stocks(list, &symbols, &quotes),
+        ));
     }
     // Legacy folder-as-source origins keep syncing.
     if let Some(folder) = uri.strip_prefix("cider://notes/folder/") {
-        let data = cider(cider_lib::notes::list(Some(folder), None)).await?;
+        let data = cider(cider_lib::notes::list(Some(folder), None, None)).await?;
         let mut out = format!("# Apple Notes — {folder}\n\n");
         for n in data.as_array().unwrap_or(&vec![]) {
             out.push_str(&format!(
@@ -377,6 +290,354 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
         return Ok((format!("Notes: {folder}"), out));
     }
     anyhow::bail!("Unrecognized Mac source origin: {uri}")
+}
+
+// ---- Renderers -------------------------------------------------------------
+//
+// Pure functions from cider's JSON to the markdown a source stores. The shapes
+// are a contract, not a style: the chat's live answer cards
+// (src/lib/liveCards.ts, docs/RFC-events.md §7) parse this text back into
+// native tables, so every line is fixed-order and one item per line. The
+// tests below pin each shape; change one only together with its parser.
+
+/// `# Calendar — next N days`, a `## YYYY-MM-DD` heading per day, then one
+/// `- HH:MM — Title (Calendar)[ at Location]` per event (`all day` in the
+/// time slot for all-day events); notes ride as an indented `  - ` line.
+fn render_calendar(days: &str, data: &serde_json::Value) -> String {
+    let mut out = format!("# Calendar — next {days} days\n\n");
+    let mut last_day = String::new();
+    for e in data.as_array().unwrap_or(&vec![]) {
+        let start = e["start_date"].as_str().unwrap_or("");
+        let day = start.chars().take(10).collect::<String>();
+        if day != last_day && !day.is_empty() {
+            out.push_str(&format!("## {day}\n"));
+            last_day = day;
+        }
+        let time = if e["is_all_day"].as_bool() == Some(true) {
+            "all day".to_string()
+        } else {
+            start.chars().skip(11).take(5).collect()
+        };
+        out.push_str(&format!(
+            "- {} — {} ({})",
+            time,
+            e["title"].as_str().unwrap_or("Untitled"),
+            e["calendar"].as_str().unwrap_or("Calendar"),
+        ));
+        if let Some(loc) = e["location"].as_str() {
+            out.push_str(&format!(" at {loc}"));
+        }
+        out.push('\n');
+        if let Some(notes) = e["notes"].as_str() {
+            if !notes.trim().is_empty() {
+                out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
+            }
+        }
+    }
+    out
+}
+
+/// `# Reminders — List`, then one `- [ ] Title \`id\`[ — due YYYY-MM-DD]`
+/// per open reminder; notes ride as an indented `  - ` line.
+fn render_reminders(list: &str, data: &serde_json::Value) -> String {
+    let mut out = format!("# Reminders — {list}\n\n");
+    for r in data.as_array().unwrap_or(&vec![]) {
+        out.push_str(&format!(
+            "- [ ] {}",
+            r["title"].as_str().unwrap_or("Untitled")
+        ));
+        // Carry the id into the text: titles repeat (two identical bug
+        // reports is the case that prompted this), so it is the only way
+        // for a reader — or an agent — to name one reminder exactly when
+        // asking to complete it.
+        if let Some(id) = r["id"].as_str() {
+            out.push_str(&format!(" `{id}`"));
+        }
+        if let Some(due) = r["due_date"].as_str() {
+            out.push_str(&format!(
+                " — due {}",
+                due.chars().take(10).collect::<String>()
+            ));
+        }
+        out.push('\n');
+        if let Some(notes) = r["notes"].as_str() {
+            if !notes.trim().is_empty() {
+                out.push_str(&format!("  - {}\n", notes.trim().replace('\n', " ")));
+            }
+        }
+    }
+    out
+}
+
+/// `# Stocks — List`, a five-column table `| Symbol | Name | Price | Change |
+/// Status |` in watchlist order (price as `123.45 USD`, change as `+1.23%`,
+/// blanks for symbols the quote cache lacks), then
+/// `_Prices as of <RFC 3339> (Apple Stocks cache)._` when any quote carried a
+/// time. Quotes are as fresh as the Stocks app/widget keeps them.
+fn render_stocks(list: &str, symbols: &[String], quotes: &serde_json::Value) -> String {
+    let mut out = format!("# Stocks — {list}\n\n");
+    let mut as_of = "";
+    let empty = vec![];
+    let rows = quotes.as_array().unwrap_or(&empty);
+    out.push_str("| Symbol | Name | Price | Change | Status |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for sym in symbols {
+        let q = rows.iter().find(|q| q["symbol"].as_str() == Some(sym));
+        let (name, price, pct, status) = match q {
+            Some(q) => {
+                if let Some(t) = q["as_of"].as_str() {
+                    if t > as_of {
+                        as_of = t;
+                    }
+                }
+                (
+                    q["name"].as_str().unwrap_or("").to_string(),
+                    q["price"]
+                        .as_f64()
+                        .map(|p| format!("{p:.2} {}", q["currency"].as_str().unwrap_or("")))
+                        .unwrap_or_default(),
+                    q["change_percent"]
+                        .as_f64()
+                        .map(|c| format!("{c:+.2}%"))
+                        .unwrap_or_default(),
+                    q["exchange_status"].as_str().unwrap_or("").to_string(),
+                )
+            }
+            None => (String::new(), String::new(), String::new(), String::new()),
+        };
+        out.push_str(&format!(
+            "| {sym} | {name} | {price} | {pct} | {status} |\n"
+        ));
+    }
+    if !as_of.is_empty() {
+        out.push_str(&format!("\n_Prices as of {as_of} (Apple Stocks cache)._\n"));
+    }
+    out
+}
+
+// ---- Item events -----------------------------------------------------------
+//
+// Phase 5 of docs/RFC-events.md: a Mac resync names *which item* changed,
+// not that "the list" did. The stored text already carries what a delta
+// needs — reminder ids and due dates, calendar days and times, one item per
+// line (the renderers above) — so the diff of the old and new renderings
+// *is* the delta: no high-water mark to persist, no second cider call, and
+// the same answer whether the change arrived through the store watch
+// (macwatch.rs), the minute sweep, or one of our own write-backs. cider 0.6's
+// `since` filters stay available for a pass that wants the store's own view.
+
+/// Item-level events between two renderings of one `cider://` source, as
+/// `(kind, detail)` pairs in the RFC §1 vocabulary (`completed`, `moved`,
+/// `added`, `removed`, `updated`). Empty for providers with no items to name
+/// — a note or a stocks table — where the generic `updated` diff is the
+/// right event, and empty when only sub-lines (reminder notes, event notes)
+/// changed, for the same reason.
+pub fn item_events(url: &str, old_text: &str, new_text: &str) -> Vec<(&'static str, String)> {
+    if url.starts_with("cider://reminders/list/") {
+        reminder_events(old_text, new_text)
+    } else if url.starts_with("cider://calendar/upcoming/") {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        calendar_events(old_text, new_text, &today)
+    } else {
+        Vec::new()
+    }
+}
+
+struct ReminderLine<'a> {
+    title: &'a str,
+    id: &'a str,
+    due: Option<&'a str>,
+}
+
+/// One `render_reminders` item line back into its parts; `None` for
+/// anything else (headings, the indented notes lines, a line with no id).
+fn parse_reminder_line(line: &str) -> Option<ReminderLine<'_>> {
+    let rest = line.strip_prefix("- [ ] ")?;
+    let (body, due) = match rest.rsplit_once(" \u{2014} due ") {
+        Some((body, due)) => (body, Some(due.trim())),
+        None => (rest, None),
+    };
+    let body = body.strip_suffix('`')?;
+    let (title, id) = body.rsplit_once(" `")?;
+    Some(ReminderLine { title, id, due })
+}
+
+/// cider lists open reminders only, so an id that vanished was completed
+/// (or deleted — the store does not say, and "done" is the common case).
+fn reminder_events(old: &str, new: &str) -> Vec<(&'static str, String)> {
+    let old_items: Vec<ReminderLine<'_>> = old.lines().filter_map(parse_reminder_line).collect();
+    let new_items: Vec<ReminderLine<'_>> = new.lines().filter_map(parse_reminder_line).collect();
+    let old_by_id: std::collections::HashMap<&str, &ReminderLine<'_>> =
+        old_items.iter().map(|r| (r.id, r)).collect();
+    let new_by_id: std::collections::HashMap<&str, &ReminderLine<'_>> =
+        new_items.iter().map(|r| (r.id, r)).collect();
+    let mut out = Vec::new();
+    for r in &old_items {
+        if !new_by_id.contains_key(r.id) {
+            out.push(("completed", format!("\u{2713} {}", r.title)));
+        }
+    }
+    for r in &new_items {
+        match old_by_id.get(r.id) {
+            None => out.push(("added", format!("new reminder \u{00b7} {}", r.title))),
+            Some(o) if o.due != r.due => out.push((
+                "moved",
+                format!(
+                    "{} \u{00b7} due {} \u{2192} {}",
+                    r.title,
+                    o.due.unwrap_or("no date"),
+                    r.due.unwrap_or("no date")
+                ),
+            )),
+            Some(o) if o.title != r.title => out.push((
+                "updated",
+                format!("renamed \u{00b7} {} \u{2192} {}", o.title, r.title),
+            )),
+            Some(_) => {}
+        }
+    }
+    out
+}
+
+struct CalendarLine<'a> {
+    /// `Title (Calendar)` — the location suffix is dropped so a venue change
+    /// reads as the same event.
+    key: &'a str,
+    day: &'a str,
+    time: &'a str,
+}
+
+/// Every `render_calendar` item line with the `## YYYY-MM-DD` it sits under.
+fn parse_calendar(text: &str) -> Vec<CalendarLine<'_>> {
+    let mut day = "";
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(d) = line.strip_prefix("## ") {
+            day = d.trim();
+            continue;
+        }
+        // Note lines are indented (`  - `), so they miss this prefix.
+        let Some(rest) = line.strip_prefix("- ") else {
+            continue;
+        };
+        let Some((time, key)) = rest.split_once(" \u{2014} ") else {
+            continue;
+        };
+        if day.is_empty() {
+            continue;
+        }
+        let key = match key.rfind(") at ") {
+            Some(i) => &key[..=i],
+            None => key,
+        };
+        out.push(CalendarLine { key, day, time });
+    }
+    out
+}
+
+fn calendar_title(key: &str) -> &str {
+    key.rsplit_once(" (").map(|(t, _)| t).unwrap_or(key)
+}
+
+/// `Thu 2 PM`, `Thu Sep 3 2 PM` with the date, `Thu all day`; falls back
+/// to the raw fields when a line does not parse.
+fn when_label(day: &str, time: &str, with_date: bool) -> String {
+    let date = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .map(|d| {
+            if with_date {
+                d.format("%a %b %-d").to_string()
+            } else {
+                d.format("%a").to_string()
+            }
+        })
+        .unwrap_or_else(|_| day.to_string());
+    let clock = match time.split_once(':') {
+        Some((h, m)) => match (h.parse::<u32>(), m.parse::<u32>()) {
+            (Ok(h), Ok(m)) if h < 24 && m < 60 => {
+                let (h12, half) = match h {
+                    0 => (12, "AM"),
+                    1..=11 => (h, "AM"),
+                    12 => (12, "PM"),
+                    _ => (h - 12, "PM"),
+                };
+                if m == 0 {
+                    format!("{h12} {half}")
+                } else {
+                    format!("{h12}:{m:02} {half}")
+                }
+            }
+            _ => time.to_string(),
+        },
+        None => time.to_string(),
+    };
+    format!("{date} {clock}")
+}
+
+/// A rolling window slides every fetch: days before `today` fell off the
+/// front and days past the old rendering's last event are new to the window,
+/// not new to the calendar. Both are dropped before matching, so a daily
+/// standup never reads as seven removals and seven arrivals. Within the
+/// overlap, exact `(title, day, time)` matches cancel; a leftover new line
+/// pairs with a leftover old line of the same title as `moved`, and what is
+/// still left is `added` or `removed`.
+fn calendar_events(old: &str, new: &str, today: &str) -> Vec<(&'static str, String)> {
+    let old_lines = parse_calendar(old);
+    let new_lines = parse_calendar(new);
+    let old_last_day = old_lines.iter().map(|l| l.day).max();
+    let mut old_left: Vec<&CalendarLine<'_>> =
+        old_lines.iter().filter(|l| l.day >= today).collect();
+    let mut new_left: Vec<&CalendarLine<'_>> = Vec::new();
+    for n in new_lines
+        .iter()
+        .filter(|l| old_last_day.is_none_or(|last| l.day <= last))
+    {
+        match old_left
+            .iter()
+            .position(|o| o.key == n.key && o.day == n.day && o.time == n.time)
+        {
+            Some(i) => {
+                old_left.remove(i);
+            }
+            None => new_left.push(n),
+        }
+    }
+    let mut out = Vec::new();
+    for n in new_left {
+        match old_left.iter().position(|o| o.key == n.key) {
+            Some(i) => {
+                let o = old_left.remove(i);
+                let with_date = o.day != n.day;
+                out.push((
+                    "moved",
+                    format!(
+                        "{} \u{00b7} {} \u{2192} {}",
+                        calendar_title(n.key),
+                        when_label(o.day, o.time, with_date),
+                        when_label(n.day, n.time, with_date)
+                    ),
+                ));
+            }
+            None => out.push((
+                "added",
+                format!(
+                    "new event \u{00b7} {} \u{00b7} {}",
+                    calendar_title(n.key),
+                    when_label(n.day, n.time, true)
+                ),
+            )),
+        }
+    }
+    for o in old_left {
+        out.push((
+            "removed",
+            format!(
+                "event gone \u{00b7} {} \u{00b7} {}",
+                calendar_title(o.key),
+                when_label(o.day, o.time, true)
+            ),
+        ));
+    }
+    out
 }
 
 /// Is this origin a Mac item?
@@ -531,5 +792,232 @@ mod tests {
     async fn fetch_rejects_unrecognized_origin() {
         let err = fetch("cider://bogus/thing").await.unwrap_err();
         assert!(err.to_string().contains("Unrecognized Mac source origin"));
+    }
+
+    // The live-card contract (src/lib/liveCards.ts parses these): one item
+    // per line, fixed field order. A drift here is a card silently gone.
+    #[test]
+    fn calendar_renders_one_fixed_line_per_event() {
+        let data = serde_json::json!([
+            {"title": "Inspection", "calendar": "Home", "location": "12 Elm St",
+             "start_date": "2026-09-03T14:00:00", "is_all_day": false,
+             "notes": "bring the\nreport"},
+            {"title": "Labor Day", "calendar": "US Holidays",
+             "start_date": "2026-09-07T00:00:00", "is_all_day": true},
+        ]);
+        assert_eq!(
+            render_calendar("7", &data),
+            "# Calendar — next 7 days\n\n\
+             ## 2026-09-03\n\
+             - 14:00 — Inspection (Home) at 12 Elm St\n\
+             \x20 - bring the report\n\
+             ## 2026-09-07\n\
+             - all day — Labor Day (US Holidays)\n"
+        );
+    }
+
+    #[test]
+    fn reminders_render_title_id_and_due() {
+        let data = serde_json::json!([
+            {"id": "x-apple-reminder://A1", "title": "Call the insurer",
+             "list": "Home", "priority": 0, "due_date": "2026-09-04T16:00:00Z",
+             "notes": "policy 4471"},
+            {"id": "x-apple-reminder://B2", "title": "Buy stamps", "list": "Home",
+             "priority": 0},
+        ]);
+        assert_eq!(
+            render_reminders("Home", &data),
+            "# Reminders — Home\n\n\
+             - [ ] Call the insurer `x-apple-reminder://A1` — due 2026-09-04\n\
+             \x20 - policy 4471\n\
+             - [ ] Buy stamps `x-apple-reminder://B2`\n"
+        );
+    }
+
+    #[test]
+    fn stocks_render_a_five_column_table_and_as_of() {
+        let symbols = vec!["AAPL".to_string(), "ZZZZ".to_string()];
+        let quotes = serde_json::json!([
+            {"symbol": "AAPL", "name": "Apple Inc.", "price": 231.456,
+             "change_percent": -1.2345, "currency": "USD",
+             "exchange_status": "closed", "as_of": "2026-09-02T20:00:00Z"},
+        ]);
+        assert_eq!(
+            render_stocks("My Symbols", &symbols, &quotes),
+            "# Stocks — My Symbols\n\n\
+             | Symbol | Name | Price | Change | Status |\n\
+             |---|---|---|---|---|\n\
+             | AAPL | Apple Inc. | 231.46 USD | -1.23% | closed |\n\
+             | ZZZZ |  |  |  |  |\n\n\
+             _Prices as of 2026-09-02T20:00:00Z (Apple Stocks cache)._\n"
+        );
+    }
+
+    // ---- Item events (docs/RFC-events.md phase 5) ----
+
+    const REMINDERS_OLD: &str = "# Reminders — Home\n\n\
+        - [ ] Call the insurer `x-apple-reminder://A1` — due 2026-09-04\n\
+        \x20 - policy 4471\n\
+        - [ ] Buy stamps `x-apple-reminder://B2`\n\
+        - [ ] Fix the gate `x-apple-reminder://C3` — due 2026-09-10\n";
+
+    #[test]
+    fn completing_a_reminder_is_one_completed_event() {
+        let new = REMINDERS_OLD.replace(
+            "- [ ] Call the insurer `x-apple-reminder://A1` — due 2026-09-04\n\
+             \x20 - policy 4471\n",
+            "",
+        );
+        assert_eq!(
+            item_events("cider://reminders/list/Home", REMINDERS_OLD, &new),
+            vec![("completed", "✓ Call the insurer".to_string())]
+        );
+    }
+
+    #[test]
+    fn reminder_arrivals_moves_and_renames_are_named() {
+        let new = "# Reminders — Home\n\n\
+            - [ ] Call the insurer `x-apple-reminder://A1` — due 2026-09-06\n\
+            - [ ] Buy more stamps `x-apple-reminder://B2`\n\
+            - [ ] Fix the gate `x-apple-reminder://C3`\n\
+            - [ ] Renew the permit `x-apple-reminder://D4` — due 2026-09-30\n";
+        assert_eq!(
+            item_events("cider://reminders/list/Home", REMINDERS_OLD, new),
+            vec![
+                (
+                    "moved",
+                    "Call the insurer · due 2026-09-04 → 2026-09-06".to_string()
+                ),
+                (
+                    "updated",
+                    "renamed · Buy stamps → Buy more stamps".to_string()
+                ),
+                (
+                    "moved",
+                    "Fix the gate · due 2026-09-10 → no date".to_string()
+                ),
+                ("added", "new reminder · Renew the permit".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn reminder_note_edits_leave_the_generic_diff_to_speak() {
+        let new = REMINDERS_OLD.replace("policy 4471", "policy 4471, ask for Dana");
+        assert!(item_events("cider://reminders/list/Home", REMINDERS_OLD, &new).is_empty());
+        // Same text, same ids: nothing to say.
+        assert!(
+            item_events("cider://reminders/list/Home", REMINDERS_OLD, REMINDERS_OLD).is_empty()
+        );
+    }
+
+    const CALENDAR_OLD: &str = "# Calendar — next 7 days\n\n\
+        ## 2026-09-02\n\
+        - 09:00 — Standup (Work)\n\
+        - 14:00 — Inspection (Home) at 12 Elm St\n\
+        \x20 - bring the report\n\
+        ## 2026-09-03\n\
+        - 09:00 — Standup (Work)\n\
+        ## 2026-09-04\n\
+        - 09:00 — Standup (Work)\n\
+        - all day — Offsite (Work)\n";
+
+    #[test]
+    fn a_rescheduled_event_is_one_moved_event() {
+        let new = CALENDAR_OLD.replace(
+            "- 14:00 — Inspection (Home) at 12 Elm St\n\x20 - bring the report\n## 2026-09-03\n",
+            "## 2026-09-03\n- 10:00 — Inspection (Home) at 12 Elm St\n\x20 - bring the report\n",
+        );
+        assert_eq!(
+            calendar_events(CALENDAR_OLD, &new, "2026-09-02"),
+            vec![(
+                "moved",
+                "Inspection · Wed Sep 2 2 PM → Thu Sep 3 10 AM".to_string()
+            )]
+        );
+        // Same day, later: weekday only.
+        let later = CALENDAR_OLD.replace("- 14:00 — Inspection", "- 15:30 — Inspection");
+        assert_eq!(
+            calendar_events(CALENDAR_OLD, &later, "2026-09-02"),
+            vec![("moved", "Inspection · Wed 2 PM → Wed 3:30 PM".to_string())]
+        );
+    }
+
+    #[test]
+    fn calendar_arrivals_and_departures_inside_the_window() {
+        let new = CALENDAR_OLD
+            .replace("- all day — Offsite (Work)\n", "")
+            .replace(
+                "## 2026-09-03\n",
+                "## 2026-09-03\n- 12:00 — Lunch with Sam (Personal)\n",
+            );
+        assert_eq!(
+            calendar_events(CALENDAR_OLD, &new, "2026-09-02"),
+            vec![
+                (
+                    "added",
+                    "new event · Lunch with Sam · Thu Sep 3 12 PM".to_string()
+                ),
+                (
+                    "removed",
+                    "event gone · Offsite · Fri Sep 4 all day".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sliding_window_and_a_venue_change_are_not_events() {
+        // Two days on: the front two days fell off, two new days rolled in,
+        // and the daily standup is still the daily standup.
+        let slid = "# Calendar — next 7 days\n\n\
+            ## 2026-09-04\n\
+            - 09:00 — Standup (Work)\n\
+            - all day — Offsite (Work)\n\
+            ## 2026-09-05\n\
+            - 09:00 — Standup (Work)\n\
+            ## 2026-09-06\n\
+            - 09:00 — Standup (Work)\n";
+        assert!(calendar_events(CALENDAR_OLD, slid, "2026-09-04").is_empty());
+        let moved_venue = CALENDAR_OLD.replace("at 12 Elm St", "at 14 Elm St");
+        assert!(calendar_events(CALENDAR_OLD, &moved_venue, "2026-09-02").is_empty());
+        // An empty old rendering (a calendar with nothing in range) makes
+        // every new line an arrival.
+        assert_eq!(
+            calendar_events(
+                "# Calendar — next 7 days\n\n",
+                "## 2026-09-03\n- 09:00 — Dentist (Personal)\n",
+                "2026-09-02"
+            ),
+            vec![("added", "new event · Dentist · Thu Sep 3 9 AM".to_string())]
+        );
+    }
+
+    #[test]
+    fn notes_and_stocks_have_no_item_events() {
+        assert!(item_events(
+            "cider://notes/note/x-coredata://A/ICNote/p1",
+            "# A\n\nold",
+            "# A\n\nnew"
+        )
+        .is_empty());
+        assert!(item_events(
+            "cider://stocks/watchlist/My Symbols",
+            "| AAPL | 1 |",
+            "| AAPL | 2 |"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn clock_labels_read_like_a_person_wrote_them() {
+        assert_eq!(when_label("2026-09-03", "00:00", false), "Thu 12 AM");
+        assert_eq!(when_label("2026-09-03", "12:00", false), "Thu 12 PM");
+        assert_eq!(
+            when_label("2026-09-03", "23:45", true),
+            "Thu Sep 3 11:45 PM"
+        );
+        assert_eq!(when_label("2026-09-03", "all day", false), "Thu all day");
+        assert_eq!(when_label("someday", "soon", false), "someday soon");
     }
 }

@@ -44,6 +44,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 futures-util = "0.3.32"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# RSS / Atom / JSON Feed parsing for feed sources (docs/RFC-events.md §2).
+feed-rs = "2"
 tauri-plugin-debug-bridge = { version = "0.6", optional = true }
 model2vec-rs = "0.2.1"
 tokio-util = { version = "0.7.18", default-features = false }
@@ -54,11 +56,18 @@ csv = "1"
 # Apple Notes/Reminders/Calendar/Stocks sources (mac.rs) — linked, not shelled
 # out to, so users need no `brew install cider`. default-features = false
 # drops its Clap CLI front-end. cider is Paul's repo: fix bugs there.
-cider = { package = "cider-cli", version = "0.4", default-features = false }
+# TODO(cider): back to crates.io once 0.6 publishes (0.6.0 is tagged, not
+# yet on crates.io; the watch module and `since` deltas live there).
+cider = { package = "cider-cli", version = "0.6.2", default-features = false }
+# cider logs through the `log` facade (0.6.2); diagnostics.rs installs the
+# logger that routes it into the app log.
+log = "0.4"
 percent-encoding = "2"
 # Folder scanning for all folder sources (docs/RFC-git-sources.md): ripgrep's
 # own walker — .gitignore/.ignore-aware, symlink-safe, prunes dot-dirs.
 ignore = "0.4"
+# FSEvents for open notebooks' folder sources (fswatch.rs, RFC-events §4).
+notify = "6"
 # Query-time exact-match retrieval leg over repo-backed sources — ripgrep's
 # engine, in-process (RFC-git-sources §6).
 grep-regex = "0.1"

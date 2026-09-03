@@ -1,6 +1,9 @@
 # RFC: Events — feeds, watchers, arrivals, and live cards
 
-Status: draft, for review (2026-09-01). Tracking: `bd show alchemy-release-jcd`.
+Status: implementing on `cld/events` (2026-09-02) — phases 1–4 and 6 landed
+and live-verified; phase 5 (Mac item events) landed against cider 0.6 and
+awaits its live check.
+Tracking: `bd show alchemy-release-jcd`.
 Origin: "explore bringing in realtime or event-based data." Companion to
 [RFC-night-shift.md](RFC-night-shift.md) (the scheduler and `source_events`),
 [RFC-living-notebook.md](RFC-living-notebook.md) (growth, consent tiers), and
@@ -116,9 +119,9 @@ unchanged because children are just sources. The parent's `mtime` holds
 unchanged document is a no-op at the same cost as a Mac resync today.
 
 The parent is not empty. Its text is a **rolling index**: the feed's
-description plus one line per kept entry (date, title, first sentence),
-rewritten and re-embedded whenever an entry lands. \"What's new in the
-Tauri blog\" retrieves the parent; a specific claim retrieves the child.
+description plus one line per kept entry (`- YYYY-MM-DD — [Title](link)`),
+rewritten and re-embedded whenever an entry lands. "What's new in the
+Tauri blog" retrieves the parent; a specific claim retrieves the child.
 This is the same lesson the wiki fold and living reports taught: a
 synthesized index over its own history gives the next judgement enough
 context to be a judgement, and the `updated` event's diff keeps the
@@ -146,9 +149,13 @@ doubled on each failure, reset on success. Conditional requests
    nothing extra. Found feeds land as a growth proposal of kind `feed`
    ("*Tauri blog* has a feed — follow it?"), never auto-subscribed.
 2. *Well-known paths.* `/feed`, `/rss`, `/rss.xml`, `/atom.xml`,
-   `/feed.xml`, `/index.xml`, `/feed.json`. One probe per domain, cached
-   in a `feed_hosts.json` beside `git_hosts.json`, run only from the
-   explicit **Follow updates…** menu item on a source — not from the sweep.
+   `/feed.xml`, `/index.xml`, `/feed.json`, and last `/sitemap.xml`. One
+   probe per domain, run only from the explicit **Follow updates…** menu
+   item on a source — not from the sweep. **A sitemap is a watch, not a
+   feed**: connecting one marks every page it lists as seen and ingests
+   nothing; only pages that appear later arrive, each fetched through the
+   normal page path under the same caps. Watching a site is not copying
+   it, and no starter notebook ships one — a user who wants it follows it.
 3. *Host rules.* GitHub repo → `releases.atom` and `commits.atom`;
    Wikipedia article → page-history Atom; YouTube channel → the channel's
    `videos.xml`; arXiv abs/pdf → an `export.arxiv.org/api/query` feed built
@@ -196,15 +203,26 @@ Debounce matters more than latency: a folder sync tool writing 400 files
 must land as one rescan and one coalesced batch of events, or it recreates
 the Lance scan storms.
 
-**Mac events via cider.** cider reads the Reminders and Calendar SQLite
-stores directly and already returns stable IDs and `modified_at`. Upstream
-(`cider_lib`, fix-there-then-bump per house rule), each list call gains
-`since: Option<DateTime>`; Alchemy keeps the last high-water mark per Mac
-source and asks for the delta, producing `added`/`completed`/`moved`/
-`updated` per item instead of one whole-list diff. A later `cider watch`
-that FSEvents the store files and yields a change stream slots in behind
-the same call, so Alchemy's side does not change twice. Mail stays out as
-a source, as RFC-cider-tools decided; nothing here reopens that.
+**Mac events via cider.** cider 0.6 (linked from its git tag until it
+publishes) gives two things: `since: Option<DateTime>` on the Reminders,
+Calendar, and Notes list calls, and `watch` — FSEvents over the directories
+those apps write to, folded into one event per store. Alchemy takes the
+watch (`macwatch.rs`): one resident task over Reminders, Calendar, and
+Notes, debounced two seconds per provider, and on an event every Mac source
+of that provider re-fetches through the ordinary path — one cider read and
+a hash compare each, a reingest only where the rendering moved. The
+fifteen-minute sweep cadence stays underneath it. Item-level events do not
+use `since`: the stored rendering already carries the ids, due dates, days,
+and times a delta needs, so `mac::item_events` diffs the old and new
+renderings and writes `completed` / `moved` / `added` / `removed` per item
+— the same answer whether the change arrived through the watch, the sweep,
+or one of Alchemy's own write-backs, and no high-water mark to keep per
+source. A calendar window slides every fetch, so days that fell off the
+front and days that rolled in at the back are not events. When the items
+have nothing to say (a note, a stocks table, an edited reminder note) the
+generic `updated` diff is written as before; more than 20 item events in
+one resync collapse into one `updated` carrying the count. Mail stays out
+as a source, as RFC-cider-tools decided; nothing here reopens that.
 
 ### 5. Triggers: filters on change-triggered reports
 
@@ -230,8 +248,7 @@ One strip, two places, reading `source_events_since` and nothing else:
   "3 new from *Tauri blog* · 1 page changed · 2 reminders done". Expands to
   the events, each linking to the entry, the diff, or the item. Source rows
   carry a new-dot until the strip is dismissed. The seen watermark is a
-  per-notebook `seen_events_at` in `localStorage` (mind the StrictMode
-  restore gotcha), not a table — it is a UI convenience.
+  per-notebook row in the `app_state` table (see Decisions).
 - **On Home**, `AwayDigest` gains the same tallies beside reports, in the
   steward sidebar RFC-v12-steward §2 reserved.
 
@@ -330,7 +347,8 @@ Each phase is its own change with its own gate, in dependency order:
 
 1. **Vocabulary + producers** — `added`/`removed`/`unreachable` from the
    existing reconcilers, trigger filters, `list_source_events` filters.
-   *Gate:* a folder add of 3 files writes 3 `added` rows and one
+   *Gate:* a folder add of 3 files writes **one** `added` event naming the
+   three files (never one row per file — cost rule 3) and one
    `sources://changed`; a filtered standing question ignores events outside
    its filter (unit tests beside `is_due`).
 2. **Feeds** — parent/child shape, poller, sniffing, tier-1 discovery into
@@ -350,10 +368,17 @@ Each phase is its own change with its own gate, in dependency order:
    notebook's folder is a source within 5 seconds.
 5. **cider deltas** — `since` upstream, release, bump; item-level Mac
    events. *Gate:* completing a reminder writes one `completed` row, not an
-   `updated` diff of the list.
+   `updated` diff of the list. (Landed: cider 0.6 from its git tag,
+   `macwatch.rs` over the Reminders/Calendar/Notes stores,
+   `mac::item_events` diffing the stored and fresh renderings,
+   `reingest_with(quiet)` so an item-named resync writes no generic
+   `updated`. The upstream `since` filters are available and unused — the
+   rendering diff needs no high-water mark.)
 6. **Agent stream** — `/events` SSE, CLI `events --follow`, ACP config.
    *Gate:* `curl -N` tails a live `added` event within a second of the
-   poller writing it.
+   poller writing it. (Landed: `events.rs`, `alchemy events [--follow]`,
+   `events_url` in the discovery file. The ACP `session/new` hand-off is
+   still open.)
 
 Phases 1–3 are the product; 4–6 are cost and reach. Nothing here is a
 timeline.
@@ -390,19 +415,23 @@ timeline.
 - **Card parse drift.** cider output changing shape breaks the stocks card
   silently into "no card". Fallback is prose, so nothing is lost, and a
   fixture test per card pins the format.
-
-## Decisions (2026-09-01)
-
-Three questions the draft left open, settled in review:
-
+- **cider's library paths printed to stderr** (`eprintln!`), which panics
+  on a closed stderr and has aborted this app before. Fixed upstream in
+  cider 0.6.2: the library logs through the `log` facade, and
+  `diagnostics::install_log_bridge` routes those lines into the app log.
+  Alchemy pins 0.6.2 and uses the full `watch_via(Via::Auto)` path.
 - **Feed parents hold a rolling index** of their kept entries and re-embed
   on change (§2). Reports and the wiki fold got measurably better once they
   could see indexes and prior versions of themselves; feeds start there.
-- **Arrivals watermark is per notebook**, in `localStorage`. Notebooks are
+- **Arrivals watermark is per notebook, in the database.** Notebooks are
   the isolation boundary the user reaches for, while the registry, staff
   history, activity, and global chat all draw their value from everything
-  living in one database — so the watermark is UI state, not a table, and
-  nothing about events becomes notebook-partitioned storage.
+  living in one database — so nothing about events becomes
+  notebook-partitioned storage. (Revised 2026-09-02: the draft said
+  `localStorage`; the app is single-tenant by design and already has a
+  database, so small state — this watermark, feed poll state, discovered
+  feeds, robots caches — lives in one `app_state` key-value table, never
+  in sidecar files or the webview.)
 - **arXiv follows a query, never a category.** A category feed is the
   whole field and would widen a notebook's focus into noise. The host rule
   builds an `export.arxiv.org/api/query` feed from the notebook's standing

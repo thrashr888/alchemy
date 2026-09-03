@@ -324,12 +324,31 @@ function findTextRange(container: HTMLElement, needle: string): Range | null {
       }
     }
   }
-  let target = mdToPlain(needle).toLowerCase().replace(/\s+/g, "");
+  const plain = mdToPlain(needle);
+  let target = plain.toLowerCase().replace(/\s+/g, "");
   if (target.length < 12) return null;
   let at = hay.indexOf(target);
   if (at === -1 && target.length > 80) {
     target = target.slice(0, 80);
     at = hay.indexOf(target);
+  }
+  // Living sources rewrite their text between the answer and the reader
+  // opening — a Stocks watchlist resyncs every minute, so the cited row's
+  // price is already gone and the prefix no longer exists. Anchor on the
+  // first line of the snippet that still does (a table's header row)
+  // rather than give up: losing the rendered view over a moved decimal is
+  // the wrong trade.
+  if (at === -1) {
+    for (const line of plain.split("\n")) {
+      const t = line.toLowerCase().replace(/\s+/g, "");
+      if (t.length < 12) continue;
+      const i = hay.indexOf(t);
+      if (i !== -1) {
+        target = t;
+        at = i;
+        break;
+      }
+    }
   }
   if (at === -1) return null;
   const start = map[at];
@@ -1431,6 +1450,7 @@ export const SOURCE_TYPE_LABEL: Record<Source["sourceType"], string> = {
   git: "Git repository",
   notion: "Notion pages",
   obsidian: "Obsidian vault",
+  feed: "Feed",
 };
 
 /** Git provenance parsed from the content header line the ingesters write
@@ -2125,6 +2145,9 @@ function SourceReader({
   );
   const markdownShaped =
     source.sourceType === "markdown" ||
+    // A feed parent's text is its rolling index, written as markdown by
+    // construction (feeds.rs::index_text).
+    source.sourceType === "feed" ||
     ((source.sourceType === "text" ||
       source.sourceType === "url" ||
       // Apple integrations (Notes, Calendar, Reminders, Stocks) come out of
@@ -2137,7 +2160,12 @@ function SourceReader({
       // this still asks the content rather than trusting the type.
       source.sourceType === "pdf") &&
       contentLooksMarkdown);
-  const richMode = markdownShaped && !(highlight && anchorFailed);
+  // A failed anchor falls back to the plain view so the passage can still
+  // be marked — except for Mac sources, whose text is regenerated on every
+  // sync: a stale citation is the normal case there, and the plain view
+  // renders their tables as pipes. They keep the rendered view, unmarked.
+  const richMode =
+    markdownShaped && !(highlight && anchorFailed && source.sourceType !== "mac");
   // Code-file sources render with the same shiki view the repo reader uses
   // (CodeView). Shiki swaps the code block's DOM in asynchronously, which
   // would detach a citation Range anchored before the swap — so when a

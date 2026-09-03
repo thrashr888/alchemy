@@ -10,6 +10,7 @@ import type {
   AiConfig,
   BuildInfo,
   GrowthOverview,
+  FeedCandidate,
   GrowthProposal,
   GrowthWebSearch,
   RetireProposal,
@@ -439,6 +440,10 @@ export const api = {
    *  Home-only and notebook-only toggles enable and disable with it. */
   setMenuContext: (inNotebook: boolean) =>
     run(cmd<void>("set_menu_context", { inNotebook })),
+  /** Tell the backend which notebook this window has open (null = Home), so
+   *  FSEvents watches its folders and closed notebooks fall to the slow sweep. */
+  setOpenNotebook: (notebookId: string | null) =>
+    run(cmd<void>("set_open_notebook", { notebookId })),
   /** Settings → Shortcuts rows from the menu's command registry. */
   listShortcuts: () =>
     run(
@@ -542,6 +547,12 @@ export const api = {
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
   /** The Grow surface: standing queries + the free tiers' proposals. */
+  arrivalsSeenAt: (notebookId: string) =>
+    run(query<number>("arrivals_seen_at", { notebookId })),
+  markArrivalsSeen: (notebookId: string, at: number) =>
+    run(cmd<void>("mark_arrivals_seen", { notebookId, at })),
+  discoverFeeds: (sourceId: string) =>
+    run(query<FeedCandidate[]>("discover_feeds", { sourceId })),
   growthProposals: (notebookId: string) =>
     run(query<GrowthOverview>("growth_proposals", { notebookId })),
   /** The Spotlight tier — mdfind is the slow part, loaded separately. */
@@ -702,8 +713,10 @@ export const api = {
     run(cmd<number>("rematch_registry", { notebookId })),
 
   // Night Shift (the Home Staff section)
-  listSourceEvents: (hours = 24) =>
-    run(query<SourceEvent[]>("list_source_events", { hours })),
+  /** Source-change events, newest first. `notebookId` narrows to one
+   *  notebook (the Arrivals strip); omit it for Home and Staff. */
+  listSourceEvents: (hours = 24, notebookId?: string) =>
+    run(query<SourceEvent[]>("list_source_events", { hours, notebookId })),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
   snapshotStatus: () => run(query<SnapshotStatus>("snapshot_status")),
   snapshotNow: () => run(cmd<SnapshotStatus>("snapshot_now")),
@@ -720,6 +733,8 @@ export const api = {
     prompt: string,
     trigger: string,
     intervalSecs: number,
+    watchSources = "",
+    watchKinds = "",
   ) =>
     run(
       cmd<ReportSchedule>("create_report_schedule", {
@@ -729,6 +744,8 @@ export const api = {
         prompt,
         trigger,
         intervalSecs,
+        watchSources,
+        watchKinds,
       }),
     ),
   updateReportSchedule: (
@@ -739,6 +756,8 @@ export const api = {
     trigger: string,
     intervalSecs: number,
     enabled: boolean,
+    watchSources = "",
+    watchKinds = "",
   ) =>
     run(
       cmd<void>("update_report_schedule", {
@@ -749,6 +768,8 @@ export const api = {
         trigger,
         intervalSecs,
         enabled,
+        watchSources,
+        watchKinds,
       }),
     ),
   deleteReportSchedule: (id: string) =>

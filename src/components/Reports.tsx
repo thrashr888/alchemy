@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, EmptyState, Input, Textarea, Modal, Spinner } from "./ui";
+import { Button, EmptyState, Input, Textarea, Modal, RowMenu, Select, Spinner } from "./ui";
+import { FOLDER_TYPES } from "./SourceMenu";
 import { cn, fmtDay } from "@/lib/utils";
 import {
   Clock,
@@ -15,8 +16,46 @@ import {
   Pencil,
   Zap,
 } from "lucide-react";
-import type { Note, ReportSchedule } from "@/lib/types";
+import type { EventKind, Note, ReportSchedule } from "@/lib/types";
 import { ARTIFACTS } from "./studioArtifacts";
+
+/** The event kinds a standing question can filter on (docs/RFC-events.md
+ *  §5), in the order they read best as a sentence. Labels are what happened
+ *  to the source, not the row's kind string. */
+export const EVENT_KIND_LABELS: { value: EventKind; label: string }[] = [
+  { value: "added", label: "New" },
+  { value: "updated", label: "Edited" },
+  { value: "removed", label: "Removed" },
+  { value: "unreachable", label: "Unreachable" },
+  { value: "completed", label: "Completed" },
+  { value: "moved", label: "Rescheduled" },
+];
+
+const splitWatch = (s: string) => s.split(" ").filter(Boolean);
+
+/** One line under the row name: cadence, filters, last run — a single
+ *  truncating string so a filtered standing question never wraps into a
+ *  three-line stack beside its icon. */
+function cadenceLine(r: ReportSchedule): string {
+  const cadence =
+    r.trigger === "change"
+      ? `On change · at most ${intervalLabel(r.intervalSecs).toLowerCase()}${watchSummary(r)}`
+      : intervalLabel(r.intervalSecs);
+  return r.lastRunAt > 0 ? `${cadence} · last ${fmtDay(r.lastRunAt)}` : cadence;
+}
+
+/** "On change · at most daily · 2 sources · new, edited" — the row's one-line
+ *  summary of a standing question's filters; empty filters say nothing. */
+export function watchSummary(r: ReportSchedule): string {
+  const parts: string[] = [];
+  const sources = splitWatch(r.watchSources ?? "");
+  if (sources.length) parts.push(`${sources.length} ${sources.length === 1 ? "source" : "sources"}`);
+  const kinds = splitWatch(r.watchKinds ?? "")
+    .map((k) => EVENT_KIND_LABELS.find((l) => l.value === k)?.label.toLowerCase())
+    .filter((k): k is string => !!k);
+  if (kinds.length) parts.push(kinds.join(", "));
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
 
 const INTERVALS = [
   { label: "Hourly", secs: 3600 },
@@ -37,6 +76,16 @@ export function Reports() {
   const runNow = useStore((s) => s.runReportNow);
   const generating = useStore((s) => s.generatingKind === "report");
   const notes = useStore((s) => s.notes);
+  // Top-level sources only: a folder or feed parent's id covers what
+  // arrives under it, so children would be noise in the picker. Living
+  // sources (folders, feeds, git, Mac apps, watched pages) lead; the rest
+  // change only when something edits them — an agent or the CLI can, so
+  // they stay pickable, just below a fold.
+  const watchable = useStore((s) => s.sources).filter((src) => !src.parentId);
+  const isLiving = (t: string) =>
+    FOLDER_TYPES.includes(t) || t === "mac" || t === "url";
+  const living = watchable.filter((src) => isLiving(src.sourceType));
+  const editOnly = watchable.filter((src) => !isLiving(src.sourceType));
   const markNotesRead = useStore((s) => s.markNotesRead);
 
   // Each schedule keeps one living note (collapse_report_notes) titled after
@@ -89,6 +138,15 @@ export function Reports() {
   const [prompt, setPrompt] = useState("");
   const [trigger, setTrigger] = useState<"interval" | "change">("interval");
   const [intervalSecs, setIntervalSecs] = useState(86400);
+  // Change-trigger filters; empty means any (docs/RFC-events.md §5).
+  const [watchSources, setWatchSources] = useState<string[]>([]);
+  const [watchKinds, setWatchKinds] = useState<string[]>([]);
+  const toggleIn = (list: string[], v: string) =>
+    list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+  const allWatchIds = watchable.map((src) => src.id);
+  const allChecked =
+    watchable.length > 0 && allWatchIds.every((id) => watchSources.includes(id));
+  const someChecked = watchSources.length > 0 && !allChecked;
 
   function openEditor() {
     setEditTarget(null);
@@ -97,6 +155,8 @@ export function Reports() {
     setPrompt("");
     setTrigger("interval");
     setIntervalSecs(86400);
+    setWatchSources([]);
+    setWatchKinds([]);
     setEditing(true);
   }
 
@@ -107,6 +167,8 @@ export function Reports() {
     setPrompt(r.prompt);
     setTrigger(r.trigger === "change" ? "change" : "interval");
     setIntervalSecs(r.intervalSecs);
+    setWatchSources(splitWatch(r.watchSources ?? ""));
+    setWatchKinds(splitWatch(r.watchKinds ?? ""));
     setEditing(true);
   }
 
@@ -142,7 +204,7 @@ export function Reports() {
           hint="Reports refresh your URL sources on a schedule, then write a timestamped note."
         />
       ) : (
-        <div className="mt-2 flex flex-col gap-1">
+        <div className="mt-2 flex select-none flex-col gap-1">
           {schedules.map((r) => (
             <div key={r.id} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-2">
               <button
@@ -158,18 +220,19 @@ export function Reports() {
                 <div className="truncate text-body text-foreground" title={r.name}>
                   {r.name}
                 </div>
-                <div className="flex items-center gap-1 text-micro text-subtle-foreground">
+                <div className="flex min-w-0 items-center gap-1 text-micro text-subtle-foreground">
                   {r.trigger === "change" ? (
-                    <Zap className="h-2.5 w-2.5" />
+                    <Zap className="h-2.5 w-2.5 shrink-0" />
                   ) : (
-                    <Clock className="h-2.5 w-2.5" />
+                    <Clock className="h-2.5 w-2.5 shrink-0" />
                   )}
-                  {r.trigger === "change"
-                    ? `On change · at most ${intervalLabel(r.intervalSecs).toLowerCase()}`
-                    : intervalLabel(r.intervalSecs)}
-                  {r.lastRunAt > 0 && <span>· last {fmtDay(r.lastRunAt)}</span>}
+                  <span className="truncate" title={cadenceLine(r)}>
+                    {cadenceLine(r)}
+                  </span>
                 </div>
               </div>
+              {/* Two quick actions on hover; the rest ride the ⋯ menu, which
+                  right-clicking the row opens too (DESIGN.md §4). */}
               <div className="hidden items-center gap-0.5 group-hover:flex group-focus-within:flex">
                 <button
                   type="button"
@@ -191,25 +254,42 @@ export function Reports() {
                 >
                   {generating ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
-                <button
-                  type="button"
-                  className="rounded p-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => openEdit(r)}
-                  title="Edit"
-                  aria-label={`Edit "${r.name}"`}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className="rounded p-1 text-muted-foreground hover:text-destructive"
-                  onClick={() => remove(r.id)}
-                  title="Delete"
-                  aria-label={`Delete "${r.name}"`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
               </div>
+              <RowMenu
+                label={`Options for "${r.name}"`}
+                items={[
+                  ...(latestNote(r)
+                    ? [
+                        {
+                          label: "Open the latest result",
+                          icon: <FileText className="h-3.5 w-3.5" />,
+                          onClick: () => showLatest(r),
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Run now",
+                    icon: <Play className="h-3.5 w-3.5" />,
+                    onClick: () => void runNow(r.id),
+                  },
+                  {
+                    label: r.enabled ? "Pause" : "Enable",
+                    icon: <Power className="h-3.5 w-3.5" />,
+                    onClick: () => void update({ ...r, enabled: !r.enabled }),
+                  },
+                  {
+                    label: "Edit…",
+                    icon: <Pencil className="h-3.5 w-3.5" />,
+                    onClick: () => openEdit(r),
+                  },
+                  {
+                    label: "Delete",
+                    icon: <Trash2 className="h-3.5 w-3.5" />,
+                    danger: true,
+                    onClick: () => void remove(r.id),
+                  },
+                ]}
+              />
             </div>
           ))}
         </div>
@@ -220,15 +300,44 @@ export function Reports() {
         onClose={() => setEditing(false)}
         title={editTarget ? "Edit report" : "Schedule a report"}
         width="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="report-form"
+              variant="primary"
+              disabled={!name.trim() || (kind === "custom" && !prompt.trim())}
+            >
+              {editTarget ? "Save" : "Schedule"}
+            </Button>
+          </div>
+        }
       >
         <form
+          id="report-form"
           onSubmit={(e) => {
             e.preventDefault();
             setEditing(false);
             const p = kind === "custom" ? prompt : "";
+            // Filters only mean something on a standing question; a clock-fired
+            // report stores none so switching triggers later starts clean.
+            const ws = trigger === "change" ? watchSources.join(" ") : "";
+            const wk = trigger === "change" ? watchKinds.join(" ") : "";
             if (editTarget)
-              void update({ ...editTarget, name, kind, prompt: p, trigger, intervalSecs });
-            else void create(name, kind, p, trigger, intervalSecs);
+              void update({
+                ...editTarget,
+                name,
+                kind,
+                prompt: p,
+                trigger,
+                intervalSecs,
+                watchSources: ws,
+                watchKinds: wk,
+              });
+            else void create(name, kind, p, trigger, intervalSecs, ws, wk);
           }}
           className="flex flex-col gap-3"
         >
@@ -265,18 +374,91 @@ export function Reports() {
               options={INTERVALS.map((i) => ({ value: String(i.secs), label: i.label }))}
             />
           </Field>
-          <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!name.trim() || (kind === "custom" && !prompt.trim())}
-            >
-              {editTarget ? "Save" : "Schedule"}
-            </Button>
-          </div>
+          {trigger === "change" && (
+            <>
+              <Field label="Which changes" htmlFor="report-watch-kinds">
+                <div id="report-watch-kinds" className="flex flex-wrap gap-1.5" role="group" aria-label="Event kinds">
+                  {EVENT_KIND_LABELS.map((k) => {
+                    const on = watchKinds.includes(k.value);
+                    return (
+                      <button
+                        key={k.value}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setWatchKinds(toggleIn(watchKinds, k.value))}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-micro transition-colors",
+                          on
+                            ? "border-primary/60 text-foreground"
+                            : "border-border text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {k.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-micro text-subtle-foreground">
+                  {watchKinds.length ? "Only these kinds of change." : "Any kind of change."}
+                </p>
+              </Field>
+              <Field label="Which sources" htmlFor="report-watch-sources">
+                <div
+                  id="report-watch-sources"
+                  className="max-h-48 overflow-y-auto rounded-md border border-input bg-surface-2"
+                  role="group"
+                  aria-label="Sources to watch"
+                >
+                  {watchable.length === 0 ? (
+                    <p className="px-3 py-2 text-micro text-subtle-foreground">No sources yet.</p>
+                  ) : (
+                    <>
+                      <label className="flex cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 text-caption text-foreground hover:bg-primary/15">
+                        <input
+                          type="checkbox"
+                          className="select-quiet"
+                          checked={allChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someChecked;
+                          }}
+                          onChange={() => setWatchSources(allChecked ? [] : allWatchIds)}
+                        />
+                        <span className="font-medium">All sources</span>
+                      </label>
+                      {living.map((src) => (
+                        <SourcePick
+                          key={src.id}
+                          title={src.title}
+                          checked={watchSources.includes(src.id)}
+                          onToggle={() => setWatchSources(toggleIn(watchSources, src.id))}
+                        />
+                      ))}
+                      {editOnly.length > 0 && (
+                        <>
+                          <div className="px-3 pb-0.5 pt-2 text-micro uppercase tracking-wide text-subtle-foreground">
+                            Change only when edited
+                          </div>
+                          {editOnly.map((src) => (
+                            <SourcePick
+                              key={src.id}
+                              title={src.title}
+                              checked={watchSources.includes(src.id)}
+                              onToggle={() => setWatchSources(toggleIn(watchSources, src.id))}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                <p className="text-micro text-subtle-foreground">
+                  {watchSources.length
+                    ? `Only ${watchSources.length} of ${watchable.length} sources.`
+                    : "Any source in this notebook."}
+                </p>
+              </Field>
+            </>
+          )}
         </form>
       </Modal>
     </div>
@@ -292,29 +474,19 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
   );
 }
 
-function Select({
-  id,
-  value,
-  onChange,
-  options,
+function SourcePick({
+  title,
+  checked,
+  onToggle,
 }: {
-  id: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  title: string;
+  checked: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-md border border-input bg-surface-2 py-2.5 pl-3 pr-9 text-body text-foreground outline-none focus:border-primary/60"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-caption text-foreground hover:bg-primary/15">
+      <input type="checkbox" className="select-quiet" checked={checked} onChange={onToggle} />
+      <span className="truncate">{title}</span>
+    </label>
   );
 }

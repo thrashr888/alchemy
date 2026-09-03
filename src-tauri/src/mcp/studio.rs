@@ -76,6 +76,16 @@ struct ScheduleReportReq {
     /// interval as the minimum time between runs).
     #[serde(default)]
     trigger: Option<String>,
+    /// With trigger "change": only changes to these source ids pull the
+    /// trigger (ids from list_sources; a folder or feed parent covers its
+    /// children). Omit for any source in the notebook.
+    #[serde(default)]
+    watch_sources: Option<Vec<String>>,
+    /// With trigger "change": only these event kinds pull the trigger —
+    /// "added", "updated", "removed", "unreachable", "completed", "moved".
+    /// Omit for any kind.
+    #[serde(default)]
+    watch_kinds: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -238,7 +248,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Schedule a recurring report in a notebook: any generator kind, one of the user's templates (by template:<id> or name), \"custom\" with a prompt, or \"brief\" — the cross-notebook morning brief (reads across ALL notebooks, ranked needs-you → changed → record; schedule it in the \"Briefs\" notebook). Interval is hourly, daily, or weekly. Each run refreshes URL sources first, then writes a timestamped note the user sees in Studio → Reports."
+        description = "Schedule a recurring report in a notebook: any generator kind, one of the user's templates (by template:<id> or name), \"custom\" with a prompt, or \"brief\" — the cross-notebook morning brief (reads across ALL notebooks, ranked needs-you → changed → record; schedule it in the \"Briefs\" notebook). Interval is hourly, daily, or weekly. Each run refreshes URL sources first, then writes a timestamped note the user sees in Studio → Reports. A trigger of \"change\" makes it a standing question that runs when sources change (interval = minimum gap); narrow it with watch_sources and watch_kinds, e.g. watch_kinds [\"added\"] on a feed's id to run only when a new entry arrives."
     )]
     async fn schedule_report(
         &self,
@@ -249,9 +259,15 @@ impl AlchemyMcp {
             interval,
             prompt,
             trigger,
+            watch_sources,
+            watch_kinds,
         }): Parameters<ScheduleReportReq>,
     ) -> Result<CallToolResult, McpError> {
         let prompt = prompt.unwrap_or_default();
+        let (watch_sources, watch_kinds) = commands::reports::resolve_watch(
+            watch_sources.map(|v| v.join(" ")),
+            watch_kinds.map(|v| v.join(" ")),
+        );
         let trigger = match trigger.as_deref() {
             Some("change") => "change".to_string(),
             _ => "interval".to_string(),
@@ -284,6 +300,8 @@ impl AlchemyMcp {
             not_before: 0,
             interval_secs,
             enabled: true,
+            watch_sources,
+            watch_kinds,
             last_run_at: 0,
             created_at: commands::now(),
         };

@@ -13,11 +13,14 @@ mod diagnostics;
 mod dockmenu;
 #[cfg(target_os = "macos")]
 mod dragout;
+mod events;
 mod examples;
 mod export;
+mod feeds;
 mod filesearch;
 mod foreground;
 mod freshness;
+mod fswatch;
 mod genqueue;
 mod gist;
 mod git;
@@ -29,6 +32,7 @@ mod inference;
 mod ingest;
 mod integrations;
 mod mac;
+mod macwatch;
 mod mcp;
 mod menu;
 mod models;
@@ -38,6 +42,7 @@ mod outline_index;
 mod pdf;
 mod pptx;
 mod rag;
+mod robots;
 mod router;
 mod scheduler;
 mod secure_fs;
@@ -146,6 +151,14 @@ pub fn run() {
             tauri::WindowEvent::Destroyed => {
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     state.glass_applied.lock().unwrap().remove(window.label());
+                    // Whatever notebook this window had open is no longer
+                    // open here; the next rearm drops its folders from the
+                    // FSEvents set (fswatch.rs).
+                    state
+                        .open_notebooks
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(window.label());
                 }
             }
             // Refocusing Alchemy is the moment the accessibility text size can
@@ -293,8 +306,18 @@ pub fn run() {
                 cancel: std::sync::Mutex::new(std::collections::HashMap::new()),
                 folder_scan_lock: tokio::sync::Mutex::new(()),
                 glass_applied: std::sync::Mutex::new(std::collections::HashMap::new()),
+                open_notebooks: std::sync::Mutex::new(std::collections::HashMap::new()),
                 gen_queue: genqueue::GenQueue::load(&data_dir),
             });
+            // FSEvents for open notebooks' folders (docs/RFC-events.md §4);
+            // the watcher itself arms once a window reports a notebook.
+            fswatch::start(app.handle().clone());
+            // FSEvents over the Reminders, Calendar, and Notes stores through
+            // cider's watch (docs/RFC-events.md §4, phase 5); the minute
+            // sweep's Mac cadence stays underneath it. cider logs through
+            // the `log` facade; the bridge lands those lines in our log.
+            diagnostics::install_log_bridge();
+            macwatch::start(app.handle().clone());
             // The queue worker drains generations the webview only watches;
             // jobs interrupted by the last shutdown are already re-queued.
             genqueue::spawn_worker(app.handle().clone());
@@ -447,6 +470,7 @@ pub fn run() {
             commands::provider_readiness,
             commands::provider_readiness_one,
             commands::resync_sources,
+            commands::set_open_notebook,
             commands::add_source_url,
             commands::add_source_text,
             commands::update_source_text,
@@ -525,6 +549,9 @@ pub fn run() {
             commands::cited_source_ids,
             commands::seed_scale_fixture,
             commands::growth_proposals,
+            commands::discover_feeds,
+            commands::arrivals_seen_at,
+            commands::mark_arrivals_seen,
             commands::growth_web_search,
             commands::growth_local,
             commands::growth_retire,

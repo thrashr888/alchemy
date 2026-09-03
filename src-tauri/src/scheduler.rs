@@ -29,6 +29,11 @@ static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
 const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 
+/// Epoch ms of the last tick that walked closed notebooks' local folders.
+/// Between those, only open notebooks' folders walk each minute — FSEvents
+/// covers them anyway (fswatch.rs); this is the belt to its braces.
+static LAST_CLOSED_SWEEP: AtomicI64 = AtomicI64::new(0);
+
 /// Epoch ms of the last snapshot attempt. Checked hourly; the job itself is
 /// idempotent within a calendar day, so a machine that wakes at odd hours
 /// still gets exactly one snapshot per day.
@@ -297,12 +302,19 @@ pub(crate) fn is_due(
         // to answer.
         "change" => {
             now - s.last_run_at >= s.interval_secs * 1000
-                && events
-                    .iter()
-                    .any(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at)
+                && events.iter().any(|e| watches(s, e) && e.at > s.last_run_at)
         }
         _ => now - s.last_run_at >= s.interval_secs * 1000,
     }
+}
+
+/// Does this standing question care about this event? Notebook first, then
+/// the optional source and kind filters (docs/RFC-events.md §5). An empty
+/// filter matches everything, which is what every pre-filter schedule meant.
+pub(crate) fn watches(s: &crate::models::ReportSchedule, e: &crate::models::SourceEvent) -> bool {
+    e.notebook_id == s.notebook_id
+        && (s.watch_sources.is_empty() || s.watch_sources.split(' ').any(|id| id == e.source_id))
+        && (s.watch_kinds.is_empty() || s.watch_kinds.split(' ').any(|k| k == e.kind))
 }
 
 /// When this run *should* have started. Pure, for the same reason `is_due`
@@ -332,7 +344,7 @@ pub(crate) fn due_at(
         // have wanted to know.
         "change" => events
             .iter()
-            .filter(|e| e.notebook_id == s.notebook_id && e.at > s.last_run_at)
+            .filter(|e| watches(s, e) && e.at > s.last_run_at)
             .map(|e| e.at)
             .min()
             .unwrap_or(s.last_run_at),
@@ -483,8 +495,29 @@ async fn run_pass(app: &AppHandle) {
     };
 
     // 1. Freshness. Resync is cheap table/mtime work and always runs: a
-    //    foregrounded window going stale is worse than a few tokens.
-    let _ = commands::resync_sources_inner(app, &state, None).await;
+    //    foregrounded window going stale is worse than a few tokens. Local
+    //    folders of notebooks nobody has open walk once per CLOSED_SWEEP_MS
+    //    (docs/RFC-events.md §4); the stamp moves only when the walk ran,
+    //    so a tick that lost the scan lock does not cost the closed set
+    //    its turn.
+    let open = state.open_notebook_ids();
+    let closed_due =
+        now_ms() - LAST_CLOSED_SWEEP.load(Ordering::Relaxed) >= crate::fswatch::CLOSED_SWEEP_MS;
+    let sweep = crate::fswatch::Sweep::Tick {
+        open: &open,
+        closed_due,
+    };
+    if let Ok(Some(_)) = commands::resync_sources_filtered(app, &state, None, sweep).await {
+        if closed_due {
+            LAST_CLOSED_SWEEP.store(now_ms(), Ordering::Relaxed);
+        }
+    }
+    // Folder sources added or removed since the last tick change what the
+    // watcher should cover; the recompute is one folder-table read.
+    crate::fswatch::rearm(app).await;
+    // Feeds poll on their own cadences (docs/RFC-events.md §2): a
+    // conditional GET each, no model, so outside the nightly budget.
+    crate::feeds::spawn_poll(app);
 
     if crate::freshness::has_budget(&budget) {
         // Distillation, tags, and card suggestions converge even when no
@@ -704,7 +737,7 @@ async fn run_pass(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ReportSchedule, SourceEvent};
+    use crate::models::{normalize_watch_list, ReportSchedule, SourceEvent, EVENT_KINDS};
     use std::collections::HashSet;
 
     const HOUR: i64 = 3_600_000;
@@ -720,6 +753,8 @@ mod tests {
             not_before: 0,
             interval_secs: 3_600,
             enabled: true,
+            watch_sources: String::new(),
+            watch_kinds: String::new(),
             last_run_at: 0,
             created_at: 0,
         }
@@ -824,6 +859,51 @@ mod tests {
         assert!(
             !is_due(&throttled, now, &none, &[event(now - 1_000)]),
             "one run per interval at most"
+        );
+    }
+
+    #[test]
+    fn standing_questions_honour_their_filters() {
+        let none = HashSet::new();
+        let now = 10 * HOUR;
+        let mut question = schedule("change");
+        question.last_run_at = now - 2 * HOUR;
+        question.watch_sources = "feed-1 feed-2".into();
+        question.watch_kinds = "added".into();
+
+        let mut hit = event(now - HOUR);
+        hit.source_id = "feed-1".into();
+        hit.kind = "added".into();
+        let mut other_source = hit.clone();
+        other_source.source_id = "src".into();
+        let mut other_kind = hit.clone();
+        other_kind.kind = "updated".into();
+
+        assert!(is_due(&question, now, &none, &[hit.clone()]));
+        assert!(
+            !is_due(&question, now, &none, &[other_source.clone()]),
+            "another source's change is not this question's business"
+        );
+        assert!(
+            !is_due(&question, now, &none, &[other_kind]),
+            "an edit is not an arrival"
+        );
+        assert_eq!(
+            due_at(&question, &[other_source, hit]),
+            now - HOUR,
+            "due when the matching event landed, not the first event"
+        );
+
+        // Empty filters keep the pre-filter meaning: anything in the notebook.
+        let mut open = schedule("change");
+        open.last_run_at = now - 2 * HOUR;
+        assert!(is_due(&open, now, &none, &[event(now - HOUR)]));
+
+        assert_eq!(normalize_watch_list(" a  b a ", None), "a b");
+        assert_eq!(
+            normalize_watch_list("added bogus updated", Some(&EVENT_KINDS)),
+            "added updated",
+            "unknown kinds are dropped rather than stored as a filter nothing matches"
         );
     }
 

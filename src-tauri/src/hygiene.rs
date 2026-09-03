@@ -22,7 +22,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
-use crate::models::Source;
+use crate::models::{Source, SourceEvent};
 
 /// Consecutive background-probe failures before a url source stops being
 /// retried and is proposed for removal instead.
@@ -87,7 +87,7 @@ fn is_file_path(source: &Source) -> bool {
 fn is_folder_like(source: &Source) -> bool {
     matches!(
         source.source_type.as_str(),
-        "folder" | "obsidian" | "git" | "notion"
+        "folder" | "obsidian" | "git" | "notion" | "feed"
     )
 }
 
@@ -303,36 +303,51 @@ async fn refresh_stale_url(state: &AppState, src: &Source) -> anyhow::Result<boo
                     .await?;
                 Ok(false)
             } else if content_collapsed(&existing.content, &extracted.text) {
-                state
-                    .db
-                    .set_source_fetch(
-                        &src.id,
-                        effective_fetched_at(&existing),
-                        existing.fetch_failures + 1,
-                    )
-                    .await?;
-                anyhow::bail!(
+                let why = format!(
                     "page came back gutted ({} chars, was {}) — keeping the stored copy",
                     extracted.text.chars().count(),
                     existing.content.chars().count()
-                )
+                );
+                strike(state, &existing, &why).await?;
+                anyhow::bail!(why)
             } else {
                 commands::reingest(state, &existing, extracted, None, true).await?;
                 Ok(true)
             }
         }
         Err(err) => {
-            state
-                .db
-                .set_source_fetch(
-                    &src.id,
-                    effective_fetched_at(&existing),
-                    existing.fetch_failures + 1,
-                )
-                .await?;
+            strike(state, &existing, &format!("{err:#}")).await?;
             Err(err)
         }
     }
+}
+
+/// Count one failed probe on the row. The strike that reaches
+/// `UNREACHABLE_AFTER` also becomes an `unreachable` event
+/// (docs/RFC-events.md §1) — once, at the threshold, so a dead link is one
+/// arrival in the Brief rather than a row per retry for the rest of its life.
+async fn strike(state: &AppState, existing: &Source, why: &str) -> anyhow::Result<()> {
+    let failures = existing.fetch_failures + 1;
+    state
+        .db
+        .set_source_fetch(&existing.id, effective_fetched_at(existing), failures)
+        .await?;
+    if failures == UNREACHABLE_AFTER {
+        let _ = state
+            .db
+            .add_source_event(&SourceEvent {
+                id: commands::new_id(),
+                notebook_id: existing.notebook_id.clone(),
+                source_id: existing.id.clone(),
+                source_title: existing.title.clone(),
+                kind: "unreachable".into(),
+                detail: format!("{failures} refresh attempts failed"),
+                diff: why.chars().take(200).collect(),
+                at: commands::now(),
+            })
+            .await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

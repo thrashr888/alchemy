@@ -13,7 +13,7 @@ mod brief;
 mod diagnostics;
 mod ledger;
 mod registry;
-mod reports;
+pub(crate) mod reports;
 mod second_look;
 pub(crate) mod weave;
 pub(crate) use brief::ensure_default_brief;
@@ -155,6 +155,10 @@ pub struct AppState {
     /// Last successfully applied glass state per window label
     /// (enabled, dark, pinned) — evicted on window destroy in lib.rs.
     pub glass_applied: Mutex<HashMap<String, (bool, bool, bool)>>,
+    /// Window label → the notebook that window has open (`set_open_notebook`).
+    /// Drives FSEvents scoping and the closed-notebook sweep (fswatch.rs);
+    /// evicted on window destroy in lib.rs and pruned on each rearm.
+    pub open_notebooks: Mutex<HashMap<String, String>>,
     /// The generation queue (genqueue.rs): pending-note jobs the backend
     /// worker drains independently of any window.
     pub gen_queue: crate::genqueue::GenQueue,
@@ -190,6 +194,16 @@ pub(crate) fn notify_changed(scope: &str, notebook_id: Option<&str>) {
 }
 
 impl AppState {
+    /// The set of notebook ids some window currently has open.
+    pub fn open_notebook_ids(&self) -> HashSet<String> {
+        self.open_notebooks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+
     /// Start a fresh cancellation scope for a new generation, returning its
     /// token. Supersedes any previous token in the same scope.
     pub fn begin_generation(&self, scope: &str) -> tokio_util::sync::CancellationToken {
@@ -1380,7 +1394,14 @@ pub(crate) async fn store_extracted(
     } else {
         0
     };
-    store_new_source(state, notebook_id, extracted, "", mtime, None, true).await
+    // Tier-1 feed discovery rode in on the page (docs/RFC-events.md §2):
+    // remember it for the Grow pane's proposals — never auto-follow.
+    let feeds = extracted.feeds.clone();
+    let src = store_new_source(state, notebook_id, extracted, "", mtime, None, true).await?;
+    if !feeds.is_empty() {
+        crate::feeds::remember_discovered(state, notebook_id, &src, &feeds).await;
+    }
+    Ok(src)
 }
 
 /// Classify and persist a new source row IMMEDIATELY, then hand chunking and
@@ -1389,7 +1410,7 @@ pub(crate) async fn store_extracted(
 /// `parent_id` is set for folder children (which dedup by path, not
 /// content); `mtime` for any file-backed source; `code_ctx` is the
 /// "repo › path" retrieval context for code chunks when the caller knows it.
-async fn store_new_source(
+pub(crate) async fn store_new_source(
     state: &AppState,
     notebook_id: &str,
     extracted: ingest::Extracted,
@@ -1594,6 +1615,7 @@ pub(crate) fn resume_stranded_imports(app: &AppHandle) {
         if let Ok(processing) = state.db.processing_sources().await {
             for s in processing {
                 let extracted = ingest::Extracted {
+                    feeds: Vec::new(),
                     image_url: s.image_url.clone(),
                     author: s.author.clone(),
                     title: s.title.clone(),
@@ -1707,6 +1729,7 @@ async fn extract_image(state: &AppState, path: &str) -> anyhow::Result<ingest::E
         anyhow::bail!("no text found in image {path}");
     }
     Ok(ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
@@ -1740,6 +1763,7 @@ async fn extract_pdf_ocr(state: &AppState, path: &str) -> anyhow::Result<ingest:
         anyhow::bail!("OCR produced no text from {path}");
     }
     Ok(ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: ingest::file_title(path),
@@ -2017,6 +2041,14 @@ pub(crate) async fn ingest_url(
         }
     }
     match crate::capture::extract_url_rescued(url).await {
+        // The fetch came back as a feed document (docs/RFC-events.md §2):
+        // connect it as a living source — parent index plus newest entries.
+        Ok(extracted) if extracted.source_type == "feed" => {
+            match crate::feeds::connect(state, notebook_id, &extracted.url, &extracted.text).await {
+                Ok(src) => Ok(src),
+                Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
+            }
+        }
         Ok(extracted) => store_extracted(state, notebook_id, extracted).await,
         Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
     }
@@ -2224,7 +2256,7 @@ pub(crate) async fn repo_backed_files(
         .filter(|s| {
             matches!(
                 s.source_type.as_str(),
-                "folder" | "obsidian" | "git" | "notion"
+                "folder" | "obsidian" | "git" | "notion" | "feed"
             ) && s.parent_id.is_empty()
         })
         .map(|s| s.id.as_str())
@@ -2640,6 +2672,24 @@ pub(crate) async fn reingest(
     code_ctx: Option<&str>,
     embed: bool,
 ) -> anyhow::Result<Source> {
+    reingest_with(state, existing, extracted, code_ctx, embed, false).await
+}
+
+/// [`reingest`] with the event write under the caller's control. `quiet`
+/// means the caller has already named what changed item by item — the Mac
+/// resync's `completed` / `moved` / `added` rows (docs/RFC-events.md §1,
+/// phase 5) — and the generic `updated` diff would be the same arrival
+/// twice: the parent rule below, made explicit for the one caller that
+/// knows more than the diff does. Everything else about the refresh (the
+/// row, the chunks, the weave, the registry match) is unchanged.
+pub(crate) async fn reingest_with(
+    state: &AppState,
+    existing: &Source,
+    extracted: ingest::Extracted,
+    code_ctx: Option<&str>,
+    embed: bool,
+    quiet: bool,
+) -> anyhow::Result<Source> {
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
@@ -2771,19 +2821,29 @@ pub(crate) async fn reingest(
             updated.content.clone(),
         );
     }
-    let _ = state
-        .db
-        .add_source_event(&crate::models::SourceEvent {
-            id: new_id(),
-            notebook_id: existing.notebook_id.clone(),
-            source_id: existing.id.clone(),
-            source_title: updated.title.clone(),
-            kind: "updated".into(),
-            detail,
-            diff,
-            at: now(),
-        })
-        .await;
+    // A folder-like parent's content is its map, which the scan rewrites
+    // whenever files come or go — and the scan already writes the `added` /
+    // `removed` events for exactly that (note_scan_events), so a parent
+    // `updated` here would be the same arrival twice.
+    let is_parent = matches!(
+        existing.source_type.as_str(),
+        "folder" | "obsidian" | "git" | "notion" | "feed"
+    );
+    if !is_parent && !quiet {
+        let _ = state
+            .db
+            .add_source_event(&crate::models::SourceEvent {
+                id: new_id(),
+                notebook_id: existing.notebook_id.clone(),
+                source_id: existing.id.clone(),
+                source_title: updated.title.clone(),
+                kind: "updated".into(),
+                detail,
+                diff,
+                at: now(),
+            })
+            .await;
+    }
     // Refreshed content means a changed hash — let the sweep re-gist it.
     crate::gist::spawn_sweep(state.db.clone(), state.ai.read().await.clone());
     Ok(Source {
@@ -3065,6 +3125,10 @@ pub(crate) async fn refresh_source_impl(
     if existing.url.is_empty() {
         anyhow::bail!("This source has no URL or file path to refresh from");
     }
+    // A feed parent polls now, cadence ignored (docs/RFC-events.md §2).
+    if existing.source_type == "feed" {
+        return crate::feeds::refresh(state, &existing).await;
+    }
     if matches!(
         existing.source_type.as_str(),
         "folder" | "obsidian" | "git" | "notion"
@@ -3115,21 +3179,14 @@ pub(crate) async fn refresh_source_impl(
         });
     }
     if crate::mac::is_mac_uri(&existing.url) {
-        // Mac item — re-fetch through cider and re-embed. Like files, a
-        // failed fetch (permission prompt pending, app closed) must not wipe
-        // the working source.
-        let (_, text) = crate::mac::fetch(&existing.url).await?;
-        let mut existing = existing;
-        existing.mtime = crate::mac::content_stamp(&text);
-        let extracted = ingest::Extracted {
-            image_url: String::new(),
-            author: String::new(),
-            title: existing.title.clone(),
-            source_type: "mac".to_string(),
-            url: existing.url.clone(),
-            text,
-        };
-        return reingest(state, &existing, extracted, None, true).await;
+        // Mac item — the same tail every Mac refresh takes (the watch, the
+        // sweep, the write-backs): item events, no-op when unchanged, and
+        // the scan lock so a concurrent watch resync cannot double-count.
+        // Like files, a failed fetch (permission prompt pending, app
+        // closed) must not wipe the working source.
+        return resync_mac_source(state, existing)
+            .await
+            .map_err(anyhow::Error::msg);
     }
     // Git-backed singles (README/blob) refresh from their cache clone — the
     // cache dir is the definitive marker; page captures of github.com URLs
@@ -3571,7 +3628,12 @@ fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
             in_fence = !in_fence;
             continue;
         }
-        if t.is_empty() || t.starts_with("> ") || t.starts_with("![") || is_rule(t) {
+        if t.is_empty()
+            || t.starts_with("> ")
+            || t.starts_with("![")
+            || is_badge_row(t)
+            || is_rule(t)
+        {
             continue;
         }
         if out.is_empty() {
@@ -3628,6 +3690,44 @@ fn snippet_of(title: &str, content: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// A line that is nothing but images or linked images — `![a](u)` and the
+/// `[![a](u)](l)` shape README badge rows take. Alt text ("Discord",
+/// "Twitter") is not prose, so the whole row skips.
+fn is_badge_row(t: &str) -> bool {
+    let mut rest = t.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let linked = rest.starts_with("[![");
+        let start = if linked {
+            1
+        } else if rest.starts_with("![") {
+            0
+        } else {
+            return false;
+        };
+        let Some(close_alt) = rest[start..].find("](") else {
+            return false;
+        };
+        let Some(close_url) = rest[start + close_alt..].find(')') else {
+            return false;
+        };
+        rest = &rest[start + close_alt + close_url + 1..];
+        if linked {
+            let Some(r) = rest.strip_prefix("](") else {
+                return false;
+            };
+            let Some(end) = r.find(')') else {
+                return false;
+            };
+            rest = &r[end + 1..];
+        }
+        rest = rest.trim_start();
+    }
+    true
 }
 
 /// `---`, `***`, `___` (three or more): a thematic break, not content.
@@ -3695,7 +3795,9 @@ fn render_inline(t: &str) -> String {
             break;
         }
     }
-    s = unlink(&s);
+    s = untag(&s);
+    // Twice: a linked image `[![alt](img)](url)` unlinks inside-out.
+    s = unlink(&unlink(&s));
     s = uncode(&s);
     s = s.replace("**", "").replace("__", "");
     // Whole-line single emphasis only; a bare `_` or `*` mid-line is more
@@ -3706,6 +3808,37 @@ fn render_inline(t: &str) -> String {
         }
     }
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Inline HTML → its text. GitHub READMEs open with `<a href><img src>`
+/// badge rows and `<p align="center">` wrappers that GFM renders but a
+/// card must not show raw; a line that is only tags strips to nothing and
+/// the caller skips it. A bare `<` with no closing `>` on the line (a
+/// comparison, "a <b") passes through.
+fn untag(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('<') {
+        let Some(len) = rest[open..].find('>') else {
+            break;
+        };
+        // Only tag-shaped runs: `<name`, `</name`, `<!--`. "a < b > c" stays.
+        let inner = &rest[open + 1..open + len];
+        let tagish = inner
+            .trim_start_matches('/')
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '!');
+        if !tagish {
+            out.push_str(&rest[..open + 1]);
+            rest = &rest[open + 1..];
+            continue;
+        }
+        out.push_str(&rest[..open]);
+        rest = &rest[open + len + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `[text](url)` and `![alt](url)` → `text` / `alt`. Unbalanced brackets
@@ -3926,6 +4059,7 @@ pub(crate) async fn ingest_mac(
     // store_extracted stamps 0 for a nonexistent path, so set it after.
     let stamp = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title,
@@ -3992,13 +4126,65 @@ pub async fn complete_mac_reminder(
 }
 
 /// Post-write resync: fetch the item's current state and re-embed it.
+/// Under the scan lock, and measured against the row as stored now, not
+/// the caller's copy: that copy predates the write, and the store change
+/// the write caused wakes the Mac watch too — a Reminders write takes
+/// seconds while FSEvents fires in two, so the watch's resync often lands
+/// first. Two resyncs diffing the same pre-write text both wrote the item
+/// event; against the stored text the second is a no-op
+/// (`resync_mac_text`).
 pub(crate) async fn resync_mac_source(
     state: &AppState,
-    mut existing: Source,
+    existing: Source,
 ) -> Result<Source, String> {
+    let _guard = state.folder_scan_lock.lock().await;
+    let existing = match state.db.get_source(&existing.id).await {
+        Ok(Some(current)) => current,
+        _ => existing,
+    };
     let (_, text) = e(crate::mac::fetch(&existing.url).await)?;
+    resync_mac_text(state, existing, text).await
+}
+
+/// Item events per resync before they collapse into one `updated` with a
+/// count — a list rebuilt wholesale is one arrival, not forty.
+const MAC_ITEM_EVENTS_MAX: usize = 20;
+
+/// The Mac resync's shared tail: `text` is the fresh rendering of
+/// `existing`, already fetched. Reads the stored rendering back, names what
+/// changed item by item (`mac::item_events`), re-embeds, and writes one
+/// event per item — or, when the items had nothing to say (a note, a stocks
+/// table, an edited reminder note), lets `reingest` write its generic
+/// `updated` diff as before. Every path that refreshes a Mac source ends
+/// here — the store watch (macwatch.rs), the minute sweep, and our own
+/// write-backs — so an event reads the same whichever one saw the change.
+pub(crate) async fn resync_mac_text(
+    state: &AppState,
+    mut existing: Source,
+    text: String,
+) -> Result<Source, String> {
+    // The sweep hands over a metadata-only row, the write-backs a full one;
+    // either way the stored text is what the items (and the generic diff)
+    // are measured against.
+    if existing.content.is_empty() {
+        existing.content = state
+            .db
+            .source_content(&existing.id)
+            .await
+            .unwrap_or_default();
+    }
+    // Nothing changed: no reingest, no event. A manual "Sync now" on an
+    // unchanged list used to write an empty-diff `updated` every time.
+    if existing.content == text {
+        return Ok(Source {
+            content: String::new(),
+            ..existing
+        });
+    }
+    let events = crate::mac::item_events(&existing.url, &existing.content, &text);
     existing.mtime = crate::mac::content_stamp(&text);
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: existing.title.clone(),
@@ -4006,7 +4192,108 @@ pub(crate) async fn resync_mac_source(
         url: existing.url.clone(),
         text,
     };
-    e(reingest(state, &existing, extracted, None, true).await)
+    let quiet = !events.is_empty();
+    let updated = e(reingest_with(state, &existing, extracted, None, true, quiet).await)?;
+    note_mac_item_events(state, &existing, &updated.title, events).await;
+    Ok(updated)
+}
+
+/// One `source_events` row per item event, capped at [`MAC_ITEM_EVENTS_MAX`];
+/// past the cap, one `updated` row carries the count and the first lines.
+/// Best-effort, like every event write: a miss never fails the resync.
+async fn note_mac_item_events(
+    state: &AppState,
+    source: &Source,
+    title: &str,
+    events: Vec<(&'static str, String)>,
+) {
+    let row = |kind: &str, detail: String, diff: String| crate::models::SourceEvent {
+        id: new_id(),
+        notebook_id: source.notebook_id.clone(),
+        source_id: source.id.clone(),
+        source_title: title.to_string(),
+        kind: kind.into(),
+        detail,
+        diff,
+        at: now(),
+    };
+    if events.len() > MAC_ITEM_EVENTS_MAX {
+        let n = events.len();
+        let lines: Vec<String> = events
+            .into_iter()
+            .take(MAC_ITEM_EVENTS_MAX)
+            .map(|(kind, detail)| format!("{kind} \u{00b7} {detail}"))
+            .collect();
+        let _ = state
+            .db
+            .add_source_event(&row(
+                "updated",
+                format!("Mac item synced \u{00b7} {n} items changed"),
+                lines.join("\n"),
+            ))
+            .await;
+        return;
+    }
+    for (kind, detail) in events {
+        let _ = state
+            .db
+            .add_source_event(&row(kind, detail, String::new()))
+            .await;
+    }
+}
+
+/// Every Mac source of one provider, re-fetched now: the store watch
+/// (macwatch.rs) saw Reminders, Calendar, or Notes write, so the sweep's
+/// fifteen-minute cadence does not apply. Archived notebooks sit out, as in
+/// the sweep. One cider read and a hash compare per source; only a changed
+/// rendering reingests (and names its items). Emits `sources://changed` per
+/// notebook that changed, the way the sweep does. Waits for the scan lock —
+/// a manual import ahead of it is a reason to queue, not to drop a change.
+pub(crate) async fn resync_mac_provider(
+    app: &AppHandle,
+    state: &AppState,
+    provider: &str,
+) -> Result<FolderScan, String> {
+    let _guard = state.folder_scan_lock.lock().await;
+    let prefix = format!("cider://{provider}/");
+    let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
+    let mut total = FolderScan::default();
+    let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
+    for src in e(state.db.all_mac_sources().await)? {
+        if !src.url.starts_with(&prefix) || archived.contains(&src.notebook_id) {
+            continue;
+        }
+        let text = match crate::mac::fetch(&src.url).await {
+            Ok((_, text)) => text,
+            Err(err) => {
+                // Transient (a permission prompt, an app mid-write): the
+                // sweep retries on its own cadence.
+                crate::note!("macwatch: failed to fetch {}: {err:#}", src.url);
+                continue;
+            }
+        };
+        if crate::mac::content_stamp(&text) == src.mtime {
+            continue;
+        }
+        let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
+        match resync_mac_text(state, src.clone(), text).await {
+            Ok(_) => {
+                scan.updated += 1;
+                total.updated += 1;
+            }
+            Err(err) => {
+                crate::note!("macwatch: failed to re-embed {}: {err:#}", src.url);
+                scan.failed += 1;
+                total.failed += 1;
+            }
+        }
+    }
+    for (notebook_id, scan) in per_notebook {
+        if scan.changed() {
+            let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
+        }
+    }
+    Ok(total)
 }
 
 // ---- Folder sources --------------------------------------------------------
@@ -4041,7 +4328,7 @@ const SNIFF_BYTES: usize = 8 * 1024;
 
 /// Vendored/generated directories pruned even when a repo forgot to
 /// gitignore them.
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules",
     "vendor",
     "third_party",
@@ -4677,6 +4964,9 @@ async fn rescan_one_folder_inner(
     };
     let work: Vec<&ScanEntry> = on_disk.iter().filter(|e| needs_action(e)).collect();
     let total = work.len() as u32;
+    // Titles for this pass's `added` / `removed` events (note_scan_events).
+    let mut added_titles: Vec<String> = Vec::new();
+    let mut removed_titles: Vec<String> = Vec::new();
 
     for (done, entry) in work.iter().enumerate() {
         let path = entry.path.as_str();
@@ -4695,6 +4985,7 @@ async fn rescan_one_folder_inner(
             // New but not downloaded — list it, label it, embed nothing.
             None if entry.placeholder => {
                 store_placeholder_child(state, folder, path, mtime).await?;
+                added_titles.push(ingest::file_title(path));
                 scan.added += 1;
             }
             // New file — full ingest as a child of this folder.
@@ -4715,6 +5006,7 @@ async fn rescan_one_folder_inner(
                     if !settled {
                         spawn_retitle(state, &src).await;
                     }
+                    added_titles.push(src.title.clone());
                     scan.added += 1;
                 }
                 Err(err) => {
@@ -4793,9 +5085,11 @@ async fn rescan_one_folder_inner(
     for child in &children {
         if !disk_paths.contains(child.url.as_str()) {
             state.db.delete_source(&child.id).await?;
+            removed_titles.push(child.title.clone());
             scan.removed += 1;
         }
     }
+    note_scan_events(state, folder, &added_titles, &removed_titles).await;
 
     // The parent's content is a folder/repo map: git provenance (when the
     // root sits in a working tree), the file tree, and the skip list — so
@@ -4861,6 +5155,7 @@ async fn rescan_one_folder_inner(
             .unwrap_or_default();
         if map != current {
             let extracted = ingest::Extracted {
+                feeds: Vec::new(),
                 image_url: String::new(),
                 author: String::new(),
                 title: folder.title.clone(),
@@ -4881,6 +5176,49 @@ async fn rescan_one_folder_inner(
         state.db.touch_notebook(&folder.notebook_id, now()).await?;
     }
     Ok(scan)
+}
+
+/// The scan's arrivals and departures as `source_events` rows
+/// (docs/RFC-events.md §1): one `added` and one `removed` per pass, never
+/// one per file — a sync tool dropping 400 files must read as "400 new
+/// files", not 400 rows. The folder parent is the event's source, so a
+/// standing question watches the folder; titles ride in `diff` as `+`/`−`
+/// lines, capped like a content diff. Best-effort: an event miss must never
+/// fail the scan that produced it.
+async fn note_scan_events(state: &AppState, folder: &Source, added: &[String], removed: &[String]) {
+    const SHOWN: usize = 20;
+    for (kind, sign, titles) in [("added", '+', added), ("removed", '\u{2212}', removed)] {
+        if titles.is_empty() {
+            continue;
+        }
+        let detail = match (kind, titles.len()) {
+            ("added", 1) => format!("new file \u{00b7} {}", titles[0]),
+            ("added", n) => format!("{n} new files"),
+            (_, 1) => format!("file gone \u{00b7} {}", titles[0]),
+            (_, n) => format!("{n} files gone"),
+        };
+        let mut lines: Vec<String> = titles
+            .iter()
+            .take(SHOWN)
+            .map(|t| format!("{sign} {t}"))
+            .collect();
+        if titles.len() > SHOWN {
+            lines.push(format!("\u{2026} and {} more", titles.len() - SHOWN));
+        }
+        let _ = state
+            .db
+            .add_source_event(&crate::models::SourceEvent {
+                id: new_id(),
+                notebook_id: folder.notebook_id.clone(),
+                source_id: folder.id.clone(),
+                source_title: folder.title.clone(),
+                kind: kind.into(),
+                detail,
+                diff: lines.join("\n"),
+                at: now(),
+            })
+            .await;
+    }
 }
 
 /// A cloud-storage sync root the user can pick a subfolder from. `provider` is
@@ -5448,6 +5786,52 @@ pub(crate) async fn resync_sources_inner(
     state: &AppState,
     only_notebook: Option<&str>,
 ) -> Result<FolderScan, String> {
+    Ok(
+        resync_sources_filtered(app, state, only_notebook, crate::fswatch::Sweep::All)
+            .await?
+            .unwrap_or_default(),
+    )
+}
+
+/// A window reports the notebook it has open (`None` = Home). Recomputes the
+/// FSEvents watch set right away so a file saved into the newly opened
+/// notebook's folder lands within seconds (docs/RFC-events.md §4).
+#[tauri::command]
+pub async fn set_open_notebook(
+    window: tauri::Window,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Option<String>,
+) -> Result<(), String> {
+    {
+        let mut open = state
+            .open_notebooks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        match notebook_id {
+            Some(id) => {
+                open.insert(window.label().to_string(), id);
+            }
+            None => {
+                open.remove(window.label());
+            }
+        }
+    }
+    crate::fswatch::rearm(&app).await;
+    Ok(())
+}
+
+/// The sweep proper. `sweep` decides which folder parents walk this pass
+/// (fswatch.rs: the scheduler tick skips closed notebooks' local folders
+/// between ten-minute windows; everyone else walks all). Returns `Ok(None)`
+/// when another scan holds the lock — distinct from "nothing changed", so
+/// the FSEvents loop can retry instead of dropping a real change.
+pub(crate) async fn resync_sources_filtered(
+    app: &AppHandle,
+    state: &AppState,
+    only_notebook: Option<&str>,
+    sweep: crate::fswatch::Sweep<'_>,
+) -> Result<Option<FolderScan>, String> {
     let app = app.clone();
     // The Spotlight index rides the same tick (internally ~10-min throttled).
     #[cfg(target_os = "macos")]
@@ -5463,7 +5847,7 @@ pub(crate) async fn resync_sources_inner(
     // A manual folder add/refresh is already scanning — skip this tick rather
     // than queue behind it and ingest the same files twice.
     let Ok(_guard) = state.folder_scan_lock.try_lock() else {
-        return Ok(FolderScan::default());
+        return Ok(None);
     };
     let mut total = FolderScan::default();
     let mut per_notebook: HashMap<String, FolderScan> = HashMap::new();
@@ -5478,6 +5862,11 @@ pub(crate) async fn resync_sources_inner(
             continue;
         }
         if only_notebook.is_some_and(|nb| nb != folder.notebook_id) {
+            continue;
+        }
+        // Closed notebooks' local folders walk on the ten-minute cadence;
+        // FSEvents covers the open ones between minute ticks (fswatch.rs).
+        if !crate::fswatch::in_sweep(&folder.source_type, &folder.notebook_id, sweep) {
             continue;
         }
         // Remote repos: one cheap ls-remote per cadence tick; a moved branch
@@ -5593,18 +5982,8 @@ pub(crate) async fn resync_sources_inner(
                     if stamp == src.mtime {
                         continue;
                     }
-                    let mut existing = src.clone();
-                    existing.mtime = stamp;
-                    let extracted = ingest::Extracted {
-                        image_url: String::new(),
-                        author: String::new(),
-                        title: existing.title.clone(),
-                        source_type: "mac".to_string(),
-                        url: existing.url.clone(),
-                        text,
-                    };
                     let scan = per_notebook.entry(src.notebook_id.clone()).or_default();
-                    match reingest(state, &existing, extracted, None, true).await {
+                    match resync_mac_text(state, src.clone(), text).await {
                         Ok(_) => {
                             scan.updated += 1;
                             total.updated += 1;
@@ -5676,7 +6055,7 @@ pub(crate) async fn resync_sources_inner(
             let _ = app.emit("sources://changed", SourcesChanged { notebook_id, scan });
         }
     }
-    Ok(total)
+    Ok(Some(total))
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -5702,6 +6081,7 @@ pub async fn reembed_all(app: AppHandle, state: State<'_, AppState>) -> Result<u
                 s.notebook_id.clone(),
                 s.id.clone(),
                 ingest::Extracted {
+                    feeds: Vec::new(),
                     image_url: String::new(),
                     author: String::new(),
                     title: s.title.clone(),
@@ -7402,6 +7782,8 @@ pub(crate) fn build_commission(
         named => named.to_string(),
     };
     Ok(ReportSchedule {
+        watch_sources: String::new(),
+        watch_kinds: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         name,
@@ -7541,6 +7923,8 @@ async fn create_schedule_reply(
         }
     };
     let schedule = ReportSchedule {
+        watch_sources: String::new(),
+        watch_kinds: String::new(),
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         name: name.trim().to_string(),
@@ -8125,6 +8509,8 @@ async fn try_tool_route(
                     &schedule.trigger,
                     schedule.interval_secs,
                     schedule.enabled,
+                    &schedule.watch_sources,
+                    &schedule.watch_kinds,
                 )
                 .await
             {
@@ -9913,6 +10299,7 @@ pub async fn convert_note_to_source(
 ) -> Result<Source, String> {
     let note = e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".to_string())?;
     let extracted = ingest::Extracted {
+        feeds: Vec::new(),
         image_url: String::new(),
         author: String::new(),
         title: note.title.clone(),
@@ -10865,8 +11252,54 @@ pub async fn growth_proposals(
     // returns as fast as a text scan.
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    let proposals = crate::growth::proposals(&sources, &queries);
+    let mut proposals = crate::growth::proposals(&sources, &queries);
+    // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
+    // remembered at import, proposed here, followed only on a click.
+    proposals.extend(crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await);
     Ok(GrowthOverview { queries, proposals })
+}
+
+/// Every feed the app can offer to follow for one source: what its page
+/// advertised, what its host's shape implies, and — only when those come
+/// up empty — what sits at the conventional paths on its origin (the one
+/// tier that fetches; docs/RFC-events.md §2). Nothing is followed here.
+/// The Arrivals watermark (docs/RFC-events.md §6): when this notebook's
+/// arrivals were last dismissed. One `app_state` row per notebook — the
+/// database is single-tenant by design, so UI state lives there too, not
+/// in a webview's localStorage that a second window or a reinstall forgets.
+#[tauri::command]
+pub async fn arrivals_seen_at(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<i64, String> {
+    Ok(e(state
+        .db
+        .kv_get(&format!("arrivals.seen.{notebook_id}"))
+        .await)?
+    .and_then(|raw| raw.parse::<i64>().ok())
+    .unwrap_or(0))
+}
+
+#[tauri::command]
+pub async fn mark_arrivals_seen(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    at: i64,
+) -> Result<(), String> {
+    e(state
+        .db
+        .kv_set(&format!("arrivals.seen.{notebook_id}"), &at.to_string())
+        .await)
+}
+
+#[tauri::command]
+pub async fn discover_feeds(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<crate::feeds::FeedCandidate>, String> {
+    let source =
+        e(state.db.get_source(&source_id).await)?.ok_or_else(|| "Source not found".to_string())?;
+    Ok(crate::feeds::discover_for_source(&state, &source).await)
 }
 
 /// The Spotlight tier alone — mdfind subprocesses make it the slow section,
@@ -11686,12 +12119,20 @@ pub fn list_shortcuts() -> Vec<crate::menu::ShortcutRow> {
 pub async fn list_source_events(
     state: State<'_, AppState>,
     hours: Option<u32>,
+    notebook_id: Option<String>,
 ) -> Result<Vec<crate::models::SourceEvent>, String> {
     let hours = i64::from(hours.unwrap_or(24));
-    e(state
+    let mut events = e(state
         .db
         .source_events_since(now() - hours * 3_600_000)
-        .await)
+        .await)?;
+    // The Arrivals strip reads one notebook (docs/RFC-events.md §6); Home
+    // and the Staff section read everything. Filtered here, not in Lance —
+    // the window is small and already in hand.
+    if let Some(nb) = notebook_id.filter(|s| !s.is_empty()) {
+        events.retain(|ev| ev.notebook_id == nb);
+    }
+    Ok(events)
 }
 
 /// What the last snapshot did, for the Nightly settings page
@@ -12494,6 +12935,7 @@ async fn import_bundle(
             None => String::new(),
         };
         let extracted = ingest::Extracted {
+            feeds: Vec::new(),
             image_url: String::new(),
             author: String::new(),
             title,
@@ -14163,6 +14605,24 @@ mod tool_tests {
     /// Gallery snippets of spreadsheet-shaped sources are the table's
     /// corner, not pipe soup: header plus the first rows, first three
     /// columns, separator dropped, an ellipsis cell where columns were cut.
+    /// A README that opens with badge markup shows its first sentence, not
+    /// the anchor and image tags GFM would have rendered.
+    #[test]
+    fn snippet_strips_inline_html() {
+        let readme = "# lancedb\n\n\
+             <a href=\"https://cloud.lancedb.com\" target=\"_blank\">\n\
+             <img src=\"https://github.com/user-attachments/assets/92dad0a2.png\" alt=\"LanceDB Cloud\">\n\
+             </a>\n\
+             [![Blog](https://img.shields.io/badge/blog.svg)](https://blog.lancedb.com/) [![Discord](https://img.shields.io/discord.svg)](https://discord.gg/x)\n\
+             ![Stars](https://img.shields.io/stars.svg)\n\
+             <p align=\"center\"><b>Developer-friendly</b>, serverless vector database.</p>\n\
+             Only a < b here is math, not a tag.";
+        assert_eq!(
+            snippet_of("lancedb", readme, 280),
+            "Developer-friendly, serverless vector database.\nOnly a < b here is math, not a tag."
+        );
+    }
+
     #[test]
     fn snippet_previews_a_table_corner() {
         let sheet = "# Sheet: Q3\n\

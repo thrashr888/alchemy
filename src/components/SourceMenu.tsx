@@ -19,6 +19,7 @@ import {
   type TagEditState,
 } from "./SourceMetaModals";
 import { SourceImagePicker } from "./SourceImagePicker";
+import { FollowFeedModal } from "./FollowFeedModal";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   Image as ImageIcon,
@@ -27,6 +28,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Rss,
   Trash2,
 } from "lucide-react";
 
@@ -37,7 +39,7 @@ import {
  * everywhere at once; a surface that must drop one says which (`omit`),
  * rather than rebuilding the list with the verb missing. */
 
-export const FOLDER_TYPES = ["folder", "git", "notion", "obsidian"];
+export const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "feed"];
 
 /** A verb the host renders elsewhere (the reader's inline toolbar) and so
  *  leaves out of the menu. */
@@ -52,6 +54,8 @@ interface Host {
   setNoteEdit: (s: NonNullable<NoteEditState>) => void;
   editText: (s: Source) => void;
   editMacNote: (s: Source) => void;
+  /** "Follow updates…" — offer the feeds this page can be followed by. */
+  followUpdates: (s: Source) => void;
   addReminder: (s: Source) => void;
   chooseImage: (s: Source) => void;
   attach: (s: Source) => void;
@@ -79,7 +83,10 @@ export function sourceMenuItems(
     s.sourceType !== "mac" &&
     !isFolder &&
     s.status !== "placeholder";
-  const refreshLabel = isFolder
+  const refreshLabel =
+    s.sourceType === "feed"
+      ? "Check feed now"
+      : isFolder
     ? "Rescan folder now"
     : s.sourceType === "mac"
       ? "Sync now"
@@ -106,6 +113,17 @@ export function sourceMenuItems(
             label: refreshLabel,
             icon: <RefreshCw className="h-3.5 w-3.5" />,
             onClick: () => void st.refreshSource(s.id),
+          },
+        ]
+      : []),
+    // A web page may advertise a feed, or sit on a host whose shape implies
+    // one (docs/RFC-events.md §2). Following it is a separate, explicit act.
+    ...(s.sourceType === "url" && !s.parentId && isWebUrl(s.url)
+      ? [
+          {
+            label: "Follow updates…",
+            icon: <Rss className="h-3.5 w-3.5" />,
+            onClick: () => host.followUpdates(s),
           },
         ]
       : []),
@@ -188,6 +206,7 @@ export function useSourceActions() {
     macNote?: boolean;
   } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const [following, setFollowing] = useState<Source | null>(null);
   const editSourceText = useStore((s) => s.editSourceText);
   const updateMacNote = useStore((s) => s.updateMacNote);
   const addMacReminder = useStore((s) => s.addMacReminder);
@@ -211,6 +230,7 @@ export function useSourceActions() {
         );
     },
     addReminder: (s) => setAddingReminder({ sourceId: s.id, list: s.title }),
+    followUpdates: setFollowing,
     chooseImage: setImageFor,
     attach: setAttaching,
     remove: (s) => void removeSourcesGuarded([s.id], confirm),
@@ -236,6 +256,7 @@ export function useSourceActions() {
           onClose={() => setImageFor(null)}
         />
       )}
+      <FollowFeedModal source={following} onClose={() => setFollowing(null)} />
       <Modal
         open={!!editing}
         onClose={() => setEditing(null)}

@@ -403,6 +403,8 @@ export interface AppState {
     prompt: string,
     trigger: string,
     intervalSecs: number,
+    watchSources?: string,
+    watchKinds?: string,
   ) => Promise<void>;
   updateReport: (report: ReportSchedule) => Promise<void>;
   deleteReport: (id: string) => Promise<void>;
