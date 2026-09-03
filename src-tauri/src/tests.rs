@@ -4108,6 +4108,43 @@ fn okf_consolidation_keeps_the_same_folder_on_either_mac() {
     .is_empty());
 }
 
+/// The move holds new writes rather than waiting for the app to go quiet, and
+/// waits per notebook: on a Mac whose watcher is rebinding bundles from the
+/// other one, something is always writing and global quiet never comes.
+#[tokio::test]
+async fn okf_a_move_holds_writes_and_waits_per_notebook() {
+    use crate::okf::{
+        begin_move, cancel_pending_write, held_writes, hold_for_move, note_pending_write,
+        wait_for_own_write,
+    };
+    let nb = "nb-move-flag";
+
+    // No move under way: nothing is held.
+    assert!(!hold_for_move(nb));
+
+    {
+        let _moving = begin_move();
+        assert!(hold_for_move(nb), "a write during a move is held, not run");
+        assert!(held_writes().contains(&nb.to_string()));
+
+        // A notebook with a write already promised is not quiet, and the wait
+        // gives up rather than blocking the whole move.
+        note_pending_write(nb, 1_788_457_384_142);
+        assert!(
+            !wait_for_own_write(nb, 0).await,
+            "still saving: this folder is skipped, not the move refused"
+        );
+
+        // Its write lands; the notebook is its own business and now quiet.
+        cancel_pending_write(nb);
+        assert!(wait_for_own_write(nb, 0).await);
+    }
+
+    // The guard is gone, so scheduling resumes and nothing stays held.
+    assert!(!hold_for_move(nb));
+    assert!(!held_writes().contains(&nb.to_string()));
+}
+
 /// A write pass that finds its bundle root gone never makes one: it follows
 /// the folder if the id turns up elsewhere, and otherwise waits and writes
 /// nothing. Re-seeding is the last answer, not the first.

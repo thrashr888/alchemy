@@ -2973,10 +2973,108 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Is a folder move under way? While it is, new writes are held rather than
+/// scheduled.
+static MOVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Notebooks whose write arrived during a move, to be scheduled when it ends.
+fn deferred() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static DEFERRED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    DEFERRED.get_or_init(Default::default)
+}
+
+/// Hold this notebook's write until the move is over, and say so.
+///
+/// Nothing already pending is cancelled — a write the debounce has already
+/// promised still lands, which is how a notebook goes quiet at all — and the
+/// held notebooks are scheduled the moment the move finishes.
+pub(crate) fn hold_for_move(notebook_id: &str) -> bool {
+    if !MOVING.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    if let Ok(mut held) = deferred().lock() {
+        held.insert(notebook_id.to_string());
+    }
+    true
+}
+
+/// The notebooks currently held, for the test that shows they are.
+pub(crate) fn held_writes() -> Vec<String> {
+    let mut out: Vec<String> = deferred()
+        .lock()
+        .map(|h| h.iter().cloned().collect())
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// Turn the flag on for as long as this value lives.
+///
+/// An RAII guard rather than two calls: a move that returns early — and it
+/// has several ways to — must not leave every notebook's write-through
+/// deferred for the life of the process.
+pub(crate) struct MoveGuard;
+
+pub(crate) fn begin_move() -> MoveGuard {
+    MOVING.store(true, std::sync::atomic::Ordering::SeqCst);
+    MoveGuard
+}
+
+impl Drop for MoveGuard {
+    fn drop(&mut self) {
+        MOVING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let held: Vec<String> = deferred()
+            .lock()
+            .map(|mut h| h.drain().collect())
+            .unwrap_or_default();
+        for id in held {
+            schedule_write(&id);
+        }
+    }
+}
+
+/// Record that a write is owed for this notebook at `deadline`.
+pub(crate) fn note_pending_write(notebook_id: &str, deadline: i64) {
+    if let Ok(mut map) = pending().lock() {
+        map.insert(notebook_id.to_string(), deadline);
+    }
+}
+
+/// Wait for one notebook's own write to finish, up to `ceiling_ms`.
+///
+/// Per notebook, not globally: on a Mac whose watcher is rebinding bundles
+/// arriving from the other one, *something* is always writing, so waiting for
+/// every bound notebook to be quiet at once waited forever and the move
+/// refused every time. Each folder only needs its own writer to be done with
+/// it.
+pub(crate) async fn wait_for_own_write(notebook_id: &str, ceiling_ms: u64) -> bool {
+    let step = 250u64;
+    let mut waited = 0u64;
+    loop {
+        if !write_in_flight(notebook_id) {
+            return true;
+        }
+        if waited >= ceiling_ms {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(step)).await;
+        waited += step;
+    }
+}
+
 /// Note that a bound notebook changed, and write its bundle once the changes
 /// stop arriving. Safe to call from any mutation: an unbound notebook costs
 /// one file read and returns.
 pub fn schedule_write(notebook_id: &str) {
+    // A folder move is under way: hold this notebook's write until the
+    // folders have stopped moving. Scheduling it now would either write into
+    // a folder that is about to be renamed or keep the notebook permanently
+    // busy, which is what made "Move them" refuse on a Mac whose watcher was
+    // rebinding bundles arriving from the other one.
+    if hold_for_move(notebook_id) {
+        return;
+    }
     let Some(app) = crate::commands::app_handle() else {
         return;
     };
@@ -2987,9 +3085,7 @@ pub fn schedule_write(notebook_id: &str) {
         return;
     }
     let id = notebook_id.to_string();
-    if let Ok(mut map) = pending().lock() {
-        map.insert(id.clone(), now_ms() + DEBOUNCE_MS);
-    }
+    note_pending_write(&id, now_ms() + DEBOUNCE_MS);
     // One flusher per notebook: later changes move its deadline rather than
     // stacking a second writer behind it.
     match flushing().lock() {
@@ -4419,19 +4515,6 @@ pub async fn dismiss_icloud_container_offer(
     crate::commands::apply_ai_config(&app, &state, config).await
 }
 
-/// Nothing moves under a write in flight: renaming a bundle mid-write leaves
-/// the writer holding a path that is no longer there and the bundle half
-/// written. Wait for quiet, and refuse rather than move anyway.
-async fn wait_for_quiet(ids: &[String]) -> Result<(), String> {
-    for _ in 0..30 {
-        if !ids.iter().any(|id| write_in_flight(id)) {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    Err("Alchemy is still saving a notebook to disk. Try again in a moment.".to_string())
-}
-
 /// Copy a folder whole. Only reached when the rename could not be done in
 /// place (a different volume), and it never removes the original: a move that
 /// half-succeeded must leave the user with their files, not a gap.
@@ -4448,6 +4531,11 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// How long one notebook's own write gets to finish before the move leaves
+/// that folder for the next try. Long enough for a bundle write, short enough
+/// that nineteen of them do not add up to a hang.
+const MOVE_WAIT_MS: u64 = 30_000;
 
 /// The offer's Move button: take every bound bundle out of `iCloud
 /// Drive/Alchemy/` and into the app's container, repoint the bindings, and
@@ -4484,7 +4572,10 @@ pub async fn move_notebooks_to_icloud_container(
     }
     let to = PathBuf::from(&offer.to);
 
-    wait_for_quiet(&bound_under(&from, &bindings)).await?;
+    // From here to the end of the function, nothing new is scheduled: the
+    // writer holds what arrives and picks it up when the guard drops. What is
+    // already pending still lands, which is how a notebook goes quiet at all.
+    let _moving = begin_move();
 
     // Making the directory is what provisions the container: the entitlement
     // says the app may have it, and the first thing to ask for it gets it made.
@@ -4505,7 +4596,18 @@ pub async fn move_notebooks_to_icloud_container(
     let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already);
 
     let mut done: Vec<IcloudPlacement> = Vec::new();
+    let mut busy: Vec<String> = Vec::new();
     for placement in moves {
+        // Per notebook, not globally. Requiring every bound notebook to be
+        // quiet at once meant that on a Mac whose watcher was rebinding
+        // bundles from the other one, the move refused every single time --
+        // something was always writing. A folder only needs its own writer to
+        // be done with it, and a notebook that never settles is skipped and
+        // named rather than taking the whole move down with it.
+        if !wait_for_own_write(placement.notebook(), MOVE_WAIT_MS).await {
+            busy.push(placement.dest().to_string_lossy().to_string());
+            continue;
+        }
         let (old, new) = match &placement {
             IcloudPlacement::Adopt { at, .. } => {
                 okf_notice(format!(
@@ -4561,6 +4663,21 @@ pub async fn move_notebooks_to_icloud_container(
         }
     }
 
+    if done.is_empty() {
+        return Err(if busy.is_empty() {
+            "Nothing could be moved into the Alchemy iCloud folder.".to_string()
+        } else {
+            "Alchemy is still saving a notebook to disk. Try again in a moment.".to_string()
+        });
+    }
+    if !busy.is_empty() {
+        okf_notice(format!(
+            "{} notebook(s) were still saving and stayed where they are: {}. They move on the next try.",
+            busy.len(),
+            busy.join(", ")
+        ));
+    }
+
     rebind_moved(&mut bindings, &done);
     save_bindings(&data_dir, &bindings);
 
@@ -4571,6 +4688,13 @@ pub async fn move_notebooks_to_icloud_container(
     // The watched root moved with them (5.7: the Notebooks folder is watched
     // whether or not a notebook is open).
     crate::fswatch::rearm(&app).await;
+    let held = held_writes();
+    if !held.is_empty() {
+        crate::note!(
+            "okf: {} notebook write(s) were held during the move and resume now",
+            held.len()
+        );
+    }
     crate::note!("okf: moved {} notebooks into {}", done.len(), offer.to);
     Ok(done.len())
 }

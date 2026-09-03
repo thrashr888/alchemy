@@ -886,10 +886,23 @@ they exist without being asked for.
     repointed afterwards. This rides the once-ever heal stamp at version 2.
 
 - **Nothing moves under a write in flight, and nothing is deleted.** The move
-  waits on §5.2's pending/flushing sets and refuses rather than renaming a
-  bundle out from under its own writer. A rename that cannot be done in place
-  falls back to a copy and leaves the original where it was, logged; a
-  half-finished move must leave the user with their files, not a gap.
+  waits on §5.2's pending/flushing sets rather than renaming a bundle out from
+  under its own writer. A rename that cannot be done in place falls back to a
+  copy and leaves the original where it was, logged; a half-finished move must
+  leave the user with their files, not a gap.
+
+  **But it waits per notebook, not for the app.** The first version needed
+  every bound notebook quiet for fifteen seconds, and on the Mac that most
+  needed the move — the one whose watcher was rebinding bundles arriving from
+  the other Mac — something was always writing, so "Move them" refused every
+  single time. Two changes. A process-wide move-in-progress flag, held by an
+  RAII guard so an early return cannot leave it set, makes the writer *defer*
+  new scheduling: nothing already pending is cancelled (that is how a notebook
+  goes quiet at all) and the held writes are scheduled the moment the move
+  ends. And each folder waits only on its own writer, up to thirty seconds; a
+  notebook that never settles is skipped and named in the log, and the move
+  carries on with the rest. The user-facing refusal is now only for the case
+  where nothing at all could be moved.
 
 ## 6. Originals travel in `references/`
 
