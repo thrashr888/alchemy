@@ -25,6 +25,7 @@ import {
   Library,
   Pencil,
   Search,
+  Users,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -160,6 +161,23 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void revealItemInDir(binding.path).catch(() => {}),
+                      },
+                      {
+                        // Sharing is Finder's (RFC-okf-live §5.7): iCloud and
+                        // Dropbox already share any folder, so the useful
+                        // thing to do is put the user in front of the right
+                        // one and say what to do there.
+                        label: "Share folder…",
+                        icon: <Users className="h-3.5 w-3.5" />,
+                        onClick: () => {
+                          void revealItemInDir(binding.path).catch(() => {});
+                          useStore
+                            .getState()
+                            .pushToast(
+                              "info",
+                              "Right-click the folder in Finder and choose Share to invite someone.",
+                            );
+                        },
                       },
                       {
                         label: "Stop keeping on disk",

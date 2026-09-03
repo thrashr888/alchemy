@@ -1050,6 +1050,11 @@ pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Note
         report_count: 0,
     };
     e(state.db.create_notebook(&nb).await)?;
+    // A notebook lives in the Notebooks folder from the moment it exists
+    // (docs/RFC-okf-live.md §5.7) — the bundle is where it lives, not a verb
+    // the user has to go and find. Best-effort: a disk that refuses must not
+    // stop a notebook being made.
+    crate::okf::bind_new_notebook(state, &nb).await;
     Ok(nb)
 }
 
@@ -1913,6 +1918,12 @@ pub(crate) async fn extract_any_file(
     state: &AppState,
     path: &str,
 ) -> anyhow::Result<ingest::Extracted> {
+    // A file iCloud has evicted is not missing, only not downloaded. Ask for
+    // it and say so, rather than reporting a file that is plainly in Finder
+    // as gone (docs/RFC-okf-live.md §5.7). The next Refresh finds it.
+    if crate::okf::hydrate_if_evicted(std::path::Path::new(path)) {
+        anyhow::bail!("Downloading from iCloud… try again in a moment.");
+    }
     let mut extracted = if let Some(url) = ingest::google_placeholder_url(path) {
         // Google Drive desktop placeholder — the content lives in the cloud;
         // fetch it through the same export path as a pasted docs.google.com URL.
@@ -4483,14 +4494,25 @@ pub(crate) fn hydrate_icloud_stubs(stubs: Vec<String>) {
     if stubs.is_empty() {
         return;
     }
-    tokio::task::spawn_blocking(move || {
+    let nudge = move || {
         for stub in stubs {
             let _ = std::process::Command::new("brctl")
                 .arg("download")
                 .arg(&stub)
                 .status();
         }
-    });
+    };
+    // The bundle writer is synchronous and can run off the runtime (a test,
+    // a blocking task), so this must not require one. On the runtime it is a
+    // blocking task; off it, a plain thread — fire-and-forget either way.
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(nudge);
+        }
+        Err(_) => {
+            std::thread::spawn(nudge);
+        }
+    }
 }
 
 fn scan_folder(root: &std::path::Path) -> ScanOutcome {

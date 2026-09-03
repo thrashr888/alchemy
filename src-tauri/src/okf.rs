@@ -22,11 +22,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::{app_data_dir, e, is_web_url, new_id, AppState};
 use crate::ingest;
-use crate::models::{Note, Source};
+use crate::models::{Note, Notebook, Source};
 use crate::rag;
 
 // ---- OKF export ------------------------------------------------------------
@@ -514,10 +514,19 @@ pub fn write_bundle(
                     }
                 }
             }
-            let unchanged =
-                prior.is_some_and(|p| p.hash == hash) && bundle.join(&place.path).exists();
+            let at = bundle.join(&place.path);
+            // A file iCloud has evicted is not missing, it is not downloaded.
+            // Writing over it would discard whatever the other Mac put there,
+            // so the pass asks for it and leaves it alone (§5.7).
+            if is_evicted_stub(&at) {
+                hydrate_if_evicted(&at);
+                still_ours.insert(concept.id.clone());
+                entries.push((place.slug.clone(), concept.title.clone(), description));
+                continue;
+            }
+            let unchanged = prior.is_some_and(|p| p.hash == hash) && at.exists();
             if !unchanged {
-                write(&bundle.join(&place.path), &text)?;
+                write(&at, &text)?;
                 out.written += 1;
             }
             manifest.concepts.insert(
@@ -1325,6 +1334,230 @@ fn parse_okf_scalars(head: &str) -> serde_yaml_ng::Mapping {
     map
 }
 
+// ---- The Notebooks folder (docs/RFC-okf-live.md §5.7) -----------------------
+
+/// Where notebooks live on disk, and whether new ones go there.
+pub(crate) async fn notebooks_home(state: &AppState) -> (PathBuf, bool) {
+    let ai = state.ai.read().await;
+    let config = ai.config();
+    (
+        PathBuf::from(config.notebooks_dir.clone()),
+        config.keep_on_disk,
+    )
+}
+
+/// A folder for this notebook under the Notebooks root, deduped the way the
+/// exporter's slugs are: `research`, then `research-2`. A notebook already
+/// bound keeps the folder it has.
+pub(crate) fn claim_notebook_folder(
+    root: &Path,
+    title: &str,
+    taken: &std::collections::HashSet<String>,
+) -> PathBuf {
+    let base = okf_slug(title);
+    let mut slug = base.clone();
+    let mut n = 2;
+    while taken.contains(&slug) || root.join(&slug).exists() {
+        slug = format!("{base}-{n}");
+        n += 1;
+    }
+    root.join(slug)
+}
+
+/// A notebook the app keeps for itself (Briefs) is not a document the user
+/// files, so it never lands in the Notebooks folder.
+pub(crate) fn is_system_notebook(notebook: &Notebook) -> bool {
+    notebook.status == "system"
+}
+
+/// Give a notebook its folder and seed it (§5.7). Silent and best-effort:
+/// creating a notebook must not fail because a disk did.
+pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
+    if is_system_notebook(notebook) {
+        return;
+    }
+    let (root, keep) = notebooks_home(state).await;
+    if !keep || root.as_os_str().is_empty() {
+        return;
+    }
+    if binding_for(&app_data_dir(state), &notebook.id).is_some() {
+        return;
+    }
+    if let Err(err) = std::fs::create_dir_all(&root) {
+        crate::diagnostics::error("okf", format!("could not make the Notebooks folder: {err}"));
+        return;
+    }
+    let taken: std::collections::HashSet<String> = load_bindings(&app_data_dir(state))
+        .values()
+        .filter_map(|b| {
+            Path::new(&b.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .collect();
+    let folder = claim_notebook_folder(&root, &notebook.title, &taken);
+    if let Err(err) = std::fs::create_dir_all(&folder) {
+        crate::diagnostics::error("okf", format!("could not make {folder:?}: {err}"));
+        return;
+    }
+    let data_dir = app_data_dir(state);
+    set_binding(
+        &data_dir,
+        &notebook.id,
+        Some(OkfBinding {
+            path: folder.to_string_lossy().to_string(),
+            id: new_id(),
+            last_write_at: 0,
+        }),
+    );
+    if let Err(err) = write_bound(state, &notebook.id).await {
+        crate::diagnostics::error("okf", format!("seed pass failed: {err}"));
+    }
+}
+
+/// Keep every active notebook on disk — the upgrade offer's Keep button
+/// (§5.7). Reports how many it bound so the caller can say so.
+pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Result<usize, String> {
+    let notebooks = e(state.db.list_notebooks().await)?;
+    let total = notebooks.len();
+    let mut bound = 0usize;
+    for (done, nb) in notebooks.iter().enumerate() {
+        if is_system_notebook(nb) || nb.status == "archived" {
+            continue;
+        }
+        let _ = app.emit(
+            "okf://binding",
+            serde_json::json!({ "done": done, "total": total, "title": nb.title }),
+        );
+        bind_new_notebook(state, nb).await;
+        if binding_for(&app_data_dir(state), &nb.id).is_some() {
+            bound += 1;
+        }
+    }
+    let _ = app.emit(
+        "okf://binding",
+        serde_json::json!({ "done": total, "total": total, "title": "" }),
+    );
+    Ok(bound)
+}
+
+/// Bundles sitting in the Notebooks folder that no notebook here is bound to
+/// (§5.7). A second Mac's folder, a share, or simply what was already there
+/// at first launch.
+pub(crate) fn unopened_bundles(
+    root: &Path,
+    bound: &std::collections::HashSet<String>,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with('.'))
+                && !bound.contains(&p.to_string_lossy().to_string())
+                // A folder that is not a bundle is somebody else's; leave it.
+                && crate::commands::find_bundle_root(p.clone()).as_deref() == Ok(p.as_path())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Open every bundle in the Notebooks folder that this Mac has not opened
+/// yet: import, bind, and say so (§5.7).
+///
+/// A bundle whose root `index.md` names an `alchemy.id` this machine already
+/// has is the same notebook arriving by another route — it rebinds to that
+/// notebook rather than making a second copy of it.
+pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usize {
+    let (root, _) = notebooks_home(state).await;
+    if root.as_os_str().is_empty() || !root.is_dir() {
+        return 0;
+    }
+    let data_dir = app_data_dir(state);
+    let bindings = load_bindings(&data_dir);
+    let bound: std::collections::HashSet<String> =
+        bindings.values().map(|b| b.path.clone()).collect();
+    let found = unopened_bundles(&root, &bound);
+    if found.is_empty() {
+        return 0;
+    }
+    let known: std::collections::HashSet<String> = e(state.db.list_notebooks().await)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|n| n.id)
+        .collect();
+
+    let mut opened = Vec::new();
+    for folder in found {
+        let path = folder.to_string_lossy().to_string();
+        // The same notebook by another route rebinds; a new one is imported.
+        let claimed = std::fs::read_to_string(folder.join("index.md"))
+            .ok()
+            .and_then(|text| parse_okf_doc(&text).nested("alchemy", "id"))
+            .filter(|id| known.contains(id) && !bindings.contains_key(id));
+        let outcome = match claimed {
+            Some(id) => {
+                set_binding(
+                    &data_dir,
+                    &id,
+                    Some(OkfBinding {
+                        path: path.clone(),
+                        id: new_id(),
+                        last_write_at: 0,
+                    }),
+                );
+                write_bound(state, &id).await.map(|_| id)
+            }
+            // Import creates the notebook — reusing the bundle's own
+            // `alchemy.id` when nothing here claims it — and then it is
+            // bound to the folder it came from.
+            None => match crate::commands::import_bundle(app, state, folder.clone(), None).await {
+                Ok(nb) => {
+                    set_binding(
+                        &data_dir,
+                        &nb.id,
+                        Some(OkfBinding {
+                            path: path.clone(),
+                            id: new_id(),
+                            last_write_at: 0,
+                        }),
+                    );
+                    write_bound(state, &nb.id).await.map(|_| nb.id)
+                }
+                Err(err) => Err(err),
+            },
+        };
+        match outcome {
+            Ok(_) => {
+                let name = folder
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                crate::note!("okf: opened {name} from the Notebooks folder");
+                opened.push(name);
+            }
+            Err(err) => crate::diagnostics::error("okf", format!("could not open {path}: {err}")),
+        }
+    }
+    if !opened.is_empty() {
+        // One announcement, however many arrived: forty folders on a first
+        // launch is one event, not forty.
+        let _ = app.emit(
+            "okf://opened",
+            serde_json::json!({ "count": opened.len(), "titles": opened }),
+        );
+        crate::commands::notify_changed("notebooks", None);
+    }
+    opened.len()
+}
+
 // ---- Originals in `references/` (docs/RFC-okf-live.md §6) -------------------
 
 /// Types worth carrying: the ones whose bytes say something the extracted
@@ -1422,7 +1655,11 @@ fn place_reference(bundle: &Path, name: &str, from: &Path) -> Result<String, Str
     let dir = bundle.join("references");
     std::fs::create_dir_all(&dir).map_err(|err| format!("Failed to create {dir:?}: {err}"))?;
     let dest = dir.join(name);
-    if !dest.exists() {
+    if is_evicted_stub(&dest) {
+        // The bytes are here, just not downloaded. Ask for them rather than
+        // writing a second copy over the placeholder.
+        hydrate_if_evicted(&dest);
+    } else if !dest.exists() {
         std::fs::copy(from, &dest)
             .map_err(|err| format!("Failed to copy {from:?} into the bundle: {err}"))?;
     }
@@ -2271,4 +2508,93 @@ pub async fn reconcile_all(state: &AppState) {
             crate::diagnostics::error("okf", format!("reconcile failed: {err}"));
         }
     }
+}
+
+/// Is this path an iCloud eviction stub standing in for a file that is not
+/// downloaded? macOS replaces the file with a hidden `.name.icloud`
+/// placeholder, so the file itself simply is not there (§5.7).
+pub fn is_evicted_stub(path: &Path) -> bool {
+    if path.exists() {
+        return false;
+    }
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return false;
+    };
+    dir.join(format!(".{name}.icloud")).is_file()
+}
+
+/// Ask iCloud for a file that is not downloaded, and say so. Returns true
+/// when a download was started, so the caller can show "Downloading from
+/// iCloud…" instead of failing at a file that is only temporarily absent.
+pub fn hydrate_if_evicted(path: &Path) -> bool {
+    if !is_evicted_stub(path) {
+        return false;
+    }
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    #[cfg(target_os = "macos")]
+    crate::commands::hydrate_icloud_stubs(vec![dir
+        .join(format!(".{name}.icloud"))
+        .to_string_lossy()
+        .to_string()]);
+    crate::note!("okf: asked iCloud for {path:?}");
+    true
+}
+
+/// The one-time upgrade offer's Keep button (§5.7): every active notebook
+/// gets a folder and a seed pass, and the offer is not made again.
+#[tauri::command]
+pub async fn keep_notebooks_on_disk(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let bound = bind_all_notebooks(&app, &state).await?;
+    answer_keep_offer(&app, &state, true).await?;
+    Ok(bound)
+}
+
+/// Record that the offer has been answered, either way, so it is asked once.
+#[tauri::command]
+pub async fn dismiss_keep_on_disk_offer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    answer_keep_offer(&app, &state, false).await
+}
+
+async fn answer_keep_offer(app: &AppHandle, state: &AppState, keep: bool) -> Result<(), String> {
+    let mut config = state.ai.read().await.config().clone();
+    config.keep_on_disk_asked = true;
+    if keep {
+        config.keep_on_disk = true;
+    }
+    crate::commands::apply_ai_config(app, state, config).await
+}
+
+/// Show a bound notebook's folder in Finder — the "Share folder…" verb
+/// (§5.7). iCloud and Dropbox already share any folder, so the useful thing
+/// the app can do is put the user in front of the right one; calling the
+/// share sheet itself is native code and waits for a sidecar.
+#[tauri::command]
+pub async fn reveal_notebook_folder(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<String, String> {
+    let binding = binding_for(&app_data_dir(&state), &notebook_id)
+        .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
+    Ok(binding.path)
+}
+
+/// Open every bundle sitting in the Notebooks folder that this Mac has not
+/// opened yet (§5.7). Called at launch and whenever the root changes.
+#[tauri::command]
+pub async fn open_notebooks_folder_bundles(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    Ok(open_found_bundles(&app, &state).await)
 }

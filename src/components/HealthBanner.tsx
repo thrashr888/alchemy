@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
@@ -8,7 +8,8 @@ import {
 } from "@/lib/reindex";
 import { Button, LiveRegion } from "./ui";
 import type { ModelStatus } from "@/lib/types";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, HardDrive } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 
 /**
  * The degraded states, designed.
@@ -34,7 +35,8 @@ interface Fix {
 
 interface Degraded {
   key: string;
-  tone: "error" | "warning";
+  /** "offer" is an invitation, not a problem: hairline, no tint, no alarm. */
+  tone: "error" | "warning" | "offer";
   title: string;
   detail: string;
   fixes: Fix[];
@@ -55,6 +57,28 @@ export function HealthBanner({
   const reembedAll = useStore((s) => s.reembedAll);
   const pending = useSyncExternalStore(subscribeReindexPending, reindexPending);
   const [checking, setChecking] = useState(false);
+  const aiConfig = useStore((s) => s.aiConfig);
+  const notebooks = useStore((s) => s.notebooks);
+  const pushToast = useStore((s) => s.pushToast);
+  const [binding, setBinding] = useState(false);
+  // Progress while the whole shelf is bound, so a slow pass says what it is
+  // doing rather than sitting on a spinner.
+  const [bindingAt, setBindingAt] = useState("");
+  useEffect(() => {
+    let alive = true;
+    const un = listen<{ done: number; total: number; title: string }>(
+      "okf://binding",
+      (e) => {
+        if (!alive) return;
+        const p = e.payload;
+        setBindingAt(p.title ? `${p.title} (${p.done + 1}/${p.total})` : "");
+      },
+    );
+    return () => {
+      alive = false;
+      void un.then((f) => f());
+    };
+  }, []);
 
   const check = async () => {
     setChecking(true);
@@ -66,6 +90,45 @@ export function HealthBanner({
   };
 
   const rows: Degraded[] = [];
+
+  // The one-time offer (docs/RFC-okf-live.md §5.7). Existing notebooks
+  // predate the folder, so they get asked once — either button answers it,
+  // and the ⋯ menu's verb stays the way in afterwards.
+  if (aiConfig && !aiConfig.keepOnDiskAsked && notebooks.some((n) => !n.status)) {
+    rows.push({
+      key: "keep-on-disk",
+      tone: "offer",
+      title: "Keep your notebooks on disk?",
+      detail: binding
+        ? `Each becomes a folder of markdown in ${binding}. Put that in iCloud Drive and your Macs stay in step.`
+        : "Each becomes a folder of markdown you can read, search, and sync.",
+      fixes: [
+        {
+          label: "Keep on disk",
+          primary: true,
+          run: async () => {
+            setBinding(true);
+            try {
+              const bound = await api.keepNotebooksOnDisk();
+              pushToast("success", `${bound} notebooks are now kept on disk.`);
+            } catch (err) {
+              pushToast("error", err instanceof Error ? err.message : String(err));
+            } finally {
+              setBinding(false);
+              void api.getAiConfig().then((c) => useStore.setState({ aiConfig: c }));
+            }
+          },
+        },
+        {
+          label: "Not now",
+          run: async () => {
+            await api.dismissKeepOnDiskOffer().catch(() => {});
+            void api.getAiConfig().then((c) => useStore.setState({ aiConfig: c }));
+          },
+        },
+      ],
+    });
+  }
 
   // An unfinished rebuild is first: it is the one state where everything
   // looks fine and the answers are quietly thinner.
@@ -197,30 +260,43 @@ export function HealthBanner({
           className={
             row.tone === "error"
               ? "flex items-center gap-2.5 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-caption"
-              : "flex items-center gap-2.5 border-b border-warning/30 bg-warning/10 px-4 py-2 text-caption"
+              : row.tone === "warning"
+                ? "flex items-center gap-2.5 border-b border-warning/30 bg-warning/10 px-4 py-2 text-caption"
+                : "flex items-center gap-2.5 border-b border-border px-4 py-2 text-caption"
           }
         >
-          <AlertTriangle
-            aria-hidden
-            className={
-              row.tone === "error"
-                ? "h-3.5 w-3.5 shrink-0 text-destructive"
-                : "h-3.5 w-3.5 shrink-0 text-warning"
-            }
-          />
+          {row.tone === "offer" ? (
+            <HardDrive aria-hidden className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <AlertTriangle
+              aria-hidden
+              className={
+                row.tone === "error"
+                  ? "h-3.5 w-3.5 shrink-0 text-destructive"
+                  : "h-3.5 w-3.5 shrink-0 text-warning"
+              }
+            />
+          )}
           <span
             className="min-w-0 flex-1 truncate"
             title={`${row.title} ${row.detail}`}
           >
             <span className="font-medium text-foreground">{row.title}</span>{" "}
-            <span className="text-muted-foreground">{row.detail}</span>
+            <span className="text-muted-foreground">
+              {row.key === "keep-on-disk" && bindingAt
+                ? `Keeping ${bindingAt}…`
+                : row.detail}
+            </span>
           </span>
           {row.fixes.map((fix) => (
             <Button
               key={fix.label}
               size="sm"
               variant={fix.primary ? "secondary" : "ghost"}
-              loading={fix.label === "Check again" && checking}
+              loading={
+              (fix.label === "Check again" && checking) ||
+              (fix.label === "Keep on disk" && binding)
+            }
               onClick={() => void fix.run()}
             >
               {fix.label}

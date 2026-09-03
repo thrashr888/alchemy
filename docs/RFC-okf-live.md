@@ -497,6 +497,112 @@ copies keep the frontmatter `title:`, so they read as two notes with one
 name and the writer's slug dedup keeps both files. Tested rather than
 special-cased.
 
+### 5.7 Notebooks on disk by default, in iCloud when it is there
+
+Obsidian, Soulver, Pages and Numbers put their documents in iCloud Drive
+without asking, and get sync and sharing for free. Alchemy does the same
+with its bundles: §5's bound notebook stops being an opt-in verb and
+becomes where a notebook lives. The store stays local — it is the index —
+and the bundle is the portable truth, which is the split RFC-sync-backend
+already draws.
+
+**One Notebooks folder.** A single setting, `notebooks_dir`, with a
+picker beside it in Settings ("Notebooks folder", Change…, Show in
+Finder). Its default is resolved once, on first launch:
+
+| iCloud Drive | default |
+| --- | --- |
+| on (`~/Library/Mobile Documents/com~apple~CloudDocs` exists) | `iCloud Drive/Alchemy/` |
+| off | `~/Documents/Alchemy/` |
+
+Not `Documents/Alchemy` when iCloud is on: Desktop & Documents syncing is
+a separate switch most people leave off, so `Documents` is not a sync
+location one can rely on. Dropbox and Drive users point the picker at
+their folder. A Mac with iCloud Drive off gets a local folder and works
+forever.
+
+**Two stages.** Stage one is the plain folder above — no entitlement,
+ships on this branch. Stage two is the app's own iCloud container, the
+branded "Alchemy" folder with the app icon at the iCloud Drive root,
+which needs the iCloud entitlement and an embedded provisioning profile
+in the bundle: a signing and release-script change, its own item, and
+the same container an iPhone app would read. Migration between stages is
+a folder move; nothing in the bundles changes.
+
+**New notebooks bind at creation.** With `keep_on_disk` on (default on,
+cost control only), a new notebook gets `<notebooks_dir>/<slug>/` and the
+seed pass before its first source lands. Slugs dedupe the way the
+exporter's do. System notebooks (Briefs) never bind. Existing notebooks
+get one offer, once, on the first launch after upgrade — a banner in the
+HealthBanner style: "Keep your notebooks on disk?" with Keep on disk and
+Not now; Keep binds every active notebook in one pass with progress.
+Not now leaves the ⋯ verb from §5.5 as the way in.
+
+**A second Mac opens what it finds.** The Notebooks folder root is
+watched like a bound root. A subfolder that probes as a bundle and is
+bound to no notebook here is opened — import then bind — and announced
+as an arrival ("Opened *Ferrari research* from iCloud"), whether it came
+from the other Mac, from a share, or was there at first launch (batched
+then, one announcement). A folder that fails the probe is left alone; a
+bundle whose `alchemy.id` matches a notebook already bound elsewhere is
+the same notebook and rebinds rather than duplicating.
+
+**Sharing is Finder's.** iCloud folder sharing works on any folder, so a
+bound notebook's folder is shareable today. A "Share folder…" verb on a
+bound notebook reveals the folder in Finder with a one-line hint; calling
+the share sheet itself (`NSSharingService` cloud sharing) is native code
+and waits for cider or a sidecar. What the other person opens is a
+bundle in their own Notebooks folder, which the paragraph above handles.
+
+**Eviction is the trap.** Optimize Mac Storage can turn any bundle file
+into a stub. Read-back has §5.6's hydration nudge; the other direction is
+a source whose original (§6) or concept file is a stub when Refresh, the
+reader, or Show in Finder wants it. Those hydrate first, bounded, and say
+"Downloading from iCloud…" rather than failing. Nothing writes over a
+stub: the writer treats a stub as absent and waits for the file.
+
+**Not done here.** The data directory never moves into iCloud. The
+entitlement is a separate release item. Multi-writer rules are §5.6's,
+originals are §6's; this section only decides where bundles live and that
+they exist without being asked for.
+
+### Notebooks on disk, as built
+
+- **The default is a `serde(default)`**, which makes "resolved once, on first
+  launch" fall out of how the config already loads: the field is absent until
+  something writes it, and the first write is the first launch.
+- **`keep_on_disk_asked` is the whole of the one-time offer.** Either button
+  sets it, so Not now is remembered as firmly as Keep — the banner is a
+  question, not a nag, and §5.5's ⋯ verb stays the way in afterwards.
+- **The Notebooks root is watched under the empty notebook id.** `fswatch`
+  maps a watched root to the notebook it belongs to; the root belongs to no
+  notebook, and no notebook has an empty id, so the debounce loop reads that
+  as "look at the folder, not at one notebook". It is watched whether or not
+  a window has a notebook open, unlike folder sources — a bundle arriving
+  while the user is on the shelf should still open.
+- **Opening a found bundle reuses the import path**, which since §3 already
+  reuses a bundle's own `alchemy.id` when nothing here claims it. So the
+  rebind rule needed only the *other* case: an id this machine already has
+  binds that notebook to the folder rather than importing a second copy.
+- **The offer banner is a third tone.** `error` and `warning` both tint their
+  container and wear a warning triangle; an invitation is neither a failure
+  nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a
+  hairline, no tint, and a drive glyph.
+- **The stub rule is one predicate, used three times.** `is_evicted_stub` is
+  "the file is not there and a `.name.icloud` placeholder is" — the writer
+  skips such a file and asks for it, `place_reference` will not copy over it,
+  and `extract_any_file` refuses with "Downloading from iCloud…" instead of
+  reporting a file plainly visible in Finder as gone. The nudge had to stop
+  requiring a Tokio runtime for this: the bundle writer is synchronous, so it
+  spawns a blocking task on the runtime and a plain thread off it.
+- **Agent reachability rides the existing `settings` tool** — `notebooksDir`
+  and `keepOnDisk` join `SETTABLE_FIELDS`, `settings_set`, and the `get`
+  snapshot, so no new tool was needed. Setting a path that is not a directory
+  is refused rather than silently accepted.
+- **Sharing is a reveal plus a sentence.** `NSSharingService` is native code;
+  what the app can do today is put the user in front of the right folder and
+  say what to do there, which is what the verb does.
+
 ## 6. Originals travel in `references/`
 
 A PDF, an image, a `.docx` crosses today as extracted text: the other Mac
@@ -610,6 +716,11 @@ asks for it rather than as a default that doubles every synced folder.
 - Originals: a dragged PDF exports once under `references/` by hash, a
   second source over the same file adds nothing, deleting the last owner
   removes it, and import re-ingests it as pages rather than text (§6).
+- Notebooks on disk: default resolution with and without the iCloud root
+  present; a new notebook creates and seeds its folder; a bundle dropped
+  into the Notebooks folder becomes a bound notebook exactly once; a
+  bundle carrying a known `alchemy.id` rebinds instead of duplicating; a
+  stub is treated as absent by the writer (§5.7).
 
 ## 9. Phasing
 
@@ -621,6 +732,8 @@ asks for it rather than as a default that doubles every synced folder.
 4. Shared folders (§5.6) — manifest out of the bundle, per-writer log,
    actors, stub hydration, the two-machine test.
 5. Originals in `references/` (§6) — writer, import, read-back, zip.
+6. Notebooks on disk by default (§5.7) — the Notebooks folder, binding at
+   creation, the upgrade offer, and opening what a second Mac finds.
 
 Each phase is useful on its own: a bound notebook that only writes is
 already an always-current export.

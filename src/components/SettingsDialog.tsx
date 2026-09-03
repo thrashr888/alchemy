@@ -6,7 +6,8 @@ import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
 import {
@@ -400,6 +401,16 @@ function GeneralTab() {
         </div>
       </div>
 
+      <div className="h-px bg-border" />
+
+      <div className="flex flex-col gap-3">
+        <div className="text-body">Notebooks</div>
+        <NotebooksFolderRow />
+        <KeepOnDiskToggle />
+      </div>
+
+      <div className="h-px bg-border" />
+
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
@@ -408,6 +419,75 @@ function GeneralTab() {
       />
       <SelfDiagnoseToggle />
     </div>
+  );
+}
+
+/** Where notebooks live on disk (docs/RFC-okf-live.md §5.7). Point it at
+ *  iCloud Drive, Dropbox, or anywhere else and the folder is the sync. */
+function NotebooksFolderRow() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const pushToast = useStore((s) => s.pushToast);
+  if (!aiConfig) return null;
+  const dir = aiConfig.notebooksDir;
+  const shown = dir.replace(/^\/Users\/[^/]+/, "~");
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body text-foreground">Notebooks folder</span>
+        <span
+          className="min-w-0 truncate text-micro text-subtle-foreground"
+          title={dir}
+        >
+          {shown || "Not set"}
+        </span>
+      </div>
+      <span className="text-micro leading-relaxed text-subtle-foreground">
+        Each notebook is a folder of markdown here. Put it in iCloud Drive or
+        Dropbox and your Macs stay in step.
+      </span>
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={async () => {
+            const picked = await open({
+              directory: true,
+              title: "Choose a folder for your notebooks",
+              defaultPath: dir || undefined,
+            });
+            if (typeof picked !== "string") return;
+            await saveAiConfig({ ...aiConfig, notebooksDir: picked });
+            pushToast("success", "New notebooks will be kept here.");
+          }}
+        >
+          Change…
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!dir}
+          onClick={() => void revealItemInDir(dir).catch(() => {})}
+        >
+          Show in Finder
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Cost control, not an opt-in gate: off simply writes nothing. */
+function KeepOnDiskToggle() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  if (!aiConfig) return null;
+  return (
+    <SettingRow
+      label="Keep new notebooks on disk"
+      hint="A new notebook gets its folder as soon as you make it."
+      checked={aiConfig.keepOnDisk}
+      onChange={(v) => void saveAiConfig({ ...aiConfig, keepOnDisk: v })}
+    />
   );
 }
 

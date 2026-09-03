@@ -116,6 +116,23 @@ pub struct AiConfig {
     /// undeliverable. 0 turns copying off entirely.
     #[serde(default = "default_reference_cap_mb")]
     pub okf_reference_cap_mb: u64,
+    /// Where notebooks live on disk as OKF bundles (docs/RFC-okf-live.md
+    /// §5.7). Resolved once, on first launch: iCloud Drive when iCloud Drive
+    /// is on, `~/Documents/Alchemy` when it is not. Point it at a Dropbox or
+    /// Drive folder and that works the same way.
+    #[serde(default = "default_notebooks_dir")]
+    pub notebooks_dir: String,
+    /// Whether a new notebook is kept on disk from the moment it is made.
+    /// On by default: the bundle is where a notebook lives, not a verb you
+    /// have to find. Off is cost control — nothing is written — never a
+    /// safety gate.
+    #[serde(default = "default_true")]
+    pub keep_on_disk: bool,
+    /// Whether the one-time "keep your notebooks on disk?" offer has been
+    /// answered. Set by either button, so the banner is asked once and never
+    /// again (§5.7).
+    #[serde(default)]
+    pub keep_on_disk_asked: bool,
     /// How much overnight work to do: "light" | "standard" | "generous".
     /// One notch rather than a slider, because a token count is not a unit
     /// anyone has intuitions about. Cost control, not an opt-in gate - the
@@ -227,6 +244,28 @@ fn default_provider() -> String {
 /// Standard is a night's work on a normal corpus without the fans coming on.
 fn default_budget() -> String {
     "standard".to_string()
+}
+
+/// The Notebooks folder, resolved once on first launch (§5.7).
+///
+/// iCloud Drive when it is switched on, because that is where Obsidian,
+/// Pages and Numbers put their documents and it buys sync and sharing for
+/// nothing. **Not** `~/Documents/Alchemy` in that case: Desktop & Documents
+/// syncing is a separate switch most people leave off, so `Documents` is not
+/// a sync location anyone can rely on. With iCloud Drive off, a local folder
+/// that works forever.
+pub fn default_notebooks_dir() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return String::new();
+    }
+    let icloud = std::path::Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs");
+    let root = if icloud.is_dir() {
+        icloud
+    } else {
+        std::path::Path::new(&home).join("Documents")
+    };
+    root.join("Alchemy").to_string_lossy().to_string()
 }
 
 /// 50 MB: comfortably every PDF, scan, and deck a research notebook holds,
@@ -481,6 +520,9 @@ impl Default for AiConfig {
             tray_enabled: default_true(),
             background_enabled: default_true(),
             okf_reference_cap_mb: default_reference_cap_mb(),
+            notebooks_dir: default_notebooks_dir(),
+            keep_on_disk: default_true(),
+            keep_on_disk_asked: false,
             background_budget: default_budget(),
             show_notifications: default_true(),
             quiet_when_focused: default_true(),

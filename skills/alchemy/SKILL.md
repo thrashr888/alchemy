@@ -135,7 +135,13 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
   `alchemy/<version>` for the app. Put your own name there when you edit a
   file and the attribution sticks.
 
-`bind_notebook_okf(notebook_id, path)` starts this: an empty folder is
+Most notebooks are already there. Alchemy keeps them in a Notebooks folder —
+iCloud Drive when iCloud Drive is on, `~/Documents/Alchemy` when it is not —
+so `list_notebooks` usually reports an `okfPath` without anyone asking. Read
+the folder with `settings` (`op: "get"`); change it with
+`op: "set", field: "notebooksDir"`.
+
+`bind_notebook_okf(notebook_id, path)` binds one somewhere else: an empty folder is
 seeded from the notebook; a folder that already holds a bundle is imported
 first, then bound. `unbind_notebook_okf(notebook_id)` stops it and leaves
 every file in place. Offer binding when the user wants a notebook in git, on

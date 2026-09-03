@@ -223,6 +223,13 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
         unset(&config.profile.instructions),
         unset(&config.profile.assistant_name)
     ));
+    // Where notebooks live on disk (docs/RFC-okf-live.md §5.7). An agent that
+    // can read this can find a notebook's files without asking.
+    out.push_str(&format!(
+        "\nNotebooks folder: {}\n- New notebooks kept on disk: {}\n",
+        unset(&config.notebooks_dir),
+        if config.keep_on_disk { "yes" } else { "no" }
+    ));
     out.push_str(
         "\nAPI keys are never shown here — manage them in Settings → Models. \
          Say \"switch chat to <provider>\" to change providers.",
@@ -233,7 +240,8 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
 const SETTABLE_FIELDS: &str = "chatProvider, studioProvider, chatModel, effort, baseUrl, \
      smallModel, embedder (the \"search model\" in user terms), provider.<id>.chatModel, \
      provider.<id>.effort, provider.<id>.baseUrl, \
-     profile.name, profile.profession, profile.instructions, profile.assistantName";
+     profile.name, profile.profession, profile.instructions, profile.assistantName, \
+     notebooksDir, keepOnDisk";
 
 const EFFORTS: [&str; 5] = ["", "minimal", "low", "medium", "high"];
 
@@ -288,6 +296,30 @@ pub(crate) fn settings_set(
             let echo = format!("Switched chat to {}", provider_display(p));
             config.chat_provider = p.id.clone();
             Ok(echo)
+        }
+        // Where notebooks live on disk (docs/RFC-okf-live.md §5.7).
+        "notebooksDir" if target_id.is_none() => {
+            let path = value.trim();
+            if path.is_empty() {
+                return Err("A notebooks folder needs a path.".into());
+            }
+            if !std::path::Path::new(path).is_dir() {
+                return Err(format!("There's no folder at {path}."));
+            }
+            config.notebooks_dir = path.to_string();
+            Ok(format!("Notebooks now live in {path}"))
+        }
+        "keepOnDisk" if target_id.is_none() => {
+            let on = matches!(
+                value.trim().to_lowercase().as_str(),
+                "true" | "on" | "yes" | "1"
+            );
+            config.keep_on_disk = on;
+            Ok(if on {
+                "New notebooks are kept on disk".into()
+            } else {
+                "New notebooks are no longer kept on disk".into()
+            })
         }
         "studioProvider" | "studio" if target_id.is_none() => {
             let p = find_provider(config, value).ok_or_else(|| {

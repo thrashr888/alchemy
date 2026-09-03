@@ -901,6 +901,22 @@ export const useStore = create<AppState>((set, get) => {
           get().pushToast("info", `Folder sync: ${parts.join(", ")}`);
         playArrival();
       });
+      // A bundle in the Notebooks folder became a notebook here — from the
+      // other Mac, from a share, or simply found at launch (RFC-okf-live
+      // §5.7). One announcement, however many arrived.
+      void listen<{ count: number; titles: string[] }>("okf://opened", (e) => {
+        const { count, titles } = e.payload;
+        if (count === 0) return;
+        void get().refreshNotebooks();
+        const name = titles[0] ?? "a notebook";
+        get().pushToast(
+          "success",
+          count === 1
+            ? `Opened ${name} from your Notebooks folder.`
+            : `Opened ${count} notebooks from your Notebooks folder.`,
+        );
+        playArrival();
+      });
       // An agent changed something through the MCP server — refresh whatever
       // this window is looking at so the change appears live.
       void listen<{ scope: string; notebookId: string | null }>(

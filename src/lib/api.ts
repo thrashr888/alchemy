@@ -467,6 +467,13 @@ export const api = {
     run(query<null>("unbind_notebook_okf", { notebookId })),
   writeNotebookOkf: (notebookId: string) =>
     run(slow<number>("write_notebook_okf", { notebookId })),
+  keepNotebooksOnDisk: () => run(slow<number>("keep_notebooks_on_disk", {})),
+  dismissKeepOnDiskOffer: () =>
+    run(query<null>("dismiss_keep_on_disk_offer", {})),
+  revealNotebookFolder: (notebookId: string) =>
+    run(query<string>("reveal_notebook_folder", { notebookId })),
+  openNotebooksFolderBundles: () =>
+    run(slow<number>("open_notebooks_folder_bundles", {})),
   importNotebookOkf: (path: string, notebookId?: string | null) =>
     run(
       slow<Notebook>("import_notebook_okf", {

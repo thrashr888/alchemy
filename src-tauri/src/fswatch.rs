@@ -235,6 +235,12 @@ async fn run(app: AppHandle, mut rx: mpsc::UnboundedReceiver<String>) {
         }
         for nb in deb.due(Instant::now()) {
             let state = app.state::<AppState>();
+            // The Notebooks root, not a notebook: something arrived in the
+            // folder, so look for bundles nobody here has opened (§5.7).
+            if nb.is_empty() {
+                crate::okf::open_found_bundles(&app, &state).await;
+                continue;
+            }
             // A bound notebook's bundle root is in the watched set too, so a
             // change under it means "read the folder back" as well as "rescan
             // the folder sources" (docs/RFC-okf-live.md §5.3). Unbound
@@ -281,6 +287,21 @@ pub async fn rearm(app: &AppHandle) {
     prune_closed_windows(app, &state);
     let open = state.open_notebook_ids();
     let mut desired: HashMap<PathBuf, String> = HashMap::new();
+    // The Notebooks folder itself, whether or not a notebook is open: a
+    // bundle that lands there — from the other Mac, from a share, from
+    // Finder — is opened without waiting for the ten-minute sweep
+    // (docs/RFC-okf-live.md §5.7). Its notebook id is the empty string,
+    // which no notebook has; the debounce loop reads that as "look at the
+    // root, not at one notebook".
+    {
+        let dir = {
+            let ai = state.ai.read().await;
+            PathBuf::from(ai.config().notebooks_dir.clone())
+        };
+        if dir.is_dir() {
+            desired.insert(dir, String::new());
+        }
+    }
     if !open.is_empty() {
         match state.db.all_folder_sources().await {
             Ok(folders) => {

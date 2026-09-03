@@ -586,6 +586,10 @@ async fn run_pass(app: &AppHandle) {
     // (docs/RFC-okf-live.md §5.3) — the open ones are on FSEvents already.
     if closed_due {
         crate::okf::reconcile_all(&state).await;
+        // And a bundle the other Mac (or a share) put in the Notebooks folder
+        // is opened on the same window (§5.7). Cheap when there is nothing
+        // new: one directory read.
+        crate::okf::open_found_bundles(app, &state).await;
     }
     // Folder sources added or removed since the last tick change what the
     // watcher should cover; the recompute is one folder-table read.

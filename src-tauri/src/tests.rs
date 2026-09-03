@@ -2755,3 +2755,217 @@ fn okf_reference_paths_resolve_inside_the_bundle() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The Notebooks folder resolves once, and iCloud Drive wins when it is
+/// there (docs/RFC-okf-live.md §5.7).
+#[test]
+fn okf_notebooks_dir_prefers_icloud_when_it_is_on() {
+    use crate::ai::default_notebooks_dir;
+    let home = std::env::var("HOME").unwrap_or_default();
+    let resolved = default_notebooks_dir();
+    assert!(resolved.ends_with("/Alchemy"), "got {resolved}");
+
+    let icloud = std::path::Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs");
+    if icloud.is_dir() {
+        assert_eq!(
+            resolved,
+            icloud.join("Alchemy").to_string_lossy(),
+            "iCloud Drive is on, so that is where notebooks go"
+        );
+    } else {
+        // Not Documents/Alchemy when iCloud is on: Desktop & Documents
+        // syncing is a separate switch most people leave off.
+        assert_eq!(
+            resolved,
+            std::path::Path::new(&home)
+                .join("Documents/Alchemy")
+                .to_string_lossy(),
+            "with iCloud Drive off, a local folder that works forever"
+        );
+    }
+    // And the default is on, because the bundle is where a notebook lives.
+    assert!(crate::ai::AiConfig::fresh().keep_on_disk);
+    assert!(!crate::ai::AiConfig::fresh().keep_on_disk_asked);
+}
+
+/// A notebook gets its own folder under the root, deduped the way the
+/// exporter's slugs are (§5.7).
+#[test]
+fn okf_notebook_folders_dedupe() {
+    use crate::okf::claim_notebook_folder;
+    let dir = okf_scratch("home");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let mut taken = std::collections::HashSet::new();
+
+    let first = claim_notebook_folder(&dir, "Ferrari research", &taken);
+    assert_eq!(first.file_name().unwrap(), "ferrari-research");
+    taken.insert("ferrari-research".to_string());
+
+    // A second notebook of the same name does not land on the first.
+    let second = claim_notebook_folder(&dir, "Ferrari research", &taken);
+    assert_eq!(second.file_name().unwrap(), "ferrari-research-2");
+
+    // Nor does one whose folder is already on disk but not in a binding.
+    std::fs::create_dir_all(dir.join("orders")).expect("mkdir");
+    assert_eq!(
+        claim_notebook_folder(&dir, "Orders", &std::collections::HashSet::new())
+            .file_name()
+            .unwrap(),
+        "orders-2"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A system notebook (Briefs) is the app's own infrastructure and never
+/// lands in the Notebooks folder (§5.7).
+#[test]
+fn okf_system_notebooks_never_bind() {
+    use crate::okf::is_system_notebook;
+    let nb = |status: &str| crate::models::Notebook {
+        id: "n".into(),
+        title: "Briefs".into(),
+        created_at: 0,
+        updated_at: 0,
+        color: String::new(),
+        icon: String::new(),
+        status: status.into(),
+        growth_web: false,
+        source_count: 0,
+        note_count: 0,
+        report_count: 0,
+    };
+    assert!(is_system_notebook(&nb("system")));
+    assert!(!is_system_notebook(&nb("")));
+    assert!(!is_system_notebook(&nb("archived")));
+}
+
+/// A bundle in the Notebooks folder is opened once; a folder that is not a
+/// bundle is left alone (§5.7).
+#[test]
+fn okf_finds_unopened_bundles_only() {
+    use crate::okf::{unopened_bundles, write_bundle};
+    let dir = okf_scratch("found");
+    let root = dir.join("Alchemy");
+    std::fs::create_dir_all(&root).expect("mkdir");
+
+    // A real bundle.
+    let bundle = root.join("ferrari-research");
+    let (sources, notes) = okf_fixture();
+    write_bundle(
+        &okf_notebook("Ferrari research"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("seed");
+    // Somebody else's folder, and a dot directory.
+    std::fs::create_dir_all(root.join("tax-receipts")).expect("mkdir");
+    std::fs::write(root.join("tax-receipts/2026.txt"), b"x").expect("write");
+    std::fs::create_dir_all(root.join(".Trash")).expect("mkdir");
+
+    let none = std::collections::HashSet::new();
+    let found = unopened_bundles(&root, &none);
+    assert_eq!(found.len(), 1, "only the bundle: {found:?}");
+    assert_eq!(found[0], bundle);
+
+    // Already bound is already open — it is not found a second time.
+    let bound: std::collections::HashSet<String> =
+        [bundle.to_string_lossy().to_string()].into_iter().collect();
+    assert!(unopened_bundles(&root, &bound).is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle carries its notebook's id, which is what lets a second Mac
+/// recognize the same notebook instead of duplicating it (§5.7).
+#[test]
+fn okf_bundles_carry_the_notebook_id_for_rebinding() {
+    use crate::okf::{parse_okf_doc, write_bundle};
+    let dir = okf_scratch("rebind");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle(
+        &okf_notebook("Shared"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("seed");
+
+    let index = std::fs::read_to_string(bundle.join("index.md")).expect("index");
+    assert_eq!(
+        parse_okf_doc(&index).nested("alchemy", "id").as_deref(),
+        Some("nb-data"),
+        "the id the second Mac matches on"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An evicted file is not a missing one: the writer asks for it and leaves
+/// it alone rather than writing over the placeholder (§5.7).
+#[test]
+fn okf_writer_treats_a_stub_as_absent() {
+    use crate::okf::{is_evicted_stub, write_bundle};
+    let dir = okf_scratch("stub");
+    let bundle = dir.join("nb");
+    let (sources, notes) = okf_fixture();
+    write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("seed");
+
+    // Evict one concept the way iCloud does: the file goes, a hidden
+    // placeholder stands in its place.
+    let real = bundle.join("notes/old-thinking.md");
+    let kept = std::fs::read_to_string(&real).expect("read");
+    std::fs::remove_file(&real).expect("evict");
+    std::fs::write(bundle.join("notes/.old-thinking.md.icloud"), b"").expect("stub");
+    assert!(is_evicted_stub(&real), "that is what eviction looks like");
+    assert!(
+        !is_evicted_stub(&bundle.join("notes/what-the-data-says.md")),
+        "a file that is here is not a stub"
+    );
+    assert!(
+        !is_evicted_stub(&bundle.join("notes/never-existed.md")),
+        "and neither is one that never existed"
+    );
+
+    // A pass over the evicted file writes nothing and does not lose it.
+    let out = write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("rewrite");
+    assert_eq!(out.written, 0, "nothing was written over the placeholder");
+    assert!(!real.exists(), "and the file is still not downloaded");
+    assert_eq!(out.removed, 0, "the concept was not treated as deleted");
+
+    // Once it lands, the next pass sees it unchanged.
+    std::fs::write(&real, &kept).expect("hydrate");
+    std::fs::remove_file(bundle.join("notes/.old-thinking.md.icloud")).expect("clear stub");
+    let after = write_bundle(
+        &okf_notebook("NB"),
+        &sources,
+        &notes,
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("after");
+    assert_eq!(
+        after.written, 0,
+        "the file that arrived is the one we wrote"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

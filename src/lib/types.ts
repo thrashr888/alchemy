@@ -688,6 +688,13 @@ export interface AiConfig {
   /** Night Shift master switch: scheduled reports + automatic source
    *  resyncs from the resident scheduler. Off = on-demand only. */
   backgroundEnabled: boolean;
+  /** Where notebooks live on disk as OKF bundles (RFC-okf-live §5.7). */
+  notebooksDir: string;
+  /** Whether a new notebook is kept on disk from the moment it is made. */
+  keepOnDisk: boolean;
+  /** Whether the one-time "keep your notebooks on disk?" offer was answered. */
+  keepOnDiskAsked: boolean;
+
   /** Desktop notifications; in config (not localStorage) so the resident
    *  scheduler can honor it with no window open. */
   showNotifications: boolean;
