@@ -168,8 +168,12 @@ export function HealthBanner({
       tone: "offer",
       title: "Move your notebooks to the Alchemy folder?",
       detail: `Alchemy has its own folder in iCloud Drive now. Your ${icloud.count} ${
-        icloud.count === 1 ? "notebook moves" : "notebooks move"
-      } there, and nothing is deleted.`,
+        icloud.count === 1 ? "notebook" : "notebooks"
+      }${
+        icloud.others > 0
+          ? ` and ${icloud.others} other ${icloud.others === 1 ? "bundle" : "bundles"}`
+          : ""
+      } ${icloud.count === 1 && icloud.others === 0 ? "moves" : "move"} there. Nothing is deleted.`,
       fixes: [
         {
           label: "Move them",

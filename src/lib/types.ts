@@ -70,6 +70,10 @@ export interface IcloudMoveOffer {
   from: string;
   to: string;
   count: number;
+  /** Bundles in the old folder no notebook here is bound to — the starters
+   *  and their copies. They move too, so the banner can promise the whole
+   *  folder rather than half of it. */
+  others: number;
 }
 
 /** What one OKF concept says about its own standing (RFC-okf-live §4), read

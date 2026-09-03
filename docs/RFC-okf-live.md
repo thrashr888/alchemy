@@ -843,6 +843,24 @@ they exist without being asked for.
   `path` and leaves the binding id alone, so the manifest — every hash the
   reconciler has — survives. Minting a new binding would have made the whole
   bundle read as changed on the far side of a folder move.
+- **The move takes the whole folder, not the bound half of it.** Relocating
+  only bound bundles left the starter notebooks and their `-2` copies in
+  `iCloud Drive/Alchemy`, so Finder showed two Alchemy folders side by side
+  and the migration read as half-done. Every folder in the old location that
+  probes as a bundle now travels, bound or not — a rename, never a delete —
+  with the exporter's `-2` rule for destination collisions. Files that are not
+  bundles stay where they are, which is why the old folder is removed only
+  when it turns out to be empty afterwards: an empty directory going away is
+  not a deletion, and anything left in it is somebody's.
+
+  One exception, and it is the two-Mac case again: when the container already
+  holds a bundle claiming the same `alchemy.id`, the copy in the old folder is
+  the older one. It stays where it is rather than being written over the
+  bundle the other Mac synced, and the log names both paths so the choice is
+  visible. The banner counts both halves — "Your 19 notebooks and 8 other
+  bundles move there. Nothing is deleted." — because a promise about a folder
+  should cover the folder.
+
 - **A folder is found by its id, never rebuilt from its path.** The move is a
   folder move on one Mac and an arrival on the other, and 0.56.0 had no
   account of the second half. Mac A moved its bundles into the container;

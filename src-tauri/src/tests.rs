@@ -3861,18 +3861,30 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
     };
     let full = bound(&stage_one);
 
-    let offer = icloud_move_plan(&home, true, false, &stage_one, &full);
+    let none: Vec<(std::path::PathBuf, Option<String>)> = Vec::new();
+    let offer = icloud_move_plan(&home, true, false, &stage_one, &full, &none);
     assert!(offer.available);
     assert_eq!(offer.count, 2);
+
+    // The starters and their copies are in the folder too, bound to nothing.
+    // They move as well, and the banner says so.
+    let with_strays = vec![
+        (stage_one.join("ferrari"), Some("nb1".to_string())),
+        (stage_one.join("worked-examples"), None),
+        (stage_one.join("worked-examples-2"), None),
+    ];
+    let counted = icloud_move_plan(&home, true, false, &stage_one, &full, &with_strays);
+    assert_eq!(counted.count, 2, "bound notebooks");
+    assert_eq!(counted.others, 2, "and the bundles nothing is bound to");
     assert_eq!(offer.from, stage_one.to_string_lossy());
     assert_eq!(offer.to, container.to_string_lossy());
 
     // No entitlement: there is no container to move into.
-    assert!(!icloud_move_plan(&home, false, false, &stage_one, &full).available);
+    assert!(!icloud_move_plan(&home, false, false, &stage_one, &full, &none).available);
     // Answered once is answered.
-    assert!(!icloud_move_plan(&home, true, true, &stage_one, &full).available);
+    assert!(!icloud_move_plan(&home, true, true, &stage_one, &full, &none).available);
     // Already there.
-    assert!(!icloud_move_plan(&home, true, false, &container, &bound(&container)).available);
+    assert!(!icloud_move_plan(&home, true, false, &container, &bound(&container), &none).available);
     // Nothing bound yet — an empty folder is not worth a banner.
     assert!(
         !icloud_move_plan(
@@ -3880,13 +3892,14 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
             true,
             false,
             &stage_one,
-            &std::collections::HashMap::new()
+            &std::collections::HashMap::new(),
+            &none
         )
         .available
     );
     // A folder the user chose is theirs; stage two does not overrule it.
     let dropbox = home.join("Dropbox/Notebooks");
-    assert!(!icloud_move_plan(&home, true, false, &dropbox, &bound(&dropbox)).available);
+    assert!(!icloud_move_plan(&home, true, false, &dropbox, &bound(&dropbox), &none).available);
 }
 
 /// The move plans a destination per bundle, dodges names already in the
@@ -3926,6 +3939,7 @@ fn okf_icloud_move_rewrites_binding_paths() {
         &bindings,
         &taken,
         &std::collections::HashMap::new(),
+        &[],
     );
     assert_eq!(moves.len(), 2, "only the two under the Notebooks folder");
     assert_eq!(moves[0].notebook(), "nb1");
@@ -4045,7 +4059,7 @@ fn okf_icloud_move_adopts_a_bundle_already_in_the_container() {
             .into_iter()
             .collect();
 
-    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already);
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already, &[]);
     assert_eq!(
         moves[0],
         IcloudPlacement::Adopt {
@@ -4062,6 +4076,79 @@ fn okf_icloud_move_adopts_a_bundle_already_in_the_container() {
         bindings["nb1"].id, "b-nb1",
         "the manifest survives an adopt"
     );
+}
+
+/// The move takes the whole folder, not just the bound half: the starter
+/// bundles and their copies travel too, so Finder is not left with two
+/// Alchemy folders side by side. And a bundle whose notebook the container
+/// already holds stays where it is rather than landing on top of it.
+#[test]
+fn okf_the_move_takes_every_bundle_in_the_old_folder() {
+    use crate::okf::{plan_icloud_moves, IcloudPlacement, OkfBinding};
+    let from = std::path::PathBuf::from("/Users/tester/iCloudDrive/Alchemy");
+    let to = std::path::PathBuf::from("/Users/tester/Container/Documents");
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert(
+        "nb1".to_string(),
+        OkfBinding {
+            path: from.join("ferrari").to_string_lossy().to_string(),
+            id: "b-nb1".into(),
+            last_write_at: 1,
+            lost: false,
+        },
+    );
+    // What is actually in the folder: the bound bundle, two starters nothing
+    // is bound to, and one of those starters is already in the container.
+    let strays = vec![
+        (from.join("ferrari"), Some("nb1".to_string())),
+        (from.join("worked-examples"), Some("starter-a".to_string())),
+        (
+            from.join("worked-examples-2"),
+            Some("starter-b".to_string()),
+        ),
+    ];
+    let already: std::collections::HashMap<String, std::path::PathBuf> =
+        [("starter-a".to_string(), to.join("worked-examples"))]
+            .into_iter()
+            .collect();
+    let taken: std::collections::HashSet<String> =
+        ["worked-examples".to_string()].into_iter().collect();
+
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already, &strays);
+    assert_eq!(
+        moves,
+        vec![
+            IcloudPlacement::Move {
+                notebook: "nb1".into(),
+                from: from.join("ferrari"),
+                to: to.join("ferrari"),
+            },
+            IcloudPlacement::Leave {
+                from: from.join("worked-examples"),
+                at: to.join("worked-examples"),
+            },
+            IcloudPlacement::Move {
+                notebook: String::new(),
+                from: from.join("worked-examples-2"),
+                to: to.join("worked-examples-2"),
+            },
+        ],
+        "the bound bundle moves, the unbound ones move too, and the one the container already has stays put"
+    );
+
+    // A name collision with a genuinely different bundle still gets the -2.
+    let clash = vec![(from.join("worked-examples"), Some("starter-a".to_string()))];
+    let moves = plan_icloud_moves(
+        &from,
+        &to,
+        &std::collections::HashMap::new(),
+        &taken,
+        &std::collections::HashMap::new(),
+        &clash,
+    );
+    assert_eq!(moves[0].dest(), to.join("worked-examples-2"));
+
+    bindings.clear();
 }
 
 /// One `alchemy.id` in several folders keeps one of them, and both Macs have

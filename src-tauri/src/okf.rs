@@ -4331,6 +4331,11 @@ pub struct IcloudMoveOffer {
     pub to: String,
     /// How many bound notebooks would move.
     pub count: usize,
+    /// Bundles in the old folder no notebook here is bound to — the starters
+    /// and their copies, or a folder from another install. They move too: a
+    /// migration that leaves half the folder behind leaves the user with two
+    /// Alchemy folders side by side in Finder, which is what happened.
+    pub others: usize,
 }
 
 /// The bound bundles sitting directly in `root`, by notebook id, sorted so a
@@ -4359,6 +4364,10 @@ pub(crate) fn icloud_move_plan(
     asked: bool,
     notebooks_dir: &Path,
     bindings: &HashMap<String, OkfBinding>,
+    // Everything in the old folder that probes as a bundle, from
+    // `bundles_under`. Passed in rather than read here so the decision stays
+    // a pure function of what it is told.
+    bundles: &[(PathBuf, Option<String>)],
 ) -> IcloudMoveOffer {
     let to = crate::ai::icloud_container_documents(home);
     let mut offer = IcloudMoveOffer {
@@ -4377,7 +4386,10 @@ pub(crate) fn icloud_move_plan(
     if notebooks_dir != crate::ai::icloud_drive_alchemy(home) {
         return offer;
     }
+    let bound: std::collections::HashSet<PathBuf> =
+        bindings.values().map(|b| PathBuf::from(&b.path)).collect();
     offer.count = bound_under(notebooks_dir, bindings).len();
+    offer.others = bundles.iter().filter(|(p, _)| !bound.contains(p)).count();
     offer.available = offer.count > 0;
     offer
 }
@@ -4395,22 +4407,30 @@ pub(crate) enum IcloudPlacement {
     /// moved it and iCloud carried it here. Point the binding at that folder
     /// and leave the copy under the old root alone.
     Adopt { notebook: String, at: PathBuf },
+    /// The container already holds a bundle claiming the same notebook, and
+    /// this folder is not bound to anything here — so this one is the older
+    /// copy. It stays where it is rather than landing on top of the bundle
+    /// the other Mac synced, and the log says which is which.
+    Leave { from: PathBuf, at: PathBuf },
 }
 
 impl IcloudPlacement {
+    /// The notebook this placement is for, or "" for a bundle no notebook
+    /// here is bound to.
     pub(crate) fn notebook(&self) -> &str {
         match self {
             IcloudPlacement::Move { notebook, .. } | IcloudPlacement::Adopt { notebook, .. } => {
                 notebook
             }
+            IcloudPlacement::Leave { .. } => "",
         }
     }
 
-    /// Where the binding points once this placement is carried out.
+    /// Where the bundle ends up.
     pub(crate) fn dest(&self) -> &Path {
         match self {
             IcloudPlacement::Move { to, .. } => to,
-            IcloudPlacement::Adopt { at, .. } => at,
+            IcloudPlacement::Adopt { at, .. } | IcloudPlacement::Leave { at, .. } => at,
         }
     }
 }
@@ -4434,13 +4454,18 @@ pub(crate) fn plan_icloud_moves(
     bindings: &HashMap<String, OkfBinding>,
     taken: &std::collections::HashSet<String>,
     already: &HashMap<String, PathBuf>,
+    // Every folder under `from` that probes as a bundle, bound or not.
+    bundles: &[(PathBuf, Option<String>)],
 ) -> Vec<IcloudPlacement> {
     let mut taken = taken.clone();
     let mut out = Vec::new();
+    let mut placed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for id in bound_under(from, bindings) {
         let Some(binding) = bindings.get(&id) else {
             continue;
         };
+        let old = PathBuf::from(&binding.path);
+        placed.insert(old.clone());
         if let Some(at) = already.get(&id) {
             out.push(IcloudPlacement::Adopt {
                 notebook: id,
@@ -4448,24 +4473,53 @@ pub(crate) fn plan_icloud_moves(
             });
             continue;
         }
-        let old = PathBuf::from(&binding.path);
-        let Some(name) = old.file_name().and_then(|n| n.to_str()) else {
+        let Some(name) = old.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
-        let mut slug = name.to_string();
-        let mut n = 2;
-        while taken.contains(&slug) {
-            slug = format!("{name}-{n}");
-            n += 1;
-        }
-        taken.insert(slug.clone());
         out.push(IcloudPlacement::Move {
             notebook: id,
             from: old,
-            to: to.join(slug),
+            to: to.join(free_name(&name, &mut taken)),
+        });
+    }
+
+    // Then everything else in the folder that is a bundle. The starter
+    // notebooks and their `-2` copies are never bound, and leaving them
+    // behind is what left two Alchemy folders side by side in Finder.
+    for (folder, id) in bundles {
+        if placed.contains(folder) {
+            continue;
+        }
+        if let Some(at) = id.as_ref().and_then(|id| already.get(id)) {
+            out.push(IcloudPlacement::Leave {
+                from: folder.clone(),
+                at: at.clone(),
+            });
+            continue;
+        }
+        let Some(name) = folder.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        out.push(IcloudPlacement::Move {
+            notebook: String::new(),
+            from: folder.clone(),
+            to: to.join(free_name(name, &mut taken)),
         });
     }
     out
+}
+
+/// The first name in the destination this folder can have, claiming it: the
+/// exporter's `-2` rule, so a collision never lands on somebody's folder.
+fn free_name(name: &str, taken: &mut std::collections::HashSet<String>) -> String {
+    let mut slug = name.to_string();
+    let mut n = 2;
+    while taken.contains(&slug) {
+        slug = format!("{name}-{n}");
+        n += 1;
+    }
+    taken.insert(slug.clone());
+    slug
 }
 
 /// Point the bindings sidecar at the folders' new homes. The binding id and
@@ -4501,6 +4555,7 @@ pub async fn icloud_container_offer(state: State<'_, AppState>) -> Result<Icloud
         asked,
         &dir,
         &load_bindings(&app_data_dir(&state)),
+        &bundles_under(&dir),
     ))
 }
 
@@ -4560,12 +4615,14 @@ pub async fn move_notebooks_to_icloud_container(
         )
     };
     let mut bindings = load_bindings(&data_dir);
+    let strays = bundles_under(&from);
     let offer = icloud_move_plan(
         &home,
         crate::ai::bundle_has_icloud_container(),
         asked,
         &from,
         &bindings,
+        &strays,
     );
     if !offer.available {
         return Err("There's nothing to move into the Alchemy iCloud folder.".to_string());
@@ -4593,7 +4650,7 @@ pub async fn move_notebooks_to_icloud_container(
         .into_iter()
         .filter_map(|(path, id)| id.map(|id| (id, path)))
         .collect();
-    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already);
+    let moves = plan_icloud_moves(&from, &to, &bindings, &taken, &already, &strays);
 
     let mut done: Vec<IcloudPlacement> = Vec::new();
     let mut busy: Vec<String> = Vec::new();
@@ -4609,6 +4666,14 @@ pub async fn move_notebooks_to_icloud_container(
             continue;
         }
         let (old, new) = match &placement {
+            IcloudPlacement::Leave { from, at } => {
+                okf_notice(format!(
+                    "{} stays where it is: the Alchemy iCloud folder already holds {} for the same notebook, and the older copy is not worth writing over.",
+                    from.display(),
+                    at.display()
+                ));
+                continue;
+            }
             IcloudPlacement::Adopt { at, .. } => {
                 okf_notice(format!(
                     "{} is already in the Alchemy iCloud folder; the binding points there and the old copy is left where it is.",
@@ -4687,6 +4752,18 @@ pub async fn move_notebooks_to_icloud_container(
     crate::commands::apply_ai_config(&app, &state, config).await?;
     // The watched root moved with them (5.7: the Notebooks folder is watched
     // whether or not a notebook is open).
+    // The old folder goes only when nothing is left in it — never a delete of
+    // anything, only the removal of an empty directory. A file somebody put
+    // there by hand, or a bundle left behind because the container already
+    // holds its notebook, keeps the folder alive on purpose.
+    if std::fs::read_dir(&from)
+        .map(|mut d| d.next().is_none())
+        .unwrap_or(false)
+        && std::fs::remove_dir(&from).is_ok()
+    {
+        crate::note!("okf: the old Notebooks folder was empty, so it is gone");
+    }
+
     crate::fswatch::rearm(&app).await;
     let held = held_writes();
     if !held.is_empty() {
