@@ -295,6 +295,12 @@ pub fn start(app: AppHandle) {
                 Err(err) => crate::note!("notebooks: dedupe failed: {err:#}"),
             }
             crate::okf::heal_bindings(&state).await;
+            // And the tidying that is not a one-off repair: folders claiming
+            // the same notebook, and the empty directories iCloud leaves
+            // behind when it makes a folder before delivering its files.
+            // Every launch, because both arrive after the pass that would
+            // have caught them (docs/RFC-okf-live.md §5.7).
+            crate::okf::tidy_notebooks_folder(&state).await;
         }
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

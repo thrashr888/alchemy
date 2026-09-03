@@ -4195,6 +4195,94 @@ fn okf_consolidation_keeps_the_same_folder_on_either_mac() {
     .is_empty());
 }
 
+/// A bundle folder good enough for `bundles_under` to see: an `index.md` that
+/// says whose it is, and the two directories a bundle carries.
+fn okf_test_bundle(root: &std::path::Path, name: &str, id: &str) -> std::path::PathBuf {
+    let dir = root.join(name);
+    std::fs::create_dir_all(dir.join("sources")).unwrap();
+    std::fs::create_dir_all(dir.join("notes")).unwrap();
+    std::fs::write(
+        dir.join("index.md"),
+        format!("---\ntitle: {name}\nalchemy:\n  id: {id}\n---\n"),
+    )
+    .unwrap();
+    dir
+}
+
+/// The consolidation is a standing rule, not a one-off repair: a `-2` folder
+/// that arrives long after the heal stamp is written still goes aside, and a
+/// second one after that does not land on the first (§5.7).
+#[test]
+fn okf_consolidation_keeps_working_after_the_heal_stamp() {
+    use crate::okf::{apply_consolidation, bundles_under, DUPLICATES_DIR};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    okf_test_bundle(root, "ferrari", "nb1");
+
+    // Nothing to do while there is one folder per notebook.
+    assert!(apply_consolidation(root, &bundles_under(root)).is_empty());
+
+    // The other Mac's copy lands — after the stamp, which no longer gates it.
+    okf_test_bundle(root, "ferrari-2", "nb1");
+    let moved = apply_consolidation(root, &bundles_under(root));
+    assert_eq!(
+        moved.get("nb1").map(|p| p.as_path()),
+        Some(root.join("ferrari-2").as_path()),
+        "the copy is the one that moves, and the caller is told where it was"
+    );
+    assert!(root.join("ferrari/index.md").is_file(), "the keeper stays");
+    assert!(root
+        .join(DUPLICATES_DIR)
+        .join("ferrari-2/index.md")
+        .is_file());
+
+    // A third copy under the same name never overwrites the one already set
+    // aside: inside `Duplicates/` the collision gets the `-2` rule too.
+    okf_test_bundle(root, "ferrari-2", "nb1");
+    apply_consolidation(root, &bundles_under(root));
+    let aside = root.join(DUPLICATES_DIR);
+    assert!(aside.join("ferrari-2/index.md").is_file());
+    assert!(aside.join("ferrari-2-2/index.md").is_file());
+
+    // Idempotent: a settled folder plans nothing.
+    assert!(apply_consolidation(root, &bundles_under(root)).is_empty());
+}
+
+/// iCloud makes a folder before it delivers the files, so an empty directory
+/// at the Notebooks root may be a bundle mid-download. Only an old one is
+/// rubbish — and an empty directory going away is not a deletion.
+#[test]
+fn okf_empty_folders_go_only_once_they_are_old() {
+    use crate::okf::{remove_if_empty, stale_empty_dirs, DUPLICATES_DIR, EMPTY_DIR_GRACE_MS};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    std::fs::create_dir_all(root.join("arriving")).unwrap();
+    std::fs::create_dir_all(root.join(DUPLICATES_DIR)).unwrap();
+    okf_test_bundle(root, "ferrari", "nb1");
+
+    assert!(
+        stale_empty_dirs(root, now).is_empty(),
+        "a directory iCloud may still be filling is left alone"
+    );
+    // The same directory, ten minutes on.
+    assert_eq!(
+        stale_empty_dirs(root, now + EMPTY_DIR_GRACE_MS + 1),
+        vec![root.join("arriving")],
+        "an old empty folder is a leftover; a bundle and Duplicates/ are not"
+    );
+
+    assert!(remove_if_empty(&root.join("arriving")));
+    assert!(!root.join("arriving").exists());
+    assert!(
+        !remove_if_empty(&root.join("ferrari")),
+        "a folder with something in it stays, whatever its age"
+    );
+}
+
 /// The move holds new writes rather than waiting for the app to go quiet, and
 /// waits per notebook: on a Mac whose watcher is rebinding bundles from the
 /// other one, something is always writing and global quiet never comes.

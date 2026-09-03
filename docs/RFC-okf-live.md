@@ -748,6 +748,12 @@ they exist without being asked for.
   happening is a policy. The stamp carries a number so a later pass can run
   when there is something new to fix.
 
+  The stamp covers *that* kind of rule only. Tidying the folders themselves —
+  consolidating two folders that claim one notebook, clearing empty
+  leftovers, emptying the stage-one folder — undoes nothing a person can
+  redo, so it runs every pass instead; see the two entries at the end of this
+  section.
+
 - **The offer banner is a third tone.** `error` and `warning` both tint their
   container and wear a warning triangle; an invitation is neither a failure
   nor a degradation, and colour here is semantic (DESIGN.md §2). `offer` is a
@@ -901,7 +907,24 @@ they exist without being asked for.
     lexically — because both Macs run this over the same synced folder, and a
     keeper picked from local state would have each of them setting the other's
     keeper aside forever. Local state decides only where the local binding is
-    repointed afterwards. This rides the once-ever heal stamp at version 2.
+    repointed afterwards.
+
+    **And it runs on every pass, not once ever — corrected.** It first rode
+    the heal stamp, which the two-Mac state showed was the wrong shape for
+    it. The nineteen `<slug>-2` folders the other Mac wrote arrived here as
+    *empty directories* — iCloud makes the folder and delivers the files
+    after — so `bundles_under` could not see one of them, the stamp went down
+    anyway, and when the files landed nothing would ever have looked again.
+    Unlike the heal's unbinds and archives, this rule undoes nothing a person
+    can legitimately redo: a second folder for one notebook is not something
+    anybody asked for. So it runs at every launch and on every root-watcher
+    pass, for one readdir plus one `index.md` read per root folder, and a
+    folder that is not a bundle yet is left alone.
+
+    The same pass takes out **empty directories older than ten minutes**. An
+    empty directory is not data, so removing one is not a deletion; but a
+    directory a sync client is still filling is empty too, which is why its
+    own mtime has to be old before it counts as a leftover.
 
 - **Nothing moves under a write in flight, and nothing is deleted.** The move
   waits on §5.2's pending/flushing sets rather than renaming a bundle out from

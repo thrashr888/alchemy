@@ -1911,44 +1911,25 @@ pub(crate) fn heal_plan(
 /// the same one (`duplicate_rank`), everything else is *renamed* into
 /// `Duplicates/`, and a local binding pointing at a folder that moved is
 /// repointed at the keeper. Nothing is deleted, and both paths go in the log.
-async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &Path) {
+///
+/// **Every pass, not once ever.** The first version rode the heal stamp, and
+/// on the two-Mac run that was exactly the wrong shape: the nineteen
+/// `<slug>-2` folders the other Mac wrote arrived here as empty directories
+/// with their files still uploading, so `bundles_under` could not see them,
+/// the stamp went down anyway, and nothing would ever have looked again.
+/// Unlike the heal's unbinds and archives this rule undoes nothing a person
+/// can legitimately redo — a second folder for one notebook is never
+/// something anybody asked for — so it is safe to keep running. It costs one
+/// readdir plus one `index.md` read per root folder.
+pub(crate) async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &Path) {
     let (root, _) = notebooks_home(state).await;
     if root.as_os_str().is_empty() || !root.is_dir() {
         return;
     }
     let bundles = bundles_under(&root);
-    let plan = consolidate_plan(&root, &bundles);
-    if plan.is_empty() {
-        return;
-    }
-    if let Err(err) = std::fs::create_dir_all(root.join(DUPLICATES_DIR)) {
-        crate::diagnostics::error(
-            "okf",
-            format!("could not make the Duplicates folder: {err}"),
-        );
-        return;
-    }
     // Notebook id -> the folder that keeps it, so a binding aimed at a copy
     // can be repointed rather than left aimed at `Duplicates/`.
-    let mut moved: HashMap<String, PathBuf> = HashMap::new();
-    for (from, to) in plan {
-        if let Err(err) = std::fs::rename(&from, &to) {
-            crate::diagnostics::error(
-                "okf",
-                format!("could not set {from:?} aside as {to:?}: {err}"),
-            );
-            continue;
-        }
-        okf_notice(format!(
-            "{} is a second folder for a notebook that already has one, so it moved to {}. Nothing was deleted.",
-            from.display(),
-            to.display()
-        ));
-        if let Some(id) = declared_id(&to) {
-            moved.insert(id, from);
-        }
-    }
-    for (notebook, was) in moved {
+    for (notebook, was) in apply_consolidation(&root, &bundles) {
         let Some(binding) = binding_for(data_dir, &notebook) else {
             continue;
         };
@@ -1973,6 +1954,136 @@ async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &Path) {
             keeper.display()
         ));
     }
+}
+
+/// Carry out the consolidation on disk, and say, per notebook id, which
+/// folder that notebook's copy left. Nothing is deleted: every non-keeper is
+/// *renamed* under `Duplicates/`, and a name already taken in there gets the
+/// exporter's `-2` rather than landing on an earlier copy.
+///
+/// Split out from the binding work above so the disk half can be tested
+/// against a real directory without an app around it.
+pub(crate) fn apply_consolidation(
+    root: &Path,
+    bundles: &[(PathBuf, Option<String>)],
+) -> HashMap<String, PathBuf> {
+    let mut moved: HashMap<String, PathBuf> = HashMap::new();
+    let plan = consolidate_plan(root, bundles);
+    if plan.is_empty() {
+        return moved;
+    }
+    if let Err(err) = std::fs::create_dir_all(root.join(DUPLICATES_DIR)) {
+        crate::diagnostics::error(
+            "okf",
+            format!("could not make the Duplicates folder: {err}"),
+        );
+        return moved;
+    }
+    for (from, to) in plan {
+        if let Err(err) = std::fs::rename(&from, &to) {
+            crate::diagnostics::error(
+                "okf",
+                format!("could not set {from:?} aside as {to:?}: {err}"),
+            );
+            continue;
+        }
+        okf_notice(format!(
+            "{} is a second folder for a notebook that already has one, so it moved to {}. Nothing was deleted.",
+            from.display(),
+            to.display()
+        ));
+        if let Some(id) = declared_id(&to) {
+            moved.insert(id, from);
+        }
+    }
+    moved
+}
+
+/// How long a directory is allowed to sit there empty before it reads as a
+/// leftover rather than a folder a sync client is still filling.
+///
+/// iCloud makes the directory first and delivers the files after, which is
+/// how nineteen `<slug>-2` bundles turned up here as empty dirs. Ten minutes
+/// is long enough that a folder mid-download is never mistaken for rubbish,
+/// and short enough that the Notebooks folder does not stay littered.
+pub(crate) const EMPTY_DIR_GRACE_MS: i64 = 10 * 60 * 1000;
+
+/// Direct children of `root` that are empty directories and have sat there
+/// long enough to be leftovers. `Duplicates/` and dot folders are never
+/// candidates: what was put aside is out of the way, not up for collection.
+///
+/// An empty directory is not data, so removing one is not a deletion — but a
+/// directory iCloud is still filling is empty too, which is why the folder's
+/// own mtime has to be old. `now` is a parameter so the rule can be tested
+/// against a real directory without waiting ten minutes for it.
+pub(crate) fn stale_empty_dirs(root: &Path, now: i64) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            p.is_dir()
+                && !name.starts_with('.')
+                && name != DUPLICATES_DIR
+                && std::fs::read_dir(p).is_ok_and(|mut d| d.next().is_none())
+                && dir_mtime_ms(p).is_some_and(|at| now.saturating_sub(at) >= EMPTY_DIR_GRACE_MS)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// A directory's own modification time in epoch milliseconds, or `None` when
+/// the filesystem will not say — in which case nothing is done to it.
+fn dir_mtime_ms(dir: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(dir).ok()?.modified().ok()?;
+    let since = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    i64::try_from(since).ok()
+}
+
+/// Remove a directory when nothing is left in it, and say whether it went.
+///
+/// An empty directory going away is not a deletion; anything still in it is
+/// somebody's, and keeps the folder alive on purpose.
+pub(crate) fn remove_if_empty(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut d| d.next().is_none())
+        .unwrap_or(false)
+        && std::fs::remove_dir(dir).is_ok()
+}
+
+/// Take the empty leftovers out of `root`, naming each one in the log.
+fn sweep_empty_dirs(root: &Path) {
+    for dir in stale_empty_dirs(root, now_ms()) {
+        if remove_if_empty(&dir) {
+            crate::note!(
+                "okf: {} was an empty folder ten minutes old, so it is gone",
+                dir.display()
+            );
+        }
+    }
+}
+
+/// One tidying pass over the Notebooks folder: consolidate the folders that
+/// claim the same notebook, then take out the empty leftovers.
+///
+/// Called at launch and on every root-watcher pass, because both of the
+/// things it fixes arrive *after* the pass that would have caught them — a
+/// bundle iCloud is still delivering is neither a duplicate nor an empty
+/// directory yet.
+pub(crate) async fn tidy_notebooks_folder(state: &AppState) {
+    let (root, _) = notebooks_home(state).await;
+    if root.as_os_str().is_empty() || !root.is_dir() {
+        return;
+    }
+    consolidate_duplicate_bundles(state, &app_data_dir(state)).await;
+    sweep_empty_dirs(&root);
 }
 
 /// What this pass understands how to repair. A machine stamped with the
@@ -2058,7 +2169,9 @@ pub(crate) async fn heal_bindings(state: &AppState) {
             }
         }
     }
-    consolidate_duplicate_bundles(state, &data_dir).await;
+    // The consolidation used to run here, under the stamp. It runs on every
+    // pass now (`tidy_notebooks_folder`): a duplicate that arrives after the
+    // stamp is written is still a duplicate.
     if let Err(err) = std::fs::write(&stamp, HEAL_VERSION) {
         crate::note!("okf: couldn't stamp the heal: {err}");
     }
@@ -2322,6 +2435,9 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
     if OPENING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return 0;
     }
+    // Tidy first, then look: a folder that is about to be set aside as a
+    // duplicate should not be opened as an arrival on the way there.
+    tidy_notebooks_folder(state).await;
     let out = open_found_bundles_inner(app, state, &root).await;
     OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
     out
