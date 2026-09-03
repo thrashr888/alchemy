@@ -16,9 +16,10 @@ source.** Two shapes, one format:
 
 The spec moved to v0.2 while we weren't looking (the exporter says v0.1):
 provenance (`sources`), trust (`generated`, `verified`), and lifecycle
-(`status`, `stale_after`) are first-class frontmatter now. Both shapes
-should write and read those where they mean something to us, and preserve
-the rest untouched — the spec's own round-trip rule.
+(`status`, `stale_after`) are first-class frontmatter now. Phase 0 brings
+the exporter and the nightly OKF snapshot up to v0.2 first; both shapes
+then write and read those fields where they mean something to us, and
+preserve the rest untouched — the spec's own round-trip rule.
 
 ## 1. Goals
 
@@ -37,12 +38,46 @@ the rest untouched — the spec's own round-trip rule.
 - **Git operations.** Alchemy writes files; who commits them is the
   user's or the agent's business. An auto-commit option can come later.
 - **Merge resolution.** Concurrent edits to the same file resolve
-  last-writer-wins by mtime (§4.4). Write-through lands within two
+  last-writer-wins by mtime (§5.4). Write-through lands within two
   seconds, so real races are rare, and the log records both sides.
 - **Attested Computation** and the rest of spec §10. Read and preserved,
   never executed.
 
-## 3. Bundle as a source (shape B)
+## 3. Phase 0: the exporter speaks v0.2
+
+Before either shape, the writer we already have catches up with the spec.
+`export_notebook_okf` (and the zip around it) emits v0.1 today; the
+import side parses a quoted-scalar subset of frontmatter and nothing
+nested. Phase 0 makes the one exporter v0.2-correct, because shapes A and
+B both build on it and the nightly escape hatch runs it every night:
+
+- **Frontmatter families.** Every concept carries
+  `generated: { by: alchemy/<version>, at }` — `at` is the entity's
+  `updated_at` for notes, `created_at` for sources. Notes derived from
+  sources carry `sources:` entries (`id`, `resource` as the bundle-relative
+  `sources/<slug>.md` path, `title`) for every source the note cites or
+  was generated over, so a reader can walk a summary back to its inputs.
+  Curator drafts and anything with a non-empty `origin` write
+  `status: draft`; archived notes write `status: deprecated`. Sources keep
+  `resource` and `tags`; `type` stays the human label it is.
+- **Timestamps** are ISO 8601 with an explicit `Z`, everywhere.
+- **`log.md`** appends dated entries per spec §9 instead of rewriting one
+  line — the nightly loop then reads as a history, not a stamp.
+- **Round-trip.** Import parses real YAML (nested maps, lists of
+  `verified` entries) and keeps unknown keys; the bound-notebook manifest
+  (§5.1) is what carries them back out. The v0.1 quoted-scalar files we
+  have already written still parse.
+- **The nightly snapshot.** The Night Shift's data-trust job
+  (RFC-night-shift-area §7) loops the exporter over every notebook into
+  `backups/okf/latest/`. It runs the v0.2 writer with no other change; if
+  the loop is not yet wired to the scheduler, phase 0 wires it, gated by
+  `background_enabled` like the store snapshot beside it.
+
+Tests: a golden bundle for one notebook (frontmatter families present,
+timestamps `Z`-suffixed, `sources:` paths resolve inside the bundle), and
+a v0.1 bundle that still imports.
+
+## 4. Bundle as a source (shape B)
 
 The easy half, and it ships first. Detection follows the Obsidian rule:
 a picked or dropped folder is an OKF bundle when `probe_okf` says so
@@ -77,9 +112,9 @@ a zip is an import.** A bundle folder dropped on a notebook (or picked
 through Add Source, or added from a Spotlight hit) becomes an `okf`
 source. An `.okf.zip` dropped anywhere still imports — a zip cannot stay
 live. Home's Import… dialog keeps importing folders one-shot for people
-who want a copy rather than a link, and gains the binding checkbox in §4.5.
+who want a copy rather than a link, and gains the binding checkbox in §5.5.
 
-## 4. A bound notebook (shape A)
+## 5. A bound notebook (shape A)
 
 ### 4.1 The binding
 
@@ -168,7 +203,7 @@ non-goal until someone actually hits this.
   `okf_path`. The skill's OKF section tells agents the folder is the
   editing surface once a notebook is bound.
 
-## 5. Plumbing
+## 6. Plumbing
 
 - `okf` source type: `add_source_folder` detection beside the `.obsidian`
   check; reserved-file skip and frontmatter strip in the folder ingest
@@ -185,7 +220,7 @@ non-goal until someone actually hits this.
   YAML parse for reading (nested `generated`, lists of `verified`
   entries), keep hand-written emission for what we write.
 
-## 6. Tests
+## 7. Tests
 
 - Round trip: seed → bind → edit a note file → note updates; edit a note
   in-app → file updates; the second write of an unchanged note is a no-op.
@@ -197,8 +232,10 @@ non-goal until someone actually hits this.
   badged; `index.md` and `log.md` never become sources.
 - The drop rule: a folder becomes a source in a notebook, a zip imports.
 
-## 7. Phasing
+## 8. Phasing
 
+0. The v0.2 exporter and the nightly loop (§3). Every later phase writes
+   through it.
 1. Shape B — the `okf` source type and the drop rule. Small, ships alone.
 2. Shape A write-through — bindings, manifest, writer, chip, menu, MCP.
 3. Shape A read-back — watcher roots and the reconciler.
