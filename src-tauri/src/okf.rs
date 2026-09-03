@@ -271,6 +271,23 @@ struct OkfPlacement {
     title: String,
 }
 
+/// A placement at a path already decided. The slug is whatever the path says
+/// it is — which for a file read-back adopted is the name its author gave it,
+/// not one the writer would have chosen.
+fn placement_at(dir: &str, path: &str, title: &str) -> OkfPlacement {
+    let slug = path
+        .strip_prefix(&format!("{dir}/"))
+        .unwrap_or(path)
+        .strip_suffix(".md")
+        .unwrap_or(path)
+        .to_string();
+    OkfPlacement {
+        slug,
+        path: path.to_string(),
+        title: title.to_string(),
+    }
+}
+
 /// Emit one concept's v0.2 frontmatter. Hand-written rather than serialized:
 /// key order is part of the document's readability, and only the values need
 /// escaping. Unknown keys go through `serde_yaml_ng` so nested maps and
@@ -403,38 +420,60 @@ pub fn write_bundle(
     let mut manifest = manifest_at.map(load_manifest).unwrap_or_default();
     let mut out = OkfWrite::default();
 
-    // Slugs are claimed per directory, so two sources called "Notes" become
-    // notes.md and notes-2.md rather than one clobbering the other.
-    let mut used: HashMap<String, u32> = HashMap::new();
-    let mut claim = |dir: &str, title: &str| -> String {
-        let s = okf_slug(title);
-        let count = used.entry(format!("{dir}/{s}")).or_insert(0);
-        *count += 1;
-        if *count == 1 {
-            s
-        } else {
-            format!("{s}-{count}")
-        }
-    };
-
     // Place everything first: a note's `sources:` entries cite bundle paths,
-    // which are only known once every slug is claimed.
+    // which are only known once every path is claimed.
     let mut placements: HashMap<String, OkfPlacement> = HashMap::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let order: Vec<(&str, Vec<&OkfConcept>)> = vec![
         ("sources", sources.iter().collect()),
         ("notes", notes.iter().collect()),
     ];
+    // Pass one: a file read-back took in keeps the name it arrived under.
+    // The file is the concept — inventing a slug for it would leave the
+    // original unclaimed, and the next reconcile would import it again.
     for (dir, concepts) in &order {
         for concept in concepts {
-            let slug = claim(dir, &concept.title);
+            let Some(entry) = manifest.concepts.get(&concept.id) else {
+                continue;
+            };
+            if !entry.adopted || !entry.path.starts_with(&format!("{dir}/")) {
+                continue;
+            }
+            if !taken.insert(entry.path.clone()) {
+                continue;
+            }
             placements.insert(
                 concept.id.clone(),
-                OkfPlacement {
-                    path: format!("{dir}/{slug}.md"),
-                    slug,
-                    title: concept.title.clone(),
-                },
+                placement_at(dir, &entry.path, &concept.title),
             );
+        }
+    }
+    // Pass two: everything else takes the first free slug of its title, so
+    // two sources called "Notes" become notes.md and notes-2.md rather than
+    // one clobbering the other.
+    let mut used: HashMap<String, u32> = HashMap::new();
+    for (dir, concepts) in &order {
+        for concept in concepts {
+            if placements.contains_key(&concept.id) {
+                continue;
+            }
+            let base = okf_slug(&concept.title);
+            let key = format!("{dir}/{base}");
+            let mut n = *used.get(&key).unwrap_or(&0);
+            let path = loop {
+                n += 1;
+                let slug = if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}-{n}")
+                };
+                let path = format!("{dir}/{slug}.md");
+                if taken.insert(path.clone()) {
+                    break path;
+                }
+            };
+            used.insert(key, n);
+            placements.insert(concept.id.clone(), placement_at(dir, &path, &concept.title));
         }
     }
 
@@ -535,10 +574,12 @@ pub fn write_bundle(
                 write(&at, &text)?;
                 out.written += 1;
             }
+            let adopted = prior.is_some_and(|p| p.adopted);
             manifest.concepts.insert(
                 concept.id.clone(),
                 OkfManifestEntry {
                     path: place.path.clone(),
+                    adopted,
                     hash,
                     wrote_at: concept.generated_at,
                     extra: std::mem::take(&mut concept.extra),
@@ -1992,6 +2033,16 @@ pub fn set_binding(data_dir: &Path, notebook_id: &str, binding: Option<OkfBindin
 pub struct OkfManifestEntry {
     /// Bundle-relative path, so a moved bundle's manifest still reads.
     pub path: String,
+    /// The file came in from disk rather than out of the writer's slug, so
+    /// the writer keeps writing to it and never renames it (§5.3).
+    ///
+    /// A hand-added `notes/hand-added.md` used to become a note *and* a
+    /// second file at the writer's own slug, leaving the original unclaimed
+    /// for the next pass to import again — three notes became fifty-five in
+    /// five minutes. Read-back claims the path it read, and this is the flag
+    /// that says so: the file is the concept, and its name is its owner's.
+    #[serde(default)]
+    pub adopted: bool,
     /// Hash of the whole file as written. Both the "did this change" test and
     /// the echo test the reconciler needs (§5.3).
     pub hash: String,
@@ -2450,6 +2501,8 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     let mut out = OkfReconcile::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
+    // Did this pass take a file in, and so change the manifest?
+    let mut adopted = false;
 
     // Ask for anything the cloud has evicted before reading what is here, so
     // the next pass finds it (§5.6). Bounded by the same cap folder scans use.
@@ -2468,13 +2521,23 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let rel = format!(
-                "{dir}/{}",
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-            );
-            let action = classify(&rel, &okf_hash(&text), &manifest);
+            // The whole bundle-relative path, not just the filename: the
+            // allowlist reads `sources/**.md`, so two concepts can share a
+            // name at different depths and the manifest has to tell them
+            // apart — it claims this exact path in a moment.
+            let rel = path
+                .strip_prefix(&bundle)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{dir}/{}",
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_default()
+                    )
+                });
+            let hash = okf_hash(&text);
+            let action = classify(&rel, &hash, &manifest);
             let known = match &action {
                 OkfAction::Update(id) => {
                     seen.insert(id.clone());
@@ -2493,12 +2556,18 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             let mtime = file_mtime_ms(&path);
             match (dir, known) {
                 ("notes", None) => {
-                    if take_in_note(state, notebook_id, &doc, &path).await? {
+                    if let Some(id) = take_in_note(state, notebook_id, &doc, &path).await? {
+                        adopt(&mut manifest, &id, &rel, &hash, &doc);
+                        adopted = true;
                         out.created += 1;
                     }
                 }
                 ("sources", None) => {
-                    if take_in_source(state, notebook_id, &doc, &path, &bundle).await? {
+                    if let Some(id) =
+                        take_in_source(state, notebook_id, &doc, &path, &bundle).await?
+                    {
+                        adopt(&mut manifest, &id, &rel, &hash, &doc);
+                        adopted = true;
                         out.created += 1;
                     }
                 }
@@ -2546,7 +2615,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             crate::note!("okf: {rel} was deleted on disk; removed it here too");
         }
     }
-    if out.deleted > 0 {
+    if out.deleted > 0 || adopted {
         save_manifest(&manifest_at, &manifest);
     }
 
@@ -2570,6 +2639,29 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
     Ok(out)
 }
 
+/// Claim the file a `Create` came from for the entity it became.
+///
+/// This is the fix for the duplication loop (§5.3): without it the writer
+/// would put the new entity at *its* slug, leave the incoming file
+/// unclaimed, and the next reconcile would take the same file in all over
+/// again. The path the reconciler read is the entity's path from here on,
+/// and `adopted` tells the writer never to re-slug it. The hash is the file
+/// as it stands, so the very next pass reads it as an echo rather than an
+/// edit, and the frontmatter keys we do not write ride along the way an
+/// outside edit's always have.
+pub(crate) fn adopt(manifest: &mut OkfManifest, id: &str, rel: &str, hash: &str, doc: &OkfDoc) {
+    manifest.concepts.insert(
+        id.to_string(),
+        OkfManifestEntry {
+            path: rel.to_string(),
+            adopted: true,
+            hash: hash.to_string(),
+            wrote_at: 0,
+            extra: doc.extra(),
+        },
+    );
+}
+
 /// Which side of a conflict won, and the text the loser had.
 enum Verdict {
     Applied,
@@ -2582,9 +2674,9 @@ async fn take_in_note(
     notebook_id: &str,
     doc: &OkfDoc,
     path: &Path,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     if doc.body.trim().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let ts = file_mtime_ms(path).max(1);
     let note = Note {
@@ -2614,7 +2706,7 @@ async fn take_in_note(
     };
     e(crate::commands::add_note_indexed(state, &note).await)?;
     crate::note!("okf: took in note \"{}\" from disk", note.title);
-    Ok(true)
+    Ok(Some(note.id))
 }
 
 async fn take_in_source(
@@ -2623,9 +2715,9 @@ async fn take_in_source(
     doc: &OkfDoc,
     path: &Path,
     bundle: &Path,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     if doc.body.trim().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let title = doc.str("title").unwrap_or_else(|| {
         path.file_stem()
@@ -2672,9 +2764,9 @@ async fn take_in_source(
                 let _ = state.db.set_source_tags(&landed.id, &tags).await;
             }
             crate::note!("okf: took in source \"{title}\" from disk");
-            Ok(true)
+            Ok(Some(landed.id))
         }
-        Err(_) => Ok(false),
+        Err(_) => Ok(None),
     }
 }
 

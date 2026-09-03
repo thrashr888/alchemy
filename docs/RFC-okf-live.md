@@ -384,6 +384,19 @@ up. Four things the RFC did not settle, decided in the writing:
 - **A source has no `updated_at`**, so the conflict clock for one is
   `max(fetched_at, created_at)` — when its text last came in, which is the
   same question.
+- **Read-back claims the file it read.** §5.3's table said "create the note"
+  and stopped there, which left the file itself unclaimed: the writer then put
+  the new note at *its* slug, the original stayed unknown to the manifest, and
+  the next pass took it in again. Three notes became fifty-five in five
+  minutes on a Dropbox bundle. So a `Create` records the path it came from as
+  that entity's path, marked `adopted` — **the file is the concept**, and the
+  writer keeps writing to it and never re-slugs it, not even when the title
+  changes. A cloud conflict copy is the same shape and gets the same
+  treatment; §5.6's "conflict copies need no code" now needs one line of it.
+  A retitle therefore moves only the files Alchemy named, which is the right
+  side to err on: renaming a file somebody else made is a surprise, and a
+  stale slug is not.
+
 - **Reconcile stands down while a write is in flight.** Reading a bundle
   mid-write would see half of Alchemy's own pass and call it an outside
   edit, so the reconciler returns early when the notebook has a pending or

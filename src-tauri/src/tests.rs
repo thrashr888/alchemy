@@ -1661,6 +1661,94 @@ fn okf_writes_unknown_keys_back_out() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A file somebody hand-added under `notes/` becomes one note and stays one
+/// file (docs/RFC-okf-live.md §5.3).
+///
+/// The 0.55.0 loop: read-back made a note from `hand-added.md`, the writer
+/// put that note at *its own* slug, `hand-added.md` stayed unclaimed, and
+/// the next pass took it in again — three notes became fifty-five in five
+/// minutes. Now the manifest claims the path the reconciler read, so the
+/// second pass sees an echo and there is nothing to import.
+#[test]
+fn okf_a_hand_added_file_lands_once() {
+    use crate::okf::{
+        adopt, classify, load_manifest, okf_hash, parse_okf_doc, write_bundle, OkfAction,
+        OkfManifest,
+    };
+    let dir = okf_scratch("handadded");
+    let bundle = dir.join("bundle");
+    std::fs::create_dir_all(bundle.join("notes")).expect("notes");
+    // The name is deliberately not what the writer's slug would be.
+    let rel = "notes/hand-added.md";
+    let text = "---\ntype: Note\ntitle: \"Dropbox hand added\"\n---\n\nA body an agent wrote.\n";
+    std::fs::write(bundle.join(rel), text).expect("write");
+
+    // Pass one, the reconciler's half: a file the manifest never heard of.
+    let mut manifest = OkfManifest::default();
+    assert_eq!(
+        classify(rel, &okf_hash(text), &manifest),
+        OkfAction::Create,
+        "an unknown file is somebody's new document"
+    );
+    adopt(
+        &mut manifest,
+        "note-hand",
+        rel,
+        &okf_hash(text),
+        &parse_okf_doc(text),
+    );
+    let manifest_at = okf_manifest(&bundle);
+    std::fs::write(
+        &manifest_at,
+        serde_json::to_string(&manifest).expect("json"),
+    )
+    .expect("save");
+
+    // Pass two, the writer's half: the note it made goes back to the file it
+    // came from, not to `notes/dropbox-hand-added.md`.
+    let note = crate::okf::OkfConcept {
+        id: "note-hand".into(),
+        title: "Dropbox hand added".into(),
+        content: "A body an agent wrote.".into(),
+        type_label: "Note".into(),
+        generated_at: 1_756_000_500_000,
+        ..okf_blank_concept()
+    };
+    write_bundle(
+        &okf_notebook("NB"),
+        &[],
+        std::slice::from_ref(&note),
+        &bundle,
+        Some(&manifest_at),
+    )
+    .expect("write");
+
+    let notes: Vec<String> = std::fs::read_dir(bundle.join("notes"))
+        .expect("read notes")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "index.md")
+        .collect();
+    assert_eq!(
+        notes,
+        vec!["hand-added.md".to_string()],
+        "one note, one file, and the file keeps its own name"
+    );
+
+    // Pass three, the reconciler again: nothing new to take in, which is the
+    // whole point — the loop had no second pass that was not a duplicate.
+    let manifest = load_manifest(&manifest_at);
+    for name in &notes {
+        let rel = format!("notes/{name}");
+        let text = std::fs::read_to_string(bundle.join(&rel)).expect("read");
+        assert_eq!(
+            classify(&rel, &okf_hash(&text), &manifest),
+            OkfAction::Echo,
+            "{rel} is our own write coming back, not a new concept"
+        );
+    }
+}
+
 /// A bundle's listings are not its knowledge (docs/RFC-okf-live.md §4):
 /// `index.md` and `log.md` at any level are the table of contents and the
 /// history, and neither ever becomes a source.
@@ -1882,6 +1970,7 @@ fn okf_outside_keys_survive_later_writes() {
             hash: String::new(),
             wrote_at: 0,
             extra,
+            ..Default::default()
         },
     );
     let json = serde_json::to_string(&manifest).expect("json");
