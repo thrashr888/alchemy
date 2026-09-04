@@ -165,8 +165,22 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
   fixture store and asserts the table above. Runs in CI on release
   branches; locally on demand.
 - **Startup trace:** `trace.rs` gains `startup.jsonl` — stamps at process
-  start, db open, tables ensured, scheduler up, first window ready.
-  Release-over-release regression is a one-line jq away.
+  start, `setup()` entry, db open, tables ensured, scheduler up, backend
+  completion, and the first committed interactive frame. Measure a quit app
+  through LaunchServices with `scripts/measure-app-startup.sh`; an in-process
+  trace alone omits the same pre-entry work a Dock bounce includes.
+
+  The September 2026 signed-app ablation discarded the first launch of each
+  copied bundle path (LaunchServices/signature registration cost 1.9–2.3 s)
+  and compared warmed cold-process launches. Removing 39 MB of local symbols
+  left the median pre-`setup()` interval unchanged at 168 ms; its small total
+  spread was downstream database/cache noise, so release stripping was not
+  adopted as a startup fix. Making the main window opaque was also null
+  (654 ms median open-to-interactive versus 647 ms transparent). In contrast,
+  deferring note-popout and print-export routes removed another 45 KB minified
+  / 12.5 KB gzip from the main-window entry without changing its first view.
+  Keep measuring an external endpoint: binary size and bundle size are leads,
+  not proof of a faster Dock launch.
 - **Counts are cached, not rescanned:** `list_notebooks` reports per-notebook
   source/note/report totals, which meant scanning two whole tables on every
   refresh — every `mcp://changed`, and once during boot. The totals are

@@ -8,8 +8,6 @@ import {
 import { HOME_CARDS, toggleHomeCard } from "@/lib/homeCards";
 import { HomeView } from "@/components/HomeView";
 import { FileDrop } from "@/components/FileDrop";
-import { NoteWindow } from "@/components/NoteWindow";
-import { PrintExportView } from "@/components/PrintExportView";
 import { Toaster } from "@/components/ui";
 import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
@@ -26,6 +24,19 @@ import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
 // instead of making WebKit parse them before it can paint Home.
 const Workspace = lazy(() =>
   import("@/components/Workspace").then((m) => ({ default: m.Workspace })),
+);
+
+// Pop-out notes and print/export windows are separate WebViews selected by
+// their boot globals. The main window can never render either route, so keep
+// their Markdown, diagram, slide, audio, and print stacks out of its entry
+// chunk. Their dedicated windows pay the import only when they exist.
+const NoteWindow = lazy(() =>
+  import("@/components/NoteWindow").then((m) => ({ default: m.NoteWindow })),
+);
+const PrintExportView = lazy(() =>
+  import("@/components/PrintExportView").then((m) => ({
+    default: m.PrintExportView,
+  })),
 );
 
 // These surfaces cannot be visible on the first committed frame. Keeping
@@ -301,10 +312,12 @@ function App() {
   // to the boot-named temp PDF, and is closed by the backend (export.rs).
   if (window.__ALCHEMY_PRINT_EXPORT__ && window.__ALCHEMY_NOTE__) {
     return (
-      <PrintExportView
-        noteId={window.__ALCHEMY_NOTE__}
-        pdfPath={window.__ALCHEMY_PRINT_EXPORT__}
-      />
+      <Suspense fallback={null}>
+        <PrintExportView
+          noteId={window.__ALCHEMY_NOTE__}
+          pdfPath={window.__ALCHEMY_PRINT_EXPORT__}
+        />
+      </Suspense>
     );
   }
 
@@ -312,7 +325,9 @@ function App() {
   if (window.__ALCHEMY_NOTE__) {
     return (
       <>
-        <NoteWindow noteId={window.__ALCHEMY_NOTE__} />
+        <Suspense fallback={null}>
+          <NoteWindow noteId={window.__ALCHEMY_NOTE__} />
+        </Suspense>
         <Toaster toasts={toasts} onDismiss={dismissToast} />
       </>
     );
