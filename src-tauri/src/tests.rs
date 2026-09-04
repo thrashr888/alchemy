@@ -91,6 +91,8 @@ async fn rag_round_trip() {
         .map(|(i, c)| (uuid::Uuid::new_v4().to_string(), i as i32, c.text.clone()))
         .collect();
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: uuid::Uuid::new_v4().to_string(),
@@ -3093,6 +3095,89 @@ fn okf_source_rename_moves_the_by_line() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Every source concept says which Mac its `resource:` is a real path on, and
+/// import reads that back (docs/RFC-okf-live.md §5.8). Without it the far Mac
+/// has nothing to tell "the file was deleted" from "the file was never here",
+/// and calls a whole OneDrive notebook missing.
+#[test]
+fn okf_source_concept_names_the_mac_it_came_from() {
+    use crate::device::{load_origin_devices, note_origin_device, this_device};
+    use crate::okf::{load_okf_edits, parse_okf_doc, source_concept, write_bundle};
+    let dir = okf_scratch("device");
+    let data = dir.join("data");
+    let bundle = dir.join("nb");
+    let edits = load_okf_edits(&data, "nb");
+
+    // Imported here: the writer stamps this Mac without being told.
+    let mine = okf_src("s-mine", "/Users/paul/plan.pdf");
+    let concept = source_concept(&mine, "body".into(), &bundle, 50 * 1024 * 1024, &edits);
+    assert!(concept
+        .alchemy
+        .contains(&("device".to_string(), this_device().to_string())));
+
+    // Came in from the other Mac: that name travels on, so a bundle that
+    // makes the round trip does not rename every source after its last writer.
+    let mut theirs = okf_src("s-theirs", "/Volumes/OneDrive-Work/plan.pdf");
+    theirs.title = "Work plan".into();
+    theirs.origin_device = "Paul's MacBook Pro".into();
+    let concept = source_concept(&theirs, "body".into(), &bundle, 50 * 1024 * 1024, &edits);
+    write_bundle(
+        &okf_notebook("NB"),
+        std::slice::from_ref(&concept),
+        &[],
+        &bundle,
+        Some(&okf_manifest(&bundle)),
+    )
+    .expect("write");
+
+    // And import reads it off the file, which is the only channel there is.
+    let written = std::fs::read_to_string(bundle.join("sources/work-plan.md")).expect("concept");
+    let device = parse_okf_doc(&written).nested("alchemy", "device");
+    assert_eq!(device.as_deref(), Some("Paul's MacBook Pro"));
+    note_origin_device(&data, "nb", "landed-id", &device.expect("device"));
+    assert_eq!(
+        load_origin_devices(&data, "nb")
+            .get("landed-id")
+            .map(String::as_str),
+        Some("Paul's MacBook Pro"),
+        "import records where the source came from, beside the store"
+    );
+
+    // The root index says who wrote the bundle last, too.
+    let index = std::fs::read_to_string(bundle.join("index.md")).expect("index");
+    assert_eq!(
+        parse_okf_doc(&index).nested("alchemy", "device").as_deref(),
+        Some(this_device())
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder rescan deletes a child whose file is gone. A remote child's file
+/// was never on this disk — the scan of a folder that is somebody else's
+/// drive says nothing about it, and deleting it would throw away the only
+/// copy the shared bundle carried (§5.8).
+#[test]
+fn okf_rescan_never_deletes_a_remote_child() {
+    use crate::commands::child_vanished;
+    let mut local = okf_src("c-local", "/Volumes/Work/Docs/q3.pdf");
+    local.parent_id = "p".into();
+    let mut remote = local.clone();
+    remote.id = "c-remote".into();
+    remote.origin_device = "Paul's MacBook Pro".into();
+    remote.remote = true;
+
+    assert!(
+        child_vanished(&local, false),
+        "a local file that is gone is gone"
+    );
+    assert!(!child_vanished(&local, true), "still on disk");
+    assert!(
+        !child_vanished(&remote, false),
+        "never on this disk to lose"
+    );
+}
+
 /// An MCP client's `clientInfo` becomes a producer by-line, in the shape the
 /// spec's actor grammar wants (§7): `<producer>/<version>`, lowercase, spaces
 /// hyphenated.
@@ -3327,6 +3412,8 @@ fn okf_adopts_and_retires_the_in_bundle_manifest() {
 /// A source as the reference planner reads it.
 fn okf_src(id: &str, url: &str) -> crate::models::Source {
     crate::models::Source {
+        origin_device: String::new(),
+        remote: false,
         id: id.into(),
         notebook_id: "nb".into(),
         title: id.into(),

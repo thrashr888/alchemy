@@ -814,6 +814,8 @@ async fn ingest_into(ai: &Ai, db: &Db, notebook_id: &str, path: &Path) -> Source
         .collect();
     let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         id: format!("{notebook_id}-src"),
         notebook_id: notebook_id.to_string(),
         title: extracted.title.clone(),

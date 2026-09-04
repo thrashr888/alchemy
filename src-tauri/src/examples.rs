@@ -1091,6 +1091,8 @@ async fn prepare_curated(ai: &Ai, src: &CuratedSource) -> anyhow::Result<Prepare
 /// Write one prepared source into a notebook.
 async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> anyhow::Result<()> {
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         id: new_id(),
         notebook_id: notebook_id.to_string(),
         title: p.title,

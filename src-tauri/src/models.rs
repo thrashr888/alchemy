@@ -100,6 +100,21 @@ pub struct Source {
     /// removal instead of being retried forever.
     #[serde(default)]
     pub fetch_failures: i64,
+    /// The Mac this source was first imported on, as its owner names it
+    /// ("Paul's MacBook Pro"). Not a stored column: it comes off a
+    /// per-notebook sidecar at listing time (`device::mark_remote`), because
+    /// one store serves the installed app and every dev build and a schema
+    /// change is a release-timing hazard (docs/RFC-okf-live.md §5.8). Empty
+    /// out of the store; this Mac's name once marked.
+    #[serde(default)]
+    pub origin_device: String,
+    /// Its text is here and its origin is not: a source that arrived through a
+    /// shared bundle from another Mac, whose path names a drive this machine
+    /// has never mounted. Reading, search and citation work as they always
+    /// did; hygiene, the Missing filter, Refresh and Show in Finder stand
+    /// down, because there is nothing here to fix.
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// Tally of what a folder rescan changed across the scanned folder sources.

@@ -181,6 +181,8 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
         // source is the price, and it is why the cache exists.
         db.insert_source(
             &Source {
+                origin_device: String::new(),
+                remote: false,
                 id: source_id,
                 notebook_id: notebook_id.to_string(),
                 title: extracted.title.clone(),

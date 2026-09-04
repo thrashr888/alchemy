@@ -205,8 +205,11 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
         // reconcile, and a cloud-evicted file is downloadable, not missing —
         // whether it is a legacy `.icloud` placeholder or, on current macOS
         // and every FileProvider mount, the file itself with no data in it
-        // (docs/RFC-okf-live.md §5.7).
-        if is_file_path(s) && s.parent_id.is_empty() {
+        // (docs/RFC-okf-live.md §5.7). A remote source is the third of those:
+        // its path names a drive on another Mac, so "the file is gone" is not
+        // news and there is nothing here to remove (§5.8). Callers mark that
+        // with `device::mark_remote` before classifying.
+        if is_file_path(s) && s.parent_id.is_empty() && !s.remote {
             let p = std::path::Path::new(&s.url);
             if !p.exists() && !crate::okf::is_evicted_stub(p) {
                 issues.push(issue(
@@ -493,6 +496,8 @@ mod tests {
 
     fn src(id: &str, source_type: &str) -> Source {
         Source {
+            origin_device: String::new(),
+            remote: false,
             id: id.into(),
             notebook_id: "nb".into(),
             title: id.into(),
@@ -702,6 +707,29 @@ mod tests {
                 "{origin} must not be flagged"
             );
         }
+    }
+
+    /// A file that was never on this Mac cannot have gone missing from it.
+    /// The same absent path, twice: local, it is a source to propose for
+    /// removal; remote, it is a notebook that travelled through a shared
+    /// folder and brought its text with it (docs/RFC-okf-live.md §5.8).
+    #[test]
+    fn a_remote_source_is_not_a_missing_file() {
+        let now = 100 * DAY;
+        let path = "/Volumes/OneDrive-Work/Q3/plan.pdf";
+        let mut here = src("here", "pdf");
+        here.url = path.into();
+        here.fetched_at = now;
+        let mut away = src("away", "pdf");
+        away.url = path.into();
+        away.fetched_at = now;
+        away.origin_device = "Paul's MacBook Pro".into();
+        away.remote = true;
+
+        assert_eq!(
+            buckets(&classify(&[here, away], 30, now)),
+            vec![("here", "missing-file")]
+        );
     }
 
     /// An old errored import with no content is a husk; a recent one is not

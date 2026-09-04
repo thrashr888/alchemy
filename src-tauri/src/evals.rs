@@ -322,6 +322,8 @@ pub(crate) async fn seed_docs(
             .collect();
         let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
         let source = crate::models::Source {
+            origin_device: String::new(),
+            remote: false,
             image_url: String::new(),
             author: String::new(),
             id: format!("{id_prefix}src-{i}"),

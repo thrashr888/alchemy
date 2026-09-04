@@ -112,12 +112,13 @@ it; ours reads it back.
   had to be guessed back from the H1. It now carries `type: Notebook`,
   `title`, `description`, `generated`, and `alchemy: { id, color, icon }`.
 - **Sources** carry `alchemy: { id, source_type, tags, author, image_url,
-  parent }`. `source_type` is the real type — the spec-facing `tags:` stays
+  parent, device }`. `source_type` is the real type — the spec-facing `tags:` stays
   what it was — and `tags` is the user's own labels, which are ground truth
   and feed routing. `parent` is the folder/git/notion parent's **slug**, so a
   folder source's shape survives; it resolves at emission, where every other
   cross-reference does, and import resolves it back in a second pass because
-  a child's file can sort ahead of its parent's.
+  a child's file can sort ahead of its parent's. `device` names the Mac the
+  `resource:` path is real on — added later; see §5.8.
 - **Notes** carry `alchemy: { id, kind, origin, status }`. `type:` is a human
   label and several kinds share one, so `kind` is what makes a Study Guide
   come back a study guide.
@@ -982,6 +983,71 @@ they exist without being asked for.
   notebook that never settles is skipped and named in the log, and the move
   carries on with the rest. The user-facing refusal is now only for the case
   where nothing at all could be moved.
+
+### 5.8 Origin device: remote sources
+
+A bundle carries every source's text and none of the disks it was read off.
+So a work laptop's notebook, whose sources are files under a OneDrive
+folder, arrives on the home Mac complete — and every one of them points at
+a mount that machine has never had. The app read that the only way it
+could: `missing-file` on all of them, the Missing chip lit with the whole
+notebook, a Refresh offered against a path that cannot resolve, and Grow
+proposing that the user delete the sources whose text it was holding.
+Nothing was actually wrong. The app just had no way to tell "this file was
+deleted out from under you" from "this file was never on this machine".
+
+One fact settles it. Every source concept now carries `alchemy.device` —
+the Mac it was imported on, as its owner names it (`scutil --get
+ComputerName`, "Paul's MacBook Pro", not a Bonjour label, because the
+sentence a hint has to say names a machine a person recognises). The root
+`index.md` carries one too, naming the bundle's last writer. Import reads
+it back; a source added here is this Mac's without anyone saying so.
+
+**Remote is two facts, and it is not sticky.** A source is remote when its
+origin device is not this Mac *and* its origin path does not exist here.
+Both halves earn their place: the same external drive mounted on both Macs
+makes the source local in every way that matters, and an absent path alone
+is the genuine missing file this must not hide. It is computed per listing
+rather than stored, so a source becomes local the moment its path appears —
+plug the drive in and nothing has to be un-marked. An unrecorded device is
+this Mac's: every source that predates the record is ours, and guessing the
+other way would hide a real deletion behind a name we never had.
+
+A folder child asks about its *parent's* root, not its own file. The drive
+is the thing that is mounted or not; one file gone underneath a mounted
+root is a deletion, and the rescan owns that.
+
+**What stands down, and what does not.** Hygiene's missing-file bucket and
+the Sources panel's Missing chip skip remote sources. The row shows a quiet
+`from <device>` chip where the missing badge would have been — the same
+shape of information without the alarm. Refresh and Show in Finder come off
+the menu and the reader's toolbar, replaced by one line that says why:
+"Lives on Paul's MacBook Pro; the text is here." A folder rescan never
+deletes a remote child for being absent from a scan of somebody else's
+drive. Reading, hybrid search, and citations are untouched: the bundle text
+is the source, exactly as it is for a local one.
+
+`list_sources` reports `originDevice` and `remote` over IPC and MCP, and
+`source_hygiene` says the same by omission, so an agent reads the notebook
+the way the panel does rather than proposing deletions the UI refuses to
+show.
+
+**Beside the store, not in it.** The per-source device lives in
+`<app-data>/okf_devices/<notebook>.json`, the same per-notebook sidecar
+shape §5.6's edits use. One store serves the installed app and every dev
+build, so a column is a release-timing hazard, and this is a fact only
+listings and the writer read. Only what actually travelled is written —
+this Mac's own name is never a row, because absent already means ours, so a
+notebook that has never left costs one directory miss and no stats at all.
+
+Two things this deliberately does not do. It does not mark the **notebook**
+remote: a notebook can hold sources from three Macs and one of them is
+always this one, so the question is per source. And it changes nothing in
+the §5.3 reconciler: those deletes are driven by concept files vanishing
+from the bundle, never by an origin path, so a remote source whose concept
+file is genuinely deleted is still deleted — which is right. The folder
+rescan was the only pass that could delete a source for a file that was
+never here.
 
 ## 6. Originals travel in `references/`
 

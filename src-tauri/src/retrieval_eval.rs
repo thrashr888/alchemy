@@ -1656,6 +1656,8 @@ async fn eval_enrichment_reembed() {
         .map(|(i, b)| (format!("t-c{i}"), i as i32, b.to_string()))
         .collect();
     let source = crate::models::Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: src_id.clone(),
@@ -2325,6 +2327,8 @@ async fn run_scale(ai: &crate::ai::Ai, target_chars: usize) -> (f64, f64, usize)
         let vecs = vectors[cursor..cursor + n].to_vec();
         cursor += n;
         let source = crate::models::Source {
+            origin_device: String::new(),
+            remote: false,
             image_url: String::new(),
             author: String::new(),
             id: format!("scale-src-{di}"),
