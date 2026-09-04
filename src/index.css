@@ -708,8 +708,8 @@ html[data-glass="clear"] .side-card {
   }
 }
 
-/* The provider load glyph (ChatPanel's ProviderPulse): which local engine is
-   working, in a shape you can tell apart at 12px. Both parts stay legible
+/* The provider load glyph (InferenceActivity, in the title bar): which local
+   engine is working, in a shape you can tell apart at 14px. Both parts stay legible
    with the animation stopped — under prefers-reduced-motion the rule above
    collapses these to a still frame, so the base style is the real design. */
 .provider-bar {

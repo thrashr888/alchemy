@@ -441,6 +441,11 @@ impl Ollama {
         self.config.chat_model.trim()
     }
 
+    /// The embedding model this engine indexes with.
+    pub fn embed_model_name(&self) -> &str {
+        self.config.embed_model.trim()
+    }
+
     /// List locally available model names (from `/api/tags`).
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let resp = self

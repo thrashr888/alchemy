@@ -22,6 +22,7 @@ import type {
   FolderScan,
   GrepHit,
   HomeActivity,
+  ActivityItem,
   HygieneIssue,
   KokoroStatus,
   MacCollection,
@@ -827,6 +828,9 @@ export const api = {
   providerModels: (providerId: string) =>
     run(probe<ProviderModels>("provider_models", { providerId })),
   checkOllama: () => run(query<boolean>("check_ollama")),
+  /** Everything a model is doing right now. The title-bar indicator reads
+   *  this once on mount, then follows `inference://activity`. */
+  inferenceActivity: () => run(query<ActivityItem[]>("inference_activity")),
   checkModels: () => run(query<ModelHealth>("check_models")),
   getModelStats: () => run(query<ModelStat[]>("get_model_stats")),
 

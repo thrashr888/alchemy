@@ -9,6 +9,15 @@
 //! OpenAI-compatible gateways. Streaming is an invariant: chat-shaped
 //! engines expose `chat_stream`; plain `chat` is just the collected stream.
 
+mod activity;
+pub use activity::{labeled, ActivityItem};
+
+/// Everything a model is doing right now — the title bar's indicator, the
+/// `inference_activity` command and the MCP tool all read this one list.
+pub fn activity_running() -> Vec<ActivityItem> {
+    activity::running()
+}
+
 mod agent_cli;
 pub mod budget;
 mod fm;
@@ -302,11 +311,26 @@ impl ChatEngine {
         }
     }
 
+    /// Provider family and model for the activity indicator. Every call
+    /// below opens an entry with these, so the title bar shows what is
+    /// running whether it was the chat, a queued generation, a scheduled
+    /// report or a sweep that asked for it.
+    fn activity(&self) -> (&'static str, String) {
+        match self {
+            ChatEngine::Ollama(o) => ("ollama", o.chat_model_name().to_string()),
+            ChatEngine::Gateway(g) => ("gateway", g.model_name().to_string()),
+            ChatEngine::FoundationModels(_) => ("fm", "Apple Foundation Models".to_string()),
+            ChatEngine::Agent(a) => ("agent-cli", a.kind().label().to_string()),
+        }
+    }
+
     /// Streaming is the invariant; `chat` below is just the collected stream.
     pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
     {
+        let (kind, model) = self.activity();
+        let _busy = activity::begin(kind, &model);
         metered(match self {
             ChatEngine::Ollama(o) => o.chat_stream(messages, on_token).await,
             ChatEngine::Gateway(g) => g.chat_stream(messages, on_token).await,
@@ -333,8 +357,14 @@ impl ChatEngine {
         match self {
             // The delegating arm is metered by `chat_stream` itself; only the
             // agent path needs its own call, and agent CLIs are the engines
-            // that actually report a price.
-            ChatEngine::Agent(a) => metered(a.chat_stream_steps(messages, on_token, on_step).await),
+            // that actually report a price. Same for the activity entry: the
+            // arms that fall through to `chat_stream` are counted there, so
+            // opening one here too would show the run twice.
+            ChatEngine::Agent(a) => {
+                let (kind, model) = self.activity();
+                let _busy = activity::begin(kind, &model);
+                metered(a.chat_stream_steps(messages, on_token, on_step).await)
+            }
             ChatEngine::Ollama(o) => {
                 // `ps` answers in milliseconds when the daemon is up; if it
                 // errors, skip the status and let the chat call report the
@@ -356,6 +386,8 @@ impl ChatEngine {
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
+        let (kind, model) = self.activity();
+        let _busy = activity::begin(kind, &model);
         metered(match self {
             ChatEngine::Ollama(o) => o.chat(messages).await,
             ChatEngine::Gateway(g) => g.chat(messages).await,
@@ -375,6 +407,13 @@ pub enum Embedder {
 
 impl Embedder {
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        // Indexing is model work too — a folder import is minutes of it, and
+        // the machine being busy for a reason is exactly what the indicator
+        // is for. The debounce keeps a burst of short calls to one repaint.
+        let _busy = match self {
+            Embedder::Builtin(_) => activity::begin("builtin", "the built-in search model"),
+            Embedder::Ollama(o) => activity::begin("ollama", o.embed_model_name()),
+        };
         match self {
             Embedder::Builtin(le) => le.embed(texts).await,
             Embedder::Ollama(o) => o.embed(texts).await,

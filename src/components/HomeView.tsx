@@ -7,6 +7,7 @@ import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
 import { HOME_CARDS, registerHomeCards, toggleHomeCard } from "@/lib/homeCards";
 import { DevBadge } from "./DevBadge";
+import { InferenceActivity } from "./InferenceActivity";
 import { UpdateBadge } from "./UpdateBadge";
 import { HealthBanner } from "./HealthBanner";
 import { NavButtons } from "./NavButtons";
@@ -916,6 +917,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           <HomeSectionTabs />
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {/* Left of the DEV pill in dev builds, and the same slot in
+              release builds: one place, in every window, that says a model
+              is working. */}
+          <InferenceActivity />
           <DevBadge />
           <UpdateBadge />
           <Button

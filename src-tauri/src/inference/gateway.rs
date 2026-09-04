@@ -377,6 +377,12 @@ impl OpenAiClient {
     }
 
     /// LiteLLM's /model/info listing.
+    /// The model this client is pointed at — what the activity indicator
+    /// names when a gateway call is in flight.
+    pub fn model_name(&self) -> &str {
+        &self.model
+    }
+
     async fn model_info_names(&self) -> Result<Vec<String>> {
         let value = self.get_json("/model/info").await?;
         let models: Vec<String> = value["data"]

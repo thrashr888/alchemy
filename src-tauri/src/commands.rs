@@ -9256,6 +9256,37 @@ pub async fn send_message(
     source_ids: Option<Vec<String>>,
     provider_override: Option<String>,
 ) -> Result<Message, String> {
+    // Name the whole answer for the title-bar indicator, so a foreground
+    // answer is told apart from the sweeps and queued jobs beside it.
+    // Deliberately just the verb: naming the notebook would cost a lookup on
+    // the time-to-first-token path, and the indicator shows the model too.
+    crate::inference::labeled(
+        "Answering",
+        send_message_impl(
+            app,
+            window,
+            state,
+            notebook_id,
+            content,
+            config,
+            source_ids,
+            provider_override,
+        ),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_message_impl(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    content: String,
+    config: Option<ChatConfig>,
+    source_ids: Option<Vec<String>>,
+    provider_override: Option<String>,
+) -> Result<Message, String> {
     // A person is waiting: background Small-role calls stand aside
     // until this returns (`crate::foreground`).
     let _foreground = crate::foreground::begin();
@@ -14648,6 +14679,15 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<String>, Stri
 pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
     let ai = state.ai.read().await.clone();
     Ok(ai.list_models().await.is_ok())
+}
+
+/// Everything a model is doing right now (inference::activity). The title
+/// bar's indicator reads this once on mount and then follows the
+/// `inference://activity` event; an agent reads it through the MCP tool of
+/// the same name.
+#[tauri::command]
+pub async fn inference_activity() -> Result<Vec<crate::inference::ActivityItem>, String> {
+    Ok(crate::inference::activity_running())
 }
 
 #[cfg(test)]

@@ -164,6 +164,19 @@ export interface HygieneIssue {
   keeperId: string;
 }
 
+/** One model call in flight (inference::activity). The title-bar indicator
+ *  reads these; agents get the same list from the `settings` MCP tool with
+ *  op "activity". */
+export interface ActivityItem {
+  id: number;
+  /** ollama | fm | gateway | agent-cli | builtin. */
+  kind: string;
+  /** What it is for, in the user's words. "" when the caller set no scope. */
+  label: string;
+  model: string;
+  startedAt: number;
+}
+
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */
 export interface MacCollection {
   id: string;

@@ -594,6 +594,7 @@ pub fn run() {
             commands::send_notification,
             commands::list_models,
             commands::check_ollama,
+            commands::inference_activity,
             commands::check_models,
             commands::list_gateway_models,
             commands::provider_models,

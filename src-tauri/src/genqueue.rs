@@ -243,6 +243,17 @@ async fn dispatch(app: &tauri::AppHandle) {
     }
 }
 
+/// What one queued job is called on the activity indicator: the document
+/// kind, which is the word the Studio itself uses for it.
+pub(crate) fn job_label(job: &GenJob) -> String {
+    let kind = job.kind.trim();
+    if kind.is_empty() {
+        "a document".to_string()
+    } else {
+        kind.replace('_', " ")
+    }
+}
+
 async fn run_job(app: tauri::AppHandle, job: GenJob) {
     let state = app.state::<crate::commands::AppState>();
     let queue = &state.gen_queue;
@@ -254,10 +265,16 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
         .insert(job.id.clone(), token.clone());
     emit_status(&app, &job, "", "");
 
+    // The indicator names the job, not just the engine: a queue running for
+    // minutes should say what it is making.
+    let label = format!("Generating {}", crate::genqueue::job_label(&job));
     let produced = tokio::select! {
         r = tokio::time::timeout(
             RUN_DEADLINE,
-            crate::commands::generate_content_for_job(&state, &app, &job, &token),
+            crate::inference::labeled(
+                label,
+                crate::commands::generate_content_for_job(&state, &app, &job, &token),
+            ),
         ) => Some(match r {
             Ok(inner) => inner,
             Err(_) => Err(anyhow::anyhow!(

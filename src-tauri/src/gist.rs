@@ -842,75 +842,88 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
     {
         return;
     }
-    tauri::async_runtime::spawn(async move {
-        // Consolidation first (RFC-living-notebook phase 5): wiki indexes
-        // track the shelf on every sweep, before any model work runs —
-        // deterministic, and a no-change pass costs reads only.
-        match crate::growth::refresh_wiki_indexes(&db).await {
-            Ok(n) if n > 0 => crate::note!("sweep: refreshed {n} wiki index(es)"),
-            Ok(_) => {}
-            Err(err) => crate::note!("sweep: wiki index refresh failed: {err:#}"),
-        }
-        // Web-enabled notebooks get their standing queries warmed too —
-        // day-cached, so at most one metered search per notebook per day.
-        match crate::growth::sweep_web_searches(&db).await {
-            Ok(n) if n > 0 => crate::note!("sweep: warmed web proposals for {n} notebook(s)"),
-            Ok(_) => {}
-            Err(err) => crate::note!("sweep: web warm failed: {err:#}"),
-        }
-        for _ in 0..MAX_SWEEP_BATCHES {
-            match ensure_gists(&db, &ai).await {
-                // Gists converged; spend the batch on chunk enrichment (RFC §2
-                // "gists first, chunks only when idle"). Enrichment ends the
-                // sweep only when it, too, has nothing left to do.
-                // Gists converged. Tag whatever is still untagged, then spend
-                // what's left on chunk enrichment. Tags come first: they are
-                // one cheap call per source and they show up in the UI, where
-                // enrichment only ever shows up in retrieval quality.
-                Ok((0, 0)) => match ensure_section_gists(&db, &ai).await {
-                    // Section summaries ride right behind gists: same
-                    // budget shape, and the outline they index is what
-                    // long documents are retrieved by.
-                    Ok(n) if n > 0 => {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                    }
-                    Err(err) => {
-                        crate::diagnostics::error(
-                            "sweep",
-                            format!("section sweep failed: {err:#}"),
-                        );
-                        break;
-                    }
-                    Ok(_) => match ensure_tags(&db, &ai).await {
+    tauri::async_runtime::spawn(crate::inference::labeled(
+        "Reading your sources",
+        async move {
+            // Consolidation first (RFC-living-notebook phase 5): wiki indexes
+            // track the shelf on every sweep, before any model work runs —
+            // deterministic, and a no-change pass costs reads only.
+            match crate::growth::refresh_wiki_indexes(&db).await {
+                Ok(n) if n > 0 => crate::note!("sweep: refreshed {n} wiki index(es)"),
+                Ok(_) => {}
+                Err(err) => crate::note!("sweep: wiki index refresh failed: {err:#}"),
+            }
+            // Web-enabled notebooks get their standing queries warmed too —
+            // day-cached, so at most one metered search per notebook per day.
+            match crate::growth::sweep_web_searches(&db).await {
+                Ok(n) if n > 0 => crate::note!("sweep: warmed web proposals for {n} notebook(s)"),
+                Ok(_) => {}
+                Err(err) => crate::note!("sweep: web warm failed: {err:#}"),
+            }
+            for _ in 0..MAX_SWEEP_BATCHES {
+                match ensure_gists(&db, &ai).await {
+                    // Gists converged; spend the batch on chunk enrichment (RFC §2
+                    // "gists first, chunks only when idle"). Enrichment ends the
+                    // sweep only when it, too, has nothing left to do.
+                    // Gists converged. Tag whatever is still untagged, then spend
+                    // what's left on chunk enrichment. Tags come first: they are
+                    // one cheap call per source and they show up in the UI, where
+                    // enrichment only ever shows up in retrieval quality.
+                    Ok((0, 0)) => match ensure_section_gists(&db, &ai).await {
+                        // Section summaries ride right behind gists: same
+                        // budget shape, and the outline they index is what
+                        // long documents are retrieved by.
                         Ok(n) if n > 0 => {
                             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                         }
-                        // Tags converged. Offer registry cards once per notebook
-                        // per run (commands::registry::suggest_cards) — it reads
-                        // the gists this sweep just settled, so it comes after
-                        // them and before enrichment, same reasoning as tags:
-                        // one cheap call, and it shows up in the UI.
-                        Ok(_) => match crate::commands::suggest_cards(&db, &ai).await {
+                        Err(err) => {
+                            crate::diagnostics::error(
+                                "sweep",
+                                format!("section sweep failed: {err:#}"),
+                            );
+                            break;
+                        }
+                        Ok(_) => match ensure_tags(&db, &ai).await {
                             Ok(n) if n > 0 => {
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                             }
-                            // Chunk enrichment is the one stage that never
-                            // converges quickly — one small-model call per
-                            // chunk across the corpus — so it runs in quiet
-                            // hours only. The day's sweeps stop here, converged
-                            // on everything a person can see.
-                            Ok(_) if !crate::freshness::is_quiet_hours(crate::commands::now()) => {
-                                break
-                            }
-                            Ok(_) => match ensure_enrichment(&db, &ai).await {
-                                Ok(0) => break,
-                                Ok(_) => {
+                            // Tags converged. Offer registry cards once per notebook
+                            // per run (commands::registry::suggest_cards) — it reads
+                            // the gists this sweep just settled, so it comes after
+                            // them and before enrichment, same reasoning as tags:
+                            // one cheap call, and it shows up in the UI.
+                            Ok(_) => match crate::commands::suggest_cards(&db, &ai).await {
+                                Ok(n) if n > 0 => {
                                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                                 }
+                                // Chunk enrichment is the one stage that never
+                                // converges quickly — one small-model call per
+                                // chunk across the corpus — so it runs in quiet
+                                // hours only. The day's sweeps stop here, converged
+                                // on everything a person can see.
+                                Ok(_)
+                                    if !crate::freshness::is_quiet_hours(crate::commands::now()) =>
+                                {
+                                    break
+                                }
+                                Ok(_) => match ensure_enrichment(&db, &ai).await {
+                                    Ok(0) => break,
+                                    Ok(_) => {
+                                        tokio::time::sleep(std::time::Duration::from_millis(250))
+                                            .await;
+                                    }
+                                    Err(err) => {
+                                        crate::diagnostics::error(
+                                            "sweep",
+                                            format!("enrichment sweep failed: {err:#}"),
+                                        );
+                                        break;
+                                    }
+                                },
                                 Err(err) => {
                                     crate::diagnostics::error(
                                         "sweep",
-                                        format!("enrichment sweep failed: {err:#}"),
+                                        format!("card suggestion failed: {err:#}"),
                                     );
                                     break;
                                 }
@@ -918,32 +931,25 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                             Err(err) => {
                                 crate::diagnostics::error(
                                     "sweep",
-                                    format!("card suggestion failed: {err:#}"),
+                                    format!("tag sweep failed: {err:#}"),
                                 );
                                 break;
                             }
                         },
-                        Err(err) => {
-                            crate::diagnostics::error(
-                                "sweep",
-                                format!("tag sweep failed: {err:#}"),
-                            );
-                            break;
-                        }
                     },
-                },
-                Ok(_) => {
-                    // Yield between batches so imports and chat stay snappy.
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                }
-                Err(err) => {
-                    crate::diagnostics::error("sweep", format!("gist sweep failed: {err:#}"));
-                    break;
+                    Ok(_) => {
+                        // Yield between batches so imports and chat stay snappy.
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                    Err(err) => {
+                        crate::diagnostics::error("sweep", format!("gist sweep failed: {err:#}"));
+                        break;
+                    }
                 }
             }
-        }
-        SWEEPING.store(false, Ordering::SeqCst);
-    });
+            SWEEPING.store(false, Ordering::SeqCst);
+        },
+    ));
 }
 
 /// Tags proposed per source. Few enough to stay a glance, not a cloud.

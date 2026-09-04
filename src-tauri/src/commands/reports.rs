@@ -188,16 +188,21 @@ pub(crate) async fn run_report_inner(
     let prior_content = existing.as_ref().map(|note| note.content.clone());
 
     let _ = app.emit("report://step", "Generating report".to_string());
-    let (_title, content) = e(generate_content(
-        state,
-        None,
-        &schedule.notebook_id,
-        &schedule.kind,
-        &schedule.prompt,
-        None,
-        prior_content.as_deref(),
-        None,
-        None,
+    // The indicator names the report, so an unattended run at 6am is legible
+    // in the morning as well as while it happens.
+    let (_title, content) = e(crate::inference::labeled(
+        format!("Report: {}", schedule.name),
+        generate_content(
+            state,
+            None,
+            &schedule.notebook_id,
+            &schedule.kind,
+            &schedule.prompt,
+            None,
+            prior_content.as_deref(),
+            None,
+            None,
+        ),
     )
     .await)?;
 

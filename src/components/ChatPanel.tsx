@@ -869,14 +869,11 @@ export function ChatPanel() {
           )}
           {sending && streamingHere && (
             <div className="flex flex-col gap-2" aria-busy="true">
-              {/* The role line carries the engine glyph for the whole
-                  generation — the dots below stop the moment tokens land,
-                  and a long answer is exactly when "is it still going?"
-                  gets asked. */}
-              <div className="flex items-center gap-2">
-                <RoleLabel role="assistant" />
-                <ProviderPulse />
-              </div>
+              {/* The engine glyph moved to the title bar (InferenceActivity):
+                  on the role line it was too small and too local to notice,
+                  and it only ever spoke for the chat. One indicator now
+                  covers every model call the app makes. */}
+              <RoleLabel role="assistant" />
               {steps.length > 0 && (
                 <StepTrail
                   steps={steps}
@@ -1972,65 +1969,6 @@ function Citations({ citations }: { citations: Citation[] }) {
       )}
       {actions.modals}
     </div>
-  );
-}
-
-/**
- * Which local engine is working, while it works. The composer's provider pill
- * says who *will* answer; this says who *is* answering, in the answer column
- * where the waiting actually happens — and only for the two on-device
- * engines, whose latency is the thing worth a glyph (a hosted provider's
- * spinner would say nothing the network doesn't).
- *
- * Two shapes rather than two colors, per the color-means-something rule:
- * Ollama gets three uneven uprights that take turns brightening — a meter,
- * a machine of yours doing work — and Apple Foundation Models a sweeping
- * ring, the system's own. Both read at 12px, neither can be mistaken for
- * the other, and both hold up as a still frame, which is what
- * `prefers-reduced-motion` leaves behind. (Even bars were the first draft
- * and read as a hamburger menu at size; uneven ones don't.)
- */
-export function ProviderPulse() {
-  const kind = useStore((s) => {
-    const cfg = s.aiConfig;
-    return cfg?.providers.find((p) => p.id === cfg.chatProvider)?.kind ?? "";
-  });
-  const label = useStore((s) => {
-    const cfg = s.aiConfig;
-    return cfg?.providers.find((p) => p.id === cfg.chatProvider)?.label ?? "";
-  });
-  if (kind !== "ollama" && kind !== "fm") return null;
-  return (
-    <span
-      className="text-muted-foreground"
-      title={`${label} is answering`}
-      aria-hidden="true"
-    >
-      <svg
-        viewBox="0 0 12 12"
-        className="h-3 w-3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-      >
-        {kind === "ollama" ? (
-          ["M3 8.5V5", "M6 9.5V2.5", "M9 8V4"].map((d, i) => (
-            <path
-              key={d}
-              d={d}
-              className="provider-bar"
-              style={{ animationDelay: `${i * 0.16}s` }}
-            />
-          ))
-        ) : (
-          <>
-            <circle cx="6" cy="6" r="4" opacity="0.3" />
-            <path d="M6 2a4 4 0 0 1 4 4" className="provider-arc" />
-          </>
-        )}
-      </svg>
-    </span>
   );
 }
 

@@ -11,7 +11,8 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, ErrorData as
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SettingsReq {
-    /// One of: get, set, models, test, pull, style, theme, connect, setup.
+    /// One of: get, set, models, test, pull, style, theme, connect,
+    /// activity, setup.
     op: String,
     /// For set: chatProvider, studioProvider, chatModel, effort, baseUrl
     /// (bare fields target the active chat provider), smallModel, embedder,
@@ -56,7 +57,7 @@ struct SettingsReq {
 #[tool_router(router = settings_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
-        description = "Read, change, or probe Alchemy's settings. op:\"get\" returns a redacted snapshot (API keys are never readable). op:\"set\" changes ONE field: chatProvider, studioProvider, chatModel, effort, baseUrl (these three target the active chat provider), smallModel, embedder (ollama|builtin), provider.<id>.chatModel / .effort / .baseUrl, or profile.name / profile.profession / profile.instructions / profile.assistantName (the user's persona — free text, never secrets); provider values accept an id or a label; API keys and tokens can never be read or set. op:\"models\" lists installed Ollama models plus every provider's active model and live readiness. op:\"test\" live-probes one provider or model (pass `target`; empty = active chat provider) with exactly one tiny chat call and, for Ollama targets, one embed call — no config change. op:\"pull\" validates an Ollama model name (pass `model`) and returns the `ollama pull` command string for the USER to run in Terminal — Alchemy never executes it. op:\"style\" sets a notebook's answer voice/length (pass `notebook_id` plus `style` and/or `length`). op:\"theme\" switches the app theme (pass `theme`; empty lists them). op:\"connect\" lists agent clients (empty `target`) or registers Alchemy with one — requires `confirm: true` because it writes that client's config file. op:\"setup\" reports the next unmet setup step. Applied changes take effect immediately and open windows refresh live."
+        description = "Read, change, or probe Alchemy's settings. op:\"get\" returns a redacted snapshot (API keys are never readable). op:\"set\" changes ONE field: chatProvider, studioProvider, chatModel, effort, baseUrl (these three target the active chat provider), smallModel, embedder (ollama|builtin), provider.<id>.chatModel / .effort / .baseUrl, or profile.name / profile.profession / profile.instructions / profile.assistantName (the user's persona — free text, never secrets); provider values accept an id or a label; API keys and tokens can never be read or set. op:\"models\" lists installed Ollama models plus every provider's active model and live readiness. op:\"test\" live-probes one provider or model (pass `target`; empty = active chat provider) with exactly one tiny chat call and, for Ollama targets, one embed call — no config change. op:\"pull\" validates an Ollama model name (pass `model`) and returns the `ollama pull` command string for the USER to run in Terminal — Alchemy never executes it. op:\"style\" sets a notebook's answer voice/length (pass `notebook_id` plus `style` and/or `length`). op:\"theme\" switches the app theme (pass `theme`; empty lists them). op:\"connect\" lists agent clients (empty `target`) or registers Alchemy with one — requires `confirm: true` because it writes that client's config file. op:\"setup\" reports the next unmet setup step. op:\"activity\" lists every model call in flight right now (provider kind, model, what it is for, when it started) — the same list the app's title-bar indicator shows, covering chat answers, queued generations, scheduled reports, background sweeps and indexing. Applied changes take effect immediately and open windows refresh live."
     )]
     async fn settings(
         &self,
@@ -154,9 +155,13 @@ impl AlchemyMcp {
                 }))
             }
             "setup" => text(commands::settings_setup_report(&self.app, &state).await),
+            // What a model is doing right now, exactly as the app's own
+            // title-bar indicator sees it: chat answers, queued generations,
+            // scheduled reports, sweeps, indexing.
+            "activity" => json_result(&crate::inference::activity_running()),
             other => Err(invalid(format!(
                 "unknown op \"{other}\" — use get, set, models, test, pull, style, theme, \
-                 connect, or setup"
+                 connect, activity, or setup"
             ))),
         }
     }

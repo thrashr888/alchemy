@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
+import { InferenceActivity } from "./InferenceActivity";
 import { UpdateBadge } from "./UpdateBadge";
 import { DitherBackground } from "./DitherBackground";
 import { OkfChip } from "./OkfChip";
@@ -235,6 +236,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           <CenterModeTabs />
         </div>
         <div className="ml-auto flex items-center gap-1">
+          {/* Left of the DEV pill in dev builds, and the same slot in
+              release builds: one place, in every window, that says a model
+              is working. */}
+          <InferenceActivity />
           <DevBadge />
           <UpdateBadge />
           <Button
