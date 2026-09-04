@@ -3192,7 +3192,16 @@ pub(crate) async fn refresh_source_impl(
             }
         }
         // Git parents force a remote sync first so the rescan sees fresh
-        // files; local folders scan the disk as-is.
+        // files. A local folder inside a working tree gets the same
+        // treatment on the safe path only: fetch, then fast-forward if the
+        // tree is clean and strictly behind. A failure here isn't fatal —
+        // the disk still has files worth rescanning.
+        if matches!(existing.source_type.as_str(), "folder" | "obsidian") {
+            let dir = std::path::PathBuf::from(&existing.url);
+            if let Err(err) = crate::git::sync_local(&dir).await {
+                crate::note!("git local sync: {} failed: {err:#}", existing.url);
+            }
+        }
         if existing.source_type == "git" {
             let dir = crate::git::cache_dir(&app_data_dir(state), &existing.id);
             match crate::git::sync_remote(&dir).await {
@@ -6045,6 +6054,20 @@ pub(crate) async fn resync_sources_filtered(
                 }
                 Ok(None) => {}
                 Err(err) => crate::note!("git resync: {} failed: {err:#}", folder.url),
+            }
+        }
+        // Local folders that sit in a working tree: fetch on the same
+        // cadence and fast-forward when nothing can be lost, so the tree
+        // the rescan below walks is current with the remote instead of
+        // drifting until someone pulls by hand. git::advance_decision holds
+        // the safety rules; a dirty or diverged tree is left untouched.
+        if matches!(folder.source_type.as_str(), "folder" | "obsidian")
+            && sync_minutes > 0
+            && crate::git::remote_probe_due(&folder.id, sync_minutes)
+        {
+            let dir = std::path::PathBuf::from(&folder.url);
+            if let Err(err) = crate::git::sync_local(&dir).await {
+                crate::note!("git local sync: {} failed: {err:#}", folder.url);
             }
         }
         // Notion parents: re-export changed pages per cadence tick; the

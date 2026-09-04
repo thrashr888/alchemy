@@ -293,14 +293,28 @@ display.
 
 ## 8. Sync — probe cheap, re-ingest on change, never touch user repos
 
-- **Local repo sources** ride the existing 1-minute sweep unchanged —
+- **Local repo sources** ride the existing 1-minute sweep —
   `rescan_one_folder` already mtime-diffs children; ignore-awareness only
-  changes which files are eligible. **Alchemy never runs `git fetch` (or
-  anything ref-mutating) against a user's repo** — the working tree on
-  disk is the user's truth, indexed as-is. On manual refresh, a read-only
-  `ls-remote` compare may annotate the repo map ("working tree differs
-  from origin/main") — and the cure for wanting upstream freshness is
-  adding the remote URL as a source, where the clone is ours to fetch.
+  changes which files are eligible.
+
+  *Revised (2026-09-03).* The original rule was that Alchemy never runs
+  `git fetch` or anything ref-mutating against a user's repo: the tree on
+  disk is the user's truth, indexed as-is. In the field that made local
+  repo sources quietly stale — the indexed tree drifted behind the remote
+  until somebody happened to pull by hand, and nothing said so. So a sync
+  pass now **fetches, and fast-forwards the checked-out branch in the one
+  case where nothing can be lost**: a branch (not a detached HEAD) that
+  tracks an upstream, no merge/rebase/cherry-pick/bisect half-finished, no
+  local commits the upstream lacks, and no uncommitted change to tracked
+  files. Anything else — dirty, ahead, diverged, detached, untracked — is
+  left exactly as the user left it, with the reason in the log. The move
+  is `merge --ff-only`, never a merge, rebase or reset, so the reflog
+  makes it reversible; it is bounded by the auto-sync cadence setting
+  (off stops it entirely) and manual Refresh takes the same safe path.
+  The safety rules live in one pure function, `git::advance_decision`,
+  unit-tested without a network. Wanting upstream freshness *plus*
+  isolation from your own checkout is still best served by adding the
+  remote URL as a separate source, where the clone is ours to fetch.
 - **Remote sources**: a `sweep_due`-style throttle like mac sources
   (network is the new osascript): **hourly by default, setting-adjustable**
   — `git ls-remote origin <ref>`, one round-trip, no data transfer —

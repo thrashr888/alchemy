@@ -2,8 +2,11 @@
 //! detect that a folder lives inside a repository, read its provenance with
 //! the user's own git, and render the parent source's folder/repo map.
 //!
-//! Read-only by design: nothing here ever mutates a user's repo — no fetch,
-//! no ref updates, not even `git status` (which can take the index lock).
+//! Nearly read-only by design. The one exception is `sync_local`, which
+//! fetches and fast-forwards a user's checkout when — and only when — that
+//! cannot lose work (see `advance_decision`); every other path here leaves
+//! user repos exactly as it found them. `GIT_OPTIONAL_LOCKS=0` on every
+//! subprocess keeps even `git status` off the index lock.
 //! Subprocess shape follows mac.rs: short outer timeout, quiet env.
 //! `GIT_TERMINAL_PROMPT=0` so a credential prompt can never hang the sweep.
 
@@ -841,6 +844,189 @@ pub async fn sync_remote(dir: &Path) -> anyhow::Result<Option<String>> {
     Ok(Some(short_sha(dir).await))
 }
 
+// ---- Local working trees ---------------------------------------------------
+
+/// What a sync pass observed about a local working tree, before deciding
+/// whether HEAD may move. Every field is read with the user's own git;
+/// reading never writes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TreeState {
+    /// Checked-out branch, empty when detached.
+    pub branch: String,
+    /// HEAD is a sha or a tag, not a branch.
+    pub detached: bool,
+    /// The branch's configured upstream (`origin/main`), when it has one.
+    pub upstream: Option<String>,
+    /// Tracked files differ from HEAD. Untracked files don't count — a
+    /// fast-forward can't walk over a file git doesn't know about.
+    pub dirty: bool,
+    /// A merge, rebase, cherry-pick or bisect is half-finished.
+    pub mid_operation: bool,
+    /// Commits on HEAD the upstream doesn't have.
+    pub ahead: u32,
+    /// Commits on the upstream HEAD doesn't have.
+    pub behind: u32,
+}
+
+/// The verdict for one working tree. `Skip` carries its reason so the log
+/// says why a repo stayed put instead of going quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advance {
+    /// Safe to fast-forward: clean tree, strictly behind its upstream.
+    FastForward,
+    /// Already current — nothing to apply.
+    UpToDate,
+    /// Leave the tree exactly as the user left it.
+    Skip(&'static str),
+}
+
+/// The whole safety argument for moving a user's checkout, in one pure
+/// function so it is tested without a network or a fixture repo.
+///
+/// A fast-forward is the only move ever made, and only when it cannot lose
+/// work: the branch tracks something, nothing is half-finished, no local
+/// commit would be rewritten, and no uncommitted edit is in the way.
+/// Everything else is the user's business, not ours.
+pub fn advance_decision(t: &TreeState) -> Advance {
+    if t.detached {
+        return Advance::Skip("detached HEAD");
+    }
+    if t.upstream.is_none() {
+        return Advance::Skip("branch tracks no upstream");
+    }
+    if t.mid_operation {
+        return Advance::Skip("merge or rebase in progress");
+    }
+    if t.ahead > 0 && t.behind > 0 {
+        return Advance::Skip("diverged from upstream");
+    }
+    if t.ahead > 0 {
+        return Advance::Skip("ahead of upstream");
+    }
+    if t.behind == 0 {
+        return Advance::UpToDate;
+    }
+    // Behind, so a fast-forward would actually touch files — only now does
+    // an uncommitted edit stand in the way.
+    if t.dirty {
+        return Advance::Skip("uncommitted changes");
+    }
+    Advance::FastForward
+}
+
+/// Read a working tree's state with the user's git. Read-only, and every
+/// subprocess here carries `GIT_OPTIONAL_LOCKS=0`, so even `status` won't
+/// take the index lock out from under the user's editor.
+async fn read_tree_state(dir: &Path) -> Option<TreeState> {
+    let branch = git_out(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+    if branch == "HEAD" {
+        return Some(TreeState {
+            detached: true,
+            ..Default::default()
+        });
+    }
+    let upstream = git_out(
+        dir,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await;
+    // git_out returns None on empty output, which for `status --porcelain`
+    // is exactly "clean".
+    let dirty = git_out(dir, &["status", "--porcelain", "--untracked-files=no"])
+        .await
+        .is_some();
+    let mid_operation = git_out(dir, &["rev-parse", "--absolute-git-dir"])
+        .await
+        .map(std::path::PathBuf::from)
+        .is_some_and(|g| {
+            [
+                "rebase-merge",
+                "rebase-apply",
+                "MERGE_HEAD",
+                "CHERRY_PICK_HEAD",
+                "BISECT_LOG",
+            ]
+            .iter()
+            .any(|marker| g.join(marker).exists())
+        });
+    // `--left-right --count` over `@{u}...HEAD` prints "<behind>\t<ahead>".
+    let (behind, ahead) = git_out(dir, &["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+        .await
+        .map(|counts| {
+            let mut it = counts.split_whitespace();
+            let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            (behind, ahead)
+        })
+        .unwrap_or((0, 0));
+    Some(TreeState {
+        branch,
+        detached: false,
+        upstream,
+        dirty,
+        mid_operation,
+        ahead,
+        behind,
+    })
+}
+
+/// Bring the user's own checkout level with its remote, when that is safe.
+///
+/// RFC-git-sources §8 originally kept Alchemy entirely off user repos, but
+/// an indexed working tree then drifts behind the remote until somebody
+/// pulls by hand — the source goes quietly stale. So a sync pass now
+/// fetches and, in the one case where nothing can be lost, fast-forwards
+/// (`advance_decision`). Bounded by the auto-sync cadence setting (0 stops
+/// it outright), visible in the log, and reversible through the reflog.
+/// Credentials stay the user's: system git, no prompts. Returns the new
+/// short sha when HEAD moved.
+pub async fn sync_local(dir: &Path) -> anyhow::Result<Option<String>> {
+    let Some(before) = read_tree_state(dir).await else {
+        return Ok(None); // not a working tree, or no git on PATH
+    };
+    // Decide once before spending a round-trip: a detached, dirty, diverged
+    // or untracked branch won't move whatever the fetch turns up.
+    if let Advance::Skip(why) = advance_decision(&before) {
+        crate::note!("git local sync: {} left alone ({why})", dir.display());
+        return Ok(None);
+    }
+    let remote = git_out(
+        dir,
+        &[
+            "config",
+            "--get",
+            &format!("branch.{}.remote", before.branch),
+        ],
+    )
+    .await
+    .unwrap_or_else(|| "origin".to_string());
+    run_git(Some(dir), &["fetch", "--quiet", "--no-tags", &remote], 120)
+        .await
+        .map_err(|e| anyhow::anyhow!("Couldn't fetch from {remote} ({e})"))?;
+    let Some(after) = read_tree_state(dir).await else {
+        return Ok(None);
+    };
+    match advance_decision(&after) {
+        Advance::FastForward => {
+            run_git(Some(dir), &["merge", "--ff-only", "@{u}"], 60)
+                .await
+                .map_err(|e| anyhow::anyhow!("Couldn't fast-forward ({e})"))?;
+            let sha = short_sha(dir).await;
+            crate::note!(
+                "git local sync: {} fast-forwarded {} commit(s) to {sha}",
+                dir.display(),
+                after.behind
+            );
+            Ok(Some(sha))
+        }
+        Advance::UpToDate => Ok(None),
+        Advance::Skip(why) => {
+            crate::note!("git local sync: {} left alone ({why})", dir.display());
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1023,5 +1209,123 @@ mod forge_gate_tests {
         .await;
         assert!(got.is_none());
         assert!(!hosts_path(dir.path()).exists());
+    }
+}
+
+#[cfg(test)]
+mod local_sync_tests {
+    use super::*;
+
+    /// A clean branch one commit behind its upstream — the only shape that
+    /// earns a move.
+    fn behind() -> TreeState {
+        TreeState {
+            branch: "main".to_string(),
+            detached: false,
+            upstream: Some("origin/main".to_string()),
+            dirty: false,
+            mid_operation: false,
+            ahead: 0,
+            behind: 1,
+        }
+    }
+
+    #[test]
+    fn clean_and_behind_fast_forwards() {
+        assert_eq!(advance_decision(&behind()), Advance::FastForward);
+        assert_eq!(
+            advance_decision(&TreeState {
+                behind: 47,
+                ..behind()
+            }),
+            Advance::FastForward
+        );
+    }
+
+    #[test]
+    fn level_with_upstream_is_up_to_date() {
+        assert_eq!(
+            advance_decision(&TreeState {
+                behind: 0,
+                ..behind()
+            }),
+            Advance::UpToDate
+        );
+        // Nothing to apply, so an uncommitted edit isn't in anyone's way.
+        assert_eq!(
+            advance_decision(&TreeState {
+                behind: 0,
+                dirty: true,
+                ..behind()
+            }),
+            Advance::UpToDate
+        );
+    }
+
+    #[test]
+    fn a_dirty_tree_is_never_rewritten() {
+        assert_eq!(
+            advance_decision(&TreeState {
+                dirty: true,
+                ..behind()
+            }),
+            Advance::Skip("uncommitted changes")
+        );
+    }
+
+    #[test]
+    fn local_commits_are_never_lost() {
+        // Ahead only: no fast-forward is possible, and merging would be a
+        // decision that belongs to the user.
+        assert_eq!(
+            advance_decision(&TreeState {
+                ahead: 2,
+                behind: 0,
+                ..behind()
+            }),
+            Advance::Skip("ahead of upstream")
+        );
+        assert_eq!(
+            advance_decision(&TreeState {
+                ahead: 2,
+                behind: 3,
+                ..behind()
+            }),
+            Advance::Skip("diverged from upstream")
+        );
+    }
+
+    #[test]
+    fn unmoveable_heads_are_left_alone() {
+        assert_eq!(
+            advance_decision(&TreeState {
+                detached: true,
+                ..Default::default()
+            }),
+            Advance::Skip("detached HEAD")
+        );
+        assert_eq!(
+            advance_decision(&TreeState {
+                upstream: None,
+                ..behind()
+            }),
+            Advance::Skip("branch tracks no upstream")
+        );
+        assert_eq!(
+            advance_decision(&TreeState {
+                mid_operation: true,
+                ..behind()
+            }),
+            Advance::Skip("merge or rebase in progress")
+        );
+    }
+
+    /// A folder with no repo behind it reads as nothing to do, not as an
+    /// error the sweep has to handle.
+    #[tokio::test]
+    async fn a_plain_folder_is_not_a_working_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_tree_state(dir.path()).await.is_none());
+        assert!(sync_local(dir.path()).await.unwrap().is_none());
     }
 }
