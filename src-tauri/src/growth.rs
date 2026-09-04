@@ -108,24 +108,90 @@ fn extract_links(text: &str) -> Vec<(String, String)> {
         // Markdown anchor: the "](url" shape puts "[anchor]" just before.
         // Emphasis wraps the anchor, not the words ("**The Mart**" is a bold
         // link to The Mart) — strip it so the proposal reads as a title.
-        let anchor = if start >= 2 && &bytes[start - 2..start] == b"](" {
-            text[..start - 2]
-                .rfind('[')
-                .map(|open| {
-                    text[open + 1..start - 2]
-                        .trim_matches(['*', '_', '`', ' '])
-                        .to_string()
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        if let Some(url) = normalize_url(raw) {
-            out.push((url, anchor));
+        // A nested image link — `[![alt](img)](href)` — is the README badge
+        // shape, and reading the whole `[` … `](` span as the anchor is what
+        // titled a proposal "License: Apache 2.0](https://img.shields.io/…".
+        // The alt text is the title; the inner image says whether the link
+        // is a badge, in which case the href behind it is furniture too.
+        let mut anchor = String::new();
+        let mut badge = false;
+        if start >= 2 && &bytes[start - 2..start] == b"](" {
+            if let Some(open) = text[..start - 2].rfind('[') {
+                let inner = &text[open + 1..start - 2];
+                let (alt, image) = match inner.find("](") {
+                    Some(split) => (&inner[..split], inner[split + 2..].trim_end_matches(')')),
+                    None => (inner, ""),
+                };
+                badge = !image.is_empty() && is_badge_url(image);
+                anchor = alt.trim_matches(['*', '_', '`', ' ']).to_string();
+            }
+        }
+        if !badge {
+            if let Some(url) = normalize_url(raw) {
+                out.push((url, anchor));
+            }
         }
         i = start + end.max(1);
     }
     out
+}
+
+/// A shields-style status image. Badge hosts serve nothing but badges, and
+/// a `/badge/` path segment is the same thing under a project's own domain.
+fn is_badge_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(lower.as_str());
+    let host = rest.split('/').next().unwrap_or(rest);
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    const BADGE_HOSTS: [&str; 7] = [
+        "img.shields.io",
+        "shields.io",
+        "badge.fury.io",
+        "badgen.net",
+        "forthebadge.com",
+        "codecov.io",
+        "coveralls.io",
+    ];
+    BADGE_HOSTS.contains(&host) || rest.contains("/badge/") || rest.contains("/badges/")
+}
+
+/// README furniture, not a research lead. Badges and license boilerplate sit
+/// at the top of every repository, so they reach the frontier with hundreds
+/// of mentions across hundreds of sources and outrank anything a reader
+/// would actually want. Nothing matching this is proposed, however often it
+/// is linked.
+pub fn is_noise_link(url: &str, anchor: &str) -> bool {
+    if is_badge_url(url) {
+        return true;
+    }
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("license") || lower.contains("licence") || lower.contains("gnu.org/copyleft")
+    {
+        return true;
+    }
+    // The href can be bare ("www.apache.org"); then the anchor names it.
+    let label = anchor.trim().to_ascii_lowercase();
+    if label.starts_with("license") || label.starts_with("licence") {
+        return true;
+    }
+    const LICENSE_NAMES: [&str; 12] = [
+        "mit",
+        "mit license",
+        "apache 2.0",
+        "apache-2.0",
+        "bsd",
+        "bsd-2-clause",
+        "bsd-3-clause",
+        "gpl",
+        "gplv2",
+        "gplv3",
+        "agpl",
+        "lgpl",
+    ];
+    LICENSE_NAMES.contains(&label.as_str())
 }
 
 /// Strip fragments and tracking params; drop obvious non-documents. None
@@ -224,7 +290,7 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
         }
         for (url, anchor) in extract_links(&s.content) {
             let key = canonical_key(&url);
-            if existing.contains(&key) {
+            if existing.contains(&key) || is_noise_link(&url, &anchor) {
                 continue;
             }
             // A source linking to itself under a variant URL is noise.
@@ -595,14 +661,18 @@ pub async fn web_search(
             if existing.contains(&key) || !seen.insert(key) {
                 continue;
             }
+            let anchor = hit
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if is_noise_link(&url, &anchor) {
+                continue;
+            }
             out.push(GrowthProposal {
                 kind: "search".into(),
                 url,
-                anchor: hit
-                    .get("title")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
+                anchor,
                 mentions: 0,
                 source_count: 0,
                 matched_query: query.clone(),
@@ -1203,6 +1273,65 @@ mod tests {
         assert!(links
             .iter()
             .all(|(u, _)| !u.contains(['[', ']', '(', '`', '|', '<', '>'])));
+    }
+
+    #[test]
+    fn nested_image_links_are_titled_by_their_alt_text() {
+        // `[![alt](img)](href)` used to title the href with everything
+        // between the outer brackets: "Cover](https://cdn.test/cover.png".
+        let links =
+            extract_links("[![Cover](https://cdn.test/cover.png)](https://books.test/atlas)");
+        let outer = links
+            .iter()
+            .find(|(u, _)| u == "https://books.test/atlas")
+            .expect("the href is still proposed");
+        assert_eq!(outer.1, "Cover");
+    }
+
+    #[test]
+    fn badge_links_never_reach_the_frontier() {
+        // The Apache shield: the badge image titles the license page, and
+        // 205 READMEs carry the identical pair.
+        let readme =
+            "[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)]\
+             (https://www.apache.org/licenses/LICENSE-2.0)";
+        assert!(extract_links(readme)
+            .iter()
+            .all(|(u, _)| !u.contains("apache.org")));
+
+        // And the exclusion holds wherever a link arrives from.
+        assert!(is_noise_link(
+            "https://img.shields.io/badge/build-passing-green",
+            "build"
+        ));
+        assert!(is_noise_link("https://ci.test/badges/master", "build"));
+        assert!(is_noise_link(
+            "https://www.apache.org/licenses/LICENSE-2.0",
+            ""
+        ));
+        assert!(is_noise_link(
+            "https://choosealicense.com/licenses/mit/",
+            ""
+        ));
+        assert!(is_noise_link(
+            "https://opensource.org/licenses/BSD-3-Clause",
+            ""
+        ));
+        // A bare href still gives itself away in the anchor.
+        assert!(is_noise_link(
+            "https://www.apache.org",
+            "License: Apache 2.0"
+        ));
+        assert!(is_noise_link("https://example.test/legal", "MIT"));
+        // Real pages stay.
+        assert!(!is_noise_link(
+            "https://rust-lang.github.io/async-book",
+            "Async book"
+        ));
+        assert!(!is_noise_link(
+            "https://example.test/blog/licensing-explained",
+            "Licensing explained"
+        ));
     }
 
     #[test]
