@@ -26,6 +26,7 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { useSourceBreakdownCard } from "./SourceBreakdownCard";
 import { sourceSubtree } from "@/lib/sourceRows";
 import {
   FOLDER_TYPES,
@@ -272,6 +273,10 @@ export function SourcesPanel() {
 
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
   const sourceCard = sourceHoverData;
+
+  // The size strip's own hover card (alchemy-release-2j9): sources by type.
+  const { card: breakdownCard, triggerProps: breakdownTrigger } =
+    useSourceBreakdownCard(sources);
 
   const totalChars = sources.reduce((sum, s) => sum + s.charCount, 0);
   const pct = Math.min(100, (totalChars / SCALE_TARGET_CHARS) * 100);
@@ -718,9 +723,13 @@ export function SourcesPanel() {
         </div>
       </div>
 
-      {/* Notebook capacity gauge */}
+      {/* Notebook capacity gauge. Hovering or focusing it opens the
+          composition card: the same notebook split by source type. */}
       {sources.length > 0 && (
-        <div className="border-b border-border px-4 py-2.5">
+        <div
+          {...breakdownTrigger}
+          className="border-b border-border px-4 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+        >
           <div className="mb-1.5 flex items-center justify-between text-micro">
             <span className="text-muted-foreground">
               {Intl.NumberFormat().format(totalChars)} chars
@@ -1351,6 +1360,7 @@ export function SourcesPanel() {
       {marquee}
       {confirmDialog}
       {hoverCard}
+      {breakdownCard}
     </div>
   );
 }
