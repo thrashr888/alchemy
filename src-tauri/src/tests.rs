@@ -4343,13 +4343,14 @@ fn okf_empty_folders_go_only_once_they_are_old() {
     use crate::okf::{remove_if_empty, stale_empty_dirs, DUPLICATES_DIR, EMPTY_DIR_GRACE_MS};
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
+    std::fs::create_dir_all(root.join("arriving")).unwrap();
+    std::fs::create_dir_all(root.join(DUPLICATES_DIR)).unwrap();
+    okf_test_bundle(root, "ferrari", "nb1");
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    std::fs::create_dir_all(root.join("arriving")).unwrap();
-    std::fs::create_dir_all(root.join(DUPLICATES_DIR)).unwrap();
-    okf_test_bundle(root, "ferrari", "nb1");
 
     assert!(
         stale_empty_dirs(root, now).is_empty(),

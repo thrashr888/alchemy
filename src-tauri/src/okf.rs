@@ -13,11 +13,10 @@
 //! Two pieces of state make the binding work, and both are deliberately not
 //! store columns. `<app-data>/okf-bindings.json` maps notebook id to bundle
 //! path: paths are per-machine, and a column would sync them somewhere they
-//! mean nothing. `<bundle>/.alchemy/manifest.json` maps entity id to the file
+//! mean nothing. `<app-data>/okf/<binding-id>.json` maps entity id to the file
 //! Alchemy wrote for it, the hash of what it wrote, and the frontmatter keys
 //! that came from outside and must go back out untouched. The manifest lives
-//! in the bundle because it describes the bundle; a dot-directory is not a
-//! concept document (spec §3.1), so every other tool skips it.
+//! outside the bundle so each device owns its own reconciliation record.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,6 +27,13 @@ use crate::commands::{app_data_dir, e, is_web_url, new_id, AppState};
 use crate::ingest;
 use crate::models::{Note, Notebook, Source};
 use crate::rag;
+
+mod import_claims;
+#[cfg(test)]
+mod manifest_tests;
+#[cfg(test)]
+mod sync_tests;
+use import_claims::adopt_imported_files;
 
 // ---- OKF export ------------------------------------------------------------
 
@@ -491,11 +497,25 @@ pub fn write_bundle(
 ) -> Result<OkfWrite, String> {
     std::fs::create_dir_all(bundle).map_err(|err| format!("Failed to create {bundle:?}: {err}"))?;
     let write = |path: &Path, text: &str| -> Result<(), String> {
-        std::fs::write(path, text).map_err(|err| format!("Failed to write {path:?}: {err}"))
+        use std::io::Write;
+        if std::fs::read(path).ok().as_deref() == Some(text.as_bytes()) {
+            return Ok(());
+        }
+        let result = (|| -> std::io::Result<()> {
+            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(bundle))?;
+            staged.write_all(text.as_bytes())?;
+            staged.as_file().sync_all()?;
+            staged.persist(path).map_err(|err| err.error)?;
+            Ok(())
+        })();
+        result.map_err(|err| format!("Failed to write {path:?}: {err}"))
     };
     // `None` is a one-shot export into a fresh directory: there is no last
     // time to compare against and no record worth keeping afterwards.
-    let mut manifest = manifest_at.map(load_manifest).unwrap_or_default();
+    let mut manifest = manifest_at
+        .map(load_manifest_checked)
+        .transpose()?
+        .unwrap_or_default();
     let mut out = OkfWrite::default();
 
     // Place everything first: a note's `sources:` entries cite bundle paths,
@@ -580,6 +600,7 @@ pub fn write_bundle(
                 continue;
             };
             let description = okf_description(&concept.content);
+            let local_hash = local_concept_hash(concept);
             // Unknown keys from an earlier outside edit ride back out on
             // every write, not just the one that read them.
             let mut concept = concept.clone_with_extra(
@@ -634,7 +655,19 @@ pub fn write_bundle(
                 concept.content
             );
             let hash = okf_hash(&text);
+            let links_hash = okf_hash(&format!("{:?}", parse_okf_doc(&text).get("sources")));
             let prior = manifest.concepts.get(&concept.id);
+            // Absence is input to reconciliation, never permission for an
+            // unrelated database write to resurrect the other Mac's delete.
+            // Keep the claim until the missing-file grace period resolves it.
+            if prior.is_some_and(|p| !bundle.join(&p.path).exists()) {
+                if let Some(p) = prior {
+                    hydrate_if_evicted(&bundle.join(&p.path));
+                }
+                still_ours.insert(concept.id.clone());
+                entries.push((place.slug.clone(), concept.title.clone(), description));
+                continue;
+            }
             // A retitled concept moves rather than being deleted and
             // rewritten — but never onto a path another entry still claims.
             // A slug collision used to rename one concept over its
@@ -667,7 +700,20 @@ pub fn write_bundle(
                 entries.push((slug, concept.title.clone(), description));
                 continue;
             }
-            let unchanged = prior.is_some_and(|p| p.hash == hash) && at.exists();
+            let unchanged = prior.is_some_and(|p| {
+                p.hash == hash
+                    || (!p.local_hash.is_empty()
+                        && p.local_hash == local_hash
+                        && p.links_hash == links_hash)
+            }) && at.exists();
+            if unchanged {
+                // We did not read or write this file. In particular, its new
+                // mtime might belong to a remote edit: acknowledging that
+                // clock here would hide the edit from the next reconcile.
+                still_ours.insert(concept.id.clone());
+                entries.push((slug, concept.title.clone(), description));
+                continue;
+            }
             if !unchanged {
                 write(&at, &text)?;
                 out.written += 1;
@@ -685,6 +731,8 @@ pub fn write_bundle(
                     file_mtime: file_clock(&at).0,
                     file_len: file_clock(&at).1,
                     wrote_at: concept.generated_at,
+                    local_hash,
+                    links_hash,
                     missing_since: 0,
                     extra: std::mem::take(&mut concept.extra),
                 },
@@ -787,7 +835,7 @@ pub fn write_bundle(
     out.sources = listings.get("sources").map(Vec::len).unwrap_or(0);
     out.notes = listings.get("notes").map(Vec::len).unwrap_or(0);
     if let Some(path) = manifest_at {
-        save_manifest(path, &manifest);
+        save_manifest_checked(path, &manifest)?;
     }
     // A pass that changed nothing says nothing: a log of "no change" every
     // night is not a history, it is noise.
@@ -1020,29 +1068,10 @@ pub(crate) async fn gather_bundle_for(
 
     let note_concepts = notes
         .iter()
-        .map(|note| OkfConcept {
-            id: note.id.clone(),
-            title: note.title.clone(),
-            content: note.content.clone(),
-            type_label: match note.kind.as_str() {
-                "note" => "Note",
-                "report" => "Report",
-                kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
-            }
-            .to_string(),
-            generated_at: note.updated_at,
-            generated_by: okf_note_actor(note, &edits),
-            status: okf_note_status(note),
-            derived_from: cites.get(&note.id).cloned().unwrap_or_default(),
-            // `type:` is a human label and several kinds share one; `kind` is
-            // the machine name, so a Study Guide comes back a study guide.
-            alchemy: vec![
-                ("id".into(), note.id.clone()),
-                ("kind".into(), note.kind.clone()),
-                ("origin".into(), note.origin.clone()),
-                ("status".into(), note.status.clone()),
-            ],
-            ..OkfConcept::blank()
+        .map(|note| {
+            let mut concept = note_concept(note, &edits);
+            concept.derived_from = cites.get(&note.id).cloned().unwrap_or_default();
+            concept
         })
         .collect();
 
@@ -1054,6 +1083,55 @@ pub(crate) async fn gather_bundle_for(
         generated_at: notebook.updated_at,
     };
     Ok((meta, source_concepts, note_concepts))
+}
+
+fn note_concept(note: &Note, edits: &OkfEdits) -> OkfConcept {
+    OkfConcept {
+        id: note.id.clone(),
+        title: note.title.clone(),
+        content: note.content.clone(),
+        type_label: match note.kind.as_str() {
+            "note" => "Note",
+            "report" => "Report",
+            kind => rag::artifact_spec(kind).map(|(t, _)| t).unwrap_or("Note"),
+        }
+        .to_string(),
+        generated_at: note.updated_at,
+        generated_by: okf_note_actor(note, edits),
+        status: okf_note_status(note),
+        derived_from: Vec::new(),
+        // `type:` is a human label and several kinds share one; `kind` is
+        // the machine name, so a Study Guide comes back a study guide.
+        alchemy: vec![
+            ("id".into(), note.id.clone()),
+            ("kind".into(), note.kind.clone()),
+            ("origin".into(), note.origin.clone()),
+            ("status".into(), note.status.clone()),
+        ],
+        ..OkfConcept::blank()
+    }
+}
+
+/// The local representation acknowledged by the last import/write. A remote
+/// file has different row ids and creation clocks, so its byte hash alone
+/// cannot tell whether this device has made an edit worth exporting.
+fn local_concept_hash(concept: &OkfConcept) -> String {
+    okf_hash(
+        &serde_json::json!([
+            concept.title,
+            concept.content,
+            concept.type_label,
+            concept.resource,
+            concept.tags,
+            concept.generated_at,
+            concept.generated_by,
+            concept.status,
+            concept.alchemy,
+            concept.parent,
+            concept.origin_uri
+        ])
+        .to_string(),
+    )
 }
 
 /// Export a notebook as an Open Knowledge Format bundle: a directory of
@@ -2688,12 +2766,27 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
             // The same notebook by another route — the other Mac's copy, a
             // share, a folder moved — rebinds rather than duplicating.
             FoundBundle::Rebind(id) => {
+                let existing = binding_for(&data_dir, &id);
+                let binding_id = existing
+                    .as_ref()
+                    .map(|binding| binding.id.clone())
+                    .unwrap_or_else(new_id);
+                let manifest_at = manifest_path(&data_dir, &binding_id);
+                let claims = if existing.is_some() {
+                    load_manifest_checked(&manifest_at).map(|_| ())
+                } else {
+                    adopt_imported_files(state, &id, &folder, &manifest_at).await
+                };
+                if let Err(error) = claims {
+                    crate::diagnostics::error("okf", format!("could not bind {path}: {error}"));
+                    continue;
+                }
                 set_binding(
                     &data_dir,
                     &id,
                     Some(OkfBinding {
                         path: path.clone(),
-                        id: new_id(),
+                        id: binding_id,
                         last_write_at: 0,
                         lost: false,
                     }),
@@ -2705,14 +2798,29 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
             // recorded before the first write, so the writer's own output
             // can never read as a second arrival.
             FoundBundle::Import => {
+                let binding_id = new_id();
+                let manifest_at = manifest_path(&data_dir, &binding_id);
+                if let Err(error) = save_manifest_checked(&manifest_at, &OkfManifest::default()) {
+                    crate::diagnostics::error("okf", format!("could not import {path}: {error}"));
+                    continue;
+                }
                 match crate::commands::import_bundle(app, state, folder.clone(), None).await {
                     Ok(nb) => {
+                        if let Err(error) =
+                            adopt_imported_files(state, &nb.id, &folder, &manifest_at).await
+                        {
+                            crate::diagnostics::error(
+                                "okf",
+                                format!("could not bind {path}: {error}"),
+                            );
+                            continue;
+                        }
                         set_binding(
                             &data_dir,
                             &nb.id,
                             Some(OkfBinding {
                                 path: path.clone(),
-                                id: new_id(),
+                                id: binding_id,
                                 last_write_at: 0,
                                 lost: false,
                             }),
@@ -3185,6 +3293,10 @@ pub struct OkfManifestEntry {
     /// Epoch ms of the entity when we wrote it — the conflict clock (§5.4).
     #[serde(default)]
     pub wrote_at: i64,
+    #[serde(default)]
+    pub local_hash: String,
+    #[serde(default)]
+    pub links_hash: String,
     /// When a pass first found this file absent, or zero when it is there.
     ///
     /// A claimed file that is gone used to take its entity with it on the
@@ -3228,19 +3340,61 @@ pub fn manifest_path(data_dir: &Path, binding_id: &str) -> PathBuf {
 }
 
 pub fn load_manifest(path: &Path) -> OkfManifest {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    load_manifest_checked(path).unwrap_or_default()
 }
 
 fn save_manifest(path: &Path, manifest: &OkfManifest) {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(path, json);
-    }
+    let _ = save_manifest_checked(path, manifest);
+}
+
+/// A missing record is a new binding; an unreadable or malformed record is
+/// not. Live sync must propagate this error rather than treating every file
+/// as new and importing duplicate notes under fresh IDs.
+fn load_manifest_checked(path: &Path) -> Result<OkfManifest, String> {
+    let result = match std::fs::read_to_string(path) {
+        Ok(json) => serde_json::from_str(&json).map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(OkfManifest::default());
+        }
+        Err(error) => Err(error.to_string()),
+    };
+    result.map_err(|error| {
+        let message = format!(
+            "Couldn't read notebook sync record {}: {error}",
+            path.display()
+        );
+        crate::diagnostics::error("okf-manifest", &message);
+        message
+    })
+}
+
+/// Replace a reconciliation record atomically. A crash or failed write must
+/// leave the previous claims readable, never a truncated JSON file that
+/// would make the next pass import those entities again.
+fn save_manifest_checked(path: &Path, manifest: &OkfManifest) -> Result<(), String> {
+    use std::io::Write as _;
+
+    let save = || -> anyhow::Result<()> {
+        let json = serde_json::to_vec_pretty(manifest)?;
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+        staged.write_all(&json)?;
+        staged.as_file().sync_all()?;
+        staged.persist(path).map_err(|error| error.error)?;
+        Ok(())
+    };
+    save().map_err(|error| {
+        let message = format!(
+            "Couldn't save notebook sync record {}: {error}",
+            path.display()
+        );
+        crate::diagnostics::error("okf-manifest", &message);
+        message
+    })
 }
 
 /// The in-bundle manifest this branch's earlier builds wrote. Adopted once
@@ -3460,6 +3614,18 @@ pub fn schedule_write(notebook_id: &str) {
         if let Ok(mut running) = flushing().lock() {
             running.remove(&id);
         }
+        // Mutations (including a remote note imported during this write)
+        // can arrive while the flusher owns the notebook. Their deadline
+        // was recorded but no second worker was spawned; hand it off now.
+        // Otherwise that pending flag would block reconciliation forever.
+        if pending()
+            .lock()
+            .map(|map| map.contains_key(&id))
+            .unwrap_or(false)
+        {
+            schedule_write(&id);
+            return;
+        }
         // One more try after a failure, a little later: the usual cause is a
         // resource that comes back (descriptors, a folder mid-sync). A second
         // failure waits for the next real change rather than looping.
@@ -3665,6 +3831,8 @@ fn restat_manifest(manifest_at: &Path, bundle: &Path) {
 /// after it are the same pass — a bundle nobody has written yet simply has an
 /// empty manifest, so every concept counts as changed.
 pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite, String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let _guard = lock.lock().await;
     let data_dir = app_data_dir(state);
     let mut binding = binding_for(&data_dir, notebook_id)
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
@@ -3679,6 +3847,9 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
             None => return Ok(OkfWrite::default()),
         }
     }
+    // Resolve incoming edits before projecting the local database. A local
+    // mutation in another row must not overwrite unread remote content.
+    reconcile_locked(state, notebook_id).await?;
     let bundle = PathBuf::from(&binding.path);
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
@@ -3732,19 +3903,30 @@ pub(crate) async fn bind_impl(
             "This notebook already reads that folder as a source — pick a different one".into(),
         );
     }
-    // A bundle already living here has content the notebook does not; take it
-    // in before the writer starts treating this folder as its own.
-    if crate::commands::find_bundle_root(bundle.clone()).is_ok() {
-        crate::commands::import_bundle(app, state, bundle.clone(), Some(notebook_id.to_string()))
-            .await?;
-    }
     let data_dir = app_data_dir(state);
-    let id = new_id();
+    let existing = binding_for(&data_dir, notebook_id)
+        .filter(|binding| same_folder(&binding.path) == same_folder(&bundle));
+    let id = existing
+        .as_ref()
+        .map(|binding| binding.id.clone())
+        .unwrap_or_else(new_id);
     let manifest = manifest_path(&data_dir, &id);
     // Earlier builds of this branch kept the manifest inside the bundle.
     // Take it over so a folder already bound keeps its hashes instead of
     // rewriting every file, then leave the bundle machine-state-free.
     adopt_legacy_manifest(&bundle, &manifest);
+    let record = load_manifest_checked(&manifest)?;
+    save_manifest_checked(&manifest, &record)?;
+    // A bundle already living here has content the notebook does not; take it
+    // in before the writer starts treating this folder as its own. A binding
+    // to the same folder keeps its claims instead of importing edits as rows.
+    if existing.is_none() && crate::commands::find_bundle_root(bundle.clone()).is_ok() {
+        crate::commands::import_bundle(app, state, bundle.clone(), Some(notebook_id.to_string()))
+            .await?;
+    }
+    if existing.is_none() {
+        adopt_imported_files(state, notebook_id, &bundle, &manifest).await?;
+    }
     set_binding(
         &data_dir,
         notebook_id,
@@ -3904,6 +4086,30 @@ fn write_in_flight(notebook_id: &str) -> bool {
             .lock()
             .map(|s| s.contains(notebook_id))
             .unwrap_or(true)
+}
+
+/// Watcher, periodic sweep and manual writes all share the same manifest.
+/// Serialize their read/modify/save cycle; the debounce flag alone cannot
+/// exclude two reconcilers or a manual write. Separate local data directories
+/// deliberately get separate locks, just as two laptops do.
+fn notebook_sync_lock(
+    state: &AppState,
+    notebook_id: &str,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    type Locks = HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>;
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<Locks>> = std::sync::OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let key = app_data_dir(state).join("okf").join(notebook_id);
+    if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) {
+        return lock;
+    }
+    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(key, std::sync::Arc::downgrade(&lock));
+    lock
 }
 
 /// Every concept file under a bundle directory, at any depth, in a stable
@@ -4090,19 +4296,25 @@ pub(crate) fn vanish_verdict(
 /// has never heard of becomes an entity, a file whose hash moved updates one,
 /// and a file that is gone deletes one.
 pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconcile, String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let _guard = lock.lock().await;
+    if write_in_flight(notebook_id) {
+        return Ok(OkfReconcile::default());
+    }
+    reconcile_locked(state, notebook_id).await
+}
+
+async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReconcile, String> {
     let data_dir = app_data_dir(state);
     let Some(binding) = binding_for(&data_dir, notebook_id) else {
         return Ok(OkfReconcile::default());
     };
-    if write_in_flight(notebook_id) {
-        return Ok(OkfReconcile::default());
-    }
     let bundle = PathBuf::from(&binding.path);
     if !bundle.is_dir() {
         return Ok(OkfReconcile::default());
     }
     let manifest_at = manifest_path(&data_dir, &binding.id);
-    let mut manifest = load_manifest(&manifest_at);
+    let mut manifest = load_manifest_checked(&manifest_at)?;
     // Path → entity id, the direction the reconciler reads in.
     let by_path: HashMap<String, String> = manifest
         .concepts
@@ -4192,39 +4404,72 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
             };
             let doc = parse_okf_doc(&text);
             let (mtime, len) = file_clock(&path);
+            if known.is_none() {
+                save_manifest_checked(&manifest_at, &manifest)?;
+            }
             match (dir, known) {
                 ("notes", None) => {
-                    if let Some(id) = take_in_note(state, notebook_id, &doc, &path).await? {
+                    if let Some(taken) = take_in_note(state, notebook_id, &doc, &path).await? {
+                        let id = taken.id;
                         adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
+                        manifest.concepts.get_mut(&id).unwrap().local_hash = taken.local_hash;
+                        save_manifest_checked(&manifest_at, &manifest)?;
                         dirty = true;
                         out.created += 1;
                     }
                 }
                 ("sources", None) => {
-                    if let Some(id) =
+                    if let Some(taken) =
                         take_in_source(state, notebook_id, &doc, &path, &bundle).await?
                     {
+                        let id = taken.id;
                         adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
+                        manifest.concepts.get_mut(&id).unwrap().local_hash = taken.local_hash;
+                        save_manifest_checked(&manifest_at, &manifest)?;
                         dirty = true;
                         out.created += 1;
                     }
                 }
                 ("notes", Some(id)) => {
                     match update_note_from_disk(state, &id, &doc, mtime).await? {
-                        Verdict::Applied => out.updated += 1,
+                        Verdict::Applied(local_hash) => {
+                            out.updated += 1;
+                            adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
+                            manifest.concepts.get_mut(&id).unwrap().local_hash = local_hash;
+                            save_manifest_checked(&manifest_at, &manifest)?;
+                            dirty = true;
+                        }
                         Verdict::Overruled(text) => {
                             out.overruled += 1;
                             losers.push(format!("{rel}\n\n{text}"));
+                            if let Some(entry) = manifest.concepts.get_mut(&id) {
+                                entry.hash.clear();
+                                entry.local_hash.clear();
+                                entry.file_mtime = 0;
+                                dirty = true;
+                            }
                         }
                         Verdict::Gone => {}
                     }
                 }
                 ("sources", Some(id)) => {
                     match update_source_from_disk(state, &id, &doc, &path, mtime).await? {
-                        Verdict::Applied => out.updated += 1,
+                        Verdict::Applied(local_hash) => {
+                            out.updated += 1;
+                            adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
+                            manifest.concepts.get_mut(&id).unwrap().local_hash = local_hash;
+                            save_manifest_checked(&manifest_at, &manifest)?;
+                            dirty = true;
+                        }
                         Verdict::Overruled(text) => {
                             out.overruled += 1;
                             losers.push(format!("{rel}\n\n{text}"));
+                            if let Some(entry) = manifest.concepts.get_mut(&id) {
+                                entry.hash.clear();
+                                entry.local_hash.clear();
+                                entry.file_mtime = 0;
+                                dirty = true;
+                            }
                         }
                         Verdict::Gone => {}
                     }
@@ -4275,7 +4520,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
         }
     }
     if out.deleted > 0 || dirty {
-        save_manifest(&manifest_at, &manifest);
+        save_manifest_checked(&manifest_at, &manifest)?;
     }
     // §5.3 asks for the delete to be logged, and `note!` is stderr: on a
     // shared folder `log.md` is the only record the other side has of why a
@@ -4339,6 +4584,8 @@ pub(crate) fn adopt(
             file_mtime: mtime,
             file_len: len,
             wrote_at: 0,
+            local_hash: String::new(),
+            links_hash: okf_hash(&format!("{:?}", doc.get("sources"))),
             missing_since: 0,
             extra: doc.extra(),
         },
@@ -4346,8 +4593,13 @@ pub(crate) fn adopt(
 }
 
 /// Which side of a conflict won, and the text the loser had.
+struct Taken {
+    id: String,
+    local_hash: String,
+}
+
 enum Verdict {
-    Applied,
+    Applied(String),
     Overruled(String),
     Gone,
 }
@@ -4357,7 +4609,7 @@ async fn take_in_note(
     notebook_id: &str,
     doc: &OkfDoc,
     path: &Path,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Taken>, String> {
     if doc.body.trim().is_empty() {
         return Ok(None);
     }
@@ -4389,7 +4641,14 @@ async fn take_in_note(
     };
     e(crate::commands::add_note_indexed(state, &note).await)?;
     crate::note!("okf: took in note \"{}\" from disk", note.title);
-    Ok(Some(note.id))
+    let local_hash = local_concept_hash(&note_concept(
+        &note,
+        &load_okf_edits(&app_data_dir(state), notebook_id),
+    ));
+    Ok(Some(Taken {
+        id: note.id,
+        local_hash,
+    }))
 }
 
 async fn take_in_source(
@@ -4398,7 +4657,7 @@ async fn take_in_source(
     doc: &OkfDoc,
     path: &Path,
     bundle: &Path,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Taken>, String> {
     if doc.body.trim().is_empty() {
         return Ok(None);
     }
@@ -4442,13 +4701,15 @@ async fn take_in_source(
     });
     // A duplicate is success, not failure — the same rule import follows.
     match crate::commands::store_extracted(state, notebook_id, extracted).await {
-        Ok(landed) => {
+        Ok(mut landed) => {
             if let Some(tags) = doc.nested("alchemy", "tags") {
                 let _ = state.db.set_source_tags(&landed.id, &tags).await;
+                landed.tags = tags;
             }
             // Where its `resource` is a real path (§5.8). Recorded only when
             // the bundle names another Mac; this one's name is the default.
             if let Some(device) = doc.nested("alchemy", "device") {
+                landed.origin_device = device.clone();
                 crate::device::note_origin_device(
                     &app_data_dir(state),
                     notebook_id,
@@ -4457,9 +4718,21 @@ async fn take_in_source(
                 );
             }
             crate::note!("okf: took in source \"{title}\" from disk");
-            Ok(Some(landed.id))
+            let edits = load_okf_edits(&app_data_dir(state), notebook_id);
+            let local_hash = local_concept_hash(&source_concept(
+                &landed,
+                doc.body.clone(),
+                bundle,
+                0,
+                &edits,
+            ));
+            Ok(Some(Taken {
+                id: landed.id,
+                local_hash,
+            }))
         }
-        Err(_) => Ok(None),
+        Err(err) if err.to_string().starts_with("Already in this notebook as ") => Ok(None),
+        Err(err) => Err(format!("Could not import {}: {err:#}", path.display())),
     }
 }
 
@@ -4482,12 +4755,30 @@ async fn update_note_from_disk(
     // An edit that names its author keeps that attribution; one that does not
     // is a deliberate edit and takes ownership, exactly as an in-app edit does.
     e(state.db.set_note_origin(id, &outside_actor(doc)).await)?;
-    e(state.db.set_note_status(id, "").await)?;
+    let status = doc.nested("alchemy", "status").unwrap_or_else(|| {
+        if doc.str("status").as_deref() == Some("deprecated") {
+            "archived".into()
+        } else {
+            String::new()
+        }
+    });
+    e(state.db.set_note_status(id, &status).await)?;
     if let Some(fresh) = e(state.db.get_note(id).await)? {
         crate::commands::index_note(state, &fresh).await;
     }
     crate::note!("okf: took in an edit to note \"{title}\"");
-    Ok(Verdict::Applied)
+    let updated = Note {
+        title,
+        content: doc.body.clone(),
+        origin: outside_actor(doc),
+        status,
+        updated_at: mtime,
+        ..note
+    };
+    let edits = load_okf_edits(&app_data_dir(state), &updated.notebook_id);
+    Ok(Verdict::Applied(local_concept_hash(&note_concept(
+        &updated, &edits,
+    ))))
 }
 
 async fn update_source_from_disk(
@@ -4515,12 +4806,20 @@ async fn update_source_from_disk(
         text: doc.body.clone(),
     };
     let title = extracted.title.clone();
-    e(crate::commands::reingest(state, &source, extracted, None, true).await)?;
+    let updated = e(crate::commands::reingest(state, &source, extracted, None, true).await)?;
     crate::note!(
         "okf: re-read source \"{title}\" from disk ({})",
         path.display()
     );
-    Ok(Verdict::Applied)
+    let edits = load_okf_edits(&app_data_dir(state), &source.notebook_id);
+    let local_hash = local_concept_hash(&source_concept(
+        &updated,
+        doc.body.clone(),
+        path.parent().unwrap_or(path),
+        0,
+        &edits,
+    ));
+    Ok(Verdict::Applied(local_hash))
 }
 
 /// Reconcile every bound notebook. The closed sweep's share of the work
