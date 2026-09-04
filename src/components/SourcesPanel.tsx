@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { removeSourcesGuarded, useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { describe } from "@/lib/errors";
 import {
   Badge,
   Button,
@@ -39,11 +40,17 @@ import {
   type SourceKind,
 } from "@/lib/sourceFacets";
 import { CloudMark } from "./CloudMarks";
-import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
+import {
+  HYGIENE_LABEL,
+  growthAttention,
+  growthSourceRevision,
+  loadHygieneKept,
+  visibleGrowthProposals,
+} from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
 import { ArrivalsStrip, useArrivals } from "./ArrivalsStrip";
 import { OkfBadges } from "./OkfBadges";
-import type { GrowthProposal, Source } from "@/lib/types";
+import type { Source } from "@/lib/types";
 import {
   ChevronRight,
   FileText,
@@ -111,7 +118,7 @@ export function sourceHoverData(s: Source) {
   if (s.mtime > 946_684_800_000 && s.mtime < Date.now() + 86_400_000) {
     meta.push({ label: "File updated", value: relativeTime(s.mtime) });
   }
-  if (s.status === "error") meta.push({ label: s.error || "Import failed" });
+  if (s.status === "error") meta.push({ label: describe(s.error) || "Import failed" });
   if (s.status === "processing")
     meta.push({ label: "Indexing — chat and search pick it up shortly" });
   if (s.status === "placeholder")
@@ -311,40 +318,40 @@ export function SourcesPanel() {
     return m;
   }, [sources]);
 
-  // Growth tray (RFC-living-notebook Pillar 2): frontier links mined from
-  // the notebook's own sources, loaded once per notebook. Nothing fetches
-  // until the user accepts a proposal.
-  const [growth, setGrowth] = useState<GrowthProposal[]>([]);
-  // Dismissals come from the store (per-notebook, persisted there) so the
-  // Grow pane clearing its last proposal also drops this door live.
+  // The badge reads the same notebook-scoped sections as the Grow pane.
+  // A separate overview could outlive a notebook switch or keep advertising
+  // proposals after the pane refreshed to an empty result.
+  const growth = useStore((s) =>
+    currentId ? s.growSections[currentId] : undefined,
+  );
+  const cacheSection = useStore((s) => s.cacheGrowSection);
   const growthDismissed = useStore((s) => s.growthDismissed);
-  // The frontier is mined from source text, so it moves whenever a source
-  // finishes importing — re-read on the ready count, not just the notebook,
-  // or the door's number drifts from what the Grow pane shows after a batch
-  // of adds.
-  const readyCount = sources.filter((s) => s.status === "ready").length;
+  // Identity and ingest timestamps matter, not only how many sources are
+  // ready: replacing one source with another must refresh the proposals.
+  const growthRevision = useMemo(() => growthSourceRevision(sources), [sources]);
   useEffect(() => {
-    if (!currentId) {
-      setGrowth([]);
-      return;
-    }
+    if (!currentId) return;
     let stale = false;
-    api
-      .growthProposals(currentId)
-      .then((overview) => {
-        if (!stale) setGrowth(overview.proposals);
-      })
-      .catch(() => undefined);
+    for (const key of ["feeds", "links"] as const) {
+      const fetch = key === "feeds" ? api.growthFeeds : api.growthLinks;
+      void fetch(currentId)
+        .then((rows) => {
+          if (!stale) cacheSection(currentId, key, rows);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       stale = true;
     };
-  }, [currentId, readyCount]);
+  }, [currentId, growthRevision, cacheSection]);
   const existingUrls = useMemo(
     () => new Set(sources.map((s) => s.url).filter(Boolean)),
     [sources],
   );
-  const growthVisible = growth.filter(
-    (p) => !growthDismissed[p.url] && !existingUrls.has(p.url),
+  const growthVisible = visibleGrowthProposals(
+    [...(growth?.feeds ?? []), ...(growth?.links ?? [])],
+    existingUrls,
+    growthDismissed,
   );
 
   // Search-first navigation (RFC-living-notebook Pillar 1): past a handful
@@ -632,28 +639,20 @@ export function SourcesPanel() {
     return () => clearTimeout(t);
   }, [currentId, sources, refreshHygiene]);
 
-  const issueBySource = useMemo(() => {
-    const kept = loadHygieneKept(currentId);
-    const m = new Map<string, (typeof hygiene)[number]>();
-    for (const h of hygiene) {
-      if (h.kind === "note") continue; // no row here to badge
-      if (h.bucket === "stale") continue; // the sweep's job, not the user's
-      if (kept[`${h.sourceId}:${h.bucket}`]) continue;
-      if (!m.has(h.sourceId)) m.set(h.sourceId, h);
-    }
-    return m;
-    // Keeps write localStorage; refreshHygiene() afterwards replaces the
-    // store array, which re-runs this memo against the fresh keeps.
-  }, [hygiene, currentId]);
-  const proposals = [...issueBySource.values()];
-  // Flagged notes have no row in this panel, but they are part of what the
-  // Grow door offers to review, so they count toward its badge.
-  const flaggedNotes = useMemo(() => {
-    const kept = loadHygieneKept(currentId);
-    return hygiene.filter(
-      (h) => h.kind === "note" && !kept[`${h.sourceId}:${h.bucket}`],
-    ).length;
-  }, [hygiene, currentId]);
+  const attention = useMemo(
+    () => growthAttention(hygiene, loadHygieneKept(currentId)),
+    [hygiene, currentId],
+  );
+  const issueBySource = useMemo(
+    () =>
+      new Map(
+        attention
+          .filter((h) => h.kind === "source")
+          .map((h) => [h.sourceId, h]),
+      ),
+    [attention],
+  );
+  const reviewCount = growthVisible.length + attention.length;
 
   return (
     <div
@@ -966,7 +965,7 @@ export function SourcesPanel() {
             {/* One door to the Grow surface (RFC-living-notebook):
                 growth proposals and needs-attention flags together, with
                 an activity dot when anything is waiting. */}
-            {growthVisible.length + proposals.length + flaggedNotes > 0 && (
+            {reviewCount > 0 && (
               <button
                 type="button"
                 onClick={() =>
@@ -987,7 +986,7 @@ export function SourcesPanel() {
                   className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
                 />
                 <span className="ml-auto shrink-0 text-caption text-subtle-foreground">
-                  {growthVisible.length + proposals.length + flaggedNotes} · Review
+                  {reviewCount} · Review
                 </span>
               </button>
             )}
@@ -1291,9 +1290,9 @@ export function SourcesPanel() {
                           // break-anywhere: raw URLs in errors have no
                           // spaces and would otherwise force the panel wide.
                           className="line-clamp-3 text-micro leading-snug text-destructive [overflow-wrap:anywhere]"
-                          title={s.error}
+                          title={describe(s.error)}
                         >
-                          {s.error || "Import failed"}
+                          {describe(s.error) || "Import failed"}
                         </div>
                       ) : s.status === "placeholder" ? (
                         <div
@@ -1377,4 +1376,3 @@ export function SourcesPanel() {
     </div>
   );
 }
-

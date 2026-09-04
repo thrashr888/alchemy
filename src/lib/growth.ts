@@ -1,3 +1,5 @@
+import type { GrowthProposal, HygieneIssue, Source } from "./types";
+
 // Growth-surface client state (RFC-living-notebook Pillar 2): dismissals
 // and the per-notebook web-search opt-in, both localStorage — per-machine
 // conveniences, not notebook data.
@@ -86,4 +88,35 @@ export function takeLegacyWebFlag(notebookId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Both the review badge and the pane use the same proposal eligibility. */
+export function visibleGrowthProposals(
+  proposals: readonly GrowthProposal[],
+  existingUrls: ReadonlySet<string>,
+  dismissed: Record<string, number>,
+): GrowthProposal[] {
+  return proposals.filter((p) => !dismissed[p.url] && !existingUrls.has(p.url));
+}
+
+/** One review row per object; stale signals belong to the background sweep. */
+export function growthAttention(
+  hygiene: readonly HygieneIssue[],
+  kept: Record<string, boolean>,
+): HygieneIssue[] {
+  const seen = new Map<string, HygieneIssue>();
+  for (const issue of hygiene) {
+    if (issue.bucket === "stale" || kept[`${issue.sourceId}:${issue.bucket}`])
+      continue;
+    const key = `${issue.kind}:${issue.sourceId}`;
+    if (!seen.has(key)) seen.set(key, issue);
+  }
+  return [...seen.values()];
+}
+
+/** Invalidate mined proposals when content changes, including equal-size replacements. */
+export function growthSourceRevision(
+  sources: readonly Pick<Source, "id" | "status" | "url" | "fetchedAt">[],
+): string {
+  return JSON.stringify(sources.map((s) => [s.id, s.status, s.url, s.fetchedAt]));
 }

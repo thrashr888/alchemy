@@ -4,6 +4,8 @@ import { api } from "@/lib/api";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   HYGIENE_LABEL,
+  growthAttention,
+  visibleGrowthProposals,
   loadHygieneKept,
   saveHygieneKept,
   takeLegacyWebFlag,
@@ -74,17 +76,10 @@ export function GrowPane() {
   // has no origin, so it gets Keep and Remove and nothing else. Keeps live
   // in localStorage; refreshing hygiene afterwards re-runs this against the
   // fresh keeps.
-  const attention = useMemo(() => {
-    const kept = loadHygieneKept(currentId);
-    const seen = new Map<string, (typeof hygiene)[number]>();
-    for (const h of hygiene) {
-      if (h.bucket === "stale") continue;
-      if (kept[`${h.sourceId}:${h.bucket}`]) continue;
-      const key = `${h.kind}:${h.sourceId}`;
-      if (!seen.has(key)) seen.set(key, h);
-    }
-    return [...seen.values()];
-  }, [hygiene, currentId]);
+  const attention = useMemo(
+    () => growthAttention(hygiene, loadHygieneKept(currentId)),
+    [hygiene, currentId],
+  );
   // "Keep" on an unreachable source resets real backend state (the strike
   // count); every other flag is suppressed locally. Returns whether it
   // touched the backend, so the bulk path can wait for those.
@@ -351,7 +346,7 @@ export function GrowPane() {
     [sources],
   );
   const visible = (list: GrowthProposal[]) =>
-    list.filter((p) => !dismissed[p.url] && !existingUrls.has(p.url));
+    visibleGrowthProposals(list, existingUrls, dismissed);
   const add = (p: GrowthProposal) => {
     dismiss(p.url);
     if (p.kind === "local") void addSourceFiles([p.url]);
