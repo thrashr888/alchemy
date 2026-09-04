@@ -55,7 +55,12 @@ import {
   Library,
   Square,
 } from "lucide-react";
-import { BriefSidebar, SidebarRail, StaffSidebar } from "./HomeSections";
+import {
+  BriefSidebar,
+  SidebarRail,
+  StaffSidebar,
+  useNightShiftTone,
+} from "./HomeSections";
 import {
   HomeChatControls,
   HomeChatThread,
@@ -388,6 +393,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return !open;
     });
   };
+  // Staff's state travels with its icon: a folded card must not hide that
+  // the night shift is off or paused.
+  const staffTone = useNightShiftTone();
   const [staffOpen, setStaffOpen] = useState(
     () => localStorage.getItem("homeStaffOpen") !== "0",
   );
@@ -1071,7 +1079,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 <div className="side-card relative flex w-12 shrink-0 flex-col items-center self-start py-2">
                   <SidebarRail
                     icon="staff"
-                    title="Show Staff"
+                    title={
+                      staffTone.label ? `Show Staff · ${staffTone.label}` : "Show Staff"
+                    }
+                    dot={!!staffTone.label}
+                    dotClass={staffTone.dot}
                     onClick={toggleStaff}
                   />
                 </div>
@@ -1084,7 +1096,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 title="Show Chats"
                 onClick={toggleChats}
               />
-              <SidebarRail icon="staff" title="Show Staff" onClick={toggleStaff} />
+              <SidebarRail
+                icon="staff"
+                title={
+                  staffTone.label ? `Show Staff · ${staffTone.label}` : "Show Staff"
+                }
+                dot={!!staffTone.label}
+                dotClass={staffTone.dot}
+                onClick={toggleStaff}
+              />
             </div>
           )}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">

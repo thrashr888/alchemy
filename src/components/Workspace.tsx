@@ -103,12 +103,13 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             carry read as a second Back arrow next to the real one. The
             Library glyph is the app's one icon for "your notebooks" — the
             Notebooks tab on Home wears it too. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={close}
-          title="Your notebooks"
-        >
+        {/* No `title`: the button already says "Notebooks", so the tooltip
+            only restated it — and a native tooltip raised from inside a
+            `data-tauri-drag-region` header outlives the drag. Move the
+            window while it is up and macOS leaves it painted at its old
+            screen point, which is how "Your notebooks" ended up floating
+            over the Studio list. */}
+        <Button variant="ghost" size="sm" onClick={close}>
           <Library className="h-4 w-4" />
           Notebooks
         </Button>
@@ -126,7 +127,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           <span
             className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full border border-background"
             style={{ backgroundColor: notebook?.color }}
-            title={notebook?.title}
             aria-hidden="true"
           />
           <span

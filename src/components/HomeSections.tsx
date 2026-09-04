@@ -233,20 +233,7 @@ export function StaffSidebar({
     }
   }
 
-  const dot = !status
-    ? "bg-muted-foreground/40"
-    : !status.backgroundEnabled
-      ? "bg-muted-foreground/40"
-      : status.paused
-        ? "bg-warning"
-        : "bg-success";
-  const statusLabel = !status
-    ? ""
-    : !status.backgroundEnabled
-      ? "Off"
-      : status.paused
-        ? "Paused until morning"
-        : "On";
+  const { dot, label: statusLabel } = nightShiftTone(status);
 
   return (
     <>
@@ -521,16 +508,47 @@ export function StaffSidebar({
   );
 }
 
+/** Night Shift's one-glance state, as a dot tone and the word for it.
+ *
+ *  Shared by the Staff card header and its collapsed rail: folding a card
+ *  down to its icon may hide the detail, never the fact that the staff are
+ *  — or aren't — working. */
+export function nightShiftTone(status: NightShiftStatus | null) {
+  if (!status) return { dot: "bg-muted-foreground/40", label: "" };
+  if (!status.backgroundEnabled)
+    return { dot: "bg-muted-foreground/40", label: "Off" };
+  return status.paused
+    ? { dot: "bg-warning", label: "Paused until morning" }
+    : { dot: "bg-success", label: "On" };
+}
+
+/** The same state, fetched for a surface that has no Staff card mounted —
+ *  the collapsed rail. */
+export function useNightShiftTone() {
+  const [status, setStatus] = useState<NightShiftStatus | null>(null);
+  useEffect(() => {
+    void api
+      .nightShiftStatus()
+      .then(setStatus)
+      .catch(() => {});
+  }, []);
+  return nightShiftTone(status);
+}
+
 /** The collapsed rails: one icon that reopens its sidebar. */
 export function SidebarRail({
   icon,
   title,
   dot,
+  dotClass,
   onClick,
 }: {
   icon: "staff" | "brief" | "reports" | "chats";
   title: string;
   dot?: boolean;
+  /** Tone for the dot when it carries a state rather than "something new":
+   *  Staff's rail mirrors its card header's on/paused/off. */
+  dotClass?: string;
   onClick: () => void;
 }) {
   // Sun for the Brief: it is the morning read, and it answers Staff's Moon —
@@ -553,7 +571,12 @@ export function SidebarRail({
     >
       <Icon className="h-4 w-4" />
       {dot && (
-        <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary" />
+        <span
+          className={cn(
+            "absolute right-1 top-1 h-1.5 w-1.5 rounded-full",
+            dotClass ?? "bg-primary",
+          )}
+        />
       )}
     </button>
   );
