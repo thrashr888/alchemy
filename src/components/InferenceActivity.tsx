@@ -19,7 +19,24 @@ import { useHoverCard } from "./ui";
  * ring, the system's own. Both are drawn at the 14px icon floor, both hold
  * up as a still frame, and a still frame is what `prefers-reduced-motion`
  * leaves behind. Idle draws nothing at all.
+ *
+ * The glyph alone said "a model is working" but never which one, and on a
+ * Mac that answers from two engines that is the interesting half. Each
+ * glyph now carries its provider's name in the title bar's own caption
+ * gray — still no color, still nothing at all when nothing is running.
  */
+
+/** Provider family (see inference/activity.rs) to the word for it. */
+const PROVIDER: Record<string, string> = {
+  ollama: "Ollama",
+  fm: "Apple",
+  gateway: "Gateway",
+  "agent-cli": "Agent",
+  builtin: "Built-in",
+};
+
+const providerName = (kind: string) => PROVIDER[kind] ?? "Model";
+
 export function InferenceActivity() {
   const [items, setItems] = useState<ActivityItem[]>([]);
   const { show, hide, card } = useHoverCard("left");
@@ -40,36 +57,47 @@ export function InferenceActivity() {
   if (items.length === 0) return null;
 
   // One glyph per engine family in flight, never one per call: eight parallel
-  // embed calls are one machine working, not eight.
+  // embed calls are one machine working, not eight. Anything we didn't draw
+  // a glyph for (a gateway, an agent CLI) borrows the meter — it reads as
+  // "busy", which is what it is — but keeps its own name.
   const kinds = [...new Set(items.map((i) => i.kind))];
-  const glyphs = kinds.filter((k) => k === "ollama" || k === "fm");
-  // Anything else running (a gateway, an agent CLI) still deserves a mark;
-  // the local-engine glyphs are the ones we drew, so the rest borrow the
-  // meter — it reads as "busy", which is what it is.
-  const shown = glyphs.length > 0 ? glyphs : ["ollama"];
+  const names = kinds.map(providerName);
+  // The model earns a place in the card's title only when there is one
+  // model to name; otherwise the rows below carry them.
+  const models = [...new Set(items.map((i) => i.model).filter(Boolean))];
+  const title = [
+    names.join(" · "),
+    models.length === 1 ? models[0] : null,
+    items.length > 1 ? String(items.length) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
       <span
-        className="flex items-center gap-1 text-muted-foreground"
+        className="flex items-center gap-1.5 text-muted-foreground"
         aria-label={
           items.length === 1
-            ? `${items[0].label || "A model"} is running`
-            : `${items.length} model calls running`
+            ? `${names[0]} is running ${items[0].label || "a model"}`
+            : `${items.length} model calls running on ${names.join(" and ")}`
         }
         onMouseEnter={(e) =>
           show(e, {
-            title: items.length === 1 ? "Running" : `Running · ${items.length}`,
+            title,
             meta: items.map((i) => ({
               label: i.label || "Working",
-              value: i.model || i.kind,
+              value: i.model || providerName(i.kind),
             })),
           })
         }
         onMouseLeave={hide}
       >
-        {shown.map((kind) => (
-          <ProviderGlyph key={kind} kind={kind} />
+        {kinds.map((kind) => (
+          <span key={kind} className="flex items-center gap-1">
+            <ProviderGlyph kind={kind} />
+            <span className="text-caption">{providerName(kind)}</span>
+          </span>
         ))}
       </span>
       {card}
