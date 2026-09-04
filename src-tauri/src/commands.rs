@@ -11430,10 +11430,14 @@ pub async fn growth_proposals(
     // returns as fast as a text scan.
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    let mut proposals = crate::growth::proposals(&sources, &queries);
     // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
-    // remembered at import, proposed here, followed only on a click.
-    proposals.extend(crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await);
+    // remembered at import, proposed here, followed only on a click. They
+    // go in first because the tiers overlap — a page that advertises a feed
+    // is often also a link its siblings cite — and "Follow this feed" is the
+    // better of the two offers for the same URL.
+    let mut proposals = crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await;
+    proposals.extend(crate::growth::proposals(&sources, &queries));
+    let proposals = crate::growth::dedupe_proposals(proposals);
     Ok(GrowthOverview { queries, proposals })
 }
 
