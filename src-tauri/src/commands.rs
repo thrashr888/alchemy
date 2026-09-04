@@ -3202,11 +3202,18 @@ pub(crate) async fn refresh_source_impl(
         // files. A local folder inside a working tree gets the same
         // treatment on the safe path only: fetch, then fast-forward if the
         // tree is clean and strictly behind. A failure here isn't fatal —
-        // the disk still has files worth rescanning.
+        // the disk still has files worth rescanning — but the user pressed
+        // Refresh, so they are told in their own terms why nothing new
+        // arrived instead of watching a refresh silently change nothing.
         if matches!(existing.source_type.as_str(), "folder" | "obsidian") {
             let dir = std::path::PathBuf::from(&existing.url);
-            if let Err(err) = crate::git::sync_local(&dir).await {
-                crate::note!("git local sync: {} failed: {err:#}", existing.url);
+            if crate::git::sync_local(&dir, crate::git::SyncTrigger::Manual).await
+                == crate::git::SyncOutcome::Unreachable
+            {
+                let _ = app.emit(
+                    "integrations://toast",
+                    "Couldn't reach the remote; using the checkout as is.",
+                );
             }
         }
         if existing.source_type == "git" {
@@ -6068,14 +6075,17 @@ pub(crate) async fn resync_sources_filtered(
         // the rescan below walks is current with the remote instead of
         // drifting until someone pulls by hand. git::advance_decision holds
         // the safety rules; a dirty or diverged tree is left untouched.
+        //
+        // A remote this machine can't reach costs one log line and then
+        // widening silence (git::quiet_after) — never a status change on the
+        // source, never a missing-file flag, never a tight retry. The rescan
+        // below still runs, on the checkout exactly as it stands.
         if matches!(folder.source_type.as_str(), "folder" | "obsidian")
             && sync_minutes > 0
             && crate::git::remote_probe_due(&folder.id, sync_minutes)
         {
             let dir = std::path::PathBuf::from(&folder.url);
-            if let Err(err) = crate::git::sync_local(&dir).await {
-                crate::note!("git local sync: {} failed: {err:#}", folder.url);
-            }
+            let _ = crate::git::sync_local(&dir, crate::git::SyncTrigger::Sweep).await;
         }
         // Notion parents: re-export changed pages per cadence tick; the
         // rescan below re-embeds only rewritten files. remote_probe_due is

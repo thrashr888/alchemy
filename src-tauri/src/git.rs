@@ -970,6 +970,77 @@ async fn read_tree_state(dir: &Path) -> Option<TreeState> {
     })
 }
 
+/// What one `sync_local` pass did.
+///
+/// `Unreachable` is deliberately not an error. A checkout whose remote this
+/// machine cannot reach — a VPN-only host on a laptop at home, or a repo the
+/// user has no credentials for — is a normal steady state, not a fault: the
+/// files are all still on disk and worth reading. Modelling it as `Err`
+/// invited every caller to treat a missing network as a broken source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncOutcome {
+    /// HEAD fast-forwarded; the short sha it moved to.
+    Moved(String),
+    /// Nothing to do: level with the remote, or not a working tree at all.
+    UpToDate,
+    /// Skipped on purpose — dirty, diverged, detached, mid-rebase.
+    LeftAlone(&'static str),
+    /// The fetch failed. The checkout is used exactly as it stands.
+    Unreachable,
+}
+
+/// Why a sync ran: an unattended cadence tick, or the user pressing Refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTrigger {
+    Sweep,
+    Manual,
+}
+
+/// Consecutive failed fetches per checkout, and when the last one was tried.
+static LOCAL_FETCH_STRIKES: Mutex<Option<HashMap<std::path::PathBuf, (u32, Instant)>>> =
+    Mutex::new(None);
+
+/// How long an unreachable remote is left alone after `strikes` failures in
+/// a row. A fetch against a host that isn't there spends its whole 120-second
+/// timeout and prints a log line, so repeating that every cadence tick for a
+/// repo this machine can never reach is pure cost. The window widens instead,
+/// up to a day, and the first success clears it.
+fn quiet_after(strikes: u32) -> Duration {
+    match strikes {
+        0 => Duration::ZERO,
+        1 => Duration::from_secs(30 * 60),
+        2 => Duration::from_secs(2 * 60 * 60),
+        3 => Duration::from_secs(6 * 60 * 60),
+        _ => Duration::from_secs(24 * 60 * 60),
+    }
+}
+
+/// May an unattended pass spend a fetch on this checkout yet? Manual
+/// refreshes never ask — the user is standing there, and one 120-second
+/// timeout they asked for beats a silently skipped retry.
+fn fetch_due(dir: &Path, now: Instant) -> bool {
+    let guard = LOCAL_FETCH_STRIKES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    match guard.as_ref().and_then(|m| m.get(dir)) {
+        Some((strikes, last)) => now.duration_since(*last) >= quiet_after(*strikes),
+        None => true,
+    }
+}
+
+fn record_fetch(dir: &Path, failed: bool, now: Instant) {
+    let mut guard = LOCAL_FETCH_STRIKES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    if failed {
+        let strikes = map.get(dir).map(|(n, _)| *n).unwrap_or(0);
+        map.insert(dir.to_path_buf(), (strikes.saturating_add(1), now));
+    } else {
+        map.remove(dir);
+    }
+}
+
 /// Bring the user's own checkout level with its remote, when that is safe.
 ///
 /// RFC-git-sources §8 originally kept Alchemy entirely off user repos, but
@@ -978,17 +1049,26 @@ async fn read_tree_state(dir: &Path) -> Option<TreeState> {
 /// fetches and, in the one case where nothing can be lost, fast-forwards
 /// (`advance_decision`). Bounded by the auto-sync cadence setting (0 stops
 /// it outright), visible in the log, and reversible through the reflog.
-/// Credentials stay the user's: system git, no prompts. Returns the new
-/// short sha when HEAD moved.
-pub async fn sync_local(dir: &Path) -> anyhow::Result<Option<String>> {
+/// Credentials stay the user's: system git, no prompts.
+///
+/// A failed fetch never propagates. It costs one log line and one widening
+/// backoff window (`quiet_after`); the source keeps its status, its files
+/// and its content, and the rescan that follows reads the checkout as it is.
+pub async fn sync_local(dir: &Path, trigger: SyncTrigger) -> SyncOutcome {
     let Some(before) = read_tree_state(dir).await else {
-        return Ok(None); // not a working tree, or no git on PATH
+        return SyncOutcome::UpToDate; // not a working tree, or no git on PATH
     };
     // Decide once before spending a round-trip: a detached, dirty, diverged
     // or untracked branch won't move whatever the fetch turns up.
     if let Advance::Skip(why) = advance_decision(&before) {
         crate::note!("git local sync: {} left alone ({why})", dir.display());
-        return Ok(None);
+        return SyncOutcome::LeftAlone(why);
+    }
+    let now = Instant::now();
+    if trigger == SyncTrigger::Sweep && !fetch_due(dir, now) {
+        // Already known unreachable, and inside its quiet window. Silence is
+        // the point: the one line that said so has already been logged.
+        return SyncOutcome::Unreachable;
     }
     let remote = git_out(
         dir,
@@ -1000,29 +1080,51 @@ pub async fn sync_local(dir: &Path) -> anyhow::Result<Option<String>> {
     )
     .await
     .unwrap_or_else(|| "origin".to_string());
-    run_git(Some(dir), &["fetch", "--quiet", "--no-tags", &remote], 120)
-        .await
-        .map_err(|e| anyhow::anyhow!("Couldn't fetch from {remote} ({e})"))?;
+    match run_git(Some(dir), &["fetch", "--quiet", "--no-tags", &remote], 120).await {
+        Ok(_) => record_fetch(dir, false, now),
+        Err(stderr) => {
+            record_fetch(dir, true, now);
+            let wall = if looks_auth_error(&stderr) {
+                "not authorized"
+            } else {
+                "unreachable"
+            };
+            crate::note!(
+                "git local sync: {} left alone (remote {remote} {wall}); using the checkout as is",
+                dir.display()
+            );
+            return SyncOutcome::Unreachable;
+        }
+    }
     let Some(after) = read_tree_state(dir).await else {
-        return Ok(None);
+        return SyncOutcome::UpToDate;
     };
     match advance_decision(&after) {
-        Advance::FastForward => {
-            run_git(Some(dir), &["merge", "--ff-only", "@{u}"], 60)
-                .await
-                .map_err(|e| anyhow::anyhow!("Couldn't fast-forward ({e})"))?;
-            let sha = short_sha(dir).await;
-            crate::note!(
-                "git local sync: {} fast-forwarded {} commit(s) to {sha}",
-                dir.display(),
-                after.behind
-            );
-            Ok(Some(sha))
-        }
-        Advance::UpToDate => Ok(None),
+        Advance::FastForward => match run_git(Some(dir), &["merge", "--ff-only", "@{u}"], 60).await
+        {
+            Ok(_) => {
+                let sha = short_sha(dir).await;
+                crate::note!(
+                    "git local sync: {} fast-forwarded {} commit(s) to {sha}",
+                    dir.display(),
+                    after.behind
+                );
+                SyncOutcome::Moved(sha)
+            }
+            Err(err) => {
+                // Nothing was lost — the tree is where it was. Same terms as
+                // a failed fetch: say so once and read what's on disk.
+                crate::note!(
+                    "git local sync: {} left alone (fast-forward refused: {err})",
+                    dir.display()
+                );
+                SyncOutcome::LeftAlone("fast-forward refused")
+            }
+        },
+        Advance::UpToDate => SyncOutcome::UpToDate,
         Advance::Skip(why) => {
             crate::note!("git local sync: {} left alone ({why})", dir.display());
-            Ok(None)
+            SyncOutcome::LeftAlone(why)
         }
     }
 }
@@ -1326,6 +1428,92 @@ mod local_sync_tests {
     async fn a_plain_folder_is_not_a_working_tree() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_tree_state(dir.path()).await.is_none());
-        assert!(sync_local(dir.path()).await.unwrap().is_none());
+        assert_eq!(
+            sync_local(dir.path(), SyncTrigger::Sweep).await,
+            SyncOutcome::UpToDate
+        );
+    }
+
+    /// The unreachable-remote path, without a network: a real checkout whose
+    /// upstream points at a directory that does not exist. git fails the
+    /// fetch instantly, and the pass must read that as "use what's on disk",
+    /// not as a broken source.
+    #[tokio::test]
+    async fn an_unreachable_remote_is_not_an_error() {
+        let Ok(work) = tempfile::tempdir() else {
+            return;
+        };
+        // A one-commit origin, cloned, and then the origin taken away. The
+        // clone keeps a real upstream ref, so the pass gets all the way to
+        // the fetch — which fails the way an unreachable host fails.
+        let origin = work.path().join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        let setup: [&[&str]; 4] = [
+            &["init", "--initial-branch=main"],
+            &["config", "user.email", "t@test"],
+            &["config", "user.name", "T"],
+            &["commit", "--allow-empty", "-m", "one"],
+        ];
+        for args in setup {
+            if run_git(Some(&origin), args, 20).await.is_err() {
+                return; // no git on this machine; nothing to assert
+            }
+        }
+        let clone = work.path().join("clone");
+        if run_git(
+            None,
+            &[
+                "clone",
+                "--quiet",
+                &origin.to_string_lossy(),
+                &clone.to_string_lossy(),
+            ],
+            30,
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+        std::fs::remove_dir_all(&origin).unwrap();
+        let dir = clone.as_path();
+
+        assert_eq!(
+            sync_local(dir, SyncTrigger::Manual).await,
+            SyncOutcome::Unreachable
+        );
+        // The checkout is untouched and still readable — the whole point of
+        // not erroring: HEAD is where it was, and the tree still parses.
+        assert!(read_tree_state(dir).await.is_some());
+
+        // And the sweep goes quiet: one strike is on the board, so the next
+        // unattended pass inside the window doesn't spend another fetch.
+        assert!(!fetch_due(dir, Instant::now()));
+        assert_eq!(
+            sync_local(dir, SyncTrigger::Sweep).await,
+            SyncOutcome::Unreachable
+        );
+    }
+
+    #[test]
+    fn the_quiet_window_widens_and_a_success_clears_it() {
+        assert_eq!(quiet_after(0), Duration::ZERO);
+        assert!(quiet_after(1) < quiet_after(2));
+        assert!(quiet_after(2) < quiet_after(3));
+        assert_eq!(quiet_after(9), quiet_after(4)); // capped at a day
+
+        let dir = std::path::Path::new("/tmp/alchemy-test-quiet-window");
+        let now = Instant::now();
+        assert!(fetch_due(dir, now), "a checkout nobody has tried is due");
+        record_fetch(dir, true, now);
+        assert!(!fetch_due(dir, now));
+        // Past the window, one more attempt is allowed — never a tight loop,
+        // never permanent silence.
+        assert!(fetch_due(
+            dir,
+            now + quiet_after(1) + Duration::from_secs(1)
+        ));
+        record_fetch(dir, false, now);
+        assert!(fetch_due(dir, now), "a success clears the strikes");
     }
 }
