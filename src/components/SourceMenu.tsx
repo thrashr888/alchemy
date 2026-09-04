@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import { removeSourcesGuarded, useStore } from "@/lib/store";
 import type { Source } from "@/lib/types";
 import { isWebUrl } from "@/lib/utils";
+import { FOLDER_TYPES } from "@/lib/sourceFacets";
 import {
   Button,
   Input,
@@ -39,14 +40,10 @@ import {
  * everywhere at once; a surface that must drop one says which (`omit`),
  * rather than rebuilding the list with the verb missing. */
 
-export const FOLDER_TYPES = [
-  "folder",
-  "git",
-  "notion",
-  "obsidian",
-  "okf",
-  "feed",
-];
+// One definition, in the pure module the Sources panel's facets share
+// (src/lib/sourceFacets.ts); re-exported here because this is where every
+// surface already reaches for it.
+export { FOLDER_TYPES };
 
 /** A verb the host renders elsewhere (the reader's inline toolbar) and so
  *  leaves out of the menu. */

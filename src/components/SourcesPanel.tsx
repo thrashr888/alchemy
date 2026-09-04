@@ -26,6 +26,17 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { sourceSubtree } from "@/lib/sourceRows";
+import {
+  FOLDER_TYPES,
+  KIND_LABEL,
+  kindCounts as countKinds,
+  liveFacet,
+  missingSourceIds,
+  sourceKind,
+  tagCounts as countTags,
+  type SourceKind,
+} from "@/lib/sourceFacets";
 import { CloudMark } from "./CloudMarks";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
@@ -137,31 +148,23 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "okf", "feed"];
+/** Condition facets. Freshness is a fixed set — unlike kinds and tags those
+ *  chips are always there to switch off. "missing" is the exception: it only
+ *  offers itself when something is actually missing, so it clears itself the
+ *  way a kind chip does. */
+type FreshFacet = "week" | "month" | "stale" | "uncited" | "missing";
 
-/** Facet kinds: coarse buckets a narrow panel can offer as chips. */
-type SourceKind = "web" | "files" | "images" | "apple" | "folders";
-type FreshFacet = "week" | "month" | "stale" | "uncited";
-function sourceKind(s: Source): SourceKind {
-  if (FOLDER_TYPES.includes(s.sourceType)) return "folders";
-  if (s.sourceType === "url" || s.sourceType === "html") return "web";
-  if (s.sourceType === "image") return "images";
-  if (s.sourceType === "mac") return "apple";
-  return "files";
-}
-const KIND_LABEL: Record<SourceKind, string> = {
-  web: "Web",
-  files: "Files",
-  images: "Images",
-  apple: "Apple",
-  folders: "Folders",
-};
-
-/** One row of the panel: a source (folder children indent) or a domain
- *  rollup grouping loose web sources from one busy host. */
+/** One row of the panel: a source (nested under its folder by `depth`) or a
+ *  domain rollup grouping loose web sources from one busy host. */
 type SourceRow =
-  | { kind: "source"; s: Source; indent: boolean }
+  | { kind: "source"; s: Source; depth: number }
   | { kind: "group"; host: string; kids: Source[] };
+
+/** Indent stops, in rem so nesting tracks the OS text size like everything
+ *  else. Past six the panel is narrower than the indent; deeper rows share
+ *  the last stop rather than walking off the edge. */
+const INDENT_REM = 1.25;
+const MAX_INDENT = 6;
 
 function hostname(url: string): string {
   try {
@@ -357,22 +360,60 @@ export function SourcesPanel() {
       .catch(() => setCitedIds(new Set()));
   }, [freshFacet, citedIds]);
 
+  // Facet chips only offer what the notebook holds, with counts — both read
+  // off the live source list, so a removal moves them in the same render.
+  const kindCounts = useMemo(() => countKinds(sources), [sources]);
+  const tagTotals = useMemo(
+    () => new Set(sources.flatMap((s) => s.tags.split(" ").filter(Boolean))),
+    [sources],
+  );
+  // Removing the last source under a facet used to leave the panel filtered
+  // by a chip that no longer rendered — a filter with no way out. A facet
+  // holds only while the list still offers it (alchemy-release-zhk).
+  const liveKind = liveFacet(kindFacet, kindCounts);
+  const liveTag = liveFacet(tagFacet, tagTotals);
+  // Sources whose bytes aren't here — deleted out from under the notebook,
+  // or a cloud stub still in the cloud (RFC-okf-live §5.7).
+  const missingIds = useMemo(
+    () => missingSourceIds(sources, hygiene),
+    [sources, hygiene],
+  );
+  const liveFresh =
+    freshFacet === "missing" && missingIds.size === 0 ? null : freshFacet;
+  useEffect(() => {
+    if (kindFacet !== null && liveKind === null) setKindFacet(null);
+    if (tagFacet !== null && liveTag === null) setTagFacet(null);
+    if (freshFacet !== null && liveFresh === null) setFreshFacet(null);
+  }, [kindFacet, tagFacet, freshFacet, liveKind, liveTag, liveFresh]);
+  const tagChips = useMemo(
+    () => countTags(sources, liveTag),
+    [sources, liveTag],
+  );
+
   const q = query.trim().toLowerCase();
-  const filterActive = !!q || !!kindFacet || !!tagFacet || !!freshFacet;
+  const filterActive = !!q || !!liveKind || !!liveTag || !!liveFresh;
+  const clearFilters = () => {
+    setQuery("");
+    setKindFacet(null);
+    setTagFacet(null);
+    setFreshFacet(null);
+  };
   const matchesFilters = (s: Source): boolean => {
-    if (kindFacet && sourceKind(s) !== kindFacet) return false;
-    if (tagFacet && !s.tags.split(" ").includes(tagFacet)) return false;
-    if (freshFacet) {
-      if (freshFacet === "uncited") {
+    if (liveKind && sourceKind(s) !== liveKind) return false;
+    if (liveTag && !s.tags.split(" ").includes(liveTag)) return false;
+    if (liveFresh) {
+      if (liveFresh === "missing") {
+        if (!missingIds.has(s.id)) return false;
+      } else if (liveFresh === "uncited") {
         // Folder containers carry no chunks, so "uncited" would flag every
         // one of them; the facet is about content sources.
         if (FOLDER_TYPES.includes(s.sourceType)) return false;
         if (!citedIds || citedIds.has(s.id)) return false;
       } else {
         const age = Date.now() - (s.fetchedAt || s.createdAt);
-        if (freshFacet === "week" && age > 7 * 86_400_000) return false;
-        if (freshFacet === "month" && age > 30 * 86_400_000) return false;
-        if (freshFacet === "stale" && age <= 30 * 86_400_000) return false;
+        if (liveFresh === "week" && age > 7 * 86_400_000) return false;
+        if (liveFresh === "month" && age > 30 * 86_400_000) return false;
+        if (liveFresh === "stale" && age <= 30 * 86_400_000) return false;
       }
     }
     if (q) {
@@ -383,24 +424,10 @@ export function SourcesPanel() {
     return true;
   };
 
-  // Facet chips only offer what the notebook holds, with counts.
-  const kindCounts = useMemo(() => {
-    const m = new Map<SourceKind, number>();
-    for (const s of sources)
-      m.set(sourceKind(s), (m.get(sourceKind(s)) ?? 0) + 1);
-    return m;
-  }, [sources]);
-  const tagCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const s of sources)
-      for (const t of s.tags.split(" "))
-        if (t) m.set(t, (m.get(t) ?? 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-  }, [sources]);
-
-  // Rows: folder children indent under their parent; loose web sources from
-  // a busy domain fold into a group row (Pillar 1 rollups) at rest —
-  // an active filter answers its own question, so it shows flat matches.
+  // Rows: folder children indent under their parent, however deep the tree
+  // goes; loose web sources from a busy domain fold into a group row
+  // (Pillar 1 rollups) at rest — an active filter answers its own question,
+  // so it shows flat matches.
   const rows: SourceRow[] = [];
   const looseByHost = new Map<string, Source[]>();
   if (!filterActive) {
@@ -414,22 +441,20 @@ export function SourcesPanel() {
     }
   }
   const hostEmitted = new Set<string>();
+  // A folder and everything under it, however deep — an OKF bundle restores
+  // whatever parent chain it was exported with, so a folder can sit inside a
+  // folder, and the chevron on those inner rows used to rotate over a
+  // subtree that was never a candidate for a row (alchemy-release-dbk).
+  const subtree = (s: Source) =>
+    sourceSubtree(s, childrenOf, {
+      collapsed: (x, kidCount) => isCollapsed(x.id, kidCount),
+      matches: filterActive ? matchesFilters : undefined,
+    });
   for (const s of sources) {
     if (s.parentId) continue;
     if (FOLDER_TYPES.includes(s.sourceType)) {
-      const kids = childrenOf.get(s.id) ?? [];
-      const matchKids = filterActive ? kids.filter(matchesFilters) : kids;
-      if (filterActive && !matchesFilters(s) && matchKids.length === 0)
-        continue;
-      rows.push({ kind: "source", s, indent: false });
-      // Filtering auto-expands: a match hidden under a collapsed folder
-      // reads as no match at all.
-      const expanded = filterActive
-        ? matchKids.length > 0
-        : !isCollapsed(s.id, kids.length);
-      if (expanded)
-        for (const c of filterActive ? matchKids : kids)
-          rows.push({ kind: "source", s: c, indent: true });
+      for (const r of subtree(s))
+        rows.push({ kind: "source", s: r.s, depth: r.depth });
       continue;
     }
     const host =
@@ -440,12 +465,11 @@ export function SourcesPanel() {
       hostEmitted.add(host);
       rows.push({ kind: "group", host, kids: hostKids });
       if (!isCollapsed(`domain:${host}`, hostKids.length))
-        for (const c of hostKids)
-          rows.push({ kind: "source", s: c, indent: true });
+        for (const c of hostKids) rows.push({ kind: "source", s: c, depth: 1 });
       continue;
     }
     if (filterActive && !matchesFilters(s)) continue;
-    rows.push({ kind: "source", s, indent: false });
+    rows.push({ kind: "source", s, depth: 0 });
   }
   const childCount = (folderId: string) =>
     (childrenOf.get(folderId) ?? []).length;
@@ -459,7 +483,7 @@ export function SourcesPanel() {
     !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
   const contentSources = sources.filter(
-    (s) => !["folder", "obsidian", "okf"].includes(s.sourceType),
+    (s) => !FOLDER_TYPES.includes(s.sourceType),
   );
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
   const allSelected = selectedCount === contentSources.length;
@@ -718,10 +742,12 @@ export function SourcesPanel() {
       )}
 
       {/* Search-first navigation: past a handful of sources the filter box
-          is the primary way in; chips narrow by kind, tag, freshness, and
+          is the primary way in; chips narrow by kind, tag, condition, and
           citation history. Hidden in small notebooks — eight rows filter
-          themselves. */}
-      {currentId && sources.length > 8 && (
+          themselves — but never while a filter is on: removing sources down
+          past that threshold used to take the only way to switch it off
+          along with it. */}
+      {currentId && (sources.length > 8 || filterActive) && (
         <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
@@ -754,23 +780,34 @@ export function SourcesPanel() {
               .map(([kind, n]) => (
                 <FacetChip
                   key={kind}
-                  active={kindFacet === kind}
-                  onClick={() =>
-                    setKindFacet(kindFacet === kind ? null : kind)
-                  }
+                  active={liveKind === kind}
+                  onClick={() => setKindFacet(liveKind === kind ? null : kind)}
                 >
                   {KIND_LABEL[kind]} {n}
                 </FacetChip>
               ))}
-            {tagCounts.map(([tag, n]) => (
+            {tagChips.map(([tag, n]) => (
               <FacetChip
                 key={`#${tag}`}
-                active={tagFacet === tag}
-                onClick={() => setTagFacet(tagFacet === tag ? null : tag)}
+                active={liveTag === tag}
+                onClick={() => setTagFacet(liveTag === tag ? null : tag)}
               >
                 #{tag} {n}
               </FacetChip>
             ))}
+            {/* Only offered when something is actually missing — the chip
+                carries its count, the way the kind chips do. */}
+            {missingIds.size > 0 && (
+              <FacetChip
+                active={liveFresh === "missing"}
+                title="File moved or deleted, or still in the cloud"
+                onClick={() =>
+                  setFreshFacet(liveFresh === "missing" ? null : "missing")
+                }
+              >
+                Missing {missingIds.size}
+              </FacetChip>
+            )}
             {(
               [
                 ["week", "7d", "Fetched or added this week"],
@@ -781,9 +818,9 @@ export function SourcesPanel() {
             ).map(([id, label, title]) => (
               <FacetChip
                 key={id}
-                active={freshFacet === id}
+                active={liveFresh === id}
                 title={title}
-                onClick={() => setFreshFacet(freshFacet === id ? null : id)}
+                onClick={() => setFreshFacet(liveFresh === id ? null : id)}
               >
                 {label}
               </FacetChip>
@@ -937,10 +974,11 @@ export function SourcesPanel() {
               </button>
             )}
             {filterActive && rows.length === 0 && (
-              <EmptyState
-                title="No sources match"
-                hint="Clear the search or facet chips."
-              />
+              <EmptyState title="No sources match">
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              </EmptyState>
             )}
             <div
               className="relative"
@@ -1023,7 +1061,7 @@ export function SourcesPanel() {
                     </div>
                   );
                 }
-                const { s, indent } = row;
+                const { s, depth } = row;
                 const isFolder = FOLDER_TYPES.includes(s.sourceType);
                 // Which sync root a folder came out of, if any — same
                 // provider keys the Add sources dialog draws marks from.
@@ -1069,8 +1107,14 @@ export function SourcesPanel() {
                       // only when it means something; never a left border).
                       isPicked && "bg-primary/10 hover:bg-primary/15",
                       readable && "cursor-pointer",
-                      indent && "ml-5",
                     )}
+                    style={
+                      depth > 0
+                        ? {
+                            marginLeft: `${Math.min(depth, MAX_INDENT) * INDENT_REM}rem`,
+                          }
+                        : undefined
+                    }
                   >
                     {!importing && (
                       <CardAction
