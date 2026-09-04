@@ -674,7 +674,10 @@ export function ReaderPane() {
           onClick: () => useStore.getState().askAboutSource(source.id),
         }
       : null;
-  const originAction = source?.url
+  // A remote source has no origin here and nothing to re-read (RFC-okf-live
+  // §5.8): both verbs come off the toolbar, and the shared menu carries the
+  // one-line hint that says why.
+  const originAction = source?.url && !source.remote
     ? isWebUrl(source.url)
       ? {
           label: "Open original",
@@ -689,7 +692,7 @@ export function ReaderPane() {
           }
         : null
     : null;
-  const refreshAction = source?.url
+  const refreshAction = source?.url && !source.remote
     ? {
         label: source.sourceType === "mac" ? "Sync now" : "Refresh",
         icon: <RefreshCw className="h-3.5 w-3.5" />,

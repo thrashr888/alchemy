@@ -138,6 +138,14 @@ export interface Source {
   /** Consecutive background refresh failures; reset on success. At 3 the
    *  source is flagged "unreachable" instead of being retried forever. */
   fetchFailures: number;
+  /** The Mac this source was imported on, as its owner names it
+   *  ("Paul's MacBook Pro") — RFC-okf-live §5.8. */
+  originDevice: string;
+  /** Its text is here; its file is on `originDevice` and its path does not
+   *  resolve on this machine — a notebook that travelled through a shared
+   *  folder. Read, search and citations are unaffected; the missing badge,
+   *  the Missing filter, Refresh and Show in Finder stand down. */
+  remote: boolean;
 }
 
 /** One flagged source or note from the hygiene check (RFC-source-hygiene).

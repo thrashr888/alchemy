@@ -82,7 +82,11 @@ describe("liveFacet", () => {
 });
 
 describe("missingSourceIds", () => {
-  const src = (id: string, status: Source["status"]) => ({ id, status });
+  const src = (id: string, status: Source["status"], remote = false) => ({
+    id,
+    status,
+    remote,
+  });
 
   it("collects cloud stubs and files the sweep can no longer find", () => {
     const sources = [
@@ -103,5 +107,19 @@ describe("missingSourceIds", () => {
       [{ sourceId: "removed", bucket: "missing-file" }],
     );
     expect(ids.size).toBe(0);
+  });
+
+  it("leaves out sources whose file lives on another Mac", () => {
+    // The notebook came through a shared folder; the text is here and the
+    // path is somebody else's drive (RFC-okf-live §5.8). Nothing to find,
+    // so nothing to list under Missing.
+    const ids = missingSourceIds(
+      [src("here", "ready"), src("away", "ready", true)],
+      [
+        { sourceId: "here", bucket: "missing-file" },
+        { sourceId: "away", bucket: "missing-file" },
+      ],
+    );
+    expect([...ids]).toEqual(["here"]);
   });
 });

@@ -1236,6 +1236,19 @@ export function SourcesPanel() {
                               issueBySource.get(s.id)!.bucket}
                           </Badge>
                         )}
+                        {/* Where this one's file actually lives (RFC-okf-live
+                            §5.8). It stands where the "missing" badge used to
+                            for these rows, and says the same shape of thing
+                            without the alarm: nothing is wrong, the origin is
+                            just another Mac. */}
+                        {s.remote && !issueBySource.has(s.id) && (
+                          <Badge
+                            className="shrink-0"
+                            title={`Lives on ${s.originDevice}; the text is here.`}
+                          >
+                            from {s.originDevice}
+                          </Badge>
+                        )}
                         {!importing && (
                           <RowMenu
                             className="pointer-events-auto z-20"

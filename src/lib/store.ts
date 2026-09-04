@@ -1989,6 +1989,9 @@ export const useStore = create<AppState>((set, get) => {
         note: "",
         fetchedAt: Date.now(),
         fetchFailures: 0,
+        // The user just picked this folder in a panel on this Mac.
+        originDevice: "",
+        remote: false,
       };
       set({
         ingestQueue: [...get().ingestQueue, item],
