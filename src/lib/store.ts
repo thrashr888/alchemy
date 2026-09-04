@@ -7,6 +7,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
+import { initializeOnce } from "./startup";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
 import { refreshEpigraph } from "./epigraph";
@@ -368,12 +369,6 @@ async function runQueued(
   }
 }
 
-/** One-shot guard for `init`. React StrictMode double-invokes the mount
- *  effect in dev, so without this the whole boot (notebook select, schedulers,
- *  global listeners, the update check) ran twice. Module scope, so it
- *  survives the StrictMode remount. */
-let initStarted = false;
-
 /** Resolves once init's first `listNotebooks` has landed. OS entry points
  *  (deep links from the browser extension, Services, the tray) can fire
  *  before that — the backend buffers them and replays on listener bind, which
@@ -529,10 +524,7 @@ export const useStore = create<AppState>((set, get) => {
     noteReads: loadNoteReads(),
     noteReadsBaseline: loadNoteReadsBaseline(),
 
-    init: async () => {
-      // Runs once per launch even though StrictMode fires the effect twice.
-      if (initStarted) return;
-      initStarted = true;
+    init: initializeOnce(async () => {
       // Deferred: inserting NSGlassEffectView while WKWebView is still
       // doing its first paint can blank the webview for the whole session
       // (setTimeout, not rAF — rAF stalls in occluded windows).
@@ -707,7 +699,7 @@ export const useStore = create<AppState>((set, get) => {
         setTimeout(quietCheck, 4000);
         setInterval(quietCheck, 24 * 60 * 60 * 1000);
       }
-    },
+    }),
 
     bindGlobalListeners: () => {
       // Chat streaming tokens + agent progress steps. Store-level, not in

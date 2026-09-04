@@ -187,9 +187,9 @@ impl Startup {
     }
 }
 
-/// Close the current process's startup trace after React's first committed
-/// frame. Infallible and idempotent: StrictMode and secondary windows may both
-/// call it, but a boot has one user-visible startup endpoint.
+/// Close the startup trace after the main view has initialized, restored its
+/// notebook collections, and painted. The frontend owns that readiness gate;
+/// recording remains infallible and idempotent for the lifetime of this boot.
 pub fn stamp_startup_interactive() {
     if let Some(startup) = ACTIVE_STARTUP.get() {
         startup.stamp_interactive_once();

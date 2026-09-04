@@ -33,9 +33,9 @@ use crate::models::{
 use crate::okf::parse_okf_doc;
 use crate::{ingest, rag};
 
-/// First committed React frame, paired with the backend phases in
-/// `traces/startup.jsonl`. The trace layer deduplicates StrictMode and
-/// secondary-window calls for the lifetime of this process.
+/// Restored main view after initialization and paint, paired with backend
+/// phases in `traces/startup.jsonl`. The frontend waits for notebook data and
+/// lazy view code; the trace layer deduplicates reports for this process.
 #[tauri::command]
 pub fn report_startup_interactive() {
     crate::trace::stamp_startup_interactive();

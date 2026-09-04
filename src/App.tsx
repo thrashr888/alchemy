@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   NOTEBOOK_PANELS,
   navAtomic,
@@ -15,6 +15,8 @@ import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "@/lib/api";
+import { report } from "@/lib/diagnostics";
+import { afterStartupPaint } from "@/lib/startup";
 import type { HomeSection } from "@/lib/storeTypes";
 import { THEME_LIST, SYSTEM_THEME } from "@/lib/themes";
 import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
@@ -74,6 +76,20 @@ const Onboarding = lazy(() =>
   })),
 );
 
+/** Mounted inside the restored main view's Suspense boundary, so a lazy
+ * workspace cannot claim readiness while its fallback is still showing. */
+function StartupReady() {
+  useEffect(() => {
+    if (!isTauri() || getCurrentWebview().label !== "main") return;
+    return afterStartupPaint(() => {
+      void api.reportStartupInteractive().catch(() => {
+        /* Older backends have no beacon; the window still works. */
+      });
+    });
+  }, []);
+  return null;
+}
+
 function App() {
   const init = useStore((s) => s.init);
   const currentId = useStore((s) => s.currentId);
@@ -96,30 +112,28 @@ function App() {
   const openSettings = useStore((s) => s.openSettings);
   const closeSettings = useStore((s) => s.closeSettings);
 
+  const [initialized, setInitialized] = useState(false);
+  const notebookLoading = useStore((s) => s.notebookLoading);
   useEffect(() => {
-    void init();
-  }, [init]);
-
-  // The backend trace starts at setup(). Two animation frames after React's
-  // first commit is the first honest point at which this window has painted
-  // with handlers attached. The backend makes this one-shot across StrictMode
-  // and secondary windows, so startup.jsonl gets one comparable endpoint per
-  // process instead of a dev-only pair of optimistic stamps.
-  useEffect(() => {
-    if (!isTauri()) return;
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => {
-        void api.reportStartupInteractive().catch(() => {
-          /* An older backend has no beacon; startup remains usable. */
-        });
-      });
-    });
+    let active = true;
+    void init().then(
+      () => {
+        if (active) setInitialized(true);
+      },
+      (error: unknown) => {
+        if (active)
+          report(
+            "fatal",
+            "startup",
+            "Could not initialize the window",
+            String(error),
+          );
+      },
+    );
     return () => {
-      cancelAnimationFrame(first);
-      if (second) cancelAnimationFrame(second);
+      active = false;
     };
-  }, []);
+  }, [init]);
 
   // The native menu's Theme and Generate submenus render TypeScript-owned
   // lists (themes.ts, studioArtifacts.tsx) — push them over IPC at startup,
@@ -338,9 +352,13 @@ function App() {
       {currentId ? (
         <Suspense fallback={null}>
           <Workspace onOpenSettings={() => openSettings()} />
+          {initialized && !notebookLoading && <StartupReady />}
         </Suspense>
       ) : (
-        <HomeView onOpenSettings={() => openSettings()} />
+        <>
+          <HomeView onOpenSettings={() => openSettings()} />
+          {initialized && <StartupReady />}
+        </>
       )}
 
       <Suspense fallback={null}>

@@ -2,12 +2,14 @@
 # Measure the same cold-launch interval a Dock click starts: LaunchServices
 # `open` until the app records a requested startup phase. The app must not be
 # running; this script refuses to interrupt background work or an open window.
+# Optional third argument: trace path for an explicitly isolated app profile.
+# window_interactive waits for init, restored notebook data, and view commit.
 
 set -euo pipefail
 
 app_path="${1:-/Applications/Alchemy.app}"
 phase="${2:-window_interactive}"
-trace_path="${HOME}/Library/Application Support/com.thrashr888.alchemy/traces/startup.jsonl"
+trace_path="${3:-${HOME}/Library/Application Support/com.thrashr888.alchemy/traces/startup.jsonl}"
 
 if [[ ! -d "$app_path" ]]; then
   print -u2 "Alchemy app not found: $app_path"
@@ -36,7 +38,7 @@ for _ in {1..400}; do
         [split("\n")[] | fromjson?]
         | group_by(.boot)
         | map(
-            select((map(.ts) | min) >= ($start - 250))
+            select((map(.ts) | min) >= $start)
             | . as $boot
             | (map(select(.phase == $phase)) | last) as $target
             | select($target != null)

@@ -166,9 +166,16 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
   branches; locally on demand.
 - **Startup trace:** `trace.rs` gains `startup.jsonl` — stamps at process
   start, `setup()` entry, db open, tables ensured, scheduler up, backend
-  completion, and the first committed interactive frame. Measure a quit app
-  through LaunchServices with `scripts/measure-app-startup.sh`; an in-process
-  trace alone omits the same pre-entry work a Dock bounce includes.
+  completion, and the restored main view after initialization. The
+  `window_interactive` beacon waits for notebook/config loading, saved-view
+  restoration, and the main view's lazy chunk to commit, then two animation
+  frames. Secondary windows cannot finish the main window's trace. A failed
+  initialization reports a fatal diagnostic rather than a successful timing.
+  This endpoint measures usable navigation and loaded notebook collections;
+  optional background refreshes and document media may still load afterward.
+  Measure a quit app through LaunchServices with `scripts/measure-app-startup.sh`;
+  an optional third argument selects the trace path of an isolated app profile.
+  An in-process trace alone omits the same pre-entry work a Dock bounce includes.
 
   The September 2026 signed-app ablation discarded the first launch of each
   copied bundle path (LaunchServices/signature registration cost 1.9–2.3 s)
@@ -180,7 +187,11 @@ then frozen; loosening one thereafter is a deliberate commit, not drift.
   deferring note-popout and print-export routes removed another 45 KB minified
   / 12.5 KB gzip from the main-window entry without changing its first view.
   Keep measuring an external endpoint: binary size and bundle size are leads,
-  not proof of a faster Dock launch.
+  not proof of a faster Dock launch. Those earlier timings used the initial
+  React commit before initialization had necessarily finished; they must not
+  be compared directly with the stricter restored-view endpoint. The 50%
+  startup-reduction target requires a baseline and candidate measured with
+  the same endpoint and library.
 - **Counts are cached, not rescanned:** `list_notebooks` reports per-notebook
   source/note/report totals, which meant scanning two whole tables on every
   refresh — every `mcp://changed`, and once during boot. The totals are
