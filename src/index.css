@@ -708,6 +708,32 @@ html[data-glass="clear"] .side-card {
   }
 }
 
+/* The provider load glyph (ChatPanel's ProviderPulse): which local engine is
+   working, in a shape you can tell apart at 12px. Both parts stay legible
+   with the animation stopped — under prefers-reduced-motion the rule above
+   collapses these to a still frame, so the base style is the real design. */
+.provider-bar {
+  opacity: 0.55;
+  animation: provider-bar 1.4s ease-in-out infinite;
+}
+@keyframes provider-bar {
+  0%,
+  70%,
+  100% {
+    opacity: 0.35;
+  }
+  25% {
+    opacity: 1;
+  }
+}
+/* The arc spins about the ring's center, not its own bounding box — an arc's
+   box centers off to one side, and rotating around that wobbles. */
+.provider-arc {
+  transform-box: view-box;
+  transform-origin: 6px 6px;
+  animation: alchemy-spin 1.4s linear infinite;
+}
+
 @keyframes alchemy-spin {
   to {
     transform: rotate(360deg);
