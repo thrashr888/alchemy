@@ -607,6 +607,7 @@ export function SourcesPanel() {
     const kept = loadHygieneKept(currentId);
     const m = new Map<string, (typeof hygiene)[number]>();
     for (const h of hygiene) {
+      if (h.kind === "note") continue; // no row here to badge
       if (h.bucket === "stale") continue; // the sweep's job, not the user's
       if (kept[`${h.sourceId}:${h.bucket}`]) continue;
       if (!m.has(h.sourceId)) m.set(h.sourceId, h);
@@ -616,6 +617,14 @@ export function SourcesPanel() {
     // store array, which re-runs this memo against the fresh keeps.
   }, [hygiene, currentId]);
   const proposals = [...issueBySource.values()];
+  // Flagged notes have no row in this panel, but they are part of what the
+  // Grow door offers to review, so they count toward its badge.
+  const flaggedNotes = useMemo(() => {
+    const kept = loadHygieneKept(currentId);
+    return hygiene.filter(
+      (h) => h.kind === "note" && !kept[`${h.sourceId}:${h.bucket}`],
+    ).length;
+  }, [hygiene, currentId]);
 
   return (
     <div
@@ -911,7 +920,7 @@ export function SourcesPanel() {
             {/* One door to the Grow surface (RFC-living-notebook):
                 growth proposals and needs-attention flags together, with
                 an activity dot when anything is waiting. */}
-            {growthVisible.length + proposals.length > 0 && (
+            {growthVisible.length + proposals.length + flaggedNotes > 0 && (
               <button
                 type="button"
                 onClick={() =>
@@ -932,7 +941,7 @@ export function SourcesPanel() {
                   className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
                 />
                 <span className="ml-auto shrink-0 text-caption text-subtle-foreground">
-                  {growthVisible.length + proposals.length} · Review
+                  {growthVisible.length + proposals.length + flaggedNotes} · Review
                 </span>
               </button>
             )}

@@ -29,9 +29,11 @@ import {
   Tags,
   FileText,
   Globe,
+  RefreshCw,
   Rss,
   Search,
   Sprout,
+  StickyNote,
 } from "lucide-react";
 
 /** Center-pane growth review (RFC-living-notebook Pillar 2): what the
@@ -49,11 +51,15 @@ export function GrowPane() {
   const hygieneKeep = useStore((s) => s.hygieneKeep);
   const refreshSource = useStore((s) => s.refreshSource);
   const deleteSourcesBatch = useStore((s) => s.deleteSourcesBatch);
+  const deleteNotesBatch = useStore((s) => s.deleteNotesBatch);
+  const pushToast = useStore((s) => s.pushToast);
   const selectedSourceIds = useStore((s) => s.selectedSourceIds);
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const notes = useStore((s) => s.notes);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
+  const [checking, setChecking] = useState(false);
   // Proactive relocation for missing files: Spotlight candidates by exact
   // name, looked up per flagged source. null = still looking.
   const [foundPaths, setFoundPaths] = useState<Record<string, string[]>>({});
@@ -74,28 +80,33 @@ export function GrowPane() {
 
   // Needs-attention flags (RFC-source-hygiene) — merged into Grow: tending
   // what's broken is the other half of growing (and where Pillar 3's
-  // curation passes will land). Keeps live in localStorage; refreshing
-  // hygiene afterwards re-runs this against the fresh keeps.
+  // curation passes will land). Sources and notes both land here; a note
+  // has no origin, so it gets Keep and Remove and nothing else. Keeps live
+  // in localStorage; refreshing hygiene afterwards re-runs this against the
+  // fresh keeps.
   const attention = useMemo(() => {
     const kept = loadHygieneKept(currentId);
     const seen = new Map<string, (typeof hygiene)[number]>();
     for (const h of hygiene) {
       if (h.bucket === "stale") continue;
       if (kept[`${h.sourceId}:${h.bucket}`]) continue;
-      if (!seen.has(h.sourceId)) seen.set(h.sourceId, h);
+      const key = `${h.kind}:${h.sourceId}`;
+      if (!seen.has(key)) seen.set(key, h);
     }
     return [...seen.values()];
   }, [hygiene, currentId]);
+  // "Keep" on an unreachable source resets real backend state (the strike
+  // count); every other flag is suppressed locally. Returns whether it
+  // touched the backend, so the bulk path can wait for those.
   const keepIssue = (h: { sourceId: string; bucket: string }) => {
-    if (h.bucket === "unreachable") {
-      void hygieneKeep(h.sourceId).then(() => refreshHygiene());
-      return;
-    }
+    if (h.bucket === "unreachable") return hygieneKeep(h.sourceId);
     const kept = loadHygieneKept(currentId);
     kept[`${h.sourceId}:${h.bucket}`] = true;
     saveHygieneKept(currentId, kept);
-    void refreshHygiene();
+    return Promise.resolve();
   };
+  const keepOne = (h: { sourceId: string; bucket: string }) =>
+    void keepIssue(h).then(() => refreshHygiene());
   // Look up move candidates for the missing-file flags on view.
   useEffect(() => {
     const missing = attention.filter((h) => h.bucket === "missing-file");
@@ -121,6 +132,88 @@ export function GrowPane() {
       setRetrying(null);
     }
     await refreshHygiene();
+  };
+
+  // ---- Whole-section verdicts -------------------------------------------
+  // A list of broken sources is usually one decision, not ten, and ten
+  // decisions used to mean ten toasts. Each verb below acts on everything
+  // visible and says so once.
+  const retryable = attention.filter(
+    (h) => h.kind !== "note" && h.bucket !== "duplicate",
+  );
+  const keepAllAttention = async () => {
+    const n = attention.length;
+    await Promise.all(attention.map(keepIssue));
+    await refreshHygiene();
+    pushToast("success", n === 1 ? "Kept 1 flagged item" : `Kept ${n} flagged items`);
+  };
+  const retryAllAttention = async () => {
+    setRetryingAll(true);
+    let ok = 0;
+    try {
+      // Sequential: a re-fetch is a network round trip plus a re-embed, and
+      // firing the whole list at once is how a review of twenty sources
+      // becomes a stalled app.
+      for (const h of retryable) {
+        try {
+          await api.refreshSourceUrl(h.sourceId);
+          ok += 1;
+        } catch {
+          /* counted below; the flag stays and says why */
+        }
+      }
+    } finally {
+      setRetryingAll(false);
+    }
+    if (currentId) {
+      const fresh = await api.listSources(currentId);
+      if (useStore.getState().currentId === currentId)
+        useStore.setState({ sources: fresh });
+    }
+    await refreshHygiene();
+    const failed = retryable.length - ok;
+    pushToast(
+      failed > 0 ? "error" : "success",
+      failed > 0
+        ? `Re-fetched ${ok} of ${retryable.length}; ${failed} still failing`
+        : `Re-fetched ${ok === 1 ? "1 source" : `${ok} sources`}`,
+    );
+  };
+  const removeAllAttention = async () => {
+    const sourceIds = attention
+      .filter((h) => h.kind !== "note")
+      .map((h) => h.sourceId);
+    const noteIds = attention
+      .filter((h) => h.kind === "note")
+      .map((h) => h.sourceId);
+    const ok = await confirm({
+      title: `Remove ${attention.length} flagged items?`,
+      message: "Each source is deleted with its chunks.",
+      items: attention.map((h) => h.title || "Untitled"),
+      confirmLabel: "Remove all",
+      danger: true,
+    });
+    if (!ok) return;
+    // Both batches carry their own undo toast, so a mixed list says it
+    // twice — still one toast per batch, never one per item.
+    if (sourceIds.length > 0) await deleteSourcesBatch(sourceIds);
+    if (noteIds.length > 0) await deleteNotesBatch(noteIds);
+    await refreshHygiene();
+  };
+  const removeIssue = (h: { kind: string; sourceId: string }) =>
+    void (h.kind === "note"
+      ? deleteNotesBatch([h.sourceId])
+      : deleteSourcesBatch([h.sourceId]));
+  // The check is cheap (a metadata scan plus fs stats), so the review can
+  // simply re-run it. Agents reach the same check through the
+  // `source_hygiene` MCP tool.
+  const recheck = async () => {
+    setChecking(true);
+    try {
+      await refreshHygiene();
+    } finally {
+      setChecking(false);
+    }
   };
 
   const [queries, setQueries] = useState<string[]>([]);
@@ -581,9 +674,55 @@ export function GrowPane() {
                   <span className="text-caption font-semibold text-foreground">
                     Needs attention
                   </span>
-                  <span className="text-caption text-subtle-foreground">
-                    broken or outdated sources — Keep dismisses the flag
+                  <span className="truncate text-caption text-subtle-foreground">
+                    broken sources and empty notes. Keep dismisses the flag.
                   </span>
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                    {attention.length > 1 && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void keepAllAttention()}
+                          title="Dismiss every flag below and keep everything"
+                        >
+                          Keep all
+                        </Button>
+                        {retryable.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            loading={retryingAll}
+                            onClick={() => void retryAllAttention()}
+                            title={`Fetch ${retryable.length} sources again now`}
+                          >
+                            Retry all
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => void removeAllAttention()}
+                          title="Remove everything below"
+                        >
+                          Remove all
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      loading={checking}
+                      onClick={() => void recheck()}
+                      aria-label="Check for problems now"
+                      title="Check for problems now"
+                    >
+                      {!checking && (
+                        <RefreshCw aria-hidden className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 {attention.length === 0 ? (
                   <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
@@ -592,9 +731,15 @@ export function GrowPane() {
                 ) : (
                   attention.map((h) => (
                     <div
-                      key={`${h.sourceId}:${h.bucket}`}
+                      key={`${h.kind}:${h.sourceId}:${h.bucket}`}
                       className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
                     >
+                      {h.kind === "note" && (
+                        <StickyNote
+                          aria-hidden
+                          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                        />
+                      )}
                       <div className="min-w-0 flex-1">
                         <div
                           className="truncate text-body text-foreground"
@@ -634,7 +779,7 @@ export function GrowPane() {
                           Locate…
                         </Button>
                       )}
-                      {h.bucket !== "duplicate" && (
+                      {h.kind !== "note" && h.bucket !== "duplicate" && (
                         <Button
                           variant="ghost"
                           disabled={retrying === h.sourceId}
@@ -646,16 +791,24 @@ export function GrowPane() {
                       )}
                       <Button
                         variant="ghost"
-                        onClick={() => keepIssue(h)}
-                        title="Dismiss this flag and keep the source"
+                        onClick={() => keepOne(h)}
+                        title={
+                          h.kind === "note"
+                            ? "Dismiss this flag and keep the note"
+                            : "Dismiss this flag and keep the source"
+                        }
                       >
                         Keep
                       </Button>
                       <Button
                         variant="ghost"
                         className="text-destructive hover:bg-destructive/10"
-                        onClick={() => void deleteSourcesBatch([h.sourceId])}
-                        title="Remove the source and its chunks"
+                        onClick={() => removeIssue(h)}
+                        title={
+                          h.kind === "note"
+                            ? "Delete the note"
+                            : "Remove the source and its chunks"
+                        }
                       >
                         Remove
                       </Button>

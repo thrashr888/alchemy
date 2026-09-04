@@ -3115,18 +3115,25 @@ pub(crate) fn is_web_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-/// Classify a notebook's sources into hygiene buckets
-/// (docs/RFC-source-hygiene.md) — read-only; the review modal and row
-/// badges render from this, and acting on it goes through the normal
-/// refresh/delete commands.
+/// Classify a notebook's sources and notes into hygiene buckets
+/// (docs/RFC-source-hygiene.md) — read-only; Grow's "Needs attention"
+/// review and the source row badges render from this, and acting on it goes
+/// through the normal refresh/delete commands. Running it is how the
+/// review's refresh button re-checks a notebook on demand.
 #[tauri::command]
 pub async fn source_hygiene(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::hygiene::HygieneIssue>, String> {
     let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let notes = e(state.db.list_notes(&notebook_id).await)?;
     let cadence = state.ai.read().await.config().hygiene_refresh_days;
-    Ok(crate::hygiene::classify(&sources, cadence, now()))
+    Ok(crate::hygiene::classify_all(
+        &sources,
+        &notes,
+        cadence,
+        now(),
+    ))
 }
 
 /// "Keep" from the hygiene review: clear an unreachable source's strike
