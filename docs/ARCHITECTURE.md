@@ -209,6 +209,61 @@ to Tailwind v4 via `@theme inline`: near-black canvas (`#08090a`), hairline
 borders (`rgba(255,255,255,0.07)`), indigo accent (`#5e6ad2`), Inter typography,
 compact spacing, thin scrollbars.
 
+## Binary size
+
+The shipped binary is dominated by the Lance/Arrow/DataFusion tree, which
+Alchemy uses a small slice of. Two changes cut it by about a third.
+
+| | before | after |
+| --- | --- | --- |
+| release binary (`aarch64-apple-darwin`) | 371.3 MiB (389,374,384 B) | 262.3 MiB (275,054,128 B) |
+| symbols in the binary | 682,857 | 343,370 |
+| front-end `dist/` | 16 MB, 370 JS chunks | 8.5 MB, 97 chunks |
+
+- **`[profile.release]`: `lto = "thin"`, `codegen-units = 1`.** There was no
+  release profile at all, so the build ran with 16 codegen units and no
+  cross-crate optimization. Thin LTO is where nearly all of the 109 MiB comes
+  from: dead code goes, and the symbol table halves as duplicate
+  instantiations collapse. Cost on a warm release build is about 30 s.
+- **An explicit shiki language set** (`SHIKI_GRAMMARS` in `ReaderPane.tsx`).
+  The code reader imported shiki's top-level entry point, which drags its
+  whole ~200-language registry into the build. It now builds a
+  `createHighlighterCore` and loads one of 33 grammars on demand — the same
+  33 `SHIKI_LANGS` already maps extensions to. Everything else falls back to
+  plain text, exactly as an unknown extension always did.
+
+Measured, and deliberately not changed:
+
+- **`strip`.** Worth another ~46 MB, and it would turn the panic backtraces
+  `diagnostics.rs` captures (`Backtrace::force_capture`) into hex addresses.
+  Crash reports are worth more than the bytes.
+- **`panic = "abort"`.** `ingest.rs` and `tts.rs` both `catch_unwind` around
+  third-party parsers, and the whole diagnostics contract is "a panic inside
+  a command unwinds into an `Err` string".
+- **Crate features.** Already pruned about as far as they go — see the
+  `default-features = false` comments in `Cargo.toml` for `cider`,
+  `ast-grep-language`, `kokoro-en`, `pulldown-cmark`, `docx-rs`, `axum` and
+  `reqwest`. `cargo bloat` puts the top of the remainder at `sqlparser`
+  (24 MiB), `lance` (18 MiB), `ort_sys` (12 MiB) and the DataFusion crates,
+  all of them transitive through `lancedb` and not separable by feature.
+- **Bundled assets.** `libs/libpdfium.dylib` (6.9 MB) and
+  `binaries/alchemy-fm` (123 KB) ride in `Contents/Resources` and stay. The
+  ONNX runtime arrives through `fastembed`'s `ort-download-binaries`; models
+  are downloaded on first use, not bundled.
+
+To reproduce:
+
+```bash
+pnpm tauri build --target aarch64-apple-darwin --no-bundle
+ls -l src-tauri/target/aarch64-apple-darwin/release/alchemy
+du -sh dist && ls dist/assets/*.js | wc -l
+
+cd src-tauri
+size -m target/aarch64-apple-darwin/release/alchemy      # section sizes
+otool -l target/aarch64-apple-darwin/release/alchemy | grep -A3 LC_SYMTAB
+cargo bloat --release --target aarch64-apple-darwin --crates -n 30
+```
+
 ## Data flow summary
 
 ```
