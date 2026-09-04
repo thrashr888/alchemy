@@ -94,9 +94,8 @@ export function InferenceActivity() {
         onMouseLeave={hide}
       >
         {kinds.map((kind) => (
-          <span key={kind} className="flex items-center gap-1">
+          <span key={kind} className="flex items-center">
             <ProviderGlyph kind={kind} />
-            <span className="text-caption">{providerName(kind)}</span>
           </span>
         ))}
       </span>
