@@ -662,7 +662,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (same URL added twice; the older copy is kept), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
+        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (the same page, file or note added twice — matched by canonical URL, or by content for files, pasted text and notes; the oldest copy is the keeper and its id is in \"keeperId\"), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
     )]
     async fn source_hygiene(
         &self,
@@ -671,7 +671,7 @@ impl AlchemyMcp {
         let state = self.state();
         let sources = state
             .db
-            .list_sources(&notebook_id)
+            .sources_with_content(&notebook_id)
             .await
             .map_err(internal)?;
         let notes = state.db.list_notes(&notebook_id).await.map_err(internal)?;

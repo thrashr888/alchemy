@@ -3125,7 +3125,10 @@ pub async fn source_hygiene(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::hygiene::HygieneIssue>, String> {
-    let sources = e(state.db.list_sources(&notebook_id).await)?;
+    // With content: the duplicate bucket groups file and pasted-text
+    // sources by what they say, and nothing else in a notebook can prove
+    // that two rows are one import.
+    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let notes = e(state.db.list_notes(&notebook_id).await)?;
     let cadence = state.ai.read().await.config().hygiene_refresh_days;
     Ok(crate::hygiene::classify_all(

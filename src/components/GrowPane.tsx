@@ -200,6 +200,33 @@ export function GrowPane() {
     if (noteIds.length > 0) await deleteNotesBatch(noteIds);
     await refreshHygiene();
   };
+  // The duplicate bucket is the one verdict that needs no reading: every row
+  // in it has an older twin the notebook is keeping, named in `keeperId`. So
+  // it gets its own verb, separate from "Remove all" — clearing a double
+  // import shouldn't mean auditing the broken sources beside it.
+  const duplicates = attention.filter((h) => h.bucket === "duplicate");
+  const removeDuplicates = async () => {
+    const sourceIds = duplicates
+      .filter((h) => h.kind !== "note")
+      .map((h) => h.sourceId);
+    const noteIds = duplicates
+      .filter((h) => h.kind === "note")
+      .map((h) => h.sourceId);
+    const ok = await confirm({
+      title:
+        duplicates.length === 1
+          ? "Remove 1 duplicate?"
+          : `Remove ${duplicates.length} duplicates?`,
+      message: "The oldest copy of each is kept.",
+      items: duplicates.map((h) => h.title || "Untitled"),
+      confirmLabel: "Remove duplicates",
+      danger: true,
+    });
+    if (!ok) return;
+    if (sourceIds.length > 0) await deleteSourcesBatch(sourceIds);
+    if (noteIds.length > 0) await deleteNotesBatch(noteIds);
+    await refreshHygiene();
+  };
   const removeIssue = (h: { kind: string; sourceId: string }) =>
     void (h.kind === "note"
       ? deleteNotesBatch([h.sourceId])
@@ -675,7 +702,8 @@ export function GrowPane() {
                     Needs attention
                   </span>
                   <span className="truncate text-caption text-subtle-foreground">
-                    broken sources and empty notes. Keep dismisses the flag.
+                    broken sources, duplicates, empty notes. Keep dismisses
+                    the flag.
                   </span>
                   <div className="ml-auto flex shrink-0 items-center gap-1">
                     {attention.length > 1 && (
@@ -697,6 +725,16 @@ export function GrowPane() {
                             title={`Fetch ${retryable.length} sources again now`}
                           >
                             Retry all
+                          </Button>
+                        )}
+                        {duplicates.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void removeDuplicates()}
+                            title={`Remove ${duplicates.length} extra copies and keep the oldest of each`}
+                          >
+                            Remove duplicates
                           </Button>
                         )}
                         <Button

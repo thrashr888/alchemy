@@ -79,6 +79,12 @@ pub struct HygieneIssue {
     pub title: String,
     pub bucket: String,
     pub detail: String,
+    /// For "duplicate": the id of the copy being kept — the oldest of the
+    /// group, which carries the history. Empty for every other bucket, so
+    /// a surface can offer "remove the extras, keep that one" without
+    /// re-deriving the grouping.
+    #[serde(default)]
+    pub keeper_id: String,
 }
 
 /// Does this source's origin point at a local file on disk (vs. web or
@@ -117,6 +123,49 @@ fn effective_fetched_at(source: &Source) -> i64 {
     }
 }
 
+/// Text short enough to be furniture — a stub `__init__.py`, a one-line
+/// README, a note holding a single heading — is not evidence that two rows
+/// are the same import. Below this, only an origin can prove a duplicate.
+const DUPLICATE_MIN_CHARS: usize = 60;
+
+/// A hash of the text, for grouping only: compared inside one classify pass
+/// and never stored, so a fast non-cryptographic hasher is the right tool.
+fn content_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.trim().hash(&mut h);
+    h.finish()
+}
+
+/// What makes two sources the same source twice — the identity the 0.55.0
+/// double-import produced under two ids.
+///
+/// A web source goes by its canonical URL: the same page under `http://`,
+/// `www.`, a trailing slash or a tracking param is one page, and
+/// `growth::canonical_key` already owns those rules. A file or pasted text
+/// goes by its text instead — a file imported twice from two folders is
+/// still one document — falling back to the path when there is too little
+/// text to be sure.
+///
+/// Folder children are excluded: two files with identical contents under one
+/// parent are the tree the user chose, and the rescan owns them. `None`
+/// means "nothing here proves sameness" — never a guess.
+fn duplicate_key(s: &Source) -> Option<String> {
+    if !s.parent_id.is_empty() {
+        return None;
+    }
+    let url = s.url.trim();
+    if !url.is_empty() && (s.source_type == "url" || commands::is_web_url(url)) {
+        return Some(format!("url:{}", crate::growth::canonical_key(url)));
+    }
+    let text = s.content.trim();
+    if text.chars().count() >= DUPLICATE_MIN_CHARS {
+        return Some(format!("text:{}", content_hash(text)));
+    }
+    // Too little text to judge by. A shared path still proves it.
+    (!url.is_empty()).then(|| format!("url:{url}"))
+}
+
 /// Bucket a notebook's sources. Pure classification over the rows (plus
 /// cheap fs stats for loose files) — no network, no mutation; callers decide
 /// what to do with the result. One issue per source, most actionable bucket
@@ -126,9 +175,9 @@ fn effective_fetched_at(source: &Source) -> i64 {
 /// review surfaces call.
 pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneIssue> {
     let cadence_ms = i64::from(cadence_days).saturating_mul(86_400_000);
-    // First-seen source per normalized URL; later holders of the same URL
-    // are the duplicates (keep the oldest — it carries the history).
-    let mut first_by_url: HashMap<String, &Source> = HashMap::new();
+    // First-seen source per identity; later holders of the same identity are
+    // the duplicates (keep the oldest — it carries the history).
+    let mut first_seen: HashMap<String, &Source> = HashMap::new();
     let mut by_age: Vec<&Source> = sources.iter().collect();
     by_age.sort_by_key(|s| s.created_at);
 
@@ -143,6 +192,7 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             title: s.title.clone(),
             bucket: bucket.into(),
             detail,
+            keeper_id: String::new(),
         };
         if s.fetch_failures >= UNREACHABLE_AFTER {
             issues.push(issue(
@@ -166,16 +216,23 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
                 continue;
             }
         }
-        if s.source_type == "url" && !s.url.is_empty() {
-            let key = s.url.trim().trim_end_matches('/').to_string();
-            if let Some(first) = first_by_url.get(key.as_str()) {
-                issues.push(issue(
-                    "duplicate",
-                    format!("same URL as \u{201c}{}\u{201d}", first.title),
-                ));
+        if let Some(key) = duplicate_key(s) {
+            if let Some(first) = first_seen.get(key.as_str()) {
+                let how = if key.starts_with("url:") {
+                    "same URL as"
+                } else {
+                    "same content as"
+                };
+                issues.push(HygieneIssue {
+                    keeper_id: first.id.clone(),
+                    ..issue(
+                        "duplicate",
+                        format!("{how} \u{201c}{}\u{201d}", first.title),
+                    )
+                });
                 continue;
             }
-            first_by_url.insert(key, s);
+            first_seen.insert(key, s);
         }
         if s.status == "error" && s.char_count == 0 && now - s.created_at > HUSK_AFTER_MS {
             issues.push(issue("husk", "failed import with no content".into()));
@@ -191,26 +248,55 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
 }
 
 /// Bucket a notebook's notes. Sources drift because the world moves under
-/// them; a note has no origin to drift from, so there is exactly one thing
-/// wrong a note can be from the outside — empty. A generation that never
-/// landed, or a blank note nobody came back to, reads on the shelf as a
-/// document and answers nothing.
+/// them; a note has no origin to drift from, so only two things can be
+/// wrong with one from the outside.
 ///
-/// The same age guard the husk bucket uses keeps this off a note the user
-/// has only just created: a note you are about to type into is not a
-/// problem, and every note starts empty.
+/// **Empty**: a generation that never landed, or a blank note nobody came
+/// back to, reads on the shelf as a document and answers nothing. The same
+/// age guard the husk bucket uses keeps this off a note the user has only
+/// just created: a note you are about to type into is not a problem, and
+/// every note starts empty.
+///
+/// **Duplicate**: the same note twice. The 0.55.0 double import wrote each
+/// generated document under two ids, so the shelf shows "Briefing Doc"
+/// beside "Briefing Doc". Title and text together are the identity — one
+/// title over two drafts is a rewrite, and one text under two titles is a
+/// deliberate copy. Oldest wins, as it does for sources.
 pub fn classify_notes(notes: &[Note], now: i64) -> Vec<HygieneIssue> {
-    notes
-        .iter()
-        .filter(|n| n.content.trim().is_empty() && now - n.updated_at > HUSK_AFTER_MS)
-        .map(|n| HygieneIssue {
-            kind: "note".into(),
-            source_id: n.id.clone(),
-            title: n.title.clone(),
-            bucket: "empty-note".into(),
-            detail: "no content — nothing was ever written here".into(),
-        })
-        .collect()
+    let mut by_age: Vec<&Note> = notes.iter().collect();
+    by_age.sort_by_key(|n| n.created_at);
+    let mut first_seen: HashMap<(String, u64), &Note> = HashMap::new();
+    let mut issues = Vec::new();
+    for n in by_age {
+        let text = n.content.trim();
+        if text.is_empty() {
+            if now - n.updated_at > HUSK_AFTER_MS {
+                issues.push(HygieneIssue {
+                    kind: "note".into(),
+                    source_id: n.id.clone(),
+                    title: n.title.clone(),
+                    bucket: "empty-note".into(),
+                    detail: "no content — nothing was ever written here".into(),
+                    keeper_id: String::new(),
+                });
+            }
+            continue;
+        }
+        let key = (n.title.trim().to_string(), content_hash(text));
+        if let Some(first) = first_seen.get(&key) {
+            issues.push(HygieneIssue {
+                kind: "note".into(),
+                source_id: n.id.clone(),
+                title: n.title.clone(),
+                bucket: "duplicate".into(),
+                detail: format!("same note as \u{201c}{}\u{201d}", first.title),
+                keeper_id: first.id.clone(),
+            });
+            continue;
+        }
+        first_seen.insert(key, n);
+    }
+    issues
 }
 
 /// The whole review in one list: what is wrong with the notebook's sources,
@@ -506,6 +592,98 @@ mod tests {
         let issues = classify(&[second, first], 30, now);
         assert_eq!(buckets(&issues), vec![("second", "duplicate")]);
         assert!(issues[0].detail.contains("first"), "{}", issues[0].detail);
+        assert_eq!(issues[0].keeper_id, "first");
+    }
+
+    /// Two copies of one document with no origin to compare: same text, two
+    /// ids. The oldest is the keeper whatever order the rows arrive in, and
+    /// every other copy carries its id.
+    #[test]
+    fn identical_text_is_a_duplicate_and_the_oldest_is_kept() {
+        let now = 100 * DAY;
+        let body = "The Meridian programme note, imported twice by the 0.55.0 \
+                    double import, at ample length to be judged by.";
+        let mut copies: Vec<Source> = ["third", "first", "second"]
+            .iter()
+            .map(|id| {
+                let mut s = src(id, "text");
+                s.content = body.into();
+                s
+            })
+            .collect();
+        copies[0].created_at = 30;
+        copies[1].created_at = 10;
+        copies[2].created_at = 20;
+
+        let issues = classify(&copies, 0, now);
+        assert_eq!(
+            buckets(&issues),
+            vec![("second", "duplicate"), ("third", "duplicate")]
+        );
+        assert!(issues.iter().all(|i| i.keeper_id == "first"));
+
+        // A different document is not a duplicate of it.
+        let mut other = src("other", "text");
+        other.content = body.replace("twice", "once");
+        let with_other = [copies[1].clone(), other];
+        assert!(classify(&with_other, 0, now).is_empty());
+    }
+
+    /// Short text proves nothing — two stub files are not one import — and a
+    /// folder child is the rescan's business, not the review's.
+    #[test]
+    fn thin_text_and_folder_children_are_never_duplicates() {
+        let now = 100 * DAY;
+        let stub = |id: &str| {
+            let mut s = src(id, "text");
+            s.content = "TODO".into();
+            s
+        };
+        assert!(classify(&[stub("a"), stub("b")], 0, now).is_empty());
+
+        let body = "A file long enough to hash, sitting under a folder source \
+                    that the rescan owns from end to end.";
+        let child = |id: &str| {
+            let mut s = src(id, "markdown");
+            s.parent_id = "parent".into();
+            s.url = format!("/tmp/tree/{id}.md");
+            s.content = body.into();
+            s
+        };
+        assert!(classify(&[child("a"), child("b")], 0, now).is_empty());
+    }
+
+    /// The same generated note under two ids — the shape Paul saw in the
+    /// Studio list. Empty notes still flag as before.
+    #[test]
+    fn duplicate_notes_keep_the_oldest() {
+        let now = 100 * DAY;
+        let note = |id: &str, title: &str, content: &str, created: i64| Note {
+            id: id.into(),
+            notebook_id: "nb".into(),
+            title: title.into(),
+            content: content.into(),
+            kind: "briefing".into(),
+            prompt: String::new(),
+            origin: String::new(),
+            status: String::new(),
+            created_at: created,
+            updated_at: created,
+        };
+        let issues = classify_notes(
+            &[
+                note("newer", "Briefing Doc", "One brief.", 20),
+                note("older", "Briefing Doc", "One brief.", 10),
+                note("other", "Briefing Doc", "A different brief.", 30),
+                note("blank", "Untitled", "", 0),
+            ],
+            now,
+        );
+        assert_eq!(
+            buckets(&issues),
+            vec![("blank", "empty-note"), ("newer", "duplicate")]
+        );
+        assert_eq!(issues[1].keeper_id, "older");
     }
 
     /// A url source whose origin doesn't parse as http — stray whitespace, a

@@ -159,6 +159,9 @@ export interface HygieneIssue {
     | "empty-note"
     | "stale";
   detail: string;
+  /** For "duplicate": the id of the copy being kept — the oldest of the
+   *  group. "" for every other bucket. */
+  keeperId: string;
 }
 
 /** One pickable Mac-provider item (a calendar range, reminders list, note…). */
