@@ -414,7 +414,7 @@ function GeneralTab() {
       <PrefToggle
         storageKey="playSounds"
         label="Play sounds"
-        hint="Soft cues for finished work, new arrivals, and errors."
+        hint="Soft cues when work you request finishes or fails."
         onEnable={previewSound}
       />
       <SelfDiagnoseToggle />

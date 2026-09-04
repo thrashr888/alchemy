@@ -578,7 +578,12 @@ export interface AppState {
   setupKokoro: () => Promise<void>;
   removeKokoro: () => Promise<void>;
   setError: (error: string | null) => void;
-  pushToast: (kind: ToastKind, message: string, onClick?: () => void) => void;
+  pushToast: (
+    kind: ToastKind,
+    message: string,
+    onClick?: () => void,
+    options?: { silent?: boolean },
+  ) => void;
   dismissToast: (id: string) => void;
   /** Record a reversible mutation silently — for changes that need no toast
    *  of their own (a rename, a tag edit) but should still answer Cmd-Z. */

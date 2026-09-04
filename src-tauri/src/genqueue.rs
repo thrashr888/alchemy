@@ -38,6 +38,10 @@ pub struct GenJob {
     #[serde(default)]
     pub source_ids: Option<Vec<String>>,
     pub note_id: String,
+    /// Empty for an explicit UI request; other origins run silently. Legacy
+    /// jobs have unknown provenance and must not claim a user request.
+    #[serde(default = "unknown_origin")]
+    pub origin: String,
     /// queued | running | waiting | done | error | cancelled
     pub status: String,
     #[serde(default)]
@@ -52,6 +56,10 @@ pub struct GenJob {
     pub updated_at: i64,
 }
 
+fn unknown_origin() -> String {
+    "unknown".to_string()
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct StatusEvent {
@@ -61,6 +69,7 @@ struct StatusEvent {
     status: String,
     detail: String,
     title: String,
+    origin: String,
 }
 
 pub struct GenQueue {
@@ -179,6 +188,7 @@ pub(crate) fn emit_status(app: &tauri::AppHandle, job: &GenJob, title: &str, det
             status: job.status.clone(),
             detail: detail.to_string(),
             title: title.to_string(),
+            origin: job.origin.clone(),
         },
     );
 }
@@ -378,6 +388,7 @@ mod tests {
             prompt: String::new(),
             source_ids: None,
             note_id: format!("note-{id}"),
+            origin: String::new(),
             status: status.into(),
             error: String::new(),
             provider: None,
@@ -385,6 +396,21 @@ mod tests {
             created_at: crate::commands::now(),
             updated_at: crate::commands::now(),
         }
+    }
+
+    #[test]
+    fn queued_jobs_preserve_origin_and_legacy_jobs_are_unknown() {
+        for origin in ["", "mcp"] {
+            let mut original = job("origin", "queued");
+            original.origin = origin.to_string();
+            let saved = serde_json::to_value(&original).unwrap();
+            let loaded: GenJob = serde_json::from_value(saved).unwrap();
+            assert_eq!(loaded.origin, origin);
+        }
+        let mut legacy = serde_json::to_value(job("legacy", "queued")).unwrap();
+        legacy.as_object_mut().unwrap().remove("origin");
+        let loaded: GenJob = serde_json::from_value(legacy).unwrap();
+        assert_eq!(loaded.origin, "unknown");
     }
 
     #[test]

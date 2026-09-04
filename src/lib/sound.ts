@@ -1,13 +1,6 @@
-/** The app's audio vocabulary — three event cues, synthesized with WebAudio
- *  (no bundled assets), all gated by the "Play sounds" preference
- *  (Settings → General). Events only, never interactions: sound exists to
- *  re-summon attention that has wandered, not to confirm what the eyes see.
- *
- *  - done:    work the user asked for finished (generation, chat answer)
- *  - arrival: something new appeared on its own (report, folder sync, agent
- *             edits) — only sounds when the window is unfocused, and at most
- *             once per half minute
- *  - error:   something failed — low and distinct, throttled against bursts
+/** Audio cues for work the user explicitly requested, gated by the "Play
+ *  sounds" preference. Automatic arrivals, sync, and background jobs stay
+ *  silent; their status and errors remain visible in the interface.
  */
 
 let ctx: AudioContext | null = null;
@@ -65,23 +58,6 @@ export function previewSound() {
 export function playDone() {
   if (!soundsEnabled() || quietNow()) return;
   previewSound();
-}
-
-let lastArrival = 0;
-
-/** A single quiet ping: something arrived without being asked for. Silent
- *  while the window is focused — in view, the toast is enough (unless the
- *  quiet-while-focused rule is switched off). */
-export function playArrival() {
-  if (!soundsEnabled() || quietNow()) return;
-  const now = Date.now();
-  if (now - lastArrival < 30_000) return;
-  lastArrival = now;
-  try {
-    note(784, 0, 0.5, "sine", 0.05);
-  } catch {
-    /* audio unavailable */
-  }
 }
 
 let lastError = 0;

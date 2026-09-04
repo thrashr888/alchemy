@@ -121,6 +121,8 @@ export function Spinner({ className }: { className?: string }) {
 
 export interface HoverCardData {
   title: string;
+  /** Full-width task descriptions with secondary details below each row. */
+  layout?: "stacked";
   /** Right-aligned beside the title (e.g. a relative time). */
   time?: string;
   meta: { icon?: React.ReactNode; label: string; value?: string }[];
@@ -145,10 +147,14 @@ export function useHoverCard(side: "left" | "right") {
 
   // `Element`, not `HTMLElement`: the graph's rows are SVG <g> nodes, and
   // all this needs is getBoundingClientRect.
-  const show = (e: React.MouseEvent<Element>, data: HoverCardData) => {
+  const show = (
+    e: React.MouseEvent<Element> | React.FocusEvent<Element>,
+    data: HoverCardData,
+  ) => {
     const el = e.currentTarget;
     window.clearTimeout(timer.current);
     const reveal = () => {
+      if (!el.isConnected) return;
       const r = el.getBoundingClientRect();
       warm.current = true;
       setState({
@@ -167,6 +173,8 @@ export function useHoverCard(side: "left" | "right") {
       setState(null);
     }, 120);
   };
+  React.useEffect(() => () => window.clearTimeout(timer.current), []);
+
   // Scrolling the list under the cursor won't fire mouseleave — drop the
   // card on any scroll instead of letting it drift from its row.
   React.useEffect(() => {
@@ -187,7 +195,10 @@ export function useHoverCard(side: "left" | "right") {
           // is the marker it watches for to hide itself (see ReaderPane).
           data-overlay=""
           className={cn(
-            "pointer-events-none fixed z-[100] w-64 rounded-lg border border-border-strong bg-surface-2 p-3 shadow-2xl",
+            "pointer-events-none menu-glass fixed z-[100] max-h-[calc(100vh-1rem)] overflow-hidden rounded-lg border border-border-strong p-3 shadow-2xl",
+            state.data.layout === "stacked"
+              ? "w-80 max-w-[calc(100vw-1rem)]"
+              : "w-64",
             side === "left" && "-translate-x-full",
           )}
           style={{
@@ -211,20 +222,36 @@ export function useHoverCard(side: "left" | "right") {
                 (m: HoverCardData["meta"][number], i: number) => (
                   <div
                     key={i}
-                    className="flex min-w-0 items-start gap-2 text-caption"
+                    className={cn(
+                      "flex min-w-0 items-start gap-2 text-caption",
+                      state.data.layout === "stacked" && "flex-col gap-0.5",
+                    )}
                   >
                     {m.icon && (
                       <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
                         {m.icon}
                       </span>
                     )}
-                    <span className="min-w-0 truncate text-muted-foreground">
+                    <span
+                      className={cn(
+                        "min-w-0 text-muted-foreground",
+                        state.data.layout === "stacked"
+                          ? "whitespace-normal break-words"
+                          : "truncate",
+                      )}
+                    >
                       {m.label}
                     </span>
                     {m.value && (
                       // Values wrap (file paths, URLs) rather than clipping
                       // out of the fixed-width card.
-                      <span className="ml-auto min-w-0 break-all pl-2 text-right text-foreground">
+                      <span
+                        className={cn(
+                          "min-w-0 break-words text-foreground",
+                          state.data.layout !== "stacked" &&
+                            "ml-auto break-all pl-2 text-right",
+                        )}
+                      >
                         {m.value}
                       </span>
                     )}

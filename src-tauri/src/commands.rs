@@ -10981,6 +10981,7 @@ pub(crate) async fn enqueue_generation_impl(
         prompt: prompt.to_string(),
         source_ids,
         note_id: note.id.clone(),
+        origin: origin.to_string(),
         status: "queued".to_string(),
         error: String::new(),
         provider,

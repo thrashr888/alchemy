@@ -39,7 +39,6 @@ const providerName = (kind: string) => PROVIDER[kind] ?? "Model";
 
 export function InferenceActivity() {
   const [items, setItems] = useState<ActivityItem[]>([]);
-  const { show, hide, card } = useHoverCard("left");
 
   useEffect(() => {
     void api
@@ -54,7 +53,13 @@ export function InferenceActivity() {
     };
   }, []);
 
-  if (items.length === 0) return null;
+  return items.length > 0 ? <ActiveInferenceActivity items={items} /> : null;
+}
+
+// Mount hover state only while activity exists. Returning null from the same
+// component preserves a stale card and its reveal timer across idle periods.
+function ActiveInferenceActivity({ items }: { items: ActivityItem[] }) {
+  const { show, hide, card } = useHoverCard("left");
 
   // One glyph per engine family in flight, never one per call: eight parallel
   // embed calls are one machine working, not eight. Anything we didn't draw
@@ -73,6 +78,15 @@ export function InferenceActivity() {
     .filter(Boolean)
     .join(" · ");
 
+  const details = {
+    title,
+    layout: "stacked" as const,
+    meta: items.map((i) => ({
+      label: i.label || "Working",
+      value: i.model || providerName(i.kind),
+    })),
+  };
+
   return (
     <>
       <span
@@ -82,16 +96,14 @@ export function InferenceActivity() {
             ? `${names[0]} is running ${items[0].label || "a model"}`
             : `${items.length} model calls running on ${names.join(" and ")}`
         }
-        onMouseEnter={(e) =>
-          show(e, {
-            title,
-            meta: items.map((i) => ({
-              label: i.label || "Working",
-              value: i.model || providerName(i.kind),
-            })),
-          })
-        }
+        tabIndex={0}
+        onMouseEnter={(e) => show(e, details)}
         onMouseLeave={hide}
+        onFocus={(e) => show(e, details)}
+        onBlur={hide}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") hide();
+        }}
       >
         {kinds.map((kind) => (
           <span key={kind} className="flex items-center">

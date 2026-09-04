@@ -16,7 +16,7 @@ import { loadGrowthDismissed, saveGrowthDismissed } from "./growth";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { historyOf, mergeLoadedTurns } from "./homeChatRun";
 import { claimTextUndo } from "./textUndo";
-import { playArrival, playDone, playError } from "./sound";
+import { playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
 import { DEFAULT_CHAT_CONFIG, DEFAULT_READING_PREFS } from "./types";
 import type {
@@ -814,6 +814,7 @@ export const useStore = create<AppState>((set, get) => {
         status: string;
         detail: string;
         title: string;
+        origin?: string;
       }>("generation://status", (e) => {
         const p = e.payload;
         const prev = get().genStatus[p.noteId]?.status;
@@ -840,12 +841,14 @@ export const useStore = create<AppState>((set, get) => {
         if (p.status === "done" && prev !== "done") {
           set({ audioProgress: null });
           get().pushToast("success", `${p.title} ready`);
-          playDone();
+          if (p.origin === "") playDone();
           void notify("Document ready", `“${p.title}” finished generating.`);
         }
         if (p.status === "error" && prev !== "error") {
           set({ audioProgress: null });
-          get().pushToast("error", p.detail || "Generation failed");
+          get().pushToast("error", p.detail || "Generation failed", undefined, {
+            silent: p.origin !== "",
+          });
         }
         if (p.status === "waiting" && prev !== "waiting")
           get().pushToast(
@@ -900,7 +903,6 @@ export const useStore = create<AppState>((set, get) => {
         ].filter(Boolean);
         if (parts.length)
           get().pushToast("info", `Folder sync: ${parts.join(", ")}`);
-        playArrival();
       });
       // A bundle in the Notebooks folder became a notebook here — from the
       // other Mac, from a share, or simply found at launch (RFC-okf-live
@@ -916,7 +918,6 @@ export const useStore = create<AppState>((set, get) => {
             ? `Opened ${name} from your Notebooks folder.`
             : `Opened ${count} notebooks from your Notebooks folder.`,
         );
-        playArrival();
       });
       // An agent changed something through the MCP server — refresh whatever
       // this window is looking at so the change appears live.
@@ -937,7 +938,6 @@ export const useStore = create<AppState>((set, get) => {
             void get().refreshHomeThreads();
             return;
           }
-          playArrival();
           // Debounced: an agent looping tool calls fires one of these per
           // call, and each refresh is a notebooks read plus a native menu
           // rebuild. One trailing refresh covers the burst.
@@ -3236,7 +3236,8 @@ export const useStore = create<AppState>((set, get) => {
 
     setError: (e) => set({ error: e }),
 
-    pushToast: (kind, message, onClick) => {
+    pushToast: (kind, message, onClick, options) => {
+      if (kind === "error" && !options?.silent) playError();
       const id = `toast-${++toastSeq}`;
       set({ toasts: [...get().toasts, { id, kind, message, onClick }] });
       // Clickable toasts linger — the user needs time to notice and act.
@@ -3486,13 +3487,10 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 }
 
-// Every failure cues once, wherever it surfaces — the global error banner or
-// an error toast. playError throttles, so an error that sets both cues once.
+// User-facing error banners cue once. Toasts choose their audio policy at
+// creation so background job failures can stay visible without making noise.
 useStore.subscribe((s, prev) => {
   if (s.error && s.error !== prev.error) playError();
-  const latest = s.toasts[s.toasts.length - 1];
-  if (s.toasts.length > prev.toasts.length && latest?.kind === "error")
-    playError();
 });
 
 // Remember the precise open view — dashboard vs notebook, and the center
