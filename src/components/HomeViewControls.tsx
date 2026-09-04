@@ -6,10 +6,17 @@
    general, so both exist and the choice is remembered. The filter is title-
    only and deliberately not the ask box: this narrows what's on screen, it
    doesn't search inside anything. ⌘K is still the way to search content. */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { cn, shortcutBlocked } from "@/lib/utils";
-import { LayoutGrid, List, Search, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
+  List,
+  Search,
+  X,
+} from "lucide-react";
 
 /** Case-insensitive substring over whatever the row shows as its name. */
 export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
@@ -143,13 +150,67 @@ export function HomeViewControls({
   );
 }
 
+/** Which way a column reads. Text starts ascending, counts and dates start
+    descending: the first click should show the answer you came for. */
+export type SortDir = "asc" | "desc";
+export type TableSort = { key: string; dir: SortDir };
+export type TableColumn = {
+  key: string;
+  label: string;
+  className?: string;
+  /** The direction this column starts in. Omit to leave it unsortable. */
+  sort?: SortDir;
+};
+
+/** Sort state for one table, remembered across launches (DESIGN.md §9,
+    state survives). Clicking the active column flips it; clicking another
+    starts that column at its natural direction. */
+export function useTableSort(
+  storageKey: string,
+  fallback: TableSort,
+  keys: readonly string[],
+) {
+  const [sort, setSort] = useState<TableSort>(() => {
+    try {
+      const [key, dir] = (localStorage.getItem(storageKey) ?? "").split(":");
+      // A key whose column no longer exists would sort by nothing and mark
+      // no header, so it falls back rather than persisting a ghost.
+      if (keys.includes(key) && (dir === "asc" || dir === "desc")) {
+        return { key, dir };
+      }
+    } catch {
+      // Quota or private-mode noise; the default order still works.
+    }
+    return fallback;
+  });
+  const toggle = (key: string, natural: SortDir) => {
+    const next: TableSort =
+      sort.key === key
+        ? { key, dir: sort.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: natural };
+    setSort(next);
+    try {
+      localStorage.setItem(storageKey, `${next.key}:${next.dir}`);
+    } catch {
+      // Same: the order holds for this session either way.
+    }
+  };
+  return { sort, toggle };
+}
+
 /** The shared table shell: a hairline header row and hoverable body rows,
-    matching the design system's no-tonal-fill rule. */
+    matching the design system's no-tonal-fill rule. A column that names a
+    natural direction becomes a real sort button, with the arrow drawn on
+    the active one and a faint one on hover elsewhere. */
 export function HomeTable({
   columns,
+  sort,
   children,
 }: {
-  columns: { key: string; label: string; className?: string }[];
+  columns: TableColumn[];
+  /** Current order plus the click handler, from `useTableSort`. Omit it and
+   *  the headers stay plain labels. */
+  sort?: TableSort & { onSort: (key: string, natural: SortDir) => void };
   children: React.ReactNode;
 }) {
   return (
@@ -157,17 +218,58 @@ export function HomeTable({
       <table className="w-full border-collapse text-body">
         <thead>
           <tr className="border-b border-border text-left">
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                className={cn(
-                  "px-3 py-2 text-caption font-medium text-subtle-foreground",
-                  c.className,
-                )}
-              >
-                {c.label}
-              </th>
-            ))}
+            {columns.map((c) => {
+              const natural = sort && c.sort;
+              const active = natural !== undefined && sort!.key === c.key;
+              const Arrow =
+                active && sort!.dir === "asc" ? ChevronUp : ChevronDown;
+              return (
+                <th
+                  key={c.key}
+                  scope="col"
+                  aria-sort={
+                    !natural
+                      ? undefined
+                      : !active
+                        ? "none"
+                        : sort!.dir === "asc"
+                          ? "ascending"
+                          : "descending"
+                  }
+                  className={cn(
+                    "px-3 py-2 text-caption font-medium text-subtle-foreground",
+                    c.className,
+                  )}
+                >
+                  {natural ? (
+                    <button
+                      type="button"
+                      onClick={() => sort!.onSort(c.key, natural)}
+                      title={`Sort by ${c.label.toLowerCase()}`}
+                      className={cn(
+                        "group/sort -mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:text-foreground",
+                        active && "text-foreground",
+                      )}
+                    >
+                      {c.label}
+                      <Arrow
+                        aria-hidden
+                        className={cn(
+                          "h-3 w-3 shrink-0 transition-opacity",
+                          // Focus shows the hint too: an affordance that
+                          // only answers the mouse is invisible by keyboard.
+                          active
+                            ? "opacity-100"
+                            : "opacity-0 group-hover/sort:opacity-40 group-focus-visible/sort:opacity-40",
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    c.label
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>{children}</tbody>

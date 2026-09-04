@@ -36,7 +36,9 @@ import {
   HomeTable,
   HomeViewControls,
   matchesHomeQuery,
+  useTableSort,
 } from "./HomeViewControls";
+import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -151,6 +153,50 @@ const SORTS: { value: RegistrySort; label: string }[] = [
   { value: "title", label: "A–Z" },
 ];
 
+/** When a card was last touched — the key behind the grid's "Latest". */
+const touched = (c: RegistryCard) => Math.max(c.updatedAt, c.createdAt);
+
+/** The index's columns. Notebooks and Identifiers stay unsortable: both are
+    multi-valued cells, and ordering a list by its first comma-separated
+    entry looks like a sort without being one. */
+const CARD_COLUMNS = [
+  { key: "name", label: "Name", sort: "asc" },
+  { key: "kind", label: "Kind", sort: "asc" },
+  { key: "docs", label: "Documents", className: "text-right", sort: "desc" },
+  { key: "nb", label: "Notebooks" },
+  { key: "id", label: "Identifiers" },
+  { key: "updated", label: "Updated", sort: "desc" },
+  { key: "menu", label: "" },
+] as const satisfies TableColumn[];
+
+const CARD_SORT_KEYS = CARD_COLUMNS.filter((c) => "sort" in c).map(
+  (c) => c.key,
+);
+
+/** Order the index's rows, ties broken on the name. */
+function sortCardRows(cards: RegistryCard[], sort: TableSort): RegistryCard[] {
+  const dir = sort.dir === "asc" ? 1 : -1;
+  const byName = (a: RegistryCard, b: RegistryCard) =>
+    a.name.localeCompare(b.name);
+  return [...cards].sort((a, b) => {
+    switch (sort.key) {
+      case "name":
+        return dir * byName(a, b);
+      case "kind":
+        return (
+          dir * kindLabel(a.kind).localeCompare(kindLabel(b.kind)) ||
+          byName(a, b)
+        );
+      case "docs":
+        return (
+          dir * (confirmed(a).length - confirmed(b).length) || byName(a, b)
+        );
+      default:
+        return dir * (touched(a) - touched(b)) || byName(a, b);
+    }
+  });
+}
+
 function sortCards(cards: RegistryCard[], sort: RegistrySort): RegistryCard[] {
   const out = [...cards];
   switch (sort) {
@@ -204,6 +250,13 @@ export function RegistrySection() {
     localStorage.setItem("registrySort", v);
     setSort(v as RegistrySort);
   };
+  // The table sorts by its headers instead, so each shape has exactly one
+  // ordering control and the select is a grid affordance.
+  const { sort: tableSort, toggle: toggleTableSort } = useTableSort(
+    "registryTableSort",
+    { key: "updated", dir: "desc" },
+    CARD_SORT_KEYS,
+  );
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const load = useCallback(async () => {
@@ -262,25 +315,22 @@ export function RegistrySection() {
     return rankByCount(counts);
   }, [mine, nbTitle]);
 
-  const shown = useMemo(
-    () =>
-      sortCards(
-        mine.filter((c) => {
-          if (!matchesHomeQuery(query, c.name, c.identifiers)) return false;
-          if (kind !== "all" && c.kind !== kind) return false;
-          if (notebook !== null) {
-            const inNb = c.attachments.some(
-              (a) =>
-                a.status !== "rejected" && nbTitle(a.notebookId) === notebook,
-            );
-            if (!inNb) return false;
-          }
-          return true;
-        }),
-        sort,
-      ),
-    [mine, kind, notebook, nbTitle, query, sort],
-  );
+  const shown = useMemo(() => {
+    const filtered = mine.filter((c) => {
+      if (!matchesHomeQuery(query, c.name, c.identifiers)) return false;
+      if (kind !== "all" && c.kind !== kind) return false;
+      if (notebook !== null) {
+        const inNb = c.attachments.some(
+          (a) => a.status !== "rejected" && nbTitle(a.notebookId) === notebook,
+        );
+        if (!inNb) return false;
+      }
+      return true;
+    });
+    return view === "table"
+      ? sortCardRows(filtered, tableSort)
+      : sortCards(filtered, sort);
+  }, [mine, kind, notebook, nbTitle, query, sort, tableSort, view]);
 
   // ---- Index selection (docs/RFC-multi-select.md) ----------------------
   const pick = usePickList("cards", shown.map((c) => c.id));
@@ -413,7 +463,11 @@ export function RegistrySection() {
               suggestions, which reads as the control disappearing. */}
           <HomeViewControls
             placeholder="Filter cards by name or identifier…"
-            sort={{ value: sort, options: SORTS, onChange: changeSort }}
+            sort={
+              view === "table"
+                ? undefined
+                : { value: sort, options: SORTS, onChange: changeSort }
+            }
             trailing={
               <>
                 {orphans.length > 0 && (
@@ -484,6 +538,8 @@ export function RegistrySection() {
             <CardTable
               cards={shown}
               nbTitle={nbTitle}
+              sort={tableSort}
+              onSort={toggleTableSort}
               onChanged={load}
               pickedIds={pick.pickedIds}
               onRowClick={(e, id) => {
@@ -811,6 +867,8 @@ function CardTable({
   pickedIds,
   onRowClick,
   onContextItems,
+  sort,
+  onSort,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
@@ -819,20 +877,15 @@ function CardTable({
   pickedIds: Set<string>;
   onRowClick: (e: React.MouseEvent, id: string) => void;
   onContextItems: (id: string) => () => RowMenuItem[] | null;
+  /** The rows arrive already ordered; the section sorts them so the
+   *  selection's range order matches what's drawn. */
+  sort: TableSort;
+  onSort: (key: string, natural: SortDir) => void;
 }) {
   return (
     <>
       {/* No "New card" button here — the header's covers both views. */}
-      <HomeTable
-        columns={[
-          { key: "name", label: "Name" },
-          { key: "kind", label: "Kind" },
-          { key: "docs", label: "Documents", className: "text-right" },
-          { key: "nb", label: "Notebooks" },
-          { key: "id", label: "Identifiers" },
-          { key: "menu", label: "" },
-        ]}
-      >
+      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }}>
         {cards.map((c) => {
           const notebooks = [
             ...new Set(
@@ -894,6 +947,11 @@ function CardTable({
               </td>
               <td className="px-3 py-2 text-caption text-subtle-foreground">
                 {c.identifiers}
+              </td>
+              {/* The index had no recency anywhere: the grid could order by
+                  "Latest" but the table couldn't even show it. */}
+              <td className="px-3 py-2 text-caption text-muted-foreground">
+                {relativeTime(touched(c))}
               </td>
               <td className="w-8 px-2 py-2" onClick={(e) => e.stopPropagation()}>
                 <RowMenu

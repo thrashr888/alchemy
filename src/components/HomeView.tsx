@@ -69,7 +69,9 @@ import {
   HomeTable,
   HomeViewControls,
   matchesHomeQuery,
+  useTableSort,
 } from "./HomeViewControls";
+import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
 
 const clampSplit = (pct: number) => Math.min(75, Math.max(15, pct));
 
@@ -136,6 +138,42 @@ function StackSplit({
   );
 }
 
+/** The shelf's columns, and which way each one first reads. */
+const NOTEBOOK_COLUMNS = [
+  { key: "title", label: "Title", sort: "asc" },
+  { key: "sources", label: "Sources", className: "text-right", sort: "desc" },
+  { key: "notes", label: "Notes", className: "text-right", sort: "desc" },
+  { key: "reports", label: "Reports", className: "text-right", sort: "desc" },
+  { key: "updated", label: "Updated", sort: "desc" },
+  { key: "menu", label: "", className: "w-8" },
+] as const satisfies TableColumn[];
+
+const NOTEBOOK_SORT_KEYS = NOTEBOOK_COLUMNS.filter((c) => "sort" in c).map(
+  (c) => c.key,
+);
+
+/** Order the shelf's rows. Every column breaks its ties on the title, so a
+ *  column of equal counts still reads down alphabetically instead of
+ *  reshuffling on each render. */
+function sortNotebooks(rows: Notebook[], sort: TableSort): Notebook[] {
+  const dir = sort.dir === "asc" ? 1 : -1;
+  const byTitle = (a: Notebook, b: Notebook) => a.title.localeCompare(b.title);
+  return [...rows].sort((a, b) => {
+    switch (sort.key) {
+      case "title":
+        return dir * byTitle(a, b);
+      case "sources":
+        return dir * (a.sourceCount - b.sourceCount) || byTitle(a, b);
+      case "notes":
+        return dir * (a.noteCount - b.noteCount) || byTitle(a, b);
+      case "reports":
+        return dir * (a.reportCount - b.reportCount) || byTitle(a, b);
+      default:
+        return dir * (a.updatedAt - b.updatedAt) || byTitle(a, b);
+    }
+  });
+}
+
 /** The scannable form of the notebook shelf. Same rows the grid shows, read
  *  down columns instead of across cards. */
 function NotebookTable({
@@ -146,6 +184,8 @@ function NotebookTable({
   pickedIds,
   onRowClick,
   onRowOpen,
+  sort,
+  onSort,
 }: {
   notebooks: Notebook[];
   onNew: () => void;
@@ -158,19 +198,14 @@ function NotebookTable({
   /** Keyboard path: Tab reaches each row, Enter opens it (bypassing the
    *  pointer-only selection logic in onRowClick). */
   onRowOpen: (nb: Notebook) => void;
+  /** The rows arrive already ordered — the shelf sorts them upstream so the
+   *  selection's range order matches what's on screen. */
+  sort: TableSort;
+  onSort: (key: string, natural: SortDir) => void;
 }) {
   return (
     <>
-      <HomeTable
-        columns={[
-          { key: "title", label: "Title" },
-          { key: "sources", label: "Sources", className: "text-right" },
-          { key: "notes", label: "Notes", className: "text-right" },
-          { key: "reports", label: "Reports", className: "text-right" },
-          { key: "updated", label: "Updated" },
-          { key: "menu", label: "", className: "w-8" },
-        ]}
-      >
+      <HomeTable columns={[...NOTEBOOK_COLUMNS]} sort={{ ...sort, onSort }}>
         {notebooks.map((nb) => (
           <tr
             key={nb.id}
@@ -325,9 +360,22 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const archivedNotebooks = notebooks.filter((n) => n.status === "archived");
   // The inline filter narrows both views; the archived shelf is untouched
   // (it's already a deliberate drill-in).
-  const shownNotebooks = activeNotebooks.filter((n) =>
+  const filteredNotebooks = activeNotebooks.filter((n) =>
     matchesHomeQuery(homeQuery, n.title),
   );
+  // Column order belongs to the table, so the grid keeps the backend's
+  // most-recently-updated order and only the rows re-sort. Ordering happens
+  // here rather than inside the table so shift-click ranges run down the
+  // rows as they are drawn.
+  const { sort: nbSort, toggle: toggleNbSort } = useTableSort(
+    "homeTableSort",
+    { key: "updated", dir: "desc" },
+    NOTEBOOK_SORT_KEYS,
+  );
+  const shownNotebooks =
+    homeView === "table"
+      ? sortNotebooks(filteredNotebooks, nbSort)
+      : filteredNotebooks;
   // The Steward's sidebars (RFC-v12-steward UI §2, as sidebars): Staff on
   // the left, Brief above Latest Reports on the right. Each collapses on
   // its own, persisted. Registry joins when its pillar exists.
@@ -1182,6 +1230,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               {homeView === "table" ? (
                 <NotebookTable
                   notebooks={shownNotebooks}
+                  sort={nbSort}
+                  onSort={toggleNbSort}
                   onNew={() => {
                     setNewTitle("");
         setNewIcon("");
