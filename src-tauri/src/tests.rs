@@ -4946,3 +4946,175 @@ fn okf_writer_treats_a_stub_as_absent() {
     crate::okf::set_dataless_probe(Arc::new(|_: &std::path::Path| None));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- Grow, section by section ----------------------------------------------
+
+/// A blank source row for the Grow fixtures below.
+fn grow_source(nb: &str, id: &str, title: &str, url: &str, content: &str) -> Source {
+    Source {
+        id: id.into(),
+        notebook_id: nb.into(),
+        title: title.into(),
+        source_type: "url".into(),
+        url: url.into(),
+        content: content.into(),
+        char_count: content.len() as i64,
+        chunk_count: 0,
+        created_at: now(),
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        author: String::new(),
+        image_url: String::new(),
+        tags: String::new(),
+        note: String::new(),
+        fetched_at: now(),
+        fetch_failures: 0,
+    }
+}
+
+/// The Grow pane loads its sections independently so a slow tier holds
+/// nothing back, while `growth_proposals` stays the one call agents get over
+/// MCP. That split is only safe while the two agree: the per-section
+/// commands' union, deduped, must be exactly what the aggregator returns.
+#[tokio::test]
+async fn grow_sections_union_matches_aggregator() {
+    let dir = std::env::temp_dir().join(format!("nbl-grow-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = uuid::Uuid::new_v4().to_string();
+
+    db.insert_sources_bulk(&[
+        grow_source(
+            &nb,
+            "s1",
+            "Field notes",
+            "https://example.com/notes",
+            "See [the survey](https://example.com/survey) and https://example.com/appendix.",
+        ),
+        grow_source(
+            &nb,
+            "s2",
+            "Reading list",
+            "https://example.com/reading",
+            "Also [the survey](https://example.com/survey), worth a second look.",
+        ),
+    ])
+    .await
+    .expect("seed sources");
+    // One feed the notebook's own page advertised, as `remember_discovered`
+    // would have stored it at import.
+    db.kv_set(
+        &format!("feed.discovered.{nb}"),
+        &format!(
+            r#"{{"https://example.com/feed.xml":{{"source_id":"s1","source_title":"Field notes","seen_at":{}}}}}"#,
+            now()
+        ),
+    )
+    .await
+    .expect("seed discovered feed");
+
+    let traces = dir.join("traces");
+    std::fs::create_dir_all(&traces).expect("trace dir");
+
+    let feeds = crate::commands::growth_feeds_impl(&db, &nb)
+        .await
+        .expect("feeds section");
+    let links = crate::commands::growth_links_impl(&db, &traces, &nb)
+        .await
+        .expect("links section");
+    assert!(
+        feeds
+            .iter()
+            .any(|p| p.url == "https://example.com/feed.xml"),
+        "the advertised feed is proposed"
+    );
+    assert!(
+        links.iter().any(|p| p.url == "https://example.com/survey"),
+        "the twice-cited link is proposed"
+    );
+
+    // The aggregator's own recipe, run here against the same corpus: feeds
+    // first (the better offer for an overlapping URL), then mined links.
+    let mut union = feeds.clone();
+    union.extend(links.clone());
+    let union = crate::growth::dedupe_proposals(union);
+
+    let scanned = db.sources_with_content(&nb).await.expect("plain scan");
+    let queries = crate::growth::standing_queries(&traces, &nb, now());
+    let mut expected = crate::feeds::discovered_proposals(&db, &nb, &scanned).await;
+    expected.extend(crate::growth::proposals(&scanned, &queries));
+    let expected = crate::growth::dedupe_proposals(expected);
+
+    let urls = |v: &[crate::growth::GrowthProposal]| {
+        v.iter()
+            .map(|p| (p.kind.clone(), p.url.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        urls(&union),
+        urls(&expected),
+        "per-section union is the aggregator, tier order and all"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shared content scan is keyed on the sources table's Lance version, so
+/// a write between two reads must reach the second one. A cache that missed
+/// this would show the Grow pane a corpus that no longer exists.
+#[tokio::test]
+async fn shared_content_scan_follows_the_table_version() {
+    let dir = std::env::temp_dir().join(format!("nbl-grow-cache-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.expect("open db");
+    let nb = uuid::Uuid::new_v4().to_string();
+
+    db.insert_sources_bulk(&[grow_source(
+        &nb,
+        "s1",
+        "First",
+        "https://example.com/one",
+        "one",
+    )])
+    .await
+    .expect("seed");
+    let first = db
+        .sources_with_content_shared(&nb)
+        .await
+        .expect("first read");
+    assert_eq!(first.len(), 1);
+    // Served from the cache — same version, same rows, and the text is there.
+    let again = db
+        .sources_with_content_shared(&nb)
+        .await
+        .expect("cached read");
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].content, "one", "cached rows keep their text");
+
+    db.insert_sources_bulk(&[grow_source(
+        &nb,
+        "s2",
+        "Second",
+        "https://example.com/two",
+        "two",
+    )])
+    .await
+    .expect("append");
+    let after = db
+        .sources_with_content_shared(&nb)
+        .await
+        .expect("read after write");
+    assert_eq!(
+        after.len(),
+        2,
+        "the write moved the table version, so the cache stood down"
+    );
+
+    // A different notebook never reads the first one's cached scan.
+    let other = uuid::Uuid::new_v4().to_string();
+    let empty = db
+        .sources_with_content_shared(&other)
+        .await
+        .expect("other notebook");
+    assert!(empty.is_empty(), "the cache is keyed by notebook too");
+    let _ = std::fs::remove_dir_all(&dir);
+}

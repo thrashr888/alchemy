@@ -698,7 +698,7 @@ pub async fn remember_discovered(
 /// Discovered feeds as growth proposals of kind `feed`, minus the ones the
 /// notebook already follows and the ones whose page is gone.
 pub async fn discovered_proposals(
-    state: &AppState,
+    db: &Db,
     notebook_id: &str,
     sources: &[Source],
 ) -> Vec<crate::growth::GrowthProposal> {
@@ -712,7 +712,7 @@ pub async fn discovered_proposals(
         .map(|s| crate::growth::canonical_key(&s.url))
         .collect();
     let live: std::collections::HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
-    let found = load_discovered(&state.db, notebook_id).await;
+    let found = load_discovered(db, notebook_id).await;
     let mut out: Vec<crate::growth::GrowthProposal> = found
         .into_iter()
         .filter(|(url, d)| {

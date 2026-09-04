@@ -184,7 +184,6 @@ function sortNotebooks(rows: Notebook[], sort: TableSort): Notebook[] {
  *  down columns instead of across cards. */
 function NotebookTable({
   notebooks,
-  onNew,
   unreadByNb,
   rowMenu,
   pickedIds,
@@ -194,7 +193,6 @@ function NotebookTable({
   onSort,
 }: {
   notebooks: Notebook[];
-  onNew: () => void;
   unreadByNb: Map<string, number>;
   /** Per-row menu, so the table has the same verbs (and the same
    *  right-click) as the cards — it had neither. */
@@ -267,16 +265,15 @@ function NotebookTable({
             {/* The menu column: right-clicking the row opens the same menu
                 (RowMenu binds to the nearest .group), which the table had no
                 way to offer before. */}
-            <td className="w-8 px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+            <td
+              className="w-8 px-1 py-2 text-right"
+              onClick={(e) => e.stopPropagation()}
+            >
               {rowMenu(nb)}
             </td>
           </tr>
         ))}
       </HomeTable>
-      <Button variant="secondary" className="mt-3" onClick={onNew}>
-        <Plus className="h-4 w-4" />
-        New notebook
-      </Button>
     </>
   );
 }
@@ -1257,12 +1254,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   notebooks={shownNotebooks}
                   sort={nbSort}
                   onSort={toggleNbSort}
-                  onNew={() => {
-                    setNewTitle("");
-        setNewIcon("");
-        setNewColor("");
-                    setCreating(true);
-                  }}
                   unreadByNb={unreadByNb}
                   pickedIds={pick.pickedIds}
                   onRowClick={(e, nb) => {

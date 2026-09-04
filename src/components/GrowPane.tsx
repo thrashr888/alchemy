@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -8,19 +8,9 @@ import {
   saveHygieneKept,
   takeLegacyWebFlag,
 } from "@/lib/growth";
-import type {
-  GrowthProposal,
-  RetireProposal,
-  TagMergeProposal,
-} from "@/lib/types";
-import {
-  Button,
-  EmptyState,
-  LoadingState,
-  Spinner,
-  Switch,
-  useConfirm,
-} from "./ui";
+import type { GrowthProposal, TagMergeProposal } from "@/lib/types";
+import type { GrowSections } from "@/lib/storeTypes";
+import { Button, EmptyState, Spinner, Switch, useConfirm } from "./ui";
 import { Favicon } from "./SourcesPanel";
 import {
   AlertCircle,
@@ -243,16 +233,25 @@ export function GrowPane() {
     }
   };
 
-  const [queries, setQueries] = useState<string[]>([]);
-  const [proposals, setProposals] = useState<GrowthProposal[] | null>(null);
-  // The Spotlight tier arrives on its own clock — mdfind subprocesses are
-  // the slow part, so the section fills in async instead of gating the pane.
-  const [localTier, setLocalTier] = useState<GrowthProposal[] | null>(null);
-  // The retirement pass (Pillar 3): old, never-cited sources — proposals
-  // only, computed from local traces, loaded alongside the other tiers.
-  const [retire, setRetire] = useState<RetireProposal[] | null>(null);
-  // Tag-merge proposals (phase 5): near-duplicate tags, deterministic.
-  const [merges, setMerges] = useState<TagMergeProposal[]>([]);
+  // Every section loads on its own clock (alchemy-release-hxl). The pane
+  // paints its frame and headers at once; each section arrives when its own
+  // call returns, so the slow tiers — Spotlight's mdfind subprocesses, the
+  // duplicate scan that reads content, the web search — hold nothing else
+  // back. Cached results per notebook show instantly on return and refresh
+  // in place underneath.
+  const cached = useStore((s) =>
+    currentId ? s.growSections[currentId] : undefined,
+  );
+  const cacheSection = useStore((s) => s.cacheGrowSection);
+  const queries = cached?.queries ?? [];
+  const feedTier = cached?.feeds;
+  const linkTier = cached?.links;
+  const localTier = cached?.local;
+  const retire = cached?.tidy;
+  const merges = cached?.organize ?? [];
+  // Per-section failures, in the section that failed — one tier going wrong
+  // is not the pane going wrong.
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
   const [indexBusy, setIndexBusy] = useState(false);
   // Dismissals live in the store (loaded per notebook there) so the
   // sidebar's "Grow this notebook" door empties as this pane is cleared.
@@ -269,11 +268,46 @@ export function GrowPane() {
     refreshDays: number;
   } | null>(null);
 
+  /** Run one section's call and publish it to the store cache. Sections are
+   *  independent: a rejection marks that section and no other. */
+  const loadSection = useCallback(
+    <K extends keyof GrowSections>(
+      notebookId: string,
+      key: K,
+      fetcher: () => Promise<NonNullable<GrowSections[K]>>,
+    ) => {
+      setFailed((f) => (f[key] ? { ...f, [key]: false } : f));
+      return fetcher()
+        .then((rows) => cacheSection(notebookId, key, rows))
+        .catch(() => {
+          // Leave the last known rows in place — a failed refresh should
+          // not empty a section that was showing something a moment ago.
+          setFailed((f) => ({ ...f, [key]: true }));
+        });
+    },
+    [cacheSection],
+  );
+
+  const loadAllSections = useCallback(
+    (notebookId: string) => {
+      void loadSection(notebookId, "queries", () =>
+        api.growthQueries(notebookId),
+      );
+      void loadSection(notebookId, "feeds", () => api.growthFeeds(notebookId));
+      void loadSection(notebookId, "links", () => api.growthLinks(notebookId));
+      void loadSection(notebookId, "local", () => api.growthLocal(notebookId));
+      void loadSection(notebookId, "tidy", () => api.growthRetire(notebookId));
+      void loadSection(notebookId, "organize", () =>
+        api.growthTagMerges(notebookId),
+      );
+    },
+    [loadSection],
+  );
+
   useEffect(() => {
-    setQueries([]);
-    setProposals(null);
     setWeb(null);
     setWebOn(false);
+    setFailed({});
     if (!currentId) return;
     // Backend-owned opt-in (the sweep acts on it); the old localStorage
     // flag migrates over the first time this notebook's pane opens.
@@ -284,40 +318,9 @@ export function GrowPane() {
       .then((on) => setWebOn(on))
       .catch(() => undefined);
     void refreshHygiene();
-    let stale = false;
-    api
-      .growthProposals(currentId)
-      .then((overview) => {
-        if (stale) return;
-        setQueries(overview.queries);
-        setProposals(overview.proposals);
-      })
-      .catch(() => setProposals([]));
-    setLocalTier(null);
-    api
-      .growthLocal(currentId)
-      .then((hits) => {
-        if (!stale) setLocalTier(hits);
-      })
-      .catch(() => setLocalTier([]));
-    setRetire(null);
-    api
-      .growthRetire(currentId)
-      .then((rows) => {
-        if (!stale) setRetire(rows);
-      })
-      .catch(() => setRetire([]));
-    setMerges([]);
-    api
-      .growthTagMerges(currentId)
-      .then((rows) => {
-        if (!stale) setMerges(rows);
-      })
-      .catch(() => undefined);
-    return () => {
-      stale = true;
-    };
-  }, [currentId]);
+    loadAllSections(currentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentId, loadAllSections]);
 
   const runWebSearch = (notebookId: string) => {
     setWebBusy(true);
@@ -394,7 +397,11 @@ export function GrowPane() {
         useStore
           .getState()
           .pushToast("success", `Merged #${m.from} into #${m.to} on ${count} sources`);
-        setMerges((rows) => rows.filter((r) => r.from !== m.from));
+        cacheSection(
+          currentId,
+          "organize",
+          merges.filter((r) => r.from !== m.from),
+        );
       })
       .catch(() => undefined);
   };
@@ -424,11 +431,35 @@ export function GrowPane() {
       .catch(() => undefined)
       .finally(() => setIndexBusy(false));
   };
-  const mined = visible(proposals ?? []).filter((p) => p.kind === "web");
+  const mined = visible(linkTier ?? []);
   // Feeds the notebook's own pages advertised (docs/RFC-events.md §2):
-  // remembered at import, followed only from here.
-  const feeds = visible(proposals ?? []).filter((p) => p.kind === "feed");
+  // remembered at import, followed only from here. A page that advertises a
+  // feed is often also a link its siblings cite; the feed is the better
+  // offer, so it wins the URL — the backend subtracts it from the link tier
+  // (growth_links_impl), which keeps the two sections disjoint here.
+  const feeds = visible(feedTier ?? []);
   const found = visible(web?.proposals ?? []);
+  // Spotlight searches for the standing queries, so it stays pending until
+  // both land — but a notebook with no questions has nothing to search for,
+  // and announcing a search that will return empty is a flicker, not news.
+  const localPending =
+    !failed.local &&
+    localTier === undefined &&
+    (cached?.queries === undefined || queries.length > 0);
+  // The one-line "nothing here" summary replaces all three free tiers, so it
+  // may only speak once all three have actually answered.
+  const freeTiersSettled =
+    localTier !== undefined &&
+    linkTier !== undefined &&
+    feedTier !== undefined &&
+    cached?.queries !== undefined;
+  const freeTiersFailed = !!(failed.local || failed.links || failed.feeds);
+  const freeTiersEmpty =
+    locals.length === 0 && mined.length === 0 && feeds.length === 0;
+  // Whether the Needs attention header earns a second line at all: whole-list
+  // verdicts only make sense over more than one flag, and Retry all / Remove
+  // duplicates only when there is something of that kind to act on.
+  const bulkVerbs = attention.length > 1;
 
   const row = (p: GrowthProposal) => (
     <div
@@ -497,12 +528,25 @@ export function GrowPane() {
     "sticky top-0 z-10 -mx-5 border-b border-border bg-background/95 px-5 py-2 backdrop-blur";
   const headerRow = `${headerBase} flex items-center gap-2`;
 
+  /** One quiet line while a section is still working. No spinner: six
+   *  sections load at once, and six spinners is a light show. */
+  const pendingLine = (label: string) => (
+    <div className="px-1 py-2 text-caption text-muted-foreground">{label}</div>
+  );
+  /** What a section says when its own call failed. Plain, and only about
+   *  itself — the rest of the pane is fine. */
+  const errorLine = (label: string) => (
+    <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
+      {label}
+    </div>
+  );
+
   const section = (
     icon: React.ReactNode,
     title: string,
     hint: string,
     items: GrowthProposal[],
-    busy = false,
+    state: { pending?: string; error?: string } = {},
   ) => (
     <div className="flex flex-col gap-2">
       <div className={headerRow}>
@@ -513,7 +557,7 @@ export function GrowPane() {
         <span className="text-caption text-subtle-foreground">{hint}</span>
         {/* Whole-section verdicts, same shape as the retirement pass: a
             long list of citations is usually all-or-nothing. */}
-        {!busy && items.length > 1 && (
+        {!state.pending && items.length > 1 && (
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
@@ -549,14 +593,12 @@ export function GrowPane() {
           </div>
         )}
       </div>
-      {busy ? (
-        <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
-          <Spinner className="h-3.5 w-3.5" /> Searching this Mac…
-        </div>
+      {state.error ? (
+        errorLine(state.error)
+      ) : state.pending ? (
+        pendingLine(state.pending)
       ) : items.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
-          Nothing right now.
-        </div>
+        errorLine("Nothing right now.")
       ) : (
         items.map(row)
       )}
@@ -575,8 +617,6 @@ export function GrowPane() {
         <div className="mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6">
           {!currentId ? (
             <EmptyState title="Open a notebook to grow it" />
-          ) : proposals === null ? (
-            <LoadingState label="Reading the frontier…" />
           ) : (
             <>
               <p className="text-pretty text-body leading-relaxed text-muted-foreground">
@@ -607,37 +647,54 @@ export function GrowPane() {
                   of trust — Spotlight groups by kind for the same reason),
                   but empty groups don't earn boxes: both free tiers quiet
                   down to one line when neither found anything. */}
-              {locals.length === 0 &&
-              mined.length === 0 &&
-              feeds.length === 0 &&
-              localTier !== null ? (
+              {freeTiersSettled && !freeTiersFailed && freeTiersEmpty ? (
                 <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                   Nothing new on this Mac or in your sources right now.
                 </div>
               ) : (
                 <>
-                  {(locals.length > 0 ||
-                    (localTier === null && queries.length > 0)) &&
+                  {(locals.length > 0 || localPending || failed.local) &&
                     section(
                       <FileText className="h-3.5 w-3.5 text-muted-foreground" />,
                       "On this Mac",
                       "Spotlight matches for the questions above",
                       locals,
-                      localTier === null && queries.length > 0,
+                      {
+                        pending: localPending
+                          ? "Searching this Mac…"
+                          : undefined,
+                        error: failed.local
+                          ? "Couldn’t search this Mac just now."
+                          : undefined,
+                      },
                     )}
-                  {mined.length > 0 &&
+                  {(mined.length > 0 || linkTier === undefined || failed.links) &&
                     section(
                       <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
                       "From your sources",
                       "pages your sources keep citing",
                       mined,
+                      {
+                        pending:
+                          linkTier === undefined && !failed.links
+                            ? "Reading what your sources cite…"
+                            : undefined,
+                        error: failed.links
+                          ? "Couldn’t read your sources just now."
+                          : undefined,
+                      },
                     )}
-                  {feeds.length > 0 &&
+                  {(feeds.length > 0 || failed.feeds) &&
                     section(
                       <Rss className="h-3.5 w-3.5 text-muted-foreground" />,
                       "Feeds",
                       "your pages advertise these — follow one to keep up",
                       feeds,
+                      {
+                        error: failed.feeds
+                          ? "Couldn’t list the feeds your pages advertise."
+                          : undefined,
+                      },
                     )}
                 </>
               )}
@@ -714,56 +771,12 @@ export function GrowPane() {
                       broken sources, duplicates, empty notes. Keep dismisses
                       the flag.
                     </span>
-                  </div>
-                  {/* Four verbs plus the recheck button never fit beside the
-                      title without crushing the summary; they get their own
-                      line, right-aligned under it. */}
-                  <div className="flex items-center justify-end gap-1">
-                    {attention.length > 1 && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => void keepAllAttention()}
-                          title="Dismiss every flag below and keep everything"
-                        >
-                          Keep all
-                        </Button>
-                        {retryable.length > 0 && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            loading={retryingAll}
-                            onClick={() => void retryAllAttention()}
-                            title={`Fetch ${retryable.length} sources again now`}
-                          >
-                            Retry all
-                          </Button>
-                        )}
-                        {duplicates.length > 0 && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void removeDuplicates()}
-                            title={`Remove ${duplicates.length} extra copies and keep the oldest of each`}
-                          >
-                            Remove duplicates
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:bg-destructive/10"
-                          onClick={() => void removeAllAttention()}
-                          title="Remove everything below"
-                        >
-                          Remove all
-                        </Button>
-                      </>
-                    )}
+                    {/* The recheck button sits where every other section
+                        header keeps its control: first line, hard right. */}
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="ml-auto shrink-0"
                       loading={checking}
                       onClick={() => void recheck()}
                       aria-label="Check for problems now"
@@ -774,6 +787,52 @@ export function GrowPane() {
                       )}
                     </Button>
                   </div>
+                  {/* The bulk verbs never fit beside the title without
+                      crushing the summary, so they get their own line — and
+                      only when at least one of them would render. A clean
+                      notebook keeps a one-line header. */}
+                  {bulkVerbs && (
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void keepAllAttention()}
+                        title="Dismiss every flag below and keep everything"
+                      >
+                        Keep all
+                      </Button>
+                      {retryable.length > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={retryingAll}
+                          onClick={() => void retryAllAttention()}
+                          title={`Fetch ${retryable.length} sources again now`}
+                        >
+                          Retry all
+                        </Button>
+                      )}
+                      {duplicates.length > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void removeDuplicates()}
+                          title={`Remove ${duplicates.length} extra copies and keep the oldest of each`}
+                        >
+                          Remove duplicates
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive/10"
+                        onClick={() => void removeAllAttention()}
+                        title="Remove everything below"
+                      >
+                        Remove all
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {attention.length === 0 ? (
                   <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
@@ -909,10 +968,10 @@ export function GrowPane() {
                     </div>
                   )}
                 </div>
-                {retire === null ? (
-                  <div className="flex items-center gap-2 px-1 py-2 text-caption text-muted-foreground">
-                    <Spinner className="h-3.5 w-3.5" /> Checking the shelves…
-                  </div>
+                {failed.tidy ? (
+                  errorLine("Couldn’t check the shelves just now.")
+                ) : retire === undefined ? (
+                  pendingLine("Checking the shelves…")
                 ) : retireVisible.length === 0 ? (
                   <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                     Nothing gathering dust.

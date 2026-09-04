@@ -205,6 +205,30 @@ pass.
    pane's Organize section. Notes link notes by title now, so the
    wiki cross-references itself. Still open: nightly growth sweeps for
    web-enabled notebooks (the opt-in flag lives client-side today).
+6. ~~Progressive Grow~~ — shipped (alchemy-release-hxl). The pane used to
+   render nothing until one `growth_proposals` call had computed every
+   free tier, so the slowest tier set the time-to-first-pixel for the
+   whole surface. It is now one call per section — `growth_queries`,
+   `growth_feeds`, `growth_links` beside the existing `growth_local`,
+   `growth_retire`, `growth_tag_merges` and `source_hygiene` — fired
+   concurrently, each rendering when it lands, with the last known result
+   per notebook served from the store cache on return.
+   `growth_proposals` stays as the one-call aggregator agents get over
+   MCP, and a test asserts the per-section union is exactly what it
+   returns (feeds subtract from links in `growth_links_impl`, so the
+   sections are disjoint and the cross-tier precedence stays next to
+   `canonical_key`).
+
+   **Measured** (3,000 sources, ~21 MB of text, debug build): the slow
+   tier is link mining — `growth::proposals` walks every source's text
+   looking for URLs, 6.2 s — and it was the one holding the pane hostage.
+   Feeds cost 32 ms, hygiene 20 ms, and the whole notebook's text now
+   loads once instead of once per section: three unshared
+   `sources_with_content` scans took 341 ms, against 77 ms for the first
+   shared scan and 2 ms for the two behind it (db.rs `SourcesContent`,
+   keyed on the sources table's Lance version). Each section logs its own
+   `grow section <name>: <n> rows in <ms>ms` line, so a future slow tier
+   names itself in the log.
 
 At 1M+ sources the answer is "many notebooks + meta-chat", not one
 table: the router already federates across notebooks, and per-notebook
