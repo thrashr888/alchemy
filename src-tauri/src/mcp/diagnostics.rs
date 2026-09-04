@@ -22,7 +22,13 @@ impl AlchemyMcp {
                        recently, newest first. Each record has a level (info|warn|error|fatal), \
                        an origin (rust = backend, js = front-end), a kind (panic, ipc, render, \
                        unhandled-rejection, startup), the message, and often a backtrace in \
-                       `detail` plus structured `context`. Use it when the user reports that \
+                       `detail` plus structured `context`. Native crashes are here too: a \
+                       `crash-report` record is a macOS .ips report (the app died by signal — \
+                       WKWebView, an FFI fault — with no Rust panic to catch), carrying the \
+                       exception, the termination reason, and the crashed thread's top frames; \
+                       an `unclean-exit` record means the previous run never reached its \
+                       shutdown path, with the log lines that led up to it. Use it when the \
+                       user reports that \
                        something broke, when a command failed for reasons the error string \
                        doesn't explain, or before concluding a bug can't be reproduced — the \
                        failure is usually already recorded here. The same records are in \

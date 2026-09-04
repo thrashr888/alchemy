@@ -7,6 +7,7 @@ mod capture;
 mod clip;
 mod commands;
 mod connectors;
+mod crashwatch;
 mod db;
 mod diagnostics;
 #[cfg(target_os = "macos")]
@@ -145,12 +146,26 @@ pub fn run() {
                 if resident {
                     api.prevent_close();
                     let _ = window.hide();
+                    // The process lives on. Said out loud, because this is
+                    // exactly the state a user describes as "it quit".
+                    diagnostics::record(
+                        diagnostics::Event::new(diagnostics::Level::Info, "rust", "window-close")
+                            .message("Main window hidden; Alchemy stays resident."),
+                    );
                     scheduler::first_close_notice(app);
                 }
             }
             // Evict per-window glass memos when a window is destroyed so a
             // recreated window with the same label re-applies from scratch.
             tauri::WindowEvent::Destroyed => {
+                // "The app quit" and "the window closed" look identical in a
+                // bug report and are not the same event. This is the second
+                // one, recorded at info so the pair is distinguishable in the
+                // log (docs/RFC-diagnostics.md, "As built").
+                diagnostics::record(
+                    diagnostics::Event::new(diagnostics::Level::Info, "rust", "window-close")
+                        .message(format!("Window {} closed.", window.label())),
+                );
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     state.glass_applied.lock().unwrap().remove(window.label());
                     // Whatever notebook this window had open is no longer
@@ -185,6 +200,10 @@ pub fn run() {
             if let Err(err) = secure_fs::ensure_private_dir(&data_dir) {
                 diagnostics::fatal_startup("could not secure the app data dir", &err);
             }
+            // Was there a previous run that never reached its shutdown path?
+            // Answered before anything else can write to app-data, then a
+            // stamp of our own goes down (crashwatch.rs).
+            crashwatch::open_session(&data_dir);
             // Boot-phase stamps -> traces/startup.jsonl (docs/RFC-professional-grade.md
             // Pillar 2). See trace::Startup for exactly what the clock covers.
             // The global handle serves background work spawned without State
@@ -425,6 +444,16 @@ pub fn run() {
                 });
             }
 
+            // Crash reports macOS wrote for a run that died without ever
+            // reaching Rust's panic hook. Off the setup thread and behind the
+            // window: this reads a directory that can hold hundreds of files.
+            {
+                let data_dir = data_dir.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    crashwatch::scan_reports(&data_dir);
+                });
+            }
+
             // Seed the current accessibility text scale so the first window
             // focus doesn't spuriously broadcast; the frontend reads it at boot
             // via get_system_text_scale, and window-focus republishes changes.
@@ -441,6 +470,7 @@ pub fn run() {
             commands::recent_errors,
             commands::pending_fatal,
             commands::reveal_log,
+            commands::crash_notice,
             #[cfg(target_os = "macos")]
             dragout::start_file_drag,
             #[cfg(target_os = "macos")]
@@ -671,6 +701,9 @@ pub fn run() {
             // live: fires on real Dock clicks; the synthetic AppleScript
             // `reopen` event does NOT reach tao's delegate — don't let a
             // scripted test convince you this is broken.)
+            // The one clean way out. Clearing the stamp here is what makes a
+            // stamp found at the next launch mean something (crashwatch.rs).
+            tauri::RunEvent::Exit => crashwatch::close_session(),
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => integrations::focus_main(app),
             _ => {}

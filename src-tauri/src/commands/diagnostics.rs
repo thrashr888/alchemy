@@ -77,3 +77,11 @@ pub fn reveal_log() -> Result<(), String> {
         .map_err(|err| format!("could not reveal {}: {err}", target.display()))?;
     Ok(())
 }
+
+/// The crash notice for this launch, if macOS filed a report for a run that
+/// died without reaching Rust's panic hook (crashwatch.rs). `None` — the
+/// usual answer — means the last run ended on its own terms.
+#[tauri::command]
+pub fn crash_notice() -> Option<serde_json::Value> {
+    crate::crashwatch::notice()
+}
