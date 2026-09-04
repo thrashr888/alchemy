@@ -140,14 +140,24 @@ export interface Source {
   fetchFailures: number;
 }
 
-/** One flagged source from the hygiene check (RFC-source-hygiene).
- *  "unreachable" | "missing-file" | "duplicate" | "husk" are proposed
- *  removals (never automatic); "stale" is informational — the background
- *  sweep re-fetches those itself. */
+/** One flagged source or note from the hygiene check (RFC-source-hygiene).
+ *  "unreachable" | "missing-file" | "duplicate" | "husk" | "empty-note" are
+ *  proposed removals (never automatic); "stale" is informational — the
+ *  background sweep re-fetches those itself. */
 export interface HygieneIssue {
+  /** Which table `sourceId` points into. Notes have nothing to re-fetch, so
+   *  the review offers them Keep and Remove only. */
+  kind: "source" | "note";
+  /** The flagged object's id — a note id when `kind` is "note". */
   sourceId: string;
   title: string;
-  bucket: "unreachable" | "missing-file" | "duplicate" | "husk" | "stale";
+  bucket:
+    | "unreachable"
+    | "missing-file"
+    | "duplicate"
+    | "husk"
+    | "empty-note"
+    | "stale";
   detail: string;
 }
 

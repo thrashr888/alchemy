@@ -5,8 +5,12 @@
 //! reversible, so aging url sources refresh automatically (budgeted through
 //! the scheduler pass, the gist-sweep shape); removal is not, so dead links,
 //! missing files, duplicates, and errored husks are only ever *proposed* —
-//! `classify` buckets them, the sources panel badges them, and the review
-//! modal (or an agent, via the `source_hygiene` MCP tool) decides.
+//! `classify` buckets them, the sources panel badges them, and Grow's
+//! "Needs attention" review (or an agent, via the `source_hygiene` MCP
+//! tool) decides.
+//!
+//! Notes are in the check too (`classify_notes`), on the same terms: an
+//! empty note is proposed for removal and nothing else happens to it.
 //!
 //! The sweep's refresh is non-destructive on failure: a transient timeout
 //! keeps the last-good content and bumps `fetch_failures`, where the
@@ -22,7 +26,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
-use crate::models::{Source, SourceEvent};
+use crate::models::{Note, Source, SourceEvent};
 
 /// Consecutive background-probe failures before a url source stops being
 /// retried and is proposed for removal instead.
@@ -59,12 +63,18 @@ fn attempt_due(source_id: &str) -> bool {
     }
 }
 
-/// One flagged source. `bucket` is the disposition class the UI and MCP
-/// report group by: "unreachable" | "missing-file" | "duplicate" | "husk"
-/// (proposed removals) and "stale" (informational — the sweep handles it).
+/// One flagged object. `bucket` is the disposition class the UI and MCP
+/// report group by: "unreachable" | "missing-file" | "duplicate" | "husk" |
+/// "empty-note" (proposed removals) and "stale" (informational — the sweep
+/// handles it).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HygieneIssue {
+    /// "source" or "note" — which table `source_id` points into, and so
+    /// which verbs the review can offer. A note has nothing to re-fetch.
+    pub kind: String,
+    /// The flagged object's id. Named for the case that has always been
+    /// here; a note issue carries its note id.
     pub source_id: String,
     pub title: String,
     pub bucket: String,
@@ -111,6 +121,9 @@ fn effective_fetched_at(source: &Source) -> i64 {
 /// cheap fs stats for loose files) — no network, no mutation; callers decide
 /// what to do with the result. One issue per source, most actionable bucket
 /// wins.
+///
+/// Notes are classified by `classify_notes`; `classify_all` is what the
+/// review surfaces call.
 pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneIssue> {
     let cadence_ms = i64::from(cadence_days).saturating_mul(86_400_000);
     // First-seen source per normalized URL; later holders of the same URL
@@ -125,6 +138,7 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             continue; // rescan owns parents; their children are below
         }
         let issue = |bucket: &str, detail: String| HygieneIssue {
+            kind: "source".into(),
             source_id: s.id.clone(),
             title: s.title.clone(),
             bucket: bucket.into(),
@@ -173,6 +187,43 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             issues.push(issue("stale", format!("last fetched {days} days ago")));
         }
     }
+    issues
+}
+
+/// Bucket a notebook's notes. Sources drift because the world moves under
+/// them; a note has no origin to drift from, so there is exactly one thing
+/// wrong a note can be from the outside — empty. A generation that never
+/// landed, or a blank note nobody came back to, reads on the shelf as a
+/// document and answers nothing.
+///
+/// The same age guard the husk bucket uses keeps this off a note the user
+/// has only just created: a note you are about to type into is not a
+/// problem, and every note starts empty.
+pub fn classify_notes(notes: &[Note], now: i64) -> Vec<HygieneIssue> {
+    notes
+        .iter()
+        .filter(|n| n.content.trim().is_empty() && now - n.updated_at > HUSK_AFTER_MS)
+        .map(|n| HygieneIssue {
+            kind: "note".into(),
+            source_id: n.id.clone(),
+            title: n.title.clone(),
+            bucket: "empty-note".into(),
+            detail: "no content — nothing was ever written here".into(),
+        })
+        .collect()
+}
+
+/// The whole review in one list: what is wrong with the notebook's sources,
+/// then with its notes. The two halves share a shape so one surface (and one
+/// MCP report) can render both.
+pub fn classify_all(
+    sources: &[Source],
+    notes: &[Note],
+    cadence_days: u32,
+    now: i64,
+) -> Vec<HygieneIssue> {
+    let mut issues = classify(sources, cadence_days, now);
+    issues.extend(classify_notes(notes, now));
     issues
 }
 
@@ -555,5 +606,55 @@ mod tests {
     #[test]
     fn collapse_guard_ignores_short_sources() {
         assert!(!content_collapsed("a short stub of a page", ""));
+    }
+
+    fn note(id: &str, content: &str, updated_at: i64) -> Note {
+        Note {
+            id: id.into(),
+            notebook_id: "nb".into(),
+            title: id.into(),
+            content: content.into(),
+            kind: "note".into(),
+            prompt: String::new(),
+            origin: String::new(),
+            status: String::new(),
+            created_at: updated_at,
+            updated_at,
+        }
+    }
+
+    /// An empty note is flagged only once it has had a week to be written.
+    /// Every note starts empty, and the one the user is typing into right
+    /// now is not a problem to review.
+    #[test]
+    fn empty_notes_flag_only_after_the_husk_age() {
+        let now = 100 * DAY;
+        let issues = classify_notes(
+            &[
+                note("just-made", "", now - DAY),
+                note("blank", "   \n ", now - 30 * DAY),
+                note("written", "It says here…", now - 30 * DAY),
+            ],
+            now,
+        );
+        assert_eq!(buckets(&issues), vec![("blank", "empty-note")]);
+        assert_eq!(issues[0].kind, "note");
+    }
+
+    /// One list, both halves, and every issue says which it is — the review
+    /// has to know whether "Retry" means anything for a row.
+    #[test]
+    fn classify_all_labels_each_half() {
+        let now = 100 * DAY;
+        let mut dead = src("dead", "url");
+        dead.url = "https://example.com/gone".into();
+        dead.fetch_failures = UNREACHABLE_AFTER;
+        let issues = classify_all(&[dead], &[note("blank", "", 0)], 30, now);
+        assert_eq!(
+            buckets(&issues),
+            vec![("dead", "unreachable"), ("blank", "empty-note")]
+        );
+        assert_eq!(issues[0].kind, "source");
+        assert_eq!(issues[1].kind, "note");
     }
 }

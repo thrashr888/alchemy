@@ -3115,18 +3115,25 @@ pub(crate) fn is_web_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-/// Classify a notebook's sources into hygiene buckets
-/// (docs/RFC-source-hygiene.md) — read-only; the review modal and row
-/// badges render from this, and acting on it goes through the normal
-/// refresh/delete commands.
+/// Classify a notebook's sources and notes into hygiene buckets
+/// (docs/RFC-source-hygiene.md) — read-only; Grow's "Needs attention"
+/// review and the source row badges render from this, and acting on it goes
+/// through the normal refresh/delete commands. Running it is how the
+/// review's refresh button re-checks a notebook on demand.
 #[tauri::command]
 pub async fn source_hygiene(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::hygiene::HygieneIssue>, String> {
     let sources = e(state.db.list_sources(&notebook_id).await)?;
+    let notes = e(state.db.list_notes(&notebook_id).await)?;
     let cadence = state.ai.read().await.config().hygiene_refresh_days;
-    Ok(crate::hygiene::classify(&sources, cadence, now()))
+    Ok(crate::hygiene::classify_all(
+        &sources,
+        &notes,
+        cadence,
+        now(),
+    ))
 }
 
 /// "Keep" from the hygiene review: clear an unreachable source's strike
@@ -11453,10 +11460,14 @@ pub async fn growth_proposals(
     // returns as fast as a text scan.
     let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    let mut proposals = crate::growth::proposals(&sources, &queries);
     // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
-    // remembered at import, proposed here, followed only on a click.
-    proposals.extend(crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await);
+    // remembered at import, proposed here, followed only on a click. They
+    // go in first because the tiers overlap — a page that advertises a feed
+    // is often also a link its siblings cite — and "Follow this feed" is the
+    // better of the two offers for the same URL.
+    let mut proposals = crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await;
+    proposals.extend(crate::growth::proposals(&sources, &queries));
+    let proposals = crate::growth::dedupe_proposals(proposals);
     Ok(GrowthOverview { queries, proposals })
 }
 

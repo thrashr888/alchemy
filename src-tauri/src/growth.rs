@@ -156,6 +156,42 @@ fn normalize_url(raw: &str) -> Option<String> {
     Some(url)
 }
 
+/// The identity of a proposal — what makes two links "the same page" when
+/// deciding whether to show one twice. Scheme, a leading `www.`, host case,
+/// a trailing slash and the fragment/tracking params `normalize_url` already
+/// drops are all noise; the path keeps its case, because servers are allowed
+/// to care about it. Not a URL — never fetch this, only compare it.
+pub fn canonical_key(raw: &str) -> String {
+    let url = normalize_url(raw).unwrap_or_else(|| raw.trim().trim_end_matches('/').to_string());
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url.as_str());
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = host.to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(host.as_str());
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        host.to_string()
+    } else {
+        format!("{host}/{path}")
+    }
+}
+
+/// Every proposal shown on the Grow surface, minus the ones that are the
+/// same page as an earlier entry. The tiers are computed independently —
+/// links mined from source text, feeds those same pages advertised — so
+/// the same URL reaches the pane twice with only a slash or a `www.`
+/// between the two spellings. First occurrence wins, so callers order the
+/// vec by which spelling they would rather the user act on.
+pub fn dedupe_proposals(proposals: Vec<GrowthProposal>) -> Vec<GrowthProposal> {
+    let mut seen: HashSet<String> = HashSet::new();
+    proposals
+        .into_iter()
+        .filter(|p| seen.insert(canonical_key(&p.url)))
+        .collect()
+}
+
 fn tokens(text: &str) -> HashSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -166,12 +202,17 @@ fn tokens(text: &str) -> HashSet<String> {
 
 /// Rank the notebook's outbound links against its standing queries.
 pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> {
+    // Keyed by identity, not by spelling: a page the notebook already holds
+    // stays out however its links spell it, and two spellings of one
+    // candidate ("…/a" and "…/a/") merge into a single proposal carrying
+    // both mentions instead of appearing twice.
     let existing: HashSet<String> = sources
         .iter()
         .filter(|s| !s.url.is_empty())
-        .filter_map(|s| normalize_url(&s.url))
+        .map(|s| canonical_key(&s.url))
         .collect();
     struct Cand {
+        url: String,
         anchor: String,
         mentions: u32,
         sources: HashSet<String>,
@@ -182,14 +223,16 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
             continue;
         }
         for (url, anchor) in extract_links(&s.content) {
-            if existing.contains(&url) {
+            let key = canonical_key(&url);
+            if existing.contains(&key) {
                 continue;
             }
             // A source linking to itself under a variant URL is noise.
             if !s.url.is_empty() && url.contains(s.url.trim_end_matches('/')) {
                 continue;
             }
-            let c = cands.entry(url).or_insert(Cand {
+            let c = cands.entry(key).or_insert(Cand {
+                url,
                 anchor: String::new(),
                 mentions: 0,
                 sources: HashSet::new(),
@@ -204,8 +247,9 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
     let query_tokens: Vec<(String, HashSet<String>)> =
         queries.iter().map(|q| (q.clone(), tokens(q))).collect();
     let mut out: Vec<GrowthProposal> = cands
-        .into_iter()
-        .map(|(url, c)| {
+        .into_values()
+        .map(|c| {
+            let url = c.url;
             let cand_tokens = tokens(&format!("{} {}", c.anchor, url));
             let (matched_query, overlap) = query_tokens
                 .iter()
@@ -496,7 +540,7 @@ pub async fn web_search(
     let existing: HashSet<String> = sources
         .iter()
         .filter(|s| !s.url.is_empty())
-        .filter_map(|s| normalize_url(&s.url))
+        .map(|s| canonical_key(&s.url))
         .collect();
     let Ok(client) = reqwest::Client::builder()
         .user_agent(concat!("alchemy/", env!("CARGO_PKG_VERSION")))
@@ -545,7 +589,10 @@ pub async fn web_search(
             let Some(url) = normalize_url(raw) else {
                 continue;
             };
-            if existing.contains(&url) || !seen.insert(url.clone()) {
+            // Two queries routinely return one page under two spellings,
+            // and the notebook may already hold it under a third.
+            let key = canonical_key(&url);
+            if existing.contains(&key) || !seen.insert(key) {
                 continue;
             }
             out.push(GrowthProposal {
@@ -1165,5 +1212,68 @@ mod tests {
             Some("https://a.test/page?x=1".into())
         );
         assert_eq!(normalize_url("https://a.test/logo.svg"), None);
+    }
+
+    #[test]
+    fn canonical_key_ignores_scheme_www_and_trailing_slash() {
+        let key = canonical_key("https://www.a.test/Feed.xml");
+        assert_eq!(canonical_key("http://a.test/Feed.xml/"), key);
+        assert_eq!(canonical_key("https://A.TEST/Feed.xml?utm_source=x"), key);
+        // The path keeps its case — servers are allowed to care.
+        assert_ne!(canonical_key("https://a.test/feed.xml"), key);
+        // Different pages stay different.
+        assert_ne!(canonical_key("https://a.test/other"), key);
+    }
+
+    #[test]
+    fn dedupe_keeps_the_first_spelling_of_each_page() {
+        let p = |kind: &str, url: &str| GrowthProposal {
+            kind: kind.into(),
+            url: url.into(),
+            anchor: String::new(),
+            mentions: 0,
+            source_count: 0,
+            matched_query: String::new(),
+            score: 1.0,
+        };
+        let out = dedupe_proposals(vec![
+            p("feed", "https://a.test/feed"),
+            p("web", "http://www.a.test/feed/"),
+            p("web", "https://a.test/elsewhere"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].kind, "feed");
+        assert_eq!(out[1].url, "https://a.test/elsewhere");
+    }
+
+    #[test]
+    fn mined_links_merge_across_url_spellings() {
+        // One page, three spellings, two sources — one proposal carrying
+        // every mention, not three rows saying the same thing.
+        let sources = vec![
+            src(
+                "a",
+                "https://one.test/a",
+                "See https://two.test/paper and https://www.two.test/paper/",
+            ),
+            src("b", "https://one.test/b", "Also http://two.test/paper"),
+        ];
+        let props = proposals(&sources, &[]);
+        assert_eq!(props.len(), 1, "{props:?}");
+        assert_eq!(props[0].mentions, 3);
+        assert_eq!(props[0].source_count, 2);
+    }
+
+    #[test]
+    fn a_held_source_excludes_every_spelling_of_itself() {
+        let sources = vec![
+            src(
+                "a",
+                "https://one.test/a",
+                "Twice: https://www.two.test/b/ https://www.two.test/b/",
+            ),
+            src("b", "http://two.test/b", ""),
+        ];
+        assert!(proposals(&sources, &[]).is_empty());
     }
 }

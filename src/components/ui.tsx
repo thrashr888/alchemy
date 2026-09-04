@@ -207,28 +207,30 @@ export function useHoverCard(side: "left" | "right") {
           </div>
           {state.data.meta.length > 0 && (
             <div className="mt-2 flex flex-col gap-1.5">
-              {state.data.meta.map((m: HoverCardData["meta"][number], i: number) => (
-                <div
-                  key={i}
-                  className="flex min-w-0 items-start gap-2 text-caption"
-                >
-                  {m.icon && (
-                    <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
-                      {m.icon}
+              {state.data.meta.map(
+                (m: HoverCardData["meta"][number], i: number) => (
+                  <div
+                    key={i}
+                    className="flex min-w-0 items-start gap-2 text-caption"
+                  >
+                    {m.icon && (
+                      <span className="shrink-0 text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5">
+                        {m.icon}
+                      </span>
+                    )}
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {m.label}
                     </span>
-                  )}
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    {m.label}
-                  </span>
-                  {m.value && (
-                    // Values wrap (file paths, URLs) rather than clipping
-                    // out of the fixed-width card.
-                    <span className="ml-auto min-w-0 break-all pl-2 text-right text-foreground">
-                      {m.value}
-                    </span>
-                  )}
-                </div>
-              ))}
+                    {m.value && (
+                      // Values wrap (file paths, URLs) rather than clipping
+                      // out of the fixed-width card.
+                      <span className="ml-auto min-w-0 break-all pl-2 text-right text-foreground">
+                        {m.value}
+                      </span>
+                    )}
+                  </div>
+                ),
+              )}
             </div>
           )}
         </div>,
@@ -412,13 +414,15 @@ export function useMarquee({
       const h = Math.abs(py - anchorY);
       setRect({ x, y, w, h });
       const ids: string[] = [];
-      container.querySelectorAll<HTMLElement>("[data-pick-id]").forEach((el) => {
-        const r = el.getBoundingClientRect();
-        if (r.left < x + w && r.right > x && r.top < y + h && r.bottom > y) {
-          const id = el.getAttribute("data-pick-id");
-          if (id) ids.push(id);
-        }
-      });
+      container
+        .querySelectorAll<HTMLElement>("[data-pick-id]")
+        .forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.left < x + w && r.right > x && r.top < y + h && r.bottom > y) {
+            const id = el.getAttribute("data-pick-id");
+            if (id) ids.push(id);
+          }
+        });
       onSelect(ids, additive);
     };
 
@@ -922,7 +926,23 @@ export function LiveRegion({
   );
 }
 
-/** Bottom-center stack of ephemeral toasts. */
+/** How far each card behind the front one peeks out, in px, and how much it
+ *  shrinks. Three are visible; deeper ones wait their turn. */
+const TOAST_PEEK = 8;
+const TOAST_SHRINK = 0.045;
+const TOAST_VISIBLE_DEPTH = 2;
+
+/** Bottom-center stack of ephemeral toasts.
+ *
+ *  The stack overlaps rather than lists: newest in front, the ones behind it
+ *  peeking above by a few pixels, so clearing a review with a dozen actions
+ *  leaves a card and a hint of a card instead of a column reaching for the
+ *  titlebar. Pointing at it (or tabbing into it) fans the whole stack out,
+ *  which is when a toast's Undo has to be reachable anyway.
+ *
+ *  Collapsed, every card shares one grid cell and rides a transform;
+ *  expanded, they go back to being ordinary grid rows. No measuring, so a
+ *  toast that wraps to three lines is laid out by the browser either way. */
 export function Toaster({
   toasts,
   onDismiss,
@@ -930,6 +950,7 @@ export function Toaster({
   toasts: Toast[];
   onDismiss: (id: string) => void;
 }) {
+  const [hovered, setHovered] = React.useState(false);
   // The announcer renders unconditionally — the visible stack comes and goes,
   // but the live region it speaks through must already be in the document.
   // The stack itself is not the live region: its dismiss buttons would be
@@ -940,6 +961,8 @@ export function Toaster({
     />
   );
   if (toasts.length === 0) return announcer;
+  // One toast is already its own front card; there is nothing to fan out.
+  const expanded = hovered && toasts.length > 1;
   const icon = {
     success: (
       <CheckCircle2
@@ -953,7 +976,9 @@ export function Toaster({
         className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
       />
     ),
-    info: <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-citation" />,
+    info: (
+      <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-citation" />
+    ),
   };
   const border = {
     success: "border-success/40",
@@ -963,41 +988,80 @@ export function Toaster({
   return (
     <>
       {announcer}
-      <div className="pointer-events-none fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-2">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={cn(
-              "pointer-events-auto flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated/90 backdrop-blur-md px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150",
-              border[t.kind],
-            )}
-          >
-            {icon[t.kind]}
-            {t.onClick ? (
-              <button
-                type="button"
-                className="text-left text-caption text-foreground/90 underline-offset-2 hover:underline"
-                onClick={() => {
-                  t.onClick?.();
-                  onDismiss(t.id);
-                }}
+      <div
+        className="pointer-events-none fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-[70] -translate-x-1/2"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        // Tabbing to a toast's Undo fans the stack out too, so the control
+        // that has focus is the one on screen.
+        onFocus={() => setHovered(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setHovered(false);
+        }}
+      >
+        <div
+          className="grid justify-items-center"
+          style={{ rowGap: expanded ? 8 : 0 }}
+        >
+          {toasts.map((t, i) => {
+            // 0 is the newest card, in front; the rest are the depth behind it.
+            const depth = toasts.length - 1 - i;
+            const stacked: React.CSSProperties = {
+              gridArea: "1 / 1",
+              // The front card is pinned to the bottom, so the stack never
+              // shifts as messages of different heights arrive. The ones
+              // behind it hang from the top of the cell instead: bottom-
+              // aligning them would hide their peek entirely behind a front
+              // card that happened to wrap onto three lines.
+              alignSelf: depth === 0 ? "end" : "start",
+              transform: `translateY(${-depth * TOAST_PEEK}px) scale(${
+                1 - depth * TOAST_SHRINK
+              })`,
+              transformOrigin: "bottom center",
+              opacity: depth > TOAST_VISIBLE_DEPTH ? 0 : 1,
+              zIndex: i,
+              // Only the front card is clickable while stacked — the others
+              // are a hint, not a target. Keyboard focus still reaches them,
+              // and reaching them expands the stack.
+              pointerEvents: depth === 0 ? "auto" : "none",
+            };
+            return (
+              <div
+                key={t.id}
+                style={expanded ? { pointerEvents: "auto" } : stacked}
+                className={cn(
+                  "flex max-w-[520px] items-start gap-2.5 rounded-lg border bg-elevated/90 backdrop-blur-md px-3.5 py-2.5 shadow-lg animate-in slide-in-from-bottom-2 fade-in duration-150 transition-[transform,opacity] ease-out",
+                  border[t.kind],
+                )}
               >
-                {t.message}
-              </button>
-            ) : (
-              <div className="text-caption text-foreground/90 selectable">
-                {t.message}
+                {icon[t.kind]}
+                {t.onClick ? (
+                  <button
+                    type="button"
+                    className="text-left text-caption text-foreground/90 underline-offset-2 hover:underline"
+                    onClick={() => {
+                      t.onClick?.();
+                      onDismiss(t.id);
+                    }}
+                  >
+                    {t.message}
+                  </button>
+                ) : (
+                  <div className="text-caption text-foreground/90 selectable">
+                    {t.message}
+                  </div>
+                )}
+                <button
+                  className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => onDismiss(t.id)}
+                  aria-label="Dismiss notification"
+                >
+                  <X aria-hidden className="h-3.5 w-3.5" />
+                </button>
               </div>
-            )}
-            <button
-              className="ml-1 rounded p-0.5 text-muted-foreground hover:text-foreground"
-              onClick={() => onDismiss(t.id)}
-              aria-label="Dismiss notification"
-            >
-              <X aria-hidden className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
     </>
   );
@@ -1171,7 +1235,9 @@ export function RowMenu({
 
   React.useEffect(() => {
     if (!open) return;
-    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    menuRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+      ?.focus();
     // Capture-phase pointerdown: title-bar drag regions swallow clicks, but
     // pointerdown still dispatches first. Blur covers leaving the app.
     const onDown = (e: PointerEvent) => {
@@ -1191,11 +1257,14 @@ export function RowMenu({
 
   const focusMenuItem = (direction: 1 | -1) => {
     const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+      menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ) ?? [],
     );
     if (items.length === 0) return;
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
-    const next = current < 0 ? 0 : (current + direction + items.length) % items.length;
+    const next =
+      current < 0 ? 0 : (current + direction + items.length) % items.length;
     items[next]?.focus();
   };
 
@@ -1231,11 +1300,15 @@ export function RowMenu({
           focusMenuItem(-1);
         } else if (e.key === "Home") {
           e.preventDefault();
-          menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+          menuRef.current
+            ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+            ?.focus();
         } else if (e.key === "End") {
           e.preventDefault();
           const items = Array.from(
-            menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+            menuRef.current?.querySelectorAll<HTMLButtonElement>(
+              '[role="menuitem"]',
+            ) ?? [],
           );
           items[items.length - 1]?.focus();
         } else if (e.key === "Tab") {
@@ -1424,7 +1497,10 @@ export function StepTrail({
         );
       })}
       {waiting && !done && (
-        <div className="flex items-center gap-2 text-caption" aria-live="polite">
+        <div
+          className="flex items-center gap-2 text-caption"
+          aria-live="polite"
+        >
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-primary border-t-transparent animate-spin"
             aria-hidden

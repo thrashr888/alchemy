@@ -702,17 +702,22 @@ pub async fn discovered_proposals(
     notebook_id: &str,
     sources: &[Source],
 ) -> Vec<crate::growth::GrowthProposal> {
-    let followed: std::collections::HashSet<&str> = sources
+    // Identity, not spelling: the same feed reaches the discovered map once
+    // per advertising page, and two pages rarely spell it the same way.
+    // Anything the notebook already holds — followed as a feed or imported
+    // as a page — is not a proposal either.
+    let held: std::collections::HashSet<String> = sources
         .iter()
-        .filter(|s| s.source_type == "feed")
-        .map(|s| s.url.trim_end_matches('/'))
+        .filter(|s| !s.url.is_empty())
+        .map(|s| crate::growth::canonical_key(&s.url))
         .collect();
     let live: std::collections::HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
     let found = load_discovered(&state.db, notebook_id).await;
     let mut out: Vec<crate::growth::GrowthProposal> = found
         .into_iter()
         .filter(|(url, d)| {
-            !followed.contains(url.trim_end_matches('/')) && live.contains(d.source_id.as_str())
+            !held.contains(&crate::growth::canonical_key(url))
+                && live.contains(d.source_id.as_str())
         })
         .map(|(url, d)| crate::growth::GrowthProposal {
             kind: "feed".into(),
@@ -724,8 +729,8 @@ pub async fn discovered_proposals(
             score: 0.5,
         })
         .collect();
-    out.sort_by(|a, b| a.anchor.cmp(&b.anchor));
-    out
+    out.sort_by(|a, b| a.anchor.cmp(&b.anchor).then(a.url.cmp(&b.url)));
+    crate::growth::dedupe_proposals(out)
 }
 
 /// Everything the app can offer to follow for one source: what its page

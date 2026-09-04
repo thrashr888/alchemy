@@ -71,6 +71,7 @@ export const HYGIENE_LABEL: Record<string, string> = {
   "missing-file": "missing",
   duplicate: "duplicate",
   husk: "failed import",
+  "empty-note": "empty note",
   stale: "stale",
 };
 

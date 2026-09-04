@@ -662,7 +662,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Hygiene report for a notebook's sources (docs/RFC-source-hygiene.md): buckets \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (same URL added twice; the older copy is kept), and \"husk\" (old failed import with no content) are proposed removals — nothing is deleted automatically — plus informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source or refresh_source."
+        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (same URL added twice; the older copy is kept), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
     )]
     async fn source_hygiene(
         &self,
@@ -674,9 +674,11 @@ impl AlchemyMcp {
             .list_sources(&notebook_id)
             .await
             .map_err(internal)?;
+        let notes = state.db.list_notes(&notebook_id).await.map_err(internal)?;
         let cadence = state.ai.read().await.config().hygiene_refresh_days;
-        json_result(&crate::hygiene::classify(
+        json_result(&crate::hygiene::classify_all(
             &sources,
+            &notes,
             cadence,
             commands::now(),
         ))
