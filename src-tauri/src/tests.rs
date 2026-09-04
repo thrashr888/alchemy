@@ -4971,6 +4971,8 @@ fn grow_source(nb: &str, id: &str, title: &str, url: &str, content: &str) -> Sou
         note: String::new(),
         fetched_at: now(),
         fetch_failures: 0,
+        origin_device: String::new(),
+        remote: false,
     }
 }
 
