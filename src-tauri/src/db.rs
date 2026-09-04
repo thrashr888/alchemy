@@ -745,6 +745,8 @@ impl Db {
             let mtime = opt_i64_col(b, "mtime");
             for i in 0..b.num_rows() {
                 sources.push(Source {
+                    origin_device: String::new(),
+                    remote: false,
                     author: String::new(),
                     image_url: String::new(),
                     tags: String::new(),
@@ -1350,6 +1352,8 @@ impl Db {
             let failures = i64_col(b, "fetch_failures")?;
             for i in 0..b.num_rows() {
                 sources.push(Source {
+                    origin_device: String::new(),
+                    remote: false,
                     author: author.value(i).to_string(),
                     image_url: image.value(i).to_string(),
                     tags: tags.value(i).to_string(),
@@ -5670,6 +5674,8 @@ mod tests {
         db.migrate_source_fetch().await.expect("migrate");
 
         let src = Source {
+            origin_device: String::new(),
+            remote: false,
             id: "mig-1".into(),
             notebook_id: "nb-1".into(),
             title: "Fresh on a migrated table".into(),
@@ -5727,6 +5733,8 @@ mod tests {
         db.migrate_source_fetch().await.expect("migrate");
 
         let src = Source {
+            origin_device: String::new(),
+            remote: false,
             id: "upd-1".into(),
             notebook_id: "nb-1".into(),
             title: "Touched".into(),
@@ -5783,6 +5791,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nbl-fetchstamp-{}", uuid::Uuid::new_v4()));
         let db = Db::open(&dir).await.expect("open db");
         let src = Source {
+            origin_device: String::new(),
+            remote: false,
             id: "fs-1".into(),
             notebook_id: "nb-1".into(),
             title: "Fresh".into(),
@@ -5818,6 +5828,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nbl-tags-{}", uuid::Uuid::new_v4()));
         let db = Db::open(&dir).await.expect("open db");
         let src = Source {
+            origin_device: String::new(),
+            remote: false,
             id: "s-1".into(),
             notebook_id: "nb".into(),
             title: "Doc".into(),

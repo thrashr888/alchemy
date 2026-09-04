@@ -121,6 +121,10 @@ surface** — `cat`, `sed`, and `git` beat any tool call here:
 - The `alchemy:` block holds what the spec has no field for — a source's
   real type and the user's tags, a note's `kind`, the notebook's colour and
   icon on the root `index.md`. Edit it only when you mean to change those.
+- `alchemy.device` names the Mac a source's `resource:` path is real on. When
+  it names another machine and the path does not resolve here, the source is
+  *remote* (`remote: true` from `list_sources`): read it, search it, cite it —
+  but do not refresh it, reveal it, or propose removing it as a missing file.
 - `references/` holds the originals a concept was made from, named by
   content hash. A source's `resource:` pointing there means the bundle
   carries the bytes; anything else is provenance. Do not rename or delete

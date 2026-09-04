@@ -1183,6 +1183,8 @@ mod tests {
 
     fn src(id: &str, url: &str, content: &str) -> Source {
         Source {
+            origin_device: String::new(),
+            remote: false,
             id: id.into(),
             notebook_id: "nb".into(),
             title: id.into(),

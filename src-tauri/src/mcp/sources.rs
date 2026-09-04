@@ -322,14 +322,14 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field; \"processing\" means the content is stored and readable but still being indexed — search reaches it shortly, no action needed."
+        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field; \"processing\" means the content is stored and readable but still being indexed — search reaches it shortly, no action needed. originDevice names the Mac the source was imported on; remote:true means its file lives on that other Mac and its path does not resolve here — the text is fully readable and searchable, but do not refresh it, reveal it, or propose removing it."
     )]
     async fn list_sources(
         &self,
         Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
     ) -> Result<CallToolResult, McpError> {
-        let sources: Vec<Source> = self
-            .state()
+        let state = self.state();
+        let mut sources: Vec<Source> = state
             .db
             .list_sources(&notebook_id)
             .await
@@ -337,6 +337,7 @@ impl AlchemyMcp {
             .into_iter()
             .map(slim)
             .collect();
+        crate::device::mark_remote(&commands::app_data_dir(&state), &notebook_id, &mut sources);
         json_result(&sources)
     }
 
@@ -662,18 +663,19 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone), \"duplicate\" (the same page, file or note added twice — matched by canonical URL, or by content for files, pasted text and notes; the oldest copy is the keeper and its id is in \"keeperId\"), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
+        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone — never a source whose originDevice is another Mac; that one's file was never here, and list_sources reports it as remote), \"duplicate\" (the same page, file or note added twice — matched by canonical URL, or by content for files, pasted text and notes; the oldest copy is the keeper and its id is in \"keeperId\"), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
     )]
     async fn source_hygiene(
         &self,
         Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
-        let sources = state
+        let mut sources = state
             .db
             .sources_with_content(&notebook_id)
             .await
             .map_err(internal)?;
+        crate::device::mark_remote(&commands::app_data_dir(&state), &notebook_id, &mut sources);
         let notes = state.db.list_notes(&notebook_id).await.map_err(internal)?;
         let cadence = state.ai.read().await.config().hygiene_refresh_days;
         json_result(&crate::hygiene::classify_all(

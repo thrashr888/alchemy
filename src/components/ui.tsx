@@ -1076,6 +1076,10 @@ export interface RowMenuItem {
    *  becomes a radio menu item with a tick, so the current choice survives
    *  being read aloud instead of living only in the glyph. */
   checked?: boolean;
+  /** Not a verb — a line of explanation standing where verbs were removed
+   *  ("Lives on Paul's MacBook Pro; the text is here."). Renders as plain
+   *  muted text: no focus, no click, no place in the arrow-key ring. */
+  hint?: boolean;
 }
 
 /**
@@ -1346,7 +1350,16 @@ export function RowMenu({
             style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
             className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
           >
-          {(swapItems ?? items).map((it) => (
+          {(swapItems ?? items).map((it) =>
+            it.hint ? (
+              <div
+                key={it.label}
+                className="flex items-start gap-2.5 px-3 py-1.5 text-left text-caption leading-snug text-muted-foreground"
+              >
+                {it.icon && <span className="mt-px shrink-0">{it.icon}</span>}
+                {it.label}
+              </div>
+            ) : (
             <button
               key={it.label}
               role={it.checked === undefined ? "menuitem" : "menuitemradio"}
@@ -1383,7 +1396,8 @@ export function RowMenu({
               )}
               {it.label}
             </button>
-          ))}
+            ),
+          )}
           </div>,
           document.body,
         )}

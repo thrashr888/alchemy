@@ -90,12 +90,17 @@ export function liveFacet<T extends string>(
  *  Dropbox, Google Drive). Two causes, one question the reader is asking:
  *  which of these can't I actually read? (alchemy-release-0z2) */
 export function missingSourceIds(
-  sources: readonly Pick<Source, "id" | "status">[],
+  sources: readonly Pick<Source, "id" | "status" | "remote">[],
   hygiene: readonly { sourceId: string; bucket: string }[],
 ): Set<string> {
-  const known = new Set(sources.map((s) => s.id));
+  // A remote source is neither: its text is here, and its file was never on
+  // this Mac to go missing (RFC-okf-live §5.8). The backend already keeps it
+  // out of the missing-file bucket; this is the same rule on the other side
+  // of the wire, where placeholder status is judged too.
+  const local = sources.filter((s) => !s.remote);
+  const known = new Set(local.map((s) => s.id));
   const out = new Set<string>();
-  for (const s of sources) if (s.status === "placeholder") out.add(s.id);
+  for (const s of local) if (s.status === "placeholder") out.add(s.id);
   for (const h of hygiene)
     if (h.bucket === "missing-file" && known.has(h.sourceId)) out.add(h.sourceId);
   return out;

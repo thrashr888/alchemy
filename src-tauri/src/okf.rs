@@ -750,6 +750,11 @@ pub fn write_bundle(
             ("id".into(), notebook.id.clone()),
             ("color".into(), notebook.color.clone()),
             ("icon".into(), notebook.icon.clone()),
+            // The Mac that wrote this pass (§5.8). Per source it decides what
+            // a missing file means; here it just says who the bundle's last
+            // writer was, which is the question anyone reading a shared
+            // folder asks first.
+            ("device".into(), crate::device::this_device().to_string()),
         ],
         ..OkfConcept::blank()
     };
@@ -919,6 +924,17 @@ pub(crate) fn source_concept(
             ("tags".into(), s.tags.clone()),
             ("author".into(), s.author.clone()),
             ("image_url".into(), s.image_url.clone()),
+            // Which Mac this source's `resource` is a real path on (§5.8).
+            // A source marked by `device::mark_remote` carries the device it
+            // came from; anything unmarked was imported here.
+            (
+                "device".into(),
+                if s.origin_device.trim().is_empty() {
+                    crate::device::this_device().to_string()
+                } else {
+                    s.origin_device.clone()
+                },
+            ),
         ],
         parent: s.parent_id.clone(),
         ..OkfConcept::blank()
@@ -946,7 +962,11 @@ pub(crate) async fn gather_bundle_for(
         .into_iter()
         .find(|n| n.id == notebook_id)
         .ok_or_else(|| "Notebook not found".to_string())?;
-    let sources = e(state.db.list_sources(notebook_id).await)?;
+    let mut sources = e(state.db.list_sources(notebook_id).await)?;
+    // Each source's origin device, so a bundle that travels twice keeps
+    // saying where each source actually came from rather than renaming every
+    // one of them after whichever Mac wrote last (§5.8).
+    crate::device::mark_remote(&app_data_dir(state), notebook_id, &mut sources);
     let notes = e(state.db.list_notes(notebook_id).await)?;
 
     // One setting, read once per pass.
@@ -4425,6 +4445,16 @@ async fn take_in_source(
         Ok(landed) => {
             if let Some(tags) = doc.nested("alchemy", "tags") {
                 let _ = state.db.set_source_tags(&landed.id, &tags).await;
+            }
+            // Where its `resource` is a real path (§5.8). Recorded only when
+            // the bundle names another Mac; this one's name is the default.
+            if let Some(device) = doc.nested("alchemy", "device") {
+                crate::device::note_origin_device(
+                    &app_data_dir(state),
+                    notebook_id,
+                    &landed.id,
+                    &device,
+                );
             }
             crate::note!("okf: took in source \"{title}\" from disk");
             Ok(Some(landed.id))

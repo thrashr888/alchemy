@@ -24,6 +24,7 @@ import { FollowFeedModal } from "./FollowFeedModal";
 import { AttachToCardModal } from "./RegistrySection";
 import {
   Image as ImageIcon,
+  Laptop,
   MessageSquare,
   Package,
   Pencil,
@@ -110,8 +111,10 @@ export function sourceMenuItems(
         ]
       : []),
     // url holds the origin — a web URL, an on-disk path, a folder, a Mac
-    // app — and any of them can be refreshed.
-    ...(s.url && !omit.has("refresh")
+    // app — and any of them can be refreshed. Except a remote one: that path
+    // is a drive on another Mac, and a Refresh here can only ever fail
+    // (RFC-okf-live §5.8). The hint below stands in its place.
+    ...(s.url && !s.remote && !omit.has("refresh")
       ? [
           {
             label: refreshLabel,
@@ -168,6 +171,20 @@ export function sourceMenuItems(
             label: "Choose card image…",
             icon: <ImageIcon className="h-3.5 w-3.5" />,
             onClick: () => host.chooseImage(s),
+          },
+        ]
+      : []),
+    // What the two removed verbs would have done, said once. Not omittable:
+    // it is the answer to "why can't I refresh this", and the reader's roomy
+    // toolbar drops the verbs from the menu without taking the reason with
+    // them.
+    ...(s.remote
+      ? [
+          {
+            label: `Lives on ${s.originDevice}; the text is here.`,
+            icon: <Laptop className="h-3.5 w-3.5" />,
+            hint: true,
+            onClick: () => {},
           },
         ]
       : []),

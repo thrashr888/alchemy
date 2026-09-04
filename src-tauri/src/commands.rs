@@ -1314,7 +1314,12 @@ pub async fn list_sources(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<Source>, String> {
-    e(state.db.list_sources(&notebook_id).await)
+    let mut sources = e(state.db.list_sources(&notebook_id).await)?;
+    // Which Mac each source came from, and whether its origin is reachable
+    // here (docs/RFC-okf-live.md §5.8). The store does not know about
+    // devices; every surface that judges a source asks this first.
+    crate::device::mark_remote(&app_data_dir(&state), &notebook_id, &mut sources);
+    Ok(sources)
 }
 
 /// Flag URL sources whose extracted text looks like a bot wall / login / JS shell.
@@ -1444,6 +1449,8 @@ pub(crate) async fn store_new_source(
     // land "ready" with no chunks, exactly as before.
     let processing = embed && status == "ready";
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: extracted.image_url.clone(),
         author: extracted.author.clone(),
         id: new_id(),
@@ -1678,6 +1685,8 @@ async fn store_failed_url(
     reason: String,
 ) -> anyhow::Result<Source> {
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: new_id(),
@@ -2147,6 +2156,8 @@ pub(crate) async fn ingest_git(
         }
         crate::git::StagedKind::Tree => {
             let parent = Source {
+                origin_device: String::new(),
+                remote: false,
                 image_url: String::new(),
                 author: String::new(),
                 id: new_id(),
@@ -2202,6 +2213,8 @@ pub(crate) async fn ingest_notion(
     let client = crate::notion::NotionClient::new(token);
     let stats = client.export_tree(page_id, &dir).await?;
     let parent = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: parent_id,
@@ -2730,6 +2743,8 @@ pub(crate) async fn reingest_with(
         extracted.url.clone()
     };
     let updated = Source {
+        origin_device: String::new(),
+        remote: false,
         // A refresh may carry a new lead image; edits/pastes carry none —
         // keep the stored one then (same rule as author below).
         image_url: if extracted.image_url.is_empty() {
@@ -3128,7 +3143,9 @@ pub async fn source_hygiene(
     // With content: the duplicate bucket groups file and pasted-text
     // sources by what they say, and nothing else in a notebook can prove
     // that two rows are one import.
-    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    let mut sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    // A source whose origin lives on another Mac is not a missing file (§5.8).
+    crate::device::mark_remote(&app_data_dir(&state), &notebook_id, &mut sources);
     let notes = e(state.db.list_notes(&notebook_id).await)?;
     let cadence = state.ai.read().await.config().hygiene_refresh_days;
     Ok(crate::hygiene::classify_all(
@@ -4795,6 +4812,8 @@ async fn store_failed_child(
     reason: String,
 ) -> anyhow::Result<()> {
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: new_id(),
@@ -4828,6 +4847,8 @@ async fn store_placeholder_child(
     mtime: i64,
 ) -> anyhow::Result<()> {
     let source = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: new_id(),
@@ -4948,6 +4969,16 @@ fn code_context(folder_title: &str, root: &std::path::Path, path: &str) -> Optio
 /// FTS rebuilds are deferred across the whole scan and flushed once at the
 /// end (error paths included): per-child rebuilds made folder imports O(n²)
 /// — a 48-file folder paid 48 full BM25 index rebuilds.
+/// Does this scan's absence of a child's file mean the file is gone?
+///
+/// Only for a child of this Mac. A remote child (docs/RFC-okf-live.md §5.8)
+/// is here as text and nowhere as a file: its parent's root is a drive on
+/// another machine, so "not in this scan" says nothing about it, and deleting
+/// it would throw away the only copy the shared bundle carried across.
+pub(crate) fn child_vanished(child: &Source, on_disk: bool) -> bool {
+    !on_disk && !child.remote
+}
+
 async fn rescan_one_folder(
     app: Option<&AppHandle>,
     state: &AppState,
@@ -5007,7 +5038,11 @@ async fn rescan_one_folder_inner(
         state.db.replace_source(&ok, &[], &[]).await?;
     }
 
-    let all_sources = state.db.list_sources(&folder.notebook_id).await?;
+    let mut all_sources = state.db.list_sources(&folder.notebook_id).await?;
+    // Which of these came from another Mac (docs/RFC-okf-live.md §5.8) — the
+    // removal pass at the bottom asks, and a child whose drive is somebody
+    // else's must not be deleted for not being on this disk.
+    crate::device::mark_remote(&app_data_dir(state), &folder.notebook_id, &mut all_sources);
     // A file already in the notebook some other way — added individually, or
     // owned by an overlapping folder source — is not this folder's to ingest.
     let claimed: HashSet<&str> = all_sources
@@ -5218,7 +5253,7 @@ async fn rescan_one_folder_inner(
     // Files that disappeared from disk take their sources with them.
     let disk_paths: HashSet<&str> = on_disk.iter().map(|e| e.path.as_str()).collect();
     for child in &children {
-        if !disk_paths.contains(child.url.as_str()) {
+        if child_vanished(child, disk_paths.contains(child.url.as_str())) {
             state.db.delete_source(&child.id).await?;
             removed_titles.push(child.title.clone());
             scan.removed += 1;
@@ -5527,6 +5562,8 @@ pub async fn add_source_folder(
         "folder"
     };
     let folder = Source {
+        origin_device: String::new(),
+        remote: false,
         image_url: String::new(),
         author: String::new(),
         id: new_id(),
@@ -11427,6 +11464,8 @@ pub async fn seed_scale_fixture(
     let day = 86_400_000i64;
     let mut sources: Vec<Source> = Vec::with_capacity(total);
     let blank = |i: usize, title: String, source_type: &str| Source {
+        origin_device: String::new(),
+        remote: false,
         id: format!("fx-scale-{i:05}"),
         notebook_id: nb.id.clone(),
         title,
@@ -12945,6 +12984,10 @@ pub(crate) async fn import_bundle(
         };
         let user_tags = parsed.nested("alchemy", "tags");
         let parent = parsed.nested("alchemy", "parent");
+        // The Mac whose disk `resource` describes (RFC-okf-live §5.8). On the
+        // machine that wrote the bundle this is a no-op; on any other it is
+        // what keeps a OneDrive path from reading as a deleted file.
+        let device = parsed.nested("alchemy", "device");
         // The bundle may carry the original (RFC-okf-live §6). Re-extract it
         // through the ordinary file path so a PDF arrives as pages and an
         // image as a picture, rather than as the text the far side flattened
@@ -12989,6 +13032,14 @@ pub(crate) async fn import_bundle(
                 // routing and the chat manifest — restore them.
                 if let Some(tags) = user_tags {
                     let _ = state.db.set_source_tags(&landed.id, &tags).await;
+                }
+                if let Some(device) = device {
+                    crate::device::note_origin_device(
+                        &app_data_dir(state),
+                        &notebook.id,
+                        &landed.id,
+                        &device,
+                    );
                 }
                 if let Some(slug) = doc.file_stem().and_then(|s| s.to_str()) {
                     slugs.insert(slug.to_string(), landed.id.clone());

@@ -9,6 +9,7 @@ mod commands;
 mod connectors;
 mod crashwatch;
 mod db;
+mod device;
 mod diagnostics;
 #[cfg(target_os = "macos")]
 mod dockmenu;
