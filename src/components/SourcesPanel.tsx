@@ -26,6 +26,7 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import { sourceSubtree } from "@/lib/sourceRows";
 import {
   FOLDER_TYPES,
   KIND_LABEL,
@@ -153,11 +154,17 @@ export function Favicon({ url }: { url: string }) {
  *  way a kind chip does. */
 type FreshFacet = "week" | "month" | "stale" | "uncited" | "missing";
 
-/** One row of the panel: a source (folder children indent) or a domain
- *  rollup grouping loose web sources from one busy host. */
+/** One row of the panel: a source (nested under its folder by `depth`) or a
+ *  domain rollup grouping loose web sources from one busy host. */
 type SourceRow =
-  | { kind: "source"; s: Source; indent: boolean }
+  | { kind: "source"; s: Source; depth: number }
   | { kind: "group"; host: string; kids: Source[] };
+
+/** Indent stops, in rem so nesting tracks the OS text size like everything
+ *  else. Past six the panel is narrower than the indent; deeper rows share
+ *  the last stop rather than walking off the edge. */
+const INDENT_REM = 1.25;
+const MAX_INDENT = 6;
 
 function hostname(url: string): string {
   try {
@@ -417,9 +424,10 @@ export function SourcesPanel() {
     return true;
   };
 
-  // Rows: folder children indent under their parent; loose web sources from
-  // a busy domain fold into a group row (Pillar 1 rollups) at rest —
-  // an active filter answers its own question, so it shows flat matches.
+  // Rows: folder children indent under their parent, however deep the tree
+  // goes; loose web sources from a busy domain fold into a group row
+  // (Pillar 1 rollups) at rest — an active filter answers its own question,
+  // so it shows flat matches.
   const rows: SourceRow[] = [];
   const looseByHost = new Map<string, Source[]>();
   if (!filterActive) {
@@ -433,22 +441,20 @@ export function SourcesPanel() {
     }
   }
   const hostEmitted = new Set<string>();
+  // A folder and everything under it, however deep — an OKF bundle restores
+  // whatever parent chain it was exported with, so a folder can sit inside a
+  // folder, and the chevron on those inner rows used to rotate over a
+  // subtree that was never a candidate for a row (alchemy-release-dbk).
+  const subtree = (s: Source) =>
+    sourceSubtree(s, childrenOf, {
+      collapsed: (x, kidCount) => isCollapsed(x.id, kidCount),
+      matches: filterActive ? matchesFilters : undefined,
+    });
   for (const s of sources) {
     if (s.parentId) continue;
     if (FOLDER_TYPES.includes(s.sourceType)) {
-      const kids = childrenOf.get(s.id) ?? [];
-      const matchKids = filterActive ? kids.filter(matchesFilters) : kids;
-      if (filterActive && !matchesFilters(s) && matchKids.length === 0)
-        continue;
-      rows.push({ kind: "source", s, indent: false });
-      // Filtering auto-expands: a match hidden under a collapsed folder
-      // reads as no match at all.
-      const expanded = filterActive
-        ? matchKids.length > 0
-        : !isCollapsed(s.id, kids.length);
-      if (expanded)
-        for (const c of filterActive ? matchKids : kids)
-          rows.push({ kind: "source", s: c, indent: true });
+      for (const r of subtree(s))
+        rows.push({ kind: "source", s: r.s, depth: r.depth });
       continue;
     }
     const host =
@@ -459,12 +465,11 @@ export function SourcesPanel() {
       hostEmitted.add(host);
       rows.push({ kind: "group", host, kids: hostKids });
       if (!isCollapsed(`domain:${host}`, hostKids.length))
-        for (const c of hostKids)
-          rows.push({ kind: "source", s: c, indent: true });
+        for (const c of hostKids) rows.push({ kind: "source", s: c, depth: 1 });
       continue;
     }
     if (filterActive && !matchesFilters(s)) continue;
-    rows.push({ kind: "source", s, indent: false });
+    rows.push({ kind: "source", s, depth: 0 });
   }
   const childCount = (folderId: string) =>
     (childrenOf.get(folderId) ?? []).length;
@@ -1056,7 +1061,7 @@ export function SourcesPanel() {
                     </div>
                   );
                 }
-                const { s, indent } = row;
+                const { s, depth } = row;
                 const isFolder = FOLDER_TYPES.includes(s.sourceType);
                 // Which sync root a folder came out of, if any — same
                 // provider keys the Add sources dialog draws marks from.
@@ -1102,8 +1107,14 @@ export function SourcesPanel() {
                       // only when it means something; never a left border).
                       isPicked && "bg-primary/10 hover:bg-primary/15",
                       readable && "cursor-pointer",
-                      indent && "ml-5",
                     )}
+                    style={
+                      depth > 0
+                        ? {
+                            marginLeft: `${Math.min(depth, MAX_INDENT) * INDENT_REM}rem`,
+                          }
+                        : undefined
+                    }
                   >
                     {!importing && (
                       <CardAction
