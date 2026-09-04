@@ -1156,13 +1156,10 @@ impl Ai {
         };
         let model = o.chat_model_name().to_string();
         let loaded = self.ollama.ps().await.ok()?;
-        // `ps` reports fully tagged names; configs may omit `:latest`.
-        let norm = |s: &str| s.trim_end_matches(":latest").to_string();
-        if loaded.iter().any(|m| norm(m) == norm(&model)) {
-            None
-        } else {
-            Some(model)
-        }
+        // Residency is not readiness — see `ollama::is_cold`. Warm-on-typing
+        // puts the model in `ps` the instant loading starts, which is how
+        // this notice went quiet for the one case it exists for.
+        crate::inference::ollama_is_cold(&model, &loaded).then_some(model)
     }
 
     pub async fn chat_role(&self, role: Role, messages: &[ChatTurn]) -> Result<ChatOutcome> {

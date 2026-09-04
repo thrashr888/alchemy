@@ -7,6 +7,55 @@ use serde_json::json;
 
 use super::{ChatOutcome, ChatTurn, GenStats, OllamaConfig};
 
+/// Models this process has asked Ollama to load and has not yet seen finish.
+///
+/// Warm-on-typing (RFC-chat-latency) is why this exists: one keystroke fires
+/// a preload, and `ollama ps` reports a model as soon as loading *begins*.
+/// From that moment residency alone says "ready" — so the "Starting {model}…"
+/// notice stopped appearing for exactly the case it was written for, a 30B
+/// model paging in while the user waits at a silent composer.
+static WARMING: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// Marks a model as loading for as long as it is alive.
+struct WarmMark(String);
+
+impl WarmMark {
+    fn set(model: &str) -> Self {
+        let mut guard = WARMING.lock().unwrap_or_else(|p| p.into_inner());
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(model.to_string());
+        WarmMark(model.to_string())
+    }
+}
+
+impl Drop for WarmMark {
+    fn drop(&mut self) {
+        let mut guard = WARMING.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(set) = guard.as_mut() {
+            set.remove(&self.0);
+        }
+    }
+}
+
+fn is_warming(model: &str) -> bool {
+    let guard = WARMING.lock().unwrap_or_else(|p| p.into_inner());
+    guard.as_ref().is_some_and(|set| set.contains(model))
+}
+
+/// Will running `model` make the caller wait for a load?
+///
+/// Residency is not readiness: a preload still in flight has already put the
+/// model in `ps`. Names are compared with `:latest` trimmed, because `ps`
+/// reports fully tagged names and configs may omit the tag.
+pub fn is_cold(model: &str, loaded: &[String]) -> bool {
+    fn norm(s: &str) -> &str {
+        s.trim_end_matches(":latest")
+    }
+    is_warming(model) || !loaded.iter().any(|m| norm(m) == norm(model))
+}
+
 #[derive(Clone)]
 pub struct Ollama {
     http: reqwest::Client,
@@ -413,6 +462,10 @@ impl Ollama {
             .clone()
             .unwrap_or_else(|| "10m".into());
         let started = std::time::Instant::now();
+        // Held for the whole request: `ps` lists a model the moment loading
+        // STARTS, so from here until this returns the model looks resident
+        // while the user is still waiting for it. `is_cold` asks for this.
+        let _loading = WarmMark::set(&self.config.chat_model);
         let res = self
             .http
             .post(self.url("/api/chat"))
@@ -488,6 +541,30 @@ impl Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Warm-on-typing broke the cold-load notice: `ps` lists a model the
+    /// instant loading starts, so a 30B model still paging in read as
+    /// resident and "Starting {model}…" never appeared for the one case it
+    /// was written for. A preload in flight is cold.
+    #[test]
+    fn a_model_still_loading_is_still_cold() {
+        let loaded = vec!["muse-glimmer:30b-mlx".to_string()];
+        assert!(!is_cold("muse-glimmer:30b-mlx", &loaded));
+        {
+            let _loading = WarmMark::set("muse-glimmer:30b-mlx");
+            assert!(
+                is_cold("muse-glimmer:30b-mlx", &loaded),
+                "in ps but still warming — the user is waiting"
+            );
+        }
+        // The mark lifts when the preload returns, load finished.
+        assert!(!is_cold("muse-glimmer:30b-mlx", &loaded));
+
+        // Nothing resident is cold, and the tag is not part of the identity.
+        assert!(is_cold("other:8b", &loaded));
+        assert!(!is_cold("llama:latest", &["llama".to_string()]));
+        assert!(!is_cold("llama", &["llama:latest".to_string()]));
+    }
 
     /// The Small engine's `think: false` reaches the request body and wins
     /// over a reasoning effort; an engine with no opinion sends nothing.

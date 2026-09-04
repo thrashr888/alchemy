@@ -24,6 +24,7 @@ mod fm;
 mod gateway;
 mod local_embed;
 mod ollama;
+pub use ollama::is_cold as ollama_is_cold;
 // Eval-only until the app search path adopts it (task: close the oracle
 // ranking gap) — beir_eval's BEIR_XENC hook is the sole consumer today.
 #[cfg_attr(not(test), allow(dead_code))]
