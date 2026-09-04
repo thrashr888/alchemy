@@ -69,9 +69,15 @@ export function describe(error: unknown): string {
       ? `${what} timed out. If you're using Ollama, check that it's running and the model is loaded.`
       : `${what} timed out. It may just be busy — try again.`;
   }
-  if (error instanceof IpcError) {
-    return error.message;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/too many open files|\bos error (?:23|24)\b|\b(?:EMFILE|ENFILE)\b/i.test(message)) {
+    return "Alchemy reached the system's open-file limit. Let current imports finish, then try again. If it keeps happening, restart Alchemy.";
   }
-  if (error instanceof Error) return error.message;
-  return String(error);
+  // Lance errors can include dependency source paths and line numbers.
+  // Keep those in diagnostics rather than showing a Rust build path in a
+  // source card. Other errors retain their specific recovery advice.
+  if (/\bLanceError\b|\.cargo[\\/]registry[\\/]src[\\/]/i.test(message)) {
+    return "Alchemy couldn't read or update its local database. Try again. If it keeps happening, restart Alchemy.";
+  }
+  return message;
 }

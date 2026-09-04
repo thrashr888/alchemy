@@ -256,6 +256,10 @@ fn apply_diversity(
 
 pub struct Db {
     conn: Connection,
+    /// Bound overlapping full-table scans from foreground panes and
+    /// background work. Each scan may open many Lance fragments; the OS
+    /// descriptor limit alone does not bound that multiplied workload.
+    scan_slots: tokio::sync::Semaphore,
     /// Serializes chunk BM25-index rebuilds. `add_chunks` rebuilds the whole
     /// full-text index on every write; the background gist/enrichment sweep
     /// (RFC-infinite-context) made those writes concurrent with foreground
@@ -380,6 +384,7 @@ impl Db {
             .context("failed to open LanceDB")?;
         let db = Self {
             conn,
+            scan_slots: tokio::sync::Semaphore::new(4),
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
@@ -911,6 +916,7 @@ impl Db {
     }
 
     async fn collect(&self, table: &str, filter: Option<&str>) -> Result<Vec<RecordBatch>> {
+        let _slot = self.scan_slots.acquire().await?;
         if !self.table_exists(table).await? {
             return Ok(vec![]);
         }
@@ -931,6 +937,7 @@ impl Db {
         filter: Option<&str>,
         cols: &[&str],
     ) -> Result<Vec<RecordBatch>> {
+        let _slot = self.scan_slots.acquire().await?;
         if !self.table_exists(table).await? {
             return Ok(vec![]);
         }
@@ -1444,10 +1451,13 @@ impl Db {
         &self,
         notebook_id: &str,
     ) -> Result<std::sync::Arc<Vec<Source>>> {
+        // Hold the cache lock through the scan so simultaneous misses share
+        // one result. Recheck the live version AFTER waiting: a writer may
+        // have changed the table while another caller populated the cache.
+        let mut slot = self.content_cache.write().await;
         let version = self.table_version(T_SOURCES).await;
         if let Some(v) = version {
-            let hit = self.content_cache.read().await;
-            if let Some(c) = hit.as_ref() {
+            if let Some(c) = slot.as_ref() {
                 if c.notebook_id == notebook_id
                     && c.version == v
                     && c.at.elapsed() < CONTENT_CACHE_TTL
@@ -1461,7 +1471,6 @@ impl Db {
         // landed mid-scan leaves the entry keyed to the older version and
         // the next call re-reads (the `NotebookCounts` rule).
         let bytes: usize = sources.iter().map(|s| s.content.len()).sum();
-        let mut slot = self.content_cache.write().await;
         match version {
             Some(v) if bytes <= CONTENT_CACHE_MAX_BYTES => {
                 *slot = Some(SourcesContent {
@@ -5373,6 +5382,85 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[tokio::test]
+    async fn shared_content_coalesces_concurrent_misses_and_refreshes_after_write() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        let (first, second) = tokio::join!(
+            db.sources_with_content_shared("nb"),
+            db.sources_with_content_shared("nb"),
+        );
+        let first = first.expect("first scan");
+        let second = second.expect("second scan");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "concurrent misses share one scan"
+        );
+
+        let source = Source {
+            id: "source".into(),
+            notebook_id: "nb".into(),
+            title: "Added after the cached scan".into(),
+            source_type: "text".into(),
+            content: "new content".into(),
+            char_count: 11,
+            status: "ready".into(),
+            origin_device: String::new(),
+            remote: false,
+            url: String::new(),
+            chunk_count: 0,
+            created_at: 1,
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        };
+        db.insert_source(&source, &[], &[]).await.expect("insert");
+        let fresh = db.sources_with_content_shared("nb").await.expect("refresh");
+        assert!(!Arc::ptr_eq(&first, &fresh));
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].content, "new content");
+        let other = db
+            .sources_with_content_shared("other")
+            .await
+            .expect("other notebook");
+        assert!(other.is_empty(), "cache cannot cross notebook boundaries");
+    }
+
+    #[tokio::test]
+    async fn scans_wait_for_capacity_and_release_it_after_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        let held = db
+            .scan_slots
+            .acquire_many(4)
+            .await
+            .expect("reserve capacity");
+        let scan = db.collect(T_SOURCES, None);
+        tokio::pin!(scan);
+        assert!(matches!(
+            futures::poll!(&mut scan),
+            std::task::Poll::Pending
+        ));
+        drop(held);
+        scan.await.expect("scan resumes");
+        assert!(db
+            .collect(T_SOURCES, Some("not valid SQL !!!"))
+            .await
+            .is_err());
+        assert_eq!(db.scan_slots.available_permits(), 4);
+        assert!(db
+            .collect_cols(T_SOURCES, None, &["missing_column"])
+            .await
+            .is_err());
+        assert_eq!(db.scan_slots.available_permits(), 4);
+    }
 
     fn meta_turn(thread: &str, id: &str, role: &str, content: &str, at: i64) -> MetaTurn {
         MetaTurn {

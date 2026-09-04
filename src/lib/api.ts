@@ -156,7 +156,8 @@ async function run<A>(operation: Operation<A>): Promise<A> {
   } catch (failure) {
     const message = describe(failure);
     const error = failure as Partial<AppError>;
-    report("error", "ipc", message, undefined, {
+    const raw = failure instanceof Error ? failure.message : String(failure);
+    report("error", "ipc", message, raw !== message ? raw : undefined, {
       command: error?.command ?? operation.command,
       failure: error?._tag ?? "Unknown",
     });

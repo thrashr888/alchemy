@@ -9,6 +9,7 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { describe } from "@/lib/errors";
 import type { Citation, Note, Source, Template } from "@/lib/types";
 import { AmbientRail } from "./AmbientRail";
 import { CardMetaRow, CardRail } from "./RegistrySection";
@@ -2665,7 +2666,7 @@ function SourceReader({
               )}
               {source.status === "error" && source.error && (
                 <span className="text-caption text-destructive/80 [overflow-wrap:anywhere]">
-                  Import failed: {source.error}
+                  Import failed: {describe(source.error)}
                 </span>
               )}
               {isWebUrl(source.url) && (

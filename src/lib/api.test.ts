@@ -48,6 +48,19 @@ describe("IPC policy", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves raw resource errors in diagnostics without retrying a write", async () => {
+    const raw = "LanceError(IO): Too many open files (os error 24), /build/.cargo/registry/src/lance/io.rs:9";
+    invokeMock.mockRejectedValueOnce(raw);
+
+    await expect(api.createNotebook("Test")).rejects.toThrow("open-file limit");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("open-file limit"),
+      raw,
+      expect.objectContaining({ command: "create_notebook" }),
+    );
+  });
+
   it("does not retry a timed-out read", async () => {
     invokeMock.mockReturnValueOnce(new Promise(() => {}));
 
