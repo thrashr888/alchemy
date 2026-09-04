@@ -26,6 +26,15 @@ import {
   visibleTitle,
 } from "@/lib/utils";
 import { sourceIcon } from "@/lib/sourceIcon";
+import {
+  FOLDER_TYPES,
+  KIND_LABEL,
+  kindCounts as countKinds,
+  liveFacet,
+  sourceKind,
+  tagCounts as countTags,
+  type SourceKind,
+} from "@/lib/sourceFacets";
 import { CloudMark } from "./CloudMarks";
 import { HYGIENE_LABEL, loadHygieneKept } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
@@ -137,25 +146,9 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-const FOLDER_TYPES = ["folder", "git", "notion", "obsidian", "okf", "feed"];
-
-/** Facet kinds: coarse buckets a narrow panel can offer as chips. */
-type SourceKind = "web" | "files" | "images" | "apple" | "folders";
+/** Freshness facets are a fixed set — unlike kinds and tags they never run
+ *  out of options, so their chips are always there to switch off. */
 type FreshFacet = "week" | "month" | "stale" | "uncited";
-function sourceKind(s: Source): SourceKind {
-  if (FOLDER_TYPES.includes(s.sourceType)) return "folders";
-  if (s.sourceType === "url" || s.sourceType === "html") return "web";
-  if (s.sourceType === "image") return "images";
-  if (s.sourceType === "mac") return "apple";
-  return "files";
-}
-const KIND_LABEL: Record<SourceKind, string> = {
-  web: "Web",
-  files: "Files",
-  images: "Images",
-  apple: "Apple",
-  folders: "Folders",
-};
 
 /** One row of the panel: a source (folder children indent) or a domain
  *  rollup grouping loose web sources from one busy host. */
@@ -357,11 +350,38 @@ export function SourcesPanel() {
       .catch(() => setCitedIds(new Set()));
   }, [freshFacet, citedIds]);
 
+  // Facet chips only offer what the notebook holds, with counts — both read
+  // off the live source list, so a removal moves them in the same render.
+  const kindCounts = useMemo(() => countKinds(sources), [sources]);
+  const tagTotals = useMemo(
+    () => new Set(sources.flatMap((s) => s.tags.split(" ").filter(Boolean))),
+    [sources],
+  );
+  // Removing the last source under a facet used to leave the panel filtered
+  // by a chip that no longer rendered — a filter with no way out. A facet
+  // holds only while the list still offers it (alchemy-release-zhk).
+  const liveKind = liveFacet(kindFacet, kindCounts);
+  const liveTag = liveFacet(tagFacet, tagTotals);
+  useEffect(() => {
+    if (kindFacet !== null && liveKind === null) setKindFacet(null);
+    if (tagFacet !== null && liveTag === null) setTagFacet(null);
+  }, [kindFacet, tagFacet, liveKind, liveTag]);
+  const tagChips = useMemo(
+    () => countTags(sources, liveTag),
+    [sources, liveTag],
+  );
+
   const q = query.trim().toLowerCase();
-  const filterActive = !!q || !!kindFacet || !!tagFacet || !!freshFacet;
+  const filterActive = !!q || !!liveKind || !!liveTag || !!freshFacet;
+  const clearFilters = () => {
+    setQuery("");
+    setKindFacet(null);
+    setTagFacet(null);
+    setFreshFacet(null);
+  };
   const matchesFilters = (s: Source): boolean => {
-    if (kindFacet && sourceKind(s) !== kindFacet) return false;
-    if (tagFacet && !s.tags.split(" ").includes(tagFacet)) return false;
+    if (liveKind && sourceKind(s) !== liveKind) return false;
+    if (liveTag && !s.tags.split(" ").includes(liveTag)) return false;
     if (freshFacet) {
       if (freshFacet === "uncited") {
         // Folder containers carry no chunks, so "uncited" would flag every
@@ -382,21 +402,6 @@ export function SourcesPanel() {
     }
     return true;
   };
-
-  // Facet chips only offer what the notebook holds, with counts.
-  const kindCounts = useMemo(() => {
-    const m = new Map<SourceKind, number>();
-    for (const s of sources)
-      m.set(sourceKind(s), (m.get(sourceKind(s)) ?? 0) + 1);
-    return m;
-  }, [sources]);
-  const tagCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const s of sources)
-      for (const t of s.tags.split(" "))
-        if (t) m.set(t, (m.get(t) ?? 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-  }, [sources]);
 
   // Rows: folder children indent under their parent; loose web sources from
   // a busy domain fold into a group row (Pillar 1 rollups) at rest —
@@ -459,7 +464,7 @@ export function SourcesPanel() {
     !selectedSourceIds || selectedSourceIds[id] !== false;
   // Folder container rows have no chunks — only content sources count.
   const contentSources = sources.filter(
-    (s) => !["folder", "obsidian", "okf"].includes(s.sourceType),
+    (s) => !FOLDER_TYPES.includes(s.sourceType),
   );
   const selectedCount = contentSources.filter((s) => isSelected(s.id)).length;
   const allSelected = selectedCount === contentSources.length;
@@ -720,8 +725,10 @@ export function SourcesPanel() {
       {/* Search-first navigation: past a handful of sources the filter box
           is the primary way in; chips narrow by kind, tag, freshness, and
           citation history. Hidden in small notebooks — eight rows filter
-          themselves. */}
-      {currentId && sources.length > 8 && (
+          themselves — but never while a filter is on: removing sources down
+          past that threshold used to take the only way to switch it off
+          along with it. */}
+      {currentId && (sources.length > 8 || filterActive) && (
         <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
@@ -754,19 +761,17 @@ export function SourcesPanel() {
               .map(([kind, n]) => (
                 <FacetChip
                   key={kind}
-                  active={kindFacet === kind}
-                  onClick={() =>
-                    setKindFacet(kindFacet === kind ? null : kind)
-                  }
+                  active={liveKind === kind}
+                  onClick={() => setKindFacet(liveKind === kind ? null : kind)}
                 >
                   {KIND_LABEL[kind]} {n}
                 </FacetChip>
               ))}
-            {tagCounts.map(([tag, n]) => (
+            {tagChips.map(([tag, n]) => (
               <FacetChip
                 key={`#${tag}`}
-                active={tagFacet === tag}
-                onClick={() => setTagFacet(tagFacet === tag ? null : tag)}
+                active={liveTag === tag}
+                onClick={() => setTagFacet(liveTag === tag ? null : tag)}
               >
                 #{tag} {n}
               </FacetChip>
@@ -937,10 +942,11 @@ export function SourcesPanel() {
               </button>
             )}
             {filterActive && rows.length === 0 && (
-              <EmptyState
-                title="No sources match"
-                hint="Clear the search or facet chips."
-              />
+              <EmptyState title="No sources match">
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              </EmptyState>
             )}
             <div
               className="relative"

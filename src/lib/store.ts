@@ -2250,6 +2250,10 @@ export const useStore = create<AppState>((set, get) => {
         if (nb) set({ sources: await api.listSources(nb) });
         set({ picked: null });
         void get().refreshHygiene();
+        // The notebook row carries its own source count, and every surface
+        // outside this panel reads it — leave it and Home keeps showing the
+        // sources you just removed (alchemy-release-zhk).
+        void get().refreshNotebooks();
         const restorable = doomed.filter(sourceRestorable);
         const label =
           sourceIds.length === 1
@@ -2276,12 +2280,14 @@ export const useStore = create<AppState>((set, get) => {
             if (get().currentId === nb)
               set({ sources: await api.listSources(nb) });
             void get().refreshHygiene();
+            void get().refreshNotebooks();
           },
           async () => {
             if (restoredIds.length > 0) await api.deleteSources(nb, restoredIds);
             if (get().currentId === nb)
               set({ sources: await api.listSources(nb) });
             void get().refreshHygiene();
+            void get().refreshNotebooks();
           },
         );
       }),
