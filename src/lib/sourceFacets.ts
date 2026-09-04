@@ -84,3 +84,19 @@ export function liveFacet<T extends string>(
   return available.has(selected) ? selected : null;
 }
 
+/** Sources whose bytes aren't here: the file was moved or deleted out from
+ *  under the notebook (the hygiene sweep's `missing-file`), or it is a cloud
+ *  stub that has never been downloaded (`status: "placeholder"` — iCloud,
+ *  Dropbox, Google Drive). Two causes, one question the reader is asking:
+ *  which of these can't I actually read? (alchemy-release-0z2) */
+export function missingSourceIds(
+  sources: readonly Pick<Source, "id" | "status">[],
+  hygiene: readonly { sourceId: string; bucket: string }[],
+): Set<string> {
+  const known = new Set(sources.map((s) => s.id));
+  const out = new Set<string>();
+  for (const s of sources) if (s.status === "placeholder") out.add(s.id);
+  for (const h of hygiene)
+    if (h.bucket === "missing-file" && known.has(h.sourceId)) out.add(h.sourceId);
+  return out;
+}

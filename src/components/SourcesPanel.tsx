@@ -31,6 +31,7 @@ import {
   KIND_LABEL,
   kindCounts as countKinds,
   liveFacet,
+  missingSourceIds,
   sourceKind,
   tagCounts as countTags,
   type SourceKind,
@@ -146,9 +147,11 @@ export function Favicon({ url }: { url: string }) {
   );
 }
 
-/** Freshness facets are a fixed set — unlike kinds and tags they never run
- *  out of options, so their chips are always there to switch off. */
-type FreshFacet = "week" | "month" | "stale" | "uncited";
+/** Condition facets. Freshness is a fixed set — unlike kinds and tags those
+ *  chips are always there to switch off. "missing" is the exception: it only
+ *  offers itself when something is actually missing, so it clears itself the
+ *  way a kind chip does. */
+type FreshFacet = "week" | "month" | "stale" | "uncited" | "missing";
 
 /** One row of the panel: a source (folder children indent) or a domain
  *  rollup grouping loose web sources from one busy host. */
@@ -362,17 +365,26 @@ export function SourcesPanel() {
   // holds only while the list still offers it (alchemy-release-zhk).
   const liveKind = liveFacet(kindFacet, kindCounts);
   const liveTag = liveFacet(tagFacet, tagTotals);
+  // Sources whose bytes aren't here — deleted out from under the notebook,
+  // or a cloud stub still in the cloud (RFC-okf-live §5.7).
+  const missingIds = useMemo(
+    () => missingSourceIds(sources, hygiene),
+    [sources, hygiene],
+  );
+  const liveFresh =
+    freshFacet === "missing" && missingIds.size === 0 ? null : freshFacet;
   useEffect(() => {
     if (kindFacet !== null && liveKind === null) setKindFacet(null);
     if (tagFacet !== null && liveTag === null) setTagFacet(null);
-  }, [kindFacet, tagFacet, liveKind, liveTag]);
+    if (freshFacet !== null && liveFresh === null) setFreshFacet(null);
+  }, [kindFacet, tagFacet, freshFacet, liveKind, liveTag, liveFresh]);
   const tagChips = useMemo(
     () => countTags(sources, liveTag),
     [sources, liveTag],
   );
 
   const q = query.trim().toLowerCase();
-  const filterActive = !!q || !!liveKind || !!liveTag || !!freshFacet;
+  const filterActive = !!q || !!liveKind || !!liveTag || !!liveFresh;
   const clearFilters = () => {
     setQuery("");
     setKindFacet(null);
@@ -382,17 +394,19 @@ export function SourcesPanel() {
   const matchesFilters = (s: Source): boolean => {
     if (liveKind && sourceKind(s) !== liveKind) return false;
     if (liveTag && !s.tags.split(" ").includes(liveTag)) return false;
-    if (freshFacet) {
-      if (freshFacet === "uncited") {
+    if (liveFresh) {
+      if (liveFresh === "missing") {
+        if (!missingIds.has(s.id)) return false;
+      } else if (liveFresh === "uncited") {
         // Folder containers carry no chunks, so "uncited" would flag every
         // one of them; the facet is about content sources.
         if (FOLDER_TYPES.includes(s.sourceType)) return false;
         if (!citedIds || citedIds.has(s.id)) return false;
       } else {
         const age = Date.now() - (s.fetchedAt || s.createdAt);
-        if (freshFacet === "week" && age > 7 * 86_400_000) return false;
-        if (freshFacet === "month" && age > 30 * 86_400_000) return false;
-        if (freshFacet === "stale" && age <= 30 * 86_400_000) return false;
+        if (liveFresh === "week" && age > 7 * 86_400_000) return false;
+        if (liveFresh === "month" && age > 30 * 86_400_000) return false;
+        if (liveFresh === "stale" && age <= 30 * 86_400_000) return false;
       }
     }
     if (q) {
@@ -723,7 +737,7 @@ export function SourcesPanel() {
       )}
 
       {/* Search-first navigation: past a handful of sources the filter box
-          is the primary way in; chips narrow by kind, tag, freshness, and
+          is the primary way in; chips narrow by kind, tag, condition, and
           citation history. Hidden in small notebooks — eight rows filter
           themselves — but never while a filter is on: removing sources down
           past that threshold used to take the only way to switch it off
@@ -776,6 +790,19 @@ export function SourcesPanel() {
                 #{tag} {n}
               </FacetChip>
             ))}
+            {/* Only offered when something is actually missing — the chip
+                carries its count, the way the kind chips do. */}
+            {missingIds.size > 0 && (
+              <FacetChip
+                active={liveFresh === "missing"}
+                title="File moved or deleted, or still in the cloud"
+                onClick={() =>
+                  setFreshFacet(liveFresh === "missing" ? null : "missing")
+                }
+              >
+                Missing {missingIds.size}
+              </FacetChip>
+            )}
             {(
               [
                 ["week", "7d", "Fetched or added this week"],
@@ -786,9 +813,9 @@ export function SourcesPanel() {
             ).map(([id, label, title]) => (
               <FacetChip
                 key={id}
-                active={freshFacet === id}
+                active={liveFresh === id}
                 title={title}
-                onClick={() => setFreshFacet(freshFacet === id ? null : id)}
+                onClick={() => setFreshFacet(liveFresh === id ? null : id)}
               >
                 {label}
               </FacetChip>

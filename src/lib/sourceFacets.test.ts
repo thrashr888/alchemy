@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { kindCounts, liveFacet, sourceKind, tagCounts } from "./sourceFacets";
+import {
+  kindCounts,
+  liveFacet,
+  missingSourceIds,
+  sourceKind,
+  tagCounts,
+} from "./sourceFacets";
 import type { Source } from "./types";
 
 const s = (sourceType: Source["sourceType"], tags = "") => ({
@@ -72,5 +78,30 @@ describe("liveFacet", () => {
 
   it("leaves an unset facet unset", () => {
     expect(liveFacet(null, kindCounts([s("url")]))).toBeNull();
+  });
+});
+
+describe("missingSourceIds", () => {
+  const src = (id: string, status: Source["status"]) => ({ id, status });
+
+  it("collects cloud stubs and files the sweep can no longer find", () => {
+    const sources = [
+      src("a", "placeholder"),
+      src("b", "ready"),
+      src("c", "ready"),
+    ];
+    const ids = missingSourceIds(sources, [
+      { sourceId: "c", bucket: "missing-file" },
+      { sourceId: "b", bucket: "duplicate" },
+    ]);
+    expect([...ids].sort()).toEqual(["a", "c"]);
+  });
+
+  it("ignores hygiene rows for sources that are already gone", () => {
+    const ids = missingSourceIds(
+      [src("a", "ready")],
+      [{ sourceId: "removed", bucket: "missing-file" }],
+    );
+    expect(ids.size).toBe(0);
   });
 });
