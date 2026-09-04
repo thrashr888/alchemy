@@ -3426,9 +3426,80 @@ const SHIKI_LANGS: Record<string, string> = {
   dockerfile: "dockerfile", md: "markdown",
 };
 
-// The css-variables theme is built once; colors ride the app tokens (see
-// index.css) so every scheme carries through.
-let shikiThemePromise: Promise<unknown> | null = null;
+/** One grammar loader per language SHIKI_LANGS can name. Explicit on purpose:
+ *  shiki's top-level entry point drags its whole ~200-language registry into
+ *  the build as lazy chunks, and every one of those chunks is embedded in the
+ *  release binary (docs/ARCHITECTURE.md, "Binary size"). Keep this table in
+ *  step with SHIKI_LANGS — an extension with no loader here renders as plain
+ *  text, exactly like an unknown extension already does. */
+const SHIKI_GRAMMARS: Record<string, () => Promise<unknown>> = {
+  rust: () => import("shiki/langs/rust.mjs"),
+  typescript: () => import("shiki/langs/typescript.mjs"),
+  tsx: () => import("shiki/langs/tsx.mjs"),
+  javascript: () => import("shiki/langs/javascript.mjs"),
+  jsx: () => import("shiki/langs/jsx.mjs"),
+  python: () => import("shiki/langs/python.mjs"),
+  go: () => import("shiki/langs/go.mjs"),
+  ruby: () => import("shiki/langs/ruby.mjs"),
+  java: () => import("shiki/langs/java.mjs"),
+  kotlin: () => import("shiki/langs/kotlin.mjs"),
+  swift: () => import("shiki/langs/swift.mjs"),
+  c: () => import("shiki/langs/c.mjs"),
+  cpp: () => import("shiki/langs/cpp.mjs"),
+  php: () => import("shiki/langs/php.mjs"),
+  shellscript: () => import("shiki/langs/shellscript.mjs"),
+  sql: () => import("shiki/langs/sql.mjs"),
+  scala: () => import("shiki/langs/scala.mjs"),
+  lua: () => import("shiki/langs/lua.mjs"),
+  toml: () => import("shiki/langs/toml.mjs"),
+  yaml: () => import("shiki/langs/yaml.mjs"),
+  json: () => import("shiki/langs/json.mjs"),
+  jsonc: () => import("shiki/langs/jsonc.mjs"),
+  hcl: () => import("shiki/langs/hcl.mjs"),
+  css: () => import("shiki/langs/css.mjs"),
+  scss: () => import("shiki/langs/scss.mjs"),
+  html: () => import("shiki/langs/html.mjs"),
+  xml: () => import("shiki/langs/xml.mjs"),
+  proto: () => import("shiki/langs/proto.mjs"),
+  graphql: () => import("shiki/langs/graphql.mjs"),
+  vue: () => import("shiki/langs/vue.mjs"),
+  svelte: () => import("shiki/langs/svelte.mjs"),
+  dockerfile: () => import("shiki/langs/dockerfile.mjs"),
+  markdown: () => import("shiki/langs/markdown.mjs"),
+};
+
+// One highlighter for the app. The css-variables theme is built once, so
+// colors ride the app tokens (see index.css) and every scheme carries
+// through; grammars load on demand, the first time a file of that language
+// is opened.
+async function initShiki() {
+  const [core, onig] = await Promise.all([
+    import("shiki/core"),
+    import("shiki/engine/oniguruma"),
+  ]);
+  return core.createHighlighterCore({
+    themes: [
+      core.createCssVariablesTheme({
+        name: "alchemy",
+        variablePrefix: "--shiki-",
+        fontStyle: true,
+      }),
+    ],
+    langs: [],
+    engine: await onig.createOnigurumaEngine(import("shiki/wasm")),
+  });
+}
+
+type ShikiGrammar = Parameters<
+  Awaited<ReturnType<typeof initShiki>>["loadLanguage"]
+>[0];
+
+let shikiPromise: ReturnType<typeof initShiki> | null = null;
+
+function shikiCore() {
+  shikiPromise ??= initShiki();
+  return shikiPromise;
+}
 
 function CodeView({
   path,
@@ -3444,20 +3515,16 @@ function CodeView({
     let on = true;
     void (async () => {
       try {
-        const shiki = await import("shiki");
-        shikiThemePromise ??= Promise.resolve(
-          shiki.createCssVariablesTheme({
-            name: "alchemy",
-            variablePrefix: "--shiki-",
-            fontStyle: true,
-          }),
-        );
-        const theme =
-          (await shikiThemePromise) as import("shiki").ThemeRegistrationAny;
         const name = path.split("/").pop()?.toLowerCase() ?? "";
         const ext = name.includes(".") ? name.split(".").pop()! : name;
-        const lang = SHIKI_LANGS[ext] ?? "txt";
-        const out = await shiki.codeToHtml(code, { lang, theme });
+        const want = SHIKI_LANGS[ext] ?? "txt";
+        const hl = await shikiCore();
+        const loader = SHIKI_GRAMMARS[want];
+        if (loader && !hl.getLoadedLanguages().includes(want)) {
+          await hl.loadLanguage((await loader()) as ShikiGrammar);
+        }
+        const lang = hl.getLoadedLanguages().includes(want) ? want : "txt";
+        const out = hl.codeToHtml(code, { lang, theme: "alchemy" });
         if (on) setHtml(out);
       } catch {
         if (on) setHtml(null);
