@@ -50,7 +50,42 @@ import {
   FolderOpen,
   ChevronDown,
   ChevronUp,
+  ArrowUpDown,
 } from "lucide-react";
+
+/** How the notes list is ordered. Recency is the default because the list is
+ *  mostly a record of what was just made; the other two are for finding a
+ *  note you already know about. */
+type NoteSort = "recent" | "title" | "type";
+const NOTE_SORTS: { value: NoteSort; label: string }[] = [
+  { value: "recent", label: "Recent" },
+  { value: "title", label: "Title" },
+  { value: "type", label: "Type" },
+];
+
+function readNoteSort(): NoteSort {
+  try {
+    const v = localStorage.getItem("studioNoteSort");
+    if (NOTE_SORTS.some((s) => s.value === v)) return v as NoteSort;
+  } catch {
+    // Quota or private-mode noise; recency is the default anyway.
+  }
+  return "recent";
+}
+
+/** Ties break on the title, so equal dates or one type's whole run still
+ *  read down alphabetically instead of reshuffling on each render. */
+function sortNotes(notes: Note[], sort: NoteSort): Note[] {
+  const byTitle = (a: Note, b: Note) => a.title.localeCompare(b.title);
+  return [...notes].sort((a, b) => {
+    if (sort === "title") return byTitle(a, b);
+    if (sort === "type") {
+      const label = (n: Note) => KIND_LABEL[n.kind] ?? n.kind;
+      return label(a).localeCompare(label(b)) || byTitle(a, b);
+    }
+    return b.updatedAt - a.updatedAt || byTitle(a, b);
+  });
+}
 
 /** Generator families carry a quiet color identity: the icon takes the family
  *  accent (tokens in index.css) and the tile gets a faint matching wash that
@@ -230,9 +265,26 @@ export function StudioPanel() {
     () => new Set(picked?.kind === "notes" ? picked.ids : []),
     [picked],
   );
-  const visibleNoteIds = notes
-    .filter((n) => n.status !== "archived" && !isWikiPage(n))
-    .map((n) => n.id);
+  // One ordered list feeds both the rows and the selection, so a shift-click
+  // range runs down the notes as they are drawn.
+  const [noteSort, setNoteSort] = useState<NoteSort>(readNoteSort);
+  const changeNoteSort = (v: NoteSort) => {
+    setNoteSort(v);
+    try {
+      localStorage.setItem("studioNoteSort", v);
+    } catch {
+      // The order holds for this session either way.
+    }
+  };
+  const listedNotes = useMemo(
+    () =>
+      sortNotes(
+        notes.filter((n) => n.status !== "archived" && !isWikiPage(n)),
+        noteSort,
+      ),
+    [notes, noteSort],
+  );
+  const visibleNoteIds = listedNotes.map((n) => n.id);
   const visibleNoteIdsRef = useRef(visibleNoteIds);
   visibleNoteIdsRef.current = visibleNoteIds;
 
@@ -613,20 +665,37 @@ export function StudioPanel() {
           <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             Notes
           </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            disabled={!currentId}
-            onClick={() => {
-              setDraftTitle("");
-              setDraftBody("");
-              setComposing(true);
-            }}
-            title="New note"
-            aria-label="New note"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* A menu rather than a select: the panel is 320px at rest, and
+                the three orders are a one-of choice, which is what a radio
+                menu item says out loud. */}
+            <RowMenu
+              label="Sort notes"
+              alwaysVisible
+              rowContext={false}
+              trigger={<ArrowUpDown className="h-3.5 w-3.5" />}
+              triggerClassName="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+              items={NOTE_SORTS.map((s) => ({
+                label: s.label,
+                checked: noteSort === s.value,
+                onClick: () => changeNoteSort(s.value),
+              }))}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={!currentId}
+              onClick={() => {
+                setDraftTitle("");
+                setDraftBody("");
+                setComposing(true);
+              }}
+              title="New note"
+              aria-label="New note"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="px-2 pb-2">
@@ -640,9 +709,7 @@ export function StudioPanel() {
             />
           ) : (
             <div className="flex flex-col gap-1.5">
-              {notes
-                .filter((n) => n.status !== "archived" && !isWikiPage(n))
-                .map((n) => (
+              {listedNotes.map((n) => (
                 <div
                   key={n.id}
                   data-pick-id={n.id}

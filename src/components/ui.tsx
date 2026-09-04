@@ -1008,6 +1008,10 @@ export interface RowMenuItem {
   icon?: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
+  /** Set on items that pick one of a set (a sort order, say): the item
+   *  becomes a radio menu item with a tick, so the current choice survives
+   *  being read aloud instead of living only in the glyph. */
+  checked?: boolean;
 }
 
 /**
@@ -1272,7 +1276,8 @@ export function RowMenu({
           {(swapItems ?? items).map((it) => (
             <button
               key={it.label}
-              role="menuitem"
+              role={it.checked === undefined ? "menuitem" : "menuitemradio"}
+              aria-checked={it.checked}
               onClick={() => {
                 closeAndRestoreFocus();
                 it.onClick();
@@ -1284,12 +1289,24 @@ export function RowMenu({
                   : "text-foreground/90 hover:bg-surface-2 hover:text-foreground",
               )}
             >
-              {it.icon && (
-                <span
-                  className={it.danger ? undefined : "text-muted-foreground"}
-                >
-                  {it.icon}
-                </span>
+              {/* The tick keeps its slot when unticked, so the labels of a
+                  choice list stay on one left edge. */}
+              {it.checked !== undefined ? (
+                <Check
+                  aria-hidden
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 text-muted-foreground",
+                    !it.checked && "opacity-0",
+                  )}
+                />
+              ) : (
+                it.icon && (
+                  <span
+                    className={it.danger ? undefined : "text-muted-foreground"}
+                  >
+                    {it.icon}
+                  </span>
+                )
               )}
               {it.label}
             </button>
