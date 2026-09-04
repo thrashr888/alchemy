@@ -90,8 +90,19 @@ fn extract_links(text: &str) -> Vec<(String, String)> {
             i = start + 4;
             continue;
         }
+        // Where the URL stops. Markdown delimiters end it as surely as
+        // whitespace does: `[http://a](http://a)` used to run the scan
+        // straight through the `](` and propose the whole splice as one
+        // "url" (Reminders d566d11d). A bracket, a backtick or a pipe is
+        // never part of an unescaped URL, so each one is a terminator.
         let end = rest
-            .find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == '<' || c == '\'')
+            .find(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '<' | '>' | '`' | '|' | '\\'
+                    )
+            })
             .unwrap_or(rest.len());
         let raw = rest[..end].trim_end_matches(['.', ',', ';', ']', '}']);
         // Markdown anchor: the "](url" shape puts "[anchor]" just before.
@@ -1116,6 +1127,35 @@ mod tests {
         let props = proposals(&sources, &[]);
         assert!(props.iter().all(|p| p.url != "https://two.test/b"));
         assert!(props.iter().all(|p| !p.url.contains("pic.png")));
+    }
+
+    #[test]
+    fn markdown_links_are_never_split_mid_token() {
+        // A self-linking markdown URL — `[http://x](http://x)` — is how the
+        // splice got into the Grow list: the scan ran through the `](` and
+        // proposed "hub:8450](http://hub:8450" as a page to add.
+        let links = extract_links("Dashboard: [http://hub:8450](http://hub:8450) is up.");
+        assert_eq!(
+            links.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(),
+            vec!["http://hub:8450", "http://hub:8450"]
+        );
+        // The anchor still reads off the "](" shape.
+        assert_eq!(links[1].1, "http://hub:8450");
+
+        // Ordinary markdown links keep their anchor, and every delimiter
+        // that can wrap a URL ends it.
+        let links = extract_links(
+            "[Async book](https://rust-lang.github.io/async-book), \
+             `https://a.test/tick`, <https://b.test/angle>, |https://c.test/pipe|",
+        );
+        assert_eq!(links[0].0, "https://rust-lang.github.io/async-book");
+        assert_eq!(links[0].1, "Async book");
+        assert_eq!(links[1].0, "https://a.test/tick");
+        assert_eq!(links[2].0, "https://b.test/angle");
+        assert_eq!(links[3].0, "https://c.test/pipe");
+        assert!(links
+            .iter()
+            .all(|(u, _)| !u.contains(['[', ']', '(', '`', '|', '<', '>'])));
     }
 
     #[test]
