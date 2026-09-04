@@ -10,7 +10,7 @@ import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
-import { RichEditor } from "./RichEditor";
+import { LazyRichEditor } from "./LazyRichEditor";
 import { Button, Input, Modal, Spinner } from "./ui";
 import { cn } from "@/lib/utils";
 import {
@@ -108,7 +108,7 @@ export function StudioNoteViewer({
               value={title}
               onChange={(event) => setTitle(event.target.value)}
             />
-            <RichEditor value={body} onChange={setBody} />
+            <LazyRichEditor value={body} onChange={setBody} />
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
                 Cancel

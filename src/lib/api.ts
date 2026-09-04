@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Cause, Duration, Effect, Schedule } from "effect";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import { report } from "./diagnostics";
 import type {
@@ -58,94 +57,117 @@ import type {
   Template,
 } from "./types";
 
-/**
- * Effect powers the data layer: every IPC call is wrapped with a timeout and
- * typed errors, and idempotent reads get bounded retries (Ollama can be flaky
- * on cold starts). The public `api` keeps a plain Promise surface so the store
- * and components don't need to know about Effect.
- */
+/** One API operation plus the command name diagnostics reports on failure. */
+interface Operation<T> {
+  command: string;
+  execute: () => Promise<T>;
+}
 
-const invokeRaw = <T>(command: string, args?: Record<string, unknown>) =>
-  Effect.tryPromise({
-    try: () => invoke<T>(command, args),
-    catch: (e) => new IpcError({ command, message: String(e) }),
+const pause = (ms: number) =>
+  new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms));
+
+async function invokeRaw<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw new IpcError({ command, message: String(error) });
+  }
+}
+
+async function withTimeout<T>(
+  command: string,
+  timeoutMs: number,
+  execute: () => Promise<T>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = globalThis.setTimeout(
+      () => reject(new TimeoutError({ command })),
+      timeoutMs,
+    );
   });
+  try {
+    return await Promise.race([execute(), timeout]);
+  } finally {
+    if (timer !== undefined) globalThis.clearTimeout(timer);
+  }
+}
 
-// Retry transient IPC failures (not timeouts) a couple of times with backoff.
-const retryPolicy = Schedule.exponential("300 millis").pipe(
-  Schedule.intersect(Schedule.recurs(2)),
-);
+/** Build one bounded IPC operation. Only idempotent reads opt into retries. */
+function operation<T>(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  timeoutMs: number,
+  retries = 0,
+): Operation<T> {
+  return {
+    command,
+    execute: async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await withTimeout(command, timeoutMs, () =>
+            invokeRaw<T>(command, args),
+          );
+        } catch (error) {
+          // Match the old policy exactly: an IPC rejection retries after
+          // 300ms then 600ms; a timeout never retries, and neither does a
+          // mutation (whose retries value is zero).
+          if (!(error instanceof IpcError) || attempt >= retries) throw error;
+          await pause(300 * 2 ** attempt);
+        }
+      }
+    },
+  };
+}
 
 /** Idempotent read: short timeout + bounded retry. */
 const query = <T>(command: string, args?: Record<string, unknown>) =>
-  invokeRaw<T>(command, args).pipe(
-    Effect.timeoutFail({
-      duration: Duration.seconds(30),
-      onTimeout: () => new TimeoutError({ command }),
-    }),
-    Effect.retry({
-      schedule: retryPolicy,
-      while: (e: AppError) => e._tag === "IpcError",
-    }),
-  );
+  operation<T>(command, args, 30_000, 2);
 
 /** Quick mutation (DB write): short timeout, no retry (avoid double writes). */
 const cmd = <T>(command: string, args?: Record<string, unknown>) =>
-  invokeRaw<T>(command, args).pipe(
-    Effect.timeoutFail({
-      duration: Duration.seconds(30),
-      onTimeout: () => new TimeoutError({ command }),
-    }),
-  );
+  operation<T>(command, args, 30_000);
 
 /** Fast probe (gateway checks): one attempt, short timeout, no retry. */
 const probe = <T>(command: string, args?: Record<string, unknown>) =>
-  invokeRaw<T>(command, args).pipe(
-    Effect.timeoutFail({
-      duration: Duration.seconds(15),
-      onTimeout: () => new TimeoutError({ command }),
-    }),
-  );
+  operation<T>(command, args, 15_000);
 
 /** Long-running AI op (embed / generate / chat): generous timeout, no retry. */
 const ai = <T>(command: string, args?: Record<string, unknown>) =>
-  invokeRaw<T>(command, args).pipe(
-    Effect.timeoutFail({
-      duration: Duration.minutes(10),
-      onTimeout: () => new TimeoutError({ command }),
-    }),
-  );
+  operation<T>(command, args, 10 * 60_000);
 
 /** Marathon op (a 20-minute episode scripts + synthesizes for a long time):
  *  the ceiling exists only to catch a truly wedged backend. */
 const slow = <T>(command: string, args?: Record<string, unknown>) =>
-  invokeRaw<T>(command, args).pipe(
-    Effect.timeoutFail({
-      duration: Duration.minutes(60),
-      onTimeout: () => new TimeoutError({ command }),
-    }),
-  );
+  operation<T>(command, args, 60 * 60_000);
 
-/** Run an Effect to a Promise, rejecting with a clean, user-friendly Error.
+/** Run one operation, rejecting with a clean, user-friendly Error.
  *
  *  Every backend failure the app ever surfaces passes through here, after
  *  retries and timeouts have had their say — which makes it the one place
  *  worth logging from (docs/RFC-diagnostics.md). Without it, a command that
  *  fails becomes a toast the user reads once and we never see. */
-async function run<A>(effect: Effect.Effect<A, AppError>): Promise<A> {
-  const exit = await Effect.runPromiseExit(effect);
-  if (exit._tag === "Success") return exit.value;
-  const failure = Cause.squash(exit.cause);
-  const message = describe(failure);
-  const error = failure as Partial<AppError>;
-  report("error", "ipc", message, undefined, {
-    command: error?.command ?? "unknown",
-    failure: error?._tag ?? "Unknown",
-  });
-  throw new Error(message);
+async function run<A>(operation: Operation<A>): Promise<A> {
+  try {
+    return await operation.execute();
+  } catch (failure) {
+    const message = describe(failure);
+    const error = failure as Partial<AppError>;
+    report("error", "ipc", message, undefined, {
+      command: error?.command ?? operation.command,
+      failure: error?._tag ?? "Unknown",
+    });
+    throw new Error(message);
+  }
 }
 
 export const api = {
+  /** One-shot backend startup trace endpoint, called after React paints. */
+  reportStartupInteractive: () =>
+    run(cmd<void>("report_startup_interactive")),
   // Notebooks
   listNotebooks: () => run(query<Notebook[]>("list_notebooks")),
   createNotebook: (title: string, look?: { icon?: string; color?: string }) =>

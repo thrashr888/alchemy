@@ -83,51 +83,116 @@ pub fn cite_summaries(citations: &[crate::models::Citation]) -> Vec<serde_json::
 
 const STARTUP_FILE: &str = "startup.jsonl";
 
+/// The one startup clock for this process. Tauri builds the webview before it
+/// enters setup(), so the frontend can paint while setup is still running;
+/// retaining this clock lets its first committed frame close the same trace.
+static ACTIVE_STARTUP: std::sync::OnceLock<Startup> = std::sync::OnceLock::new();
+
 /// Boot-phase stamps in `startup.jsonl` (docs/RFC-professional-grade.md
 /// Pillar 2): one line per phase, so a cold-start regression between releases
 /// is a `jq` one-liner instead of a stopwatch.
 ///
-/// The clock is honest about where it starts and stops. `t0` is the top of
-/// `setup()`; the builder chain, plugin registration, and the config window
-/// whose webview Tauri builds *before* it runs our hook all happen earlier and
-/// are unreachable from there, so `ms` is elapsed-since-setup, never since
-/// `exec`. The last stamp is `setup_done` — the backend is ready and the
-/// webview has been loading alongside it. "Window interactive" would need a
-/// beacon the front-end does not emit; a stamp here would time `setup` rather
-/// than paint, so it is deliberately absent instead of wrong.
+/// The clock starts at the first instruction in [`crate::run`], before Tauri's
+/// plugin registration and WKWebView construction. It still cannot see the
+/// LaunchServices/dyld interval before Rust's entrypoint; an external launch
+/// harness must include that last piece. `window_interactive` comes from the
+/// frontend after its first committed frame, so the trace now covers every
+/// in-process phase instead of stopping at backend setup.
+#[derive(Clone)]
+pub struct StartupStart {
+    t0: std::time::Instant,
+    boot: String,
+}
+
+impl StartupStart {
+    pub fn begin() -> Self {
+        Self {
+            t0: std::time::Instant::now(),
+            boot: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    /// Attach the process clock once Tauri has resolved the app-data path.
+    /// The first record is backdated by the already-elapsed duration so its
+    /// timestamp represents the entrypoint rather than setup().
+    pub fn attach(self, dir: std::path::PathBuf) -> Startup {
+        let started = Startup {
+            dir,
+            t0: self.t0,
+            boot: self.boot,
+            interactive_reported: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let elapsed = started.t0.elapsed().as_millis() as i64;
+        started.log_stamp(
+            "process_start",
+            chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_sub(elapsed),
+            0,
+        );
+        started.stamp("setup_start");
+        let _ = ACTIVE_STARTUP.set(started.clone());
+        started
+    }
+}
+
+#[derive(Clone)]
 pub struct Startup {
     dir: std::path::PathBuf,
     t0: std::time::Instant,
     /// Groups one boot's lines together — the log interleaves runs.
     boot: String,
+    interactive_reported: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Startup {
-    /// Start the clock and stamp `setup_start`. `dir` is the traces directory.
+    /// Test and utility convenience. Production begins before the Tauri
+    /// builder through [`StartupStart`] so it includes pre-setup work.
+    #[cfg(test)]
     pub fn begin(dir: std::path::PathBuf) -> Self {
-        let started = Self {
-            dir,
-            t0: std::time::Instant::now(),
-            boot: uuid::Uuid::new_v4().to_string(),
-        };
-        started.stamp("setup_start");
-        started
+        StartupStart::begin().attach(dir)
     }
 
     /// Stamp one phase with its elapsed milliseconds since `begin`.
     /// Infallible like every other trace write — see module docs.
     pub fn stamp(&self, phase: &str) {
+        self.log_stamp(
+            phase,
+            chrono::Utc::now().timestamp_millis(),
+            self.t0.elapsed().as_millis() as u64,
+        );
+    }
+
+    fn log_stamp(&self, phase: &str, ts: i64, ms: u64) {
         log_file(
             &self.dir,
             STARTUP_FILE,
             serde_json::json!({
-                "ts": chrono::Utc::now().timestamp_millis(),
+                "ts": ts,
                 "version": env!("CARGO_PKG_VERSION"),
                 "boot": self.boot,
                 "phase": phase,
-                "ms": self.t0.elapsed().as_millis() as u64,
+                "ms": ms,
             }),
         );
+    }
+
+    fn stamp_interactive_once(&self) {
+        if !self
+            .interactive_reported
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.stamp("window_interactive");
+        }
+    }
+}
+
+/// Close the current process's startup trace after React's first committed
+/// frame. Infallible and idempotent: StrictMode and secondary windows may both
+/// call it, but a boot has one user-visible startup endpoint.
+pub fn stamp_startup_interactive() {
+    if let Some(startup) = ACTIVE_STARTUP.get() {
+        startup.stamp_interactive_once();
     }
 }
 
@@ -142,6 +207,8 @@ mod tests {
         let startup = super::Startup::begin(dir.clone());
         startup.stamp("db_open");
         startup.stamp("setup_done");
+        startup.stamp_interactive_once();
+        startup.stamp_interactive_once();
 
         let text = std::fs::read_to_string(dir.join(super::STARTUP_FILE)).expect("trace written");
         let lines: Vec<serde_json::Value> = text
@@ -149,7 +216,16 @@ mod tests {
             .map(|l| serde_json::from_str(l).expect("valid json"))
             .collect();
         let phases: Vec<&str> = lines.iter().map(|l| l["phase"].as_str().unwrap()).collect();
-        assert_eq!(phases, ["setup_start", "db_open", "setup_done"]);
+        assert_eq!(
+            phases,
+            [
+                "process_start",
+                "setup_start",
+                "db_open",
+                "setup_done",
+                "window_interactive"
+            ]
+        );
         assert!(lines
             .windows(2)
             .all(|w| w[0]["ms"].as_u64() <= w[1]["ms"].as_u64()));

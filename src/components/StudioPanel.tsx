@@ -20,7 +20,7 @@ import {
 } from "./ui";
 import { Reports } from "./Reports";
 import { exportNote, exportTargets } from "@/lib/noteExport";
-import { RichEditor } from "./RichEditor";
+import { LazyRichEditor } from "./LazyRichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import {
   cn,
@@ -987,7 +987,7 @@ export function StudioPanel() {
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
           />
-          <RichEditor value={draftBody} onChange={setDraftBody} />
+          <LazyRichEditor value={draftBody} onChange={setDraftBody} />
           <div className="flex justify-end gap-2">
             <Button
               type="button"

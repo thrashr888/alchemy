@@ -21,7 +21,7 @@ import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
-import { RichEditor } from "./RichEditor";
+import { LazyRichEditor } from "./LazyRichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
@@ -2944,7 +2944,7 @@ function NoteReader({
           onChange={(event) => setTitle(event.target.value)}
         />
         <div className="min-h-0 min-w-0 flex-1">
-          <RichEditor fill value={body} onChange={setBody} />
+          <LazyRichEditor fill value={body} onChange={setBody} />
         </div>
         <div className="flex shrink-0 justify-end gap-2">
           <Button type="button" variant="ghost" onClick={() => onEditingChange(false)}>
@@ -3126,7 +3126,7 @@ function InlineNote({ note }: { note: Note }) {
           routeDocLink(a.getAttribute("href") ?? "", undefined);
         }}
       >
-        <RichEditor
+        <LazyRichEditor
           bare
           insertRef={insertRef}
           value={note.content}

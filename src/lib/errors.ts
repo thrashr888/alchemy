@@ -1,17 +1,28 @@
-import { Data } from "effect";
-
 /**
  * Typed errors for the IPC/data layer. `IpcError` wraps any failure crossing the
  * Tauri boundary; `TimeoutError` is raised when a call exceeds its budget.
  */
-export class IpcError extends Data.TaggedError("IpcError")<{
-  command: string;
-  message: string;
-}> {}
+export class IpcError extends Error {
+  readonly _tag = "IpcError" as const;
+  readonly command: string;
 
-export class TimeoutError extends Data.TaggedError("TimeoutError")<{
-  command: string;
-}> {}
+  constructor({ command, message }: { command: string; message: string }) {
+    super(message);
+    this.name = "IpcError";
+    this.command = command;
+  }
+}
+
+export class TimeoutError extends Error {
+  readonly _tag = "TimeoutError" as const;
+  readonly command: string;
+
+  constructor({ command }: { command: string }) {
+    super(`${command} timed out`);
+    this.name = "TimeoutError";
+    this.command = command;
+  }
+}
 
 export type AppError = IpcError | TimeoutError;
 

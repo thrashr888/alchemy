@@ -32,13 +32,7 @@ function getMarkdown(editor: Editor): string {
 }
 
 /** WYSIWYG note editor. Value in/out is Markdown (via tiptap-markdown). */
-export function RichEditor({
-  value,
-  onChange,
-  fill = false,
-  bare = false,
-  insertRef,
-}: {
+export interface RichEditorProps {
   value: string;
   onChange: (markdown: string) => void;
   /** When provided, receives a function that inserts a link at the cursor
@@ -52,7 +46,15 @@ export function RichEditor({
   /** Seamless document surface: no box, no backgrounds, quiet toolbar,
    *  reading-width centered column — the pane itself is the paper. */
   bare?: boolean;
-}) {
+}
+
+export function RichEditor({
+  value,
+  onChange,
+  fill = false,
+  bare = false,
+  insertRef,
+}: RichEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({

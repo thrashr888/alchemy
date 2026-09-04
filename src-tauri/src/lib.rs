@@ -84,6 +84,10 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Earliest in-process startup clock: before plugin registration and the
+    // WKWebView Tauri constructs ahead of setup(). LaunchServices and dyld ran
+    // before this point; the external launch harness closes that final gap.
+    let startup_start = trace::StartupStart::begin();
     // Before anything else: a panic in setup used to be a silent bounce in
     // the Dock. From here on it lands in ~/Library/Logs (docs/RFC-diagnostics.md).
     diagnostics::install_panic_hook();
@@ -187,7 +191,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .setup(|app| {
+        .setup(move |app| {
             // Hand background sweeps their announce channel before anything
             // can spawn one (commands::notify_changed).
             commands::set_app_handle(app.handle().clone());
@@ -210,7 +214,7 @@ pub fn run() {
             // The global handle serves background work spawned without State
             // (the gist sweep's wiki-index refresh reads retrieval history).
             trace::set_dir(data_dir.join("traces"));
-            let startup = trace::Startup::begin(data_dir.join("traces"));
+            let startup = startup_start.attach(data_dir.join("traces"));
 
             let db_dir = data_dir.join("lancedb");
             let config_path = data_dir.join("ai_config.json");
@@ -467,6 +471,7 @@ pub fn run() {
         })
         .on_menu_event(|app, event| menu::handle_event(app, event.id().0.as_str()))
         .invoke_handler(tauri::generate_handler![
+            commands::report_startup_interactive,
             commands::log_client_error,
             commands::recent_errors,
             commands::pending_fatal,

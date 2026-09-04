@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import {
   NOTEBOOK_PANELS,
   navAtomic,
@@ -7,16 +7,9 @@ import {
 } from "@/lib/store";
 import { HOME_CARDS, toggleHomeCard } from "@/lib/homeCards";
 import { HomeView } from "@/components/HomeView";
-import { Workspace } from "@/components/Workspace";
-import { SettingsDialog } from "@/components/SettingsDialog";
-import { CommandPalette } from "@/components/CommandPalette";
-import { ImportOkfModal } from "@/components/ImportOkfModal";
-import { ExternalAddModal } from "@/components/ExternalAddModal";
 import { FileDrop } from "@/components/FileDrop";
-import { MigrationOverlay } from "@/components/MigrationOverlay";
 import { NoteWindow } from "@/components/NoteWindow";
 import { PrintExportView } from "@/components/PrintExportView";
-import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui";
 import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
@@ -27,6 +20,48 @@ import { api } from "@/lib/api";
 import type { HomeSection } from "@/lib/storeTypes";
 import { THEME_LIST, SYSTEM_THEME } from "@/lib/themes";
 import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
+
+// Home is the first frame while init resolves the last saved view. The full
+// notebook workspace cannot render until then, so load its panels in parallel
+// instead of making WebKit parse them before it can paint Home.
+const Workspace = lazy(() =>
+  import("@/components/Workspace").then((m) => ({ default: m.Workspace })),
+);
+
+// These surfaces cannot be visible on the first committed frame. Keeping
+// them out of the startup graph also keeps Settings-only integrations and
+// the command palette's corpus-search UI out of the code WebKit must parse
+// before it can paint the view the user actually opened.
+const SettingsDialog = lazy(() =>
+  import("@/components/SettingsDialog").then((m) => ({
+    default: m.SettingsDialog,
+  })),
+);
+const CommandPalette = lazy(() =>
+  import("@/components/CommandPalette").then((m) => ({
+    default: m.CommandPalette,
+  })),
+);
+const ImportOkfModal = lazy(() =>
+  import("@/components/ImportOkfModal").then((m) => ({
+    default: m.ImportOkfModal,
+  })),
+);
+const ExternalAddModal = lazy(() =>
+  import("@/components/ExternalAddModal").then((m) => ({
+    default: m.ExternalAddModal,
+  })),
+);
+const MigrationOverlay = lazy(() =>
+  import("@/components/MigrationOverlay").then((m) => ({
+    default: m.MigrationOverlay,
+  })),
+);
+const Onboarding = lazy(() =>
+  import("@/components/Onboarding").then((m) => ({
+    default: m.Onboarding,
+  })),
+);
 
 function App() {
   const init = useStore((s) => s.init);
@@ -41,6 +76,10 @@ function App() {
   const needsSetup =
     !!health && (!health.chat.working || !health.embed.working);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const paletteOpen = useStore((s) => s.paletteOpen);
+  const importOkfOpen = useStore((s) => s.importOkfOpen);
+  const pendingExternalAdd = useStore((s) => s.pendingExternalAdd);
+  const migration = useStore((s) => s.migration);
   const embedderDownload = useStore((s) => s.embedderDownload);
   const settingsTab = useStore((s) => s.settingsTab);
   const openSettings = useStore((s) => s.openSettings);
@@ -49,6 +88,27 @@ function App() {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // The backend trace starts at setup(). Two animation frames after React's
+  // first commit is the first honest point at which this window has painted
+  // with handlers attached. The backend makes this one-shot across StrictMode
+  // and secondary windows, so startup.jsonl gets one comparable endpoint per
+  // process instead of a dev-only pair of optimistic stamps.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        void api.reportStartupInteractive().catch(() => {
+          /* An older backend has no beacon; startup remains usable. */
+        });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  }, []);
 
   // The native menu's Theme and Generate submenus render TypeScript-owned
   // lists (themes.ts, studioArtifacts.tsx) — push them over IPC at startup,
@@ -261,29 +321,34 @@ function App() {
   return (
     <>
       {currentId ? (
-        <Workspace onOpenSettings={() => openSettings()} />
+        <Suspense fallback={null}>
+          <Workspace onOpenSettings={() => openSettings()} />
+        </Suspense>
       ) : (
         <HomeView onOpenSettings={() => openSettings()} />
       )}
 
-      <SettingsDialog
-        open={settingsOpen}
-        onClose={closeSettings}
-        initialTab={settingsTab}
-      />
-      <CommandPalette />
-      <ImportOkfModal />
-      {/* App-level, not inside Workspace: Home's "Add source…", the tray, and
-          Services all raise this with no notebook open, and mounted under
-          Workspace it simply never rendered there. */}
-      <ExternalAddModal />
+      <Suspense fallback={null}>
+        {settingsOpen && (
+          <SettingsDialog
+            open
+            onClose={closeSettings}
+            initialTab={settingsTab}
+          />
+        )}
+        {paletteOpen && <CommandPalette />}
+        {importOkfOpen && <ImportOkfModal />}
+        {/* App-level, not inside Workspace: Home's "Add source…", the tray,
+            and Services all raise this with no notebook open. */}
+        {pendingExternalAdd && <ExternalAddModal />}
+        {migration && <MigrationOverlay />}
+        {needsSetup && !onboardingDismissed && !settingsOpen && (
+          // Onboarding's buttons are model-setup affordances — take them to Models.
+          <Onboarding onOpenSettings={() => openSettings("models")} />
+        )}
+      </Suspense>
       {/* Always mounted: OKF-bundle drops import from the homepage too. */}
       <FileDrop />
-      <MigrationOverlay />
-      {needsSetup && !onboardingDismissed && !settingsOpen && (
-        // Onboarding's buttons are model-setup affordances — take them to Models.
-        <Onboarding onOpenSettings={() => openSettings("models")} />
-      )}
 
       {embedderDownload && (
         <div className="fixed bottom-4 right-4 z-[70] flex items-center gap-2.5 rounded-lg border border-border-strong bg-elevated px-3.5 py-2.5 shadow-lg">

@@ -33,6 +33,14 @@ use crate::models::{
 use crate::okf::parse_okf_doc;
 use crate::{ingest, rag};
 
+/// First committed React frame, paired with the backend phases in
+/// `traces/startup.jsonl`. The trace layer deduplicates StrictMode and
+/// secondary-window calls for the lifetime of this process.
+#[tauri::command]
+pub fn report_startup_interactive() {
+    crate::trace::stamp_startup_interactive();
+}
+
 /// Accumulated generation throughput for one model (persisted to disk).
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelStatAcc {
