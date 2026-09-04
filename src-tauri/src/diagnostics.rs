@@ -40,7 +40,7 @@ const SUBSYSTEM: &str = "com.thrashr888.alchemy";
 /// How many records `recent_errors` will hand back at most, however large a
 /// limit is asked for — the reader is a chat context or a UI list, not an
 /// archive tool.
-const MAX_RECENT: usize = 200;
+pub const MAX_RECENT: usize = 200;
 
 // ---- Record shape ----------------------------------------------------------
 
@@ -110,6 +110,13 @@ pub struct Event {
     pub message: String,
     pub detail: Option<String>,
     pub context: Option<serde_json::Value>,
+    /// A fatal that must not raise the restart screen. Only one thing is
+    /// shaped like that: a crash report read at the next launch
+    /// (crashwatch.rs). It is a real fatal — it belongs in the log at that
+    /// level and in `recent_errors` — but it happened to a process that no
+    /// longer exists, and offering to restart the one now running would be
+    /// answering a question nobody asked.
+    pub quiet: bool,
 }
 
 impl Event {
@@ -121,6 +128,7 @@ impl Event {
             message: String::new(),
             detail: None,
             context: None,
+            quiet: false,
         }
     }
 
@@ -139,6 +147,12 @@ impl Event {
 
     pub fn context(mut self, context: serde_json::Value) -> Self {
         self.context = Some(context);
+        self
+    }
+
+    /// Record this fatal without raising the restart screen. See `quiet`.
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
         self
     }
 }
@@ -357,7 +371,7 @@ pub fn record(event: Event) {
     #[cfg(feature = "debug")]
     mirror_to_bridge(event.level, &event.kind, &event.message, &event.detail);
 
-    if event.level == Level::Fatal {
+    if event.level == Level::Fatal && !event.quiet {
         announce_fatal(&json);
     }
 }
@@ -540,6 +554,10 @@ fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
 /// line naming the build. The startup line is what makes "which run was
 /// this?" answerable when reading the file weeks later.
 pub fn init(app: &tauri::AppHandle) {
+    // Fixed before the first record of this run is written, so
+    // "everything older than this belongs to the previous run" has an
+    // answer crashwatch.rs can trust.
+    let _ = SESSION_START.set(chrono::Utc::now().timestamp_millis());
     if let Ok(dir) = app.path().app_log_dir() {
         let _ = LOG_DIR.set(dir);
     }
@@ -552,6 +570,15 @@ pub fn init(app: &tauri::AppHandle) {
                 "arch": std::env::consts::ARCH,
             })),
     );
+}
+
+static SESSION_START: OnceLock<i64> = OnceLock::new();
+
+/// When this run started, in unix ms. Records older than this were written by
+/// a previous run — which is how the unclean-exit report finds the log lines
+/// that led up to a crash (crashwatch.rs).
+pub fn session_start_ms() -> i64 {
+    *SESSION_START.get_or_init(|| chrono::Utc::now().timestamp_millis())
 }
 
 /// Record a startup failure, tell the user in the only way that still works

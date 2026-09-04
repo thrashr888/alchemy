@@ -8,8 +8,9 @@ import {
 } from "@/lib/reindex";
 import { Button, LiveRegion } from "./ui";
 import type { IcloudMoveOffer, ModelStatus } from "@/lib/types";
-import { AlertTriangle, HardDrive } from "lucide-react";
+import { AlertTriangle, HardDrive, LifeBuoy } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { crashNotice, revealLog, type CrashNotice } from "@/lib/diagnostics";
 
 /**
  * The degraded states, designed.
@@ -40,6 +41,8 @@ interface Degraded {
   title: string;
   detail: string;
   fixes: Fix[];
+  /** Overrides the tone's default glyph where the row isn't about storage. */
+  icon?: typeof HardDrive;
 }
 
 /** The model name in "Not installed — run `ollama pull qwen3`". */
@@ -79,6 +82,28 @@ export function HealthBanner({
       alive = false;
     };
   }, []);
+  // A crash macOS recorded for the previous run (docs/RFC-diagnostics.md,
+  // "As built"). The backend finds it on a background thread after the window
+  // is up, so this asks twice: once on mount, once after the scan has had
+  // time to finish. Dismissal is local — the notice is already only shown on
+  // the one launch that follows the crash.
+  const [crash, setCrash] = useState<CrashNotice | null>(null);
+  const [crashDismissed, setCrashDismissed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const ask = () => {
+      void crashNotice().then((notice) => {
+        if (alive && notice) setCrash(notice);
+      });
+    };
+    ask();
+    const later = window.setTimeout(ask, 6000);
+    return () => {
+      alive = false;
+      window.clearTimeout(later);
+    };
+  }, []);
+
   // Progress while the whole shelf is bound, so a slow pass says what it is
   // doing rather than sitting on a spinner.
   const [bindingAt, setBindingAt] = useState("");
@@ -108,6 +133,23 @@ export function HealthBanner({
   };
 
   const rows: Degraded[] = [];
+
+  // One line, no alarm: the crash is over, the app is running, and the only
+  // useful action is getting at the report. Anything louder would be a banner
+  // about something the user already lived through.
+  if (crash && !crashDismissed) {
+    rows.push({
+      key: "crash",
+      tone: "offer",
+      icon: LifeBuoy,
+      title: "Alchemy crashed last time.",
+      detail: "The report is in the log.",
+      fixes: [
+        { label: "Reveal", run: () => revealLog() },
+        { label: "Dismiss", run: () => setCrashDismissed(true) },
+      ],
+    });
+  }
 
   // The one-time offer (docs/RFC-okf-live.md §5.7). Existing notebooks
   // predate the folder, so they get asked once — either button answers it,
@@ -343,7 +385,15 @@ export function HealthBanner({
           }
         >
           {row.tone === "offer" ? (
-            <HardDrive aria-hidden className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            (() => {
+              const Glyph = row.icon ?? HardDrive;
+              return (
+                <Glyph
+                  aria-hidden
+                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                />
+              );
+            })()
           ) : (
             <AlertTriangle
               aria-hidden

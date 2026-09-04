@@ -127,6 +127,72 @@ log, readable by the agent being asked to fix it. Read-only: an agent can see
 what broke, never edit the record of it. It is the answer to "I can't
 reproduce it": the failure is usually already recorded.
 
+## As built: crashes with no panic behind them (crashwatch.rs)
+
+The paragraph above about `DiagnosticReports` being empty was true of the
+failures this RFC set out to catch, and it hid the ones it didn't. A user
+clicked a feed follow, the app disappeared, and nothing in `alchemy.log` said
+so — because the panic hook only sees Rust's unwind path. Two shapes escape it
+entirely:
+
+- **A native crash.** WKWebView, the Lance/ONNX FFI, or anything else raising
+  SIGSEGV/SIGABRT/SIGBUS kills the process where it stands. No hook runs. The
+  only record is the `.ips` report macOS files in
+  `~/Library/Logs/DiagnosticReports`, which nobody opens.
+- **A plain exit.** An `exit(3)` from a dependency, a kill, a power loss.
+  Nothing is written anywhere by anyone.
+
+Neither can be caught as it happens. Both are caught at the next launch.
+
+**The running stamp.** `setup` writes `running.json` (pid, version, start
+time) into app-data; `RunEvent::Exit` deletes it. A stamp still present at the
+next launch means the previous run never reached its shutdown path, and
+records at `error` with that run's version, its lifetime, and the last ten log
+lines it wrote — usually the whole diagnosis. Lifetime is dated from the last
+line that run logged, which is approximate on purpose: a process that vanishes
+cannot record the moment it stopped. A stamp whose pid is still alive is a
+second Alchemy, not a crash; that records at `info` and the file is left to
+its owner.
+
+**The crash-report scan.** Off the main thread once the window is up,
+`DiagnosticReports` is read for `.ips` files newer than a watermark in
+app-data (`crash-scan.json`) whose header line names this app by `bundleID`,
+`app_name`, or `coalitionName`. Each becomes one `fatal` record with the
+exception type and signal, the termination reason, and the crashed thread's
+top twelve frames resolved against `usedImages`, so the line naming the
+faulting library is right there. A first-ever scan looks back 24 hours, or a
+fresh install on an old Mac would replay every crash the machine ever had. The
+legacy `.crash` text format gets its presence and path noted, nothing more.
+The reports themselves are never deleted or modified — they belong to macOS.
+
+**These fatals are quiet.** `Event::quiet()` records at `fatal` and skips
+`app://fatal`. A crash report is a real fatal that belongs in the log and in
+`recent_errors`, but it happened to a process that no longer exists; raising
+the restart screen over it would ask the user to escape a run that already
+ended. What they get instead is one line in the health banner — "Alchemy
+crashed last time. The report is in the log." — with Reveal and Dismiss,
+driven by `crash_notice`. It is not persisted: the notice belongs to the
+launch after the crash, not to every launch thereafter.
+
+**Window closes record at `info`.** "The app quit" and "the window closed"
+are indistinguishable in a bug report and are not the same event. With the
+menu-bar icon on, closing the main window hides it and the process stays
+resident — which is exactly the state a user describes as quitting.
+
+**No signal handler.** A SIGSEGV/SIGABRT/SIGBUS handler writing a last-gasp
+marker was considered and skipped. To be correct it may only `write(2)` to a
+pre-opened fd — no allocation, no formatting, no `note!` — and must re-raise
+the default action, and it would compete for those signals with the handlers
+WebKit and the system crash reporter install. It would buy one bit ("we died
+by signal") that the `.ips` scan already reports with the exception type and a
+stack, and the stamp covers the signal-free exits the scan cannot see. If that
+changes, the constraints above are the bar.
+
+**Agent surface.** Both record kinds — `crash-report` and `unclean-exit` —
+flow through `recent_errors` over IPC and MCP like everything else, and the
+MCP tool description names them, so an agent asked why the app quit knows to
+look and knows what it is reading.
+
 ## Deliberately not in v1
 
 - **No remote reporting.** Nothing leaves the machine. Alchemy is local-first

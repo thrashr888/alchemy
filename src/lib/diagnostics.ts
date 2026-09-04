@@ -192,6 +192,27 @@ export async function recentErrors(
   }
 }
 
+/**
+ * A crash macOS recorded for a run that died without reaching Rust's panic
+ * hook — a signal, an FFI fault, a WKWebView kill. Set once per launch by the
+ * backend's scan of ~/Library/Logs/DiagnosticReports; null on every ordinary
+ * launch, which is nearly all of them.
+ */
+export interface CrashNotice {
+  count: number;
+  summary: string;
+  logPath: string;
+}
+
+export async function crashNotice(): Promise<CrashNotice | null> {
+  if (!isTauri()) return null;
+  try {
+    return (await invoke<CrashNotice | null>("crash_notice")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Show the log file in Finder. */
 export async function revealLog(): Promise<void> {
   if (!isTauri()) return;
