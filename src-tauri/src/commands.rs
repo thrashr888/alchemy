@@ -3128,15 +3128,16 @@ pub async fn source_hygiene(
     // With content: the duplicate bucket groups file and pasted-text
     // sources by what they say, and nothing else in a notebook can prove
     // that two rows are one import.
-    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    let started = std::time::Instant::now();
+    // The shared scan: Grow asks feeds, links and this of the same corpus at
+    // once, and each one needs the text. One scan between them (db.rs
+    // `SourcesContent`) instead of three.
+    let sources = e(state.db.sources_with_content_shared(&notebook_id).await)?;
     let notes = e(state.db.list_notes(&notebook_id).await)?;
     let cadence = state.ai.read().await.config().hygiene_refresh_days;
-    Ok(crate::hygiene::classify_all(
-        &sources,
-        &notes,
-        cadence,
-        now(),
-    ))
+    let out = crate::hygiene::classify_all(&sources, &notes, cadence, now());
+    note_section("hygiene", started, out.len());
+    Ok(out)
 }
 
 /// "Keep" from the hygiene review: clear an unreachable source's strike
@@ -11250,9 +11251,12 @@ pub async fn growth_retire(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::growth::RetireProposal>, String> {
+    let started = std::time::Instant::now();
     let sources = e(state.db.list_sources(&notebook_id).await)?;
     let cited = crate::growth::cited_ids(&state.trace_dir);
-    Ok(crate::growth::retire_candidates(&sources, &cited, now()))
+    let out = crate::growth::retire_candidates(&sources, &cited, now());
+    note_section("tidy", started, out.len());
+    Ok(out)
 }
 
 /// Create or refresh the notebook's wiki (Pillar 3 + phase 5): the index
@@ -11343,8 +11347,11 @@ pub async fn growth_tag_merges(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::growth::TagMergeProposal>, String> {
+    let started = std::time::Instant::now();
     let sources = e(state.db.list_sources(&notebook_id).await)?;
-    Ok(crate::growth::tag_merge_proposals(&sources))
+    let out = crate::growth::tag_merge_proposals(&sources);
+    note_section("organize", started, out.len());
+    Ok(out)
 }
 
 /// Rewrite one tag into another on every source carrying it. Goes through
@@ -11486,6 +11493,87 @@ pub struct GrowthOverview {
     pub proposals: Vec<crate::growth::GrowthProposal>,
 }
 
+/// Log how long one Grow section took. The pane fires every section at
+/// once, so the only way to know which tier is the slow one is to time each
+/// separately and say so in the log.
+fn note_section(section: &str, started: std::time::Instant, rows: usize) {
+    let ms = started.elapsed().as_millis();
+    crate::note!("grow section {section}: {rows} rows in {ms}ms");
+}
+
+/// Feeds this notebook's own pages advertised (docs/RFC-events.md §2, tier
+/// 1): remembered at import, proposed here, followed only on a click.
+pub(crate) async fn growth_feeds_impl(
+    db: &crate::db::Db,
+    notebook_id: &str,
+) -> anyhow::Result<Vec<crate::growth::GrowthProposal>> {
+    let sources = db.sources_with_content_shared(notebook_id).await?;
+    Ok(crate::feeds::discovered_proposals(db, notebook_id, &sources).await)
+}
+
+/// Outbound links the notebook's own sources keep pointing at, ranked
+/// against what it has lately been asked and answered thinly.
+///
+/// Minus anything the Feeds section already offers. The two tiers overlap —
+/// a page that advertises a feed is often also a link its siblings cite —
+/// and "Follow this feed" is the better of the two offers for the same URL.
+/// Subtracting here rather than in the pane keeps that judgment next to
+/// `canonical_key`, which knows that `http://www.a.test/feed/` and
+/// `https://a.test/feed` are one page; it also makes the sections disjoint,
+/// so their union is the aggregator without any further deduping.
+pub(crate) async fn growth_links_impl(
+    db: &crate::db::Db,
+    trace_dir: &std::path::Path,
+    notebook_id: &str,
+) -> anyhow::Result<Vec<crate::growth::GrowthProposal>> {
+    let sources = db.sources_with_content_shared(notebook_id).await?;
+    let queries = crate::growth::standing_queries(trace_dir, notebook_id, now());
+    let offered: std::collections::HashSet<String> = growth_feeds_impl(db, notebook_id)
+        .await?
+        .iter()
+        .map(|p| crate::growth::canonical_key(&p.url))
+        .collect();
+    Ok(crate::growth::proposals(&sources, &queries)
+        .into_iter()
+        .filter(|p| !offered.contains(&crate::growth::canonical_key(&p.url)))
+        .collect())
+}
+
+/// What this notebook is hungry for: recent retrievals that came back thin.
+/// A trace-file read, no database at all — the cheapest section, and the one
+/// the web tier's consent line depends on, so it loads on its own.
+#[tauri::command]
+pub fn growth_queries(state: State<'_, AppState>, notebook_id: String) -> Vec<String> {
+    let started = std::time::Instant::now();
+    let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
+    note_section("queries", started, queries.len());
+    queries
+}
+
+/// The Feeds section alone.
+#[tauri::command]
+pub async fn growth_feeds(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    let started = std::time::Instant::now();
+    let out = e(growth_feeds_impl(&state.db, &notebook_id).await)?;
+    note_section("feeds", started, out.len());
+    Ok(out)
+}
+
+/// The "From your sources" section alone.
+#[tauri::command]
+pub async fn growth_links(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    let started = std::time::Instant::now();
+    let out = e(growth_links_impl(&state.db, &state.trace_dir, &notebook_id).await)?;
+    note_section("links", started, out.len());
+    Ok(out)
+}
+
 /// The growth surface's contents (docs/RFC-living-notebook.md Pillar 2,
 /// phase 2): the notebook's standing queries, plus proposals from the
 /// tiers that cost nothing — Spotlight matches on this Mac and outbound
@@ -11493,24 +11581,29 @@ pub struct GrowthOverview {
 /// from stored content and local traces — no model call, no network;
 /// fetching happens only when the user accepts a proposal. The open-web
 /// tier is a separate, explicit call (growth_web_search).
+///
+/// The Grow pane no longer calls this — it fetches each section on its own
+/// clock, so a slow tier holds nothing else back. This stays as the
+/// one-call aggregator agents get over MCP, and as the definition the
+/// per-section commands are tested against: their union is exactly this.
 #[tauri::command]
 pub async fn growth_proposals(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<GrowthOverview, String> {
-    // With content: the frontier lives in the text (list_sources strips it).
-    // The Spotlight tier is NOT here — mdfind subprocesses are the slow
-    // part, so the pane loads it separately (growth_local) and this call
-    // returns as fast as a text scan.
-    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    // Feeds the notebook's pages advertised (docs/RFC-events.md §2, tier 1):
-    // remembered at import, proposed here, followed only on a click. They
-    // go in first because the tiers overlap — a page that advertises a feed
-    // is often also a link its siblings cite — and "Follow this feed" is the
-    // better of the two offers for the same URL.
-    let mut proposals = crate::feeds::discovered_proposals(&state, &notebook_id, &sources).await;
-    proposals.extend(crate::growth::proposals(&sources, &queries));
+    // Feeds go in first because the tiers overlap — a page that advertises a
+    // feed is often also a link its siblings cite — and "Follow this feed" is
+    // the better of the two offers for the same URL. The Spotlight tier is
+    // NOT here: mdfind subprocesses are the slow part, and it has always been
+    // its own call (growth_local).
+    let mut proposals = e(growth_feeds_impl(&state.db, &notebook_id).await)?;
+    proposals.extend(e(growth_links_impl(
+        &state.db,
+        &state.trace_dir,
+        &notebook_id,
+    )
+    .await)?);
     let proposals = crate::growth::dedupe_proposals(proposals);
     Ok(GrowthOverview { queries, proposals })
 }
@@ -11565,9 +11658,12 @@ pub async fn growth_local(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Vec<crate::growth::GrowthProposal>, String> {
+    let started = std::time::Instant::now();
     let sources = e(state.db.list_sources(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
-    Ok(crate::growth::local_proposals(&sources, &queries).await)
+    let out = crate::growth::local_proposals(&sources, &queries).await;
+    note_section("local", started, out.len());
+    Ok(out)
 }
 
 /// The open-web tier, run only from the Grow pane after the user enables
@@ -11581,7 +11677,8 @@ pub async fn growth_web_search(
     let sources = e(state.db.list_sources(&notebook_id).await)?;
     let queries = crate::growth::standing_queries(&state.trace_dir, &notebook_id, now());
     let enabled = crate::growth::web_enabled_count(&state.db).await;
-    Ok(crate::growth::web_search(
+    let started = std::time::Instant::now();
+    let out = crate::growth::web_search(
         &state.trace_dir,
         &notebook_id,
         &sources,
@@ -11589,7 +11686,9 @@ pub async fn growth_web_search(
         enabled,
         now(),
     )
-    .await)
+    .await;
+    note_section("web", started, out.proposals.len());
+    Ok(out)
 }
 
 #[tauri::command]

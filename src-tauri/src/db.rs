@@ -287,7 +287,40 @@ pub struct Db {
     /// Per-notebook document counts, keyed by the table versions they were
     /// computed from. See `NotebookCounts`.
     counts_cache: tokio::sync::RwLock<Option<NotebookCounts>>,
+    /// The last full content scan of one notebook. See `SourcesContent`.
+    content_cache: tokio::sync::RwLock<Option<SourcesContent>>,
 }
+
+/// One notebook's sources WITH their text, held just long enough for a
+/// burst of callers to share it.
+///
+/// The Grow pane asks several independent questions of the same corpus at
+/// once — feeds advertised, links mined, duplicates found — and each one
+/// needs the text. Unshared, that is one full-content scan of the sources
+/// table per section, of a table whose rows are the whole library.
+///
+/// Keyed on the sources table's Lance version, the same way `NotebookCounts`
+/// is: a version is one manifest read, and a key that moves on every write
+/// (including one from another process) cannot serve a stale corpus. The
+/// TTL is a memory bound, not a correctness one — content is large, and
+/// nothing should hold a whole notebook's text minutes after the pane that
+/// asked for it closed.
+struct SourcesContent {
+    notebook_id: String,
+    version: u64,
+    at: std::time::Instant,
+    sources: std::sync::Arc<Vec<Source>>,
+}
+
+/// How long a content scan stays shareable. Long enough to cover a pane's
+/// concurrent section fetches and a refresh click behind them; short enough
+/// that the text is not resident for the rest of the session.
+const CONTENT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Above this, the scan is served but not held: a notebook whose text runs
+/// to tens of megabytes is exactly the one that must not be duplicated in
+/// memory for half a minute.
+const CONTENT_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Cached source/note/report counts per notebook.
 ///
@@ -356,6 +389,7 @@ impl Db {
             fusion_rrf_k: std::sync::atomic::AtomicU32::new(60.0f32.to_bits()),
             dir: dir.to_path_buf(),
             counts_cache: tokio::sync::RwLock::new(load_counts(dir)),
+            content_cache: tokio::sync::RwLock::new(None),
         };
         db.ensure_table(T_NOTEBOOKS, notebooks_schema()).await?;
         db.migrate_notebooks().await?;
@@ -1393,6 +1427,50 @@ impl Db {
         let filter = format!("notebook_id = '{}'", esc(notebook_id));
         let mut sources = self.query_sources(Some(&filter), true).await?;
         sources.sort_by_key(|s| s.created_at);
+        Ok(sources)
+    }
+
+    /// The same scan, shared across a burst of callers. See `SourcesContent`.
+    ///
+    /// Correctness is the version key: a miss on notebook, version, or age
+    /// re-scans, so this never returns rows a plain `sources_with_content`
+    /// would not have. Callers that mutate and immediately re-read are
+    /// unaffected — the write moves the table version.
+    pub async fn sources_with_content_shared(
+        &self,
+        notebook_id: &str,
+    ) -> Result<std::sync::Arc<Vec<Source>>> {
+        let version = self.table_version(T_SOURCES).await;
+        if let Some(v) = version {
+            let hit = self.content_cache.read().await;
+            if let Some(c) = hit.as_ref() {
+                if c.notebook_id == notebook_id
+                    && c.version == v
+                    && c.at.elapsed() < CONTENT_CACHE_TTL
+                {
+                    return Ok(c.sources.clone());
+                }
+            }
+        }
+        let sources = std::sync::Arc::new(self.sources_with_content(notebook_id).await?);
+        // Store under the version read BEFORE the scan, so a write that
+        // landed mid-scan leaves the entry keyed to the older version and
+        // the next call re-reads (the `NotebookCounts` rule).
+        let bytes: usize = sources.iter().map(|s| s.content.len()).sum();
+        let mut slot = self.content_cache.write().await;
+        match version {
+            Some(v) if bytes <= CONTENT_CACHE_MAX_BYTES => {
+                *slot = Some(SourcesContent {
+                    notebook_id: notebook_id.to_string(),
+                    version: v,
+                    at: std::time::Instant::now(),
+                    sources: sources.clone(),
+                });
+            }
+            // Unversioned (no table yet) or too big to hold: drop whatever
+            // was there rather than leave another notebook's text resident.
+            _ => *slot = None,
+        }
         Ok(sources)
     }
 
