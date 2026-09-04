@@ -142,6 +142,28 @@ quick-xml = "0.41"
 # Dev-only: exposes the debug bridge for CLI automation/inspection.
 debug = ["dep:tauri-plugin-debug-bridge"]
 
+# Ship a smaller binary. See docs/ARCHITECTURE.md, "Binary size", for the
+# measurements behind each line and for the two knobs deliberately left off.
+[profile.release]
+# Whole-program optimization over the Lance/Arrow/DataFusion tree, most of
+# which Alchemy never calls: thin LTO lets the linker inline and drop across
+# crate boundaries that separate codegen units keep opaque. "thin" rather
+# than "fat" because releases are cut on a laptop and fat LTO on a tree this
+# size costs far more link time than the extra bytes it saves.
+lto = "thin"
+# One codegen unit per crate: fewer duplicated instantiations, better
+# cross-function optimization inside each crate.
+codegen-units = 1
+# NOT set, on purpose:
+#   strip     — the diagnostics panic hook captures a symbolicated backtrace
+#               (diagnostics.rs, `Backtrace::force_capture`). Stripping the
+#               symbol table saves another ~46 MB and turns every shipped
+#               crash report into hex addresses. Not worth it.
+#   panic     — `panic = "abort"` would break ingest.rs and tts.rs, which
+#               both `catch_unwind` around third-party parsers, and the
+#               "a panic in a command is an Err string" contract the whole
+#               diagnostics module is built on.
+
 # Faster dev builds: keep file:line for our own code (line-tables) but skip
 # debuginfo for the heavy dependency tree (lance/arrow/datafusion), which is
 # the bulk of compile + link time and target size.
