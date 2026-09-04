@@ -586,8 +586,19 @@ export const api = {
     run(cmd<void>("mark_arrivals_seen", { notebookId, at })),
   discoverFeeds: (sourceId: string) =>
     run(query<FeedCandidate[]>("discover_feeds", { sourceId })),
+  /** Every free tier in one call. The Grow pane loads section by section
+   *  instead (below); this is the aggregator agents get over MCP. */
   growthProposals: (notebookId: string) =>
     run(query<GrowthOverview>("growth_proposals", { notebookId })),
+  /** What the notebook is hungry for — a trace read, the cheapest section. */
+  growthQueries: (notebookId: string) =>
+    run(query<string[]>("growth_queries", { notebookId })),
+  /** Feeds this notebook's own pages advertised. */
+  growthFeeds: (notebookId: string) =>
+    run(query<GrowthProposal[]>("growth_feeds", { notebookId })),
+  /** Links the notebook's own sources keep pointing at. */
+  growthLinks: (notebookId: string) =>
+    run(query<GrowthProposal[]>("growth_links", { notebookId })),
   /** The Spotlight tier — mdfind is the slow part, loaded separately. */
   growthLocal: (notebookId: string) =>
     run(query<GrowthProposal[]>("growth_local", { notebookId })),

@@ -1,6 +1,7 @@
 import type {
   AiConfig,
   ChatConfig,
+  GrowthProposal,
   HygieneIssue,
   KokoroStatus,
   Message,
@@ -17,12 +18,27 @@ import type {
   OkfLifecycle,
   ReadingPrefs,
   ReportSchedule,
+  RetireProposal,
   Source,
+  TagMergeProposal,
   Template,
   Toast,
   ToastKind,
 } from "./types";
 import type { HistoryEntry } from "./history";
+
+/** One notebook's Grow sections, each filled in when its own fetch lands
+ *  (RFC-living-notebook Pillar 2). `undefined` means "not loaded yet" and
+ *  is what the pane renders a pending line for; an empty array is a real,
+ *  finished answer of "nothing right now". */
+export interface GrowSections {
+  queries?: string[];
+  feeds?: GrowthProposal[];
+  links?: GrowthProposal[];
+  local?: GrowthProposal[];
+  tidy?: RetireProposal[];
+  organize?: TagMergeProposal[];
+}
 
 export interface QueueItem {
   id: string;
@@ -175,6 +191,17 @@ export interface AppState {
   growthDismissed: Record<string, number>;
   /** Dismiss one growth proposal: hidden ~30 days, persisted per notebook. */
   dismissGrowth: (key: string) => void;
+  /** Last known Grow sections per notebook, so returning to the pane paints
+   *  what it showed last time while each section refreshes in place. Memory
+   *  only — proposals are cheap to recompute and stale ones must not
+   *  outlive a restart. */
+  growSections: Record<string, GrowSections>;
+  /** Publish one section's result into that cache. */
+  cacheGrowSection: <K extends keyof GrowSections>(
+    notebookId: string,
+    key: K,
+    value: GrowSections[K],
+  ) => void;
   messages: Message[];
   messagesHasMore: boolean;
   messagesLoadingOlder: boolean;

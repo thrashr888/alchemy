@@ -424,6 +424,7 @@ export const useStore = create<AppState>((set, get) => {
     picked: null,
     hygiene: [],
     growthDismissed: {},
+    growSections: {},
     messages: [],
     messagesHasMore: false,
     messagesLoadingOlder: false,
@@ -2379,6 +2380,14 @@ export const useStore = create<AppState>((set, get) => {
       saveGrowthDismissed(get().currentId, next);
       set({ growthDismissed: next });
     },
+
+    cacheGrowSection: (notebookId, key, value) =>
+      set((st) => ({
+        growSections: {
+          ...st.growSections,
+          [notebookId]: { ...st.growSections[notebookId], [key]: value },
+        },
+      })),
 
     hygieneKeep: async (sourceId) => {
       try {
