@@ -489,6 +489,14 @@ export function GrowPane() {
     </div>
   );
 
+  // Section headers pin to the top of the pane while their own section
+  // scrolls: on a long Grow page the verbs you're about to use ("Add all",
+  // "Remove all") should never scroll away from the rows they act on.
+  // Hairline below, pane background under it, so content passes cleanly.
+  const headerBase =
+    "sticky top-0 z-10 -mx-5 border-b border-border bg-background/95 px-5 py-2 backdrop-blur";
+  const headerRow = `${headerBase} flex items-center gap-2`;
+
   const section = (
     icon: React.ReactNode,
     title: string,
@@ -497,7 +505,7 @@ export function GrowPane() {
     busy = false,
   ) => (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+      <div className={headerRow}>
         {icon}
         <span className="text-caption font-semibold text-foreground">
           {title}
@@ -637,7 +645,7 @@ export function GrowPane() {
                   standing queries to Firecrawl's keyless search — search
                   metadata only; pages are fetched when you add them. */}
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
+                <div className={headerRow}>
                   <Search className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-caption font-semibold text-foreground">
                     From the web
@@ -696,16 +704,21 @@ export function GrowPane() {
                   Sources panel: tending what's broken is the other half of
                   growing. Nothing is removed unless you say so. */}
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-caption font-semibold text-foreground">
-                    Needs attention
-                  </span>
-                  <span className="truncate text-caption text-subtle-foreground">
-                    broken sources, duplicates, empty notes. Keep dismisses
-                    the flag.
-                  </span>
-                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                <div className={`${headerBase} flex flex-col gap-1`}>
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="shrink-0 text-caption font-semibold text-foreground">
+                      Needs attention
+                    </span>
+                    <span className="truncate text-caption text-subtle-foreground">
+                      broken sources, duplicates, empty notes. Keep dismisses
+                      the flag.
+                    </span>
+                  </div>
+                  {/* Four verbs plus the recheck button never fit beside the
+                      title without crushing the summary; they get their own
+                      line, right-aligned under it. */}
+                  <div className="flex items-center justify-end gap-1">
                     {attention.length > 1 && (
                       <>
                         <Button
@@ -858,7 +871,7 @@ export function GrowPane() {
                   proposing, never acting — Mute drops a source from chat
                   scope (reversible in the Sources panel), Remove deletes. */}
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
+                <div className={headerRow}>
                   <Archive className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-caption font-semibold text-foreground">
                     Tidy
@@ -959,7 +972,7 @@ export function GrowPane() {
                   spelling. Proposal only; Merge rewrites every carrier. */}
               {mergesVisible.length > 0 && (
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className={headerRow}>
                     <Tags className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="text-caption font-semibold text-foreground">
                       Organize
@@ -1015,7 +1028,7 @@ export function GrowPane() {
                   dust called out. An ordinary note, so it round-trips
                   through OKF and agents can edit it. */}
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
+                <div className={headerRow}>
                   <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-caption font-semibold text-foreground">
                     Wiki index
