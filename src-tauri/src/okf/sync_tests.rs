@@ -3,16 +3,16 @@
 use super::*;
 use std::sync::{Arc, Mutex};
 
-struct Lab(PathBuf);
+pub(super) struct Lab(pub(super) PathBuf);
 
 impl Lab {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!("alchemy-sync-{}", new_id()));
         std::fs::create_dir_all(&root).unwrap();
         Self(root)
     }
 
-    async fn replica(&self, name: &str, bundle: &Path) -> AppState {
+    pub(super) async fn replica(&self, name: &str, bundle: &Path) -> AppState {
         let dir = self.0.join(name);
         let db = crate::db::Db::open(&dir.join("db")).await.unwrap();
         if db.list_notebooks().await.unwrap().is_empty() {
@@ -102,6 +102,183 @@ async fn seed_notes(state: &AppState) {
 }
 
 #[tokio::test]
+async fn replay_of_a_deleted_note_stays_deleted_after_restart() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    let path = bundle.join("notes/note-0.md");
+    let old = std::fs::read(&path).unwrap();
+    a.db.delete_note("note-0").await.unwrap();
+    write_bound(&a, "shared-notebook").await.unwrap();
+    drop(a);
+    let a = lab.replica("a", &bundle).await;
+    std::fs::write(&path, &old).unwrap();
+    assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+    assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 4);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        old,
+        "replayed bytes stay recoverable on disk"
+    );
+}
+
+#[tokio::test]
+async fn missing_established_manifest_stops_before_importing() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    std::fs::remove_file(manifest_path(&app_data_dir(&a), "a")).unwrap();
+    assert!(reconcile(&a, "shared-notebook").await.is_err());
+    assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn interrupted_note_import_recovers_reserved_row_after_restart() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    let b = lab.replica("b", &bundle).await;
+    seed_notes(&a).await;
+    std::fs::write(app_data_dir(&b).join("test-interrupt-import"), "").unwrap();
+    assert!(reconcile(&b, "shared-notebook")
+        .await
+        .unwrap_err()
+        .contains("test interruption"));
+    let manifest = load_manifest_checked(&manifest_path(&app_data_dir(&b), "b")).unwrap();
+    assert_eq!(manifest.imports.len(), 1);
+    let pending = manifest.imports.values().next().unwrap();
+    let id = pending.id.clone();
+    assert!(b.db.get_note(&id).await.unwrap().is_some());
+    // A user edit after the interruption must not be acknowledged against the
+    // old file bytes when the claim is recovered.
+    b.db.update_note(&id, "Local edit", "Survives recovery", now_ms() + 60_000)
+        .await
+        .unwrap();
+    drop(b);
+    let b = lab.replica("b", &bundle).await;
+    assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().created, 4);
+    assert_eq!(b.db.list_notes("shared-notebook").await.unwrap().len(), 5);
+    write_bound(&b, "shared-notebook").await.unwrap();
+    assert_eq!(
+        b.db.get_note(&id).await.unwrap().unwrap().content,
+        "Survives recovery"
+    );
+    assert!(!reconcile(&b, "shared-notebook").await.unwrap().changed());
+    assert!(
+        load_manifest_checked(&manifest_path(&app_data_dir(&b), "b"))
+            .unwrap()
+            .imports
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn interrupted_source_import_recovers_reserved_row_after_restart() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    std::fs::create_dir_all(bundle.join("sources")).unwrap();
+    std::fs::write(
+        bundle.join("sources/imported.md"),
+        "---\ntitle: Imported source\nalchemy:\n  tags: research,keep\n  device: Other laptop\n---\nA source arriving from the other laptop.\n",
+    )
+    .unwrap();
+    std::fs::write(app_data_dir(&a).join("test-interrupt-source-insert"), "").unwrap();
+    assert!(reconcile(&a, "shared-notebook")
+        .await
+        .unwrap_err()
+        .contains("test interruption"));
+    let manifest = load_manifest_checked(&manifest_path(&app_data_dir(&a), "a")).unwrap();
+    let id = manifest.imports.values().next().unwrap().id.clone();
+    assert_eq!(a.db.list_sources("shared-notebook").await.unwrap().len(), 1);
+    drop(a);
+    let a = lab.replica("a", &bundle).await;
+    assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+    assert_eq!(a.db.list_sources("shared-notebook").await.unwrap().len(), 1);
+    assert_eq!(
+        a.db.get_source(&id).await.unwrap().unwrap().tags,
+        "research,keep"
+    );
+    assert_eq!(
+        crate::device::load_origin_devices(&app_data_dir(&a), "shared-notebook")
+            .get(&id)
+            .map(String::as_str),
+        Some("Other laptop")
+    );
+    write_bound(&a, "shared-notebook").await.unwrap();
+    let written = std::fs::read_to_string(bundle.join("sources/imported.md")).unwrap();
+    assert!(written.contains("research,keep"));
+    assert!(written.contains("Other laptop"));
+    assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+}
+
+#[tokio::test]
+async fn reserved_import_without_a_row_retries_the_same_identity() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    std::fs::create_dir_all(bundle.join("notes")).unwrap();
+    let path = bundle.join("notes/pending.md");
+    let text = "---\ntitle: Pending\nalchemy:\n  kind: audio_overview\n---\nPending content\n";
+    std::fs::write(&path, text).unwrap();
+    let manifest_at = manifest_path(&app_data_dir(&a), "a");
+    let mut manifest = OkfManifest::default();
+    let id = recovery::reserve_import(
+        &mut manifest,
+        &manifest_at,
+        "notes/pending.md",
+        &okf_hash(text),
+        file_clock(&path),
+        &parse_okf_doc(text),
+    )
+    .unwrap();
+    drop(a);
+    let a = lab.replica("a", &bundle).await;
+    assert_eq!(reconcile(&a, "shared-notebook").await.unwrap().created, 1);
+    assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 1);
+    assert!(a.db.get_note(&id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn old_deleted_versions_cannot_overwrite_a_new_item_at_the_same_path() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    let path = bundle.join("notes/note-0.md");
+    let first = std::fs::read_to_string(&path).unwrap();
+    let second = first.replace("Original content 0", "Second observed version");
+    std::fs::write(&path, &second).unwrap();
+    assert_eq!(reconcile(&a, "shared-notebook").await.unwrap().updated, 1);
+    a.db.delete_note("note-0").await.unwrap();
+    write_bound(&a, "shared-notebook").await.unwrap();
+    for old in [&first, &second] {
+        std::fs::write(&path, old).unwrap();
+        assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+        assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 4);
+    }
+    let fresh = first.replace("Original content 0", "A new item reuses this path");
+    std::fs::write(&path, &fresh).unwrap();
+    assert_eq!(reconcile(&a, "shared-notebook").await.unwrap().created, 1);
+    for old in [&first, &second] {
+        std::fs::write(&path, old).unwrap();
+        assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+        let notes = a.db.list_notes("shared-notebook").await.unwrap();
+        assert_eq!(notes.len(), 5);
+        assert!(notes
+            .iter()
+            .any(|note| note.content.trim() == "A new item reuses this path"));
+        assert_eq!(write_bound(&a, "shared-notebook").await.unwrap().written, 1);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("A new item reuses this path"));
+        assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+    }
+}
+
+#[tokio::test]
 async fn repeated_delivery_is_quiet_after_remote_edit() {
     let lab = Lab::new();
     let bundle = lab.0.join("shared");
@@ -148,6 +325,7 @@ async fn unrelated_write_does_not_resurrect_remote_deletion() {
     seed_notes(&a).await;
     reconcile(&b, "shared-notebook").await.unwrap();
     write_bound(&b, "shared-notebook").await.unwrap();
+    let deleted_bytes = std::fs::read(bundle.join("notes/note-0.md")).unwrap();
     a.db.delete_note("note-0").await.unwrap();
     write_bound(&a, "shared-notebook").await.unwrap();
     assert!(!bundle.join("notes/note-0.md").exists());
@@ -169,6 +347,12 @@ async fn unrelated_write_does_not_resurrect_remote_deletion() {
     write_bound(&b, "shared-notebook").await.unwrap();
     assert_eq!(b.db.list_notes("shared-notebook").await.unwrap().len(), 4);
     assert!(!reconcile(&b, "shared-notebook").await.unwrap().changed());
+    // Both the deleting replica and the one that observed the deletion must
+    // reject a transport replay of this exact older version.
+    std::fs::write(bundle.join("notes/note-0.md"), deleted_bytes).unwrap();
+    assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
+    assert!(!reconcile(&b, "shared-notebook").await.unwrap().changed());
+    assert_eq!(b.db.list_notes("shared-notebook").await.unwrap().len(), 4);
 }
 
 #[tokio::test]

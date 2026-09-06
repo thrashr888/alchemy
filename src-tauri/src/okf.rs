@@ -28,9 +28,14 @@ use crate::ingest;
 use crate::models::{Note, Notebook, Source};
 use crate::rag;
 
+mod recovery;
+mod write_recovery;
+
 mod import_claims;
 #[cfg(test)]
 mod manifest_tests;
+#[cfg(test)]
+mod sync_index_tests;
 #[cfg(test)]
 mod sync_tests;
 use import_claims::adopt_imported_files;
@@ -496,17 +501,23 @@ pub fn write_bundle(
     manifest_at: Option<&Path>,
 ) -> Result<OkfWrite, String> {
     std::fs::create_dir_all(bundle).map_err(|err| format!("Failed to create {bundle:?}: {err}"))?;
-    let write = |path: &Path, text: &str| -> Result<(), String> {
+    let write = |path: &Path, text: &str| -> Result<(i64, u64), String> {
         use std::io::Write;
+        let prior_clock = file_clock(path);
         if std::fs::read(path).ok().as_deref() == Some(text.as_bytes()) {
-            return Ok(());
+            return Ok(prior_clock);
         }
-        let result = (|| -> std::io::Result<()> {
-            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(bundle))?;
+        let result = (|| -> std::io::Result<(i64, u64)> {
+            let dir = path.parent().unwrap_or(bundle);
+            let mut staged = tempfile::NamedTempFile::new_in(dir)?;
             staged.write_all(text.as_bytes())?;
             staged.as_file().sync_all()?;
+            // This receipt describes our bytes even if another device replaces
+            // the destination immediately after the atomic rename.
+            let written_clock = file_clock(staged.path());
             staged.persist(path).map_err(|err| err.error)?;
-            Ok(())
+            std::fs::File::open(dir)?.sync_all()?;
+            Ok(written_clock)
         })();
         result.map_err(|err| format!("Failed to write {path:?}: {err}"))
     };
@@ -656,36 +667,67 @@ pub fn write_bundle(
             );
             let hash = okf_hash(&text);
             let links_hash = okf_hash(&format!("{:?}", parse_okf_doc(&text).get("sources")));
-            let prior = manifest.concepts.get(&concept.id);
+            let prior = manifest.concepts.get(&concept.id).cloned();
             // Absence is input to reconciliation, never permission for an
             // unrelated database write to resurrect the other Mac's delete.
             // Keep the claim until the missing-file grace period resolves it.
-            if prior.is_some_and(|p| !bundle.join(&p.path).exists()) {
-                if let Some(p) = prior {
+            if prior
+                .as_ref()
+                .is_some_and(|p| !bundle.join(&p.path).exists())
+            {
+                if let Some(p) = &prior {
                     hydrate_if_evicted(&bundle.join(&p.path));
                 }
                 still_ours.insert(concept.id.clone());
                 entries.push((place.slug.clone(), concept.title.clone(), description));
                 continue;
             }
-            // A retitled concept moves rather than being deleted and
-            // rewritten — but never onto a path another entry still claims.
-            // A slug collision used to rename one concept over its
-            // neighbour's file and leave the manifest pointing at nothing.
             let mut rel = place.path.clone();
-            if let Some(prior) = prior {
-                if prior.path != rel {
-                    if claimed_by_another(&manifest, &concept.id, &rel) {
-                        crate::note!(
-                            "okf: {rel} is another concept's file; leaving {} where it is",
-                            prior.path
-                        );
-                        rel = prior.path.clone();
-                    } else {
-                        let from = bundle.join(&prior.path);
-                        if from.exists() && std::fs::rename(&from, bundle.join(&rel)).is_ok() {
-                            out.moved += 1;
-                        }
+            if let Some(prior) = &prior {
+                if prior.path != rel && claimed_by_another(&manifest, &concept.id, &rel) {
+                    rel = prior.path.clone();
+                }
+            }
+            let identity_changes = prior.as_ref().is_none_or(|p| p.path != rel);
+            if identity_changes {
+                if manifest_at.is_some() && bundle.join(&rel).exists() {
+                    return Err(format!("Cannot replace an unclaimed concept at {rel}"));
+                }
+                let mut entry = prior.clone().unwrap_or_default();
+                entry.path = rel.clone();
+                entry.hash = hash.clone();
+                entry.local_hash = local_hash.clone();
+                entry.links_hash = links_hash.clone();
+                entry.wrote_at = concept.generated_at;
+                entry.extra = concept.extra.clone();
+                entry.file_mtime = 0;
+                entry.file_len = 0;
+                entry.missing_since = 0;
+                entry.seen_hashes.insert(hash.clone());
+                if prior.is_some() {
+                    // A renamed path may arrive again through delayed cloud
+                    // delivery; retain its observed versions before moving it.
+                    recovery::remember_deleted(&mut manifest, &concept.id);
+                }
+                manifest.outgoing.insert(
+                    concept.id.clone(),
+                    write_recovery::PendingWrite {
+                        entry,
+                        prior: prior.clone(),
+                    },
+                );
+                if let Some(path) = manifest_at {
+                    save_manifest_checked(path, &manifest)?;
+                    #[cfg(test)]
+                    write_recovery::interrupt_write(path, "before-emit")?;
+                }
+                if let Some(prior) = &prior {
+                    std::fs::rename(bundle.join(&prior.path), bundle.join(&rel))
+                        .map_err(|err| format!("Could not move {} to {rel}: {err}", prior.path))?;
+                    out.moved += 1;
+                    #[cfg(test)]
+                    if let Some(path) = manifest_at {
+                        write_recovery::interrupt_write(path, "after-rename")?;
                     }
                 }
             }
@@ -700,12 +742,14 @@ pub fn write_bundle(
                 entries.push((slug, concept.title.clone(), description));
                 continue;
             }
-            let unchanged = prior.is_some_and(|p| {
-                p.hash == hash
-                    || (!p.local_hash.is_empty()
-                        && p.local_hash == local_hash
-                        && p.links_hash == links_hash)
-            }) && at.exists();
+            let unchanged = !identity_changes
+                && prior.as_ref().is_some_and(|p| {
+                    p.hash == hash
+                        || (!p.local_hash.is_empty()
+                            && p.local_hash == local_hash
+                            && p.links_hash == links_hash)
+                })
+                && at.exists();
             if unchanged {
                 // We did not read or write this file. In particular, its new
                 // mtime might belong to a remote edit: acknowledging that
@@ -714,22 +758,37 @@ pub fn write_bundle(
                 entries.push((slug, concept.title.clone(), description));
                 continue;
             }
-            if !unchanged {
-                write(&at, &text)?;
-                out.written += 1;
+            let written_clock = write(&at, &text)?;
+            out.written += 1;
+            #[cfg(test)]
+            if identity_changes {
+                if let Some(path) = manifest_at {
+                    write_recovery::interrupt_write(path, "after-emit")?;
+                }
             }
-            let adopted = prior.is_some_and(|p| p.adopted);
+            let adopted = prior.as_ref().is_some_and(|p| p.adopted);
+            let mut seen_hashes = prior
+                .as_ref()
+                .map(|p| p.seen_hashes.clone())
+                .unwrap_or_default();
+            if let Some(prior) = &prior {
+                if !prior.hash.is_empty() {
+                    seen_hashes.insert(prior.hash.clone());
+                }
+            }
+            seen_hashes.insert(hash.clone());
             manifest.concepts.insert(
                 concept.id.clone(),
                 OkfManifestEntry {
                     path: rel,
                     adopted,
                     hash,
+                    seen_hashes,
                     // What the file's clock and size say now that we are
                     // done with it, so the next read-back pass can skip it
                     // on a stat.
-                    file_mtime: file_clock(&at).0,
-                    file_len: file_clock(&at).1,
+                    file_mtime: written_clock.0,
+                    file_len: written_clock.1,
                     wrote_at: concept.generated_at,
                     local_hash,
                     links_hash,
@@ -737,6 +796,11 @@ pub fn write_bundle(
                     extra: std::mem::take(&mut concept.extra),
                 },
             );
+            if manifest.outgoing.remove(&concept.id).is_some() {
+                if let Some(path) = manifest_at {
+                    save_manifest_checked(path, &manifest)?;
+                }
+            }
             still_ours.insert(concept.id.clone());
             entries.push((slug, concept.title.clone(), description));
         }
@@ -752,15 +816,32 @@ pub fn write_bundle(
         .cloned()
         .collect();
     for id in gone {
-        if let Some(entry) = manifest.concepts.remove(&id) {
-            // Only if nothing else claims it. A collision that moved another
-            // concept onto this path would otherwise have its file deleted
-            // out from under it, leaving `index.md` linking at nothing.
-            if manifest.concepts.values().any(|e| e.path == entry.path) {
+        if let Some(entry) = manifest.concepts.get(&id).cloned() {
+            if manifest
+                .concepts
+                .iter()
+                .any(|(other, e)| other != &id && e.path == entry.path)
+            {
+                manifest.concepts.remove(&id);
                 continue;
             }
-            if std::fs::remove_file(bundle.join(&entry.path)).is_ok() {
-                out.removed += 1;
+            recovery::remember_deleted(&mut manifest, &id);
+            if let Some(path) = manifest_at {
+                save_manifest_checked(path, &manifest)?;
+            }
+            match std::fs::remove_file(bundle.join(&entry.path)) {
+                Ok(()) => out.removed += 1,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "Could not remove deleted concept {}: {err}",
+                        entry.path
+                    ))
+                }
+            }
+            manifest.concepts.remove(&id);
+            if let Some(path) = manifest_at {
+                save_manifest_checked(path, &manifest)?;
             }
         }
     }
@@ -3276,6 +3357,9 @@ pub struct OkfManifestEntry {
     /// Hash of the whole file as written. Both the "did this change" test and
     /// the echo test the reconciler needs (§5.3).
     pub hash: String,
+    /// File versions actually observed here; retained when the item is deleted.
+    #[serde(default)]
+    pub seen_hashes: std::collections::BTreeSet<String>,
     /// The file's own mtime when this entry was last correct. The reconciler
     /// reads and hashes only files whose mtime has moved since — hashing all
     /// 742 concepts of a large bundle to discover nothing changed took 228
@@ -3316,6 +3400,12 @@ pub struct OkfManifestEntry {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OkfManifest {
+    #[serde(default)]
+    outgoing: HashMap<String, write_recovery::PendingWrite>,
+    #[serde(default)]
+    imports: HashMap<String, recovery::PendingImport>,
+    #[serde(default)]
+    tombstones: HashMap<String, std::collections::BTreeSet<String>>,
     /// Entity id → the file written for it.
     #[serde(default)]
     pub concepts: HashMap<String, OkfManifestEntry>,
@@ -3354,7 +3444,11 @@ fn load_manifest_checked(path: &Path) -> Result<OkfManifest, String> {
     let result = match std::fs::read_to_string(path) {
         Ok(json) => serde_json::from_str(&json).map_err(|error| error.to_string()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(OkfManifest::default());
+            if path.with_extension("initialized").exists() {
+                Err("The established sync record is missing; restore it before syncing this notebook".into())
+            } else {
+                return Ok(OkfManifest::default());
+            }
         }
         Err(error) => Err(error.to_string()),
     };
@@ -3385,6 +3479,18 @@ fn save_manifest_checked(path: &Path, manifest: &OkfManifest) -> Result<(), Stri
         staged.write_all(&json)?;
         staged.as_file().sync_all()?;
         staged.persist(path).map_err(|error| error.error)?;
+        let marker = path.with_extension("initialized");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(marker)
+        {
+            Ok(file) => file.sync_all()?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Persist the rename and initialization marker before DB mutations.
+        std::fs::File::open(dir)?.sync_all()?;
         Ok(())
     };
     save().map_err(|error| {
@@ -4314,7 +4420,15 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         return Ok(OkfReconcile::default());
     }
     let manifest_at = manifest_path(&data_dir, &binding.id);
+    if binding.last_write_at > 0 && !manifest_at.exists() {
+        return Err(
+            "The established notebook sync record is missing; restore it before syncing".into(),
+        );
+    }
     let mut manifest = load_manifest_checked(&manifest_at)?;
+    write_recovery::recover_writes(state, notebook_id, &bundle, &mut manifest, &manifest_at)
+        .await?;
+    recovery::recover_imports(state, notebook_id, &mut manifest, &manifest_at).await?;
     // Path → entity id, the direction the reconciler reads in.
     let by_path: HashMap<String, String> = manifest
         .concepts
@@ -4324,6 +4438,7 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     let mut out = OkfReconcile::default();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
+    let mut restore_replay = false;
     // Did this pass change the manifest — a file taken in, or a clock moved?
     let mut dirty = false;
 
@@ -4380,6 +4495,27 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 continue;
             };
             let hash = okf_hash(&text);
+            if recovery::is_deleted_replay(&manifest, &rel, &hash) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                    if let Some(entry) = manifest.concepts.get_mut(id) {
+                        if entry.hash != hash {
+                            // A newer item can reuse this path. An old deleted
+                            // version must not overwrite that new generation.
+                            // Force the writer to restore its current bytes.
+                            entry.hash.clear();
+                            entry.local_hash.clear();
+                            entry.file_mtime = 0;
+                            dirty = true;
+                            restore_replay = true;
+                            continue;
+                        }
+                    }
+                } else {
+                    // Keep unclaimed replayed files recoverable on disk.
+                    continue;
+                }
+            }
             let action = classify(&rel, &hash, &manifest);
             let known = match &action {
                 OkfAction::Update(id) => {
@@ -4403,14 +4539,27 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 OkfAction::Create => None,
             };
             let doc = parse_okf_doc(&text);
-            let (mtime, len) = file_clock(&path);
-            if known.is_none() {
-                save_manifest_checked(&manifest_at, &manifest)?;
-            }
+            let reserved = if known.is_none() && !doc.body.trim().is_empty() {
+                Some(recovery::reserve_import(
+                    &mut manifest,
+                    &manifest_at,
+                    &rel,
+                    &hash,
+                    (mtime, len),
+                    &doc,
+                )?)
+            } else {
+                None
+            };
             match (dir, known) {
                 ("notes", None) => {
-                    if let Some(taken) = take_in_note(state, notebook_id, &doc, &path).await? {
+                    if let Some(taken) =
+                        take_in_note(state, notebook_id, &doc, &path, reserved.as_deref()).await?
+                    {
+                        #[cfg(test)]
+                        recovery::interrupt_import(state)?;
                         let id = taken.id;
+                        manifest.imports.remove(&rel);
                         adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
                         manifest.concepts.get_mut(&id).unwrap().local_hash = taken.local_hash;
                         save_manifest_checked(&manifest_at, &manifest)?;
@@ -4419,10 +4568,20 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                     }
                 }
                 ("sources", None) => {
-                    if let Some(taken) =
-                        take_in_source(state, notebook_id, &doc, &path, &bundle).await?
+                    if let Some(taken) = take_in_source(
+                        state,
+                        notebook_id,
+                        &doc,
+                        &path,
+                        &bundle,
+                        reserved.as_deref(),
+                    )
+                    .await?
                     {
+                        #[cfg(test)]
+                        recovery::interrupt_import(state)?;
                         let id = taken.id;
+                        manifest.imports.remove(&rel);
                         adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
                         manifest.concepts.get_mut(&id).unwrap().local_hash = taken.local_hash;
                         save_manifest_checked(&manifest_at, &manifest)?;
@@ -4476,6 +4635,9 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 }
                 _ => {}
             }
+            if manifest.imports.remove(&rel).is_some() {
+                save_manifest_checked(&manifest_at, &manifest)?;
+            }
         }
     }
 
@@ -4504,21 +4666,20 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     }
     let mut removed: Vec<String> = Vec::new();
     for (id, rel) in verdict.delete {
-        let deleted = if rel.starts_with("notes/") {
-            state.db.delete_note(&id).await.is_ok()
+        recovery::remember_deleted(&mut manifest, &id);
+        save_manifest_checked(&manifest_at, &manifest)?;
+        if rel.starts_with("notes/") {
+            e(state.db.delete_note(&id).await)?;
         } else {
-            state.db.delete_source(&id).await.is_ok()
-        };
-        if deleted {
-            manifest.concepts.remove(&id);
-            out.deleted += 1;
-            // Through diagnostics as well as stderr: on a shared folder this
-            // line is the only account anybody has of why a concept went away,
-            // and stderr is not where a user can find it.
-            okf_notice(format!("{rel} was deleted on disk; removed it here too"));
-            removed.push(rel);
+            e(state.db.delete_source(&id).await)?;
         }
+        manifest.concepts.remove(&id);
+        save_manifest_checked(&manifest_at, &manifest)?;
+        out.deleted += 1;
+        okf_notice(format!("{rel} was deleted on disk; removed it here too"));
+        removed.push(rel);
     }
+
     if out.deleted > 0 || dirty {
         save_manifest_checked(&manifest_at, &manifest)?;
     }
@@ -4553,6 +4714,9 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     if out.changed() {
         crate::commands::notify_changed("sources", Some(notebook_id));
     }
+    if restore_replay {
+        schedule_write(notebook_id);
+    }
     Ok(out)
 }
 
@@ -4575,12 +4739,24 @@ pub(crate) fn adopt(
     len: u64,
     doc: &OkfDoc,
 ) {
+    let mut seen_hashes = manifest
+        .concepts
+        .get(id)
+        .map(|p| p.seen_hashes.clone())
+        .unwrap_or_default();
+    if let Some(prior) = manifest.concepts.get(id) {
+        if !prior.hash.is_empty() {
+            seen_hashes.insert(prior.hash.clone());
+        }
+    }
+    seen_hashes.insert(hash.to_string());
     manifest.concepts.insert(
         id.to_string(),
         OkfManifestEntry {
             path: rel.to_string(),
             adopted: true,
             hash: hash.to_string(),
+            seen_hashes,
             file_mtime: mtime,
             file_len: len,
             wrote_at: 0,
@@ -4609,13 +4785,16 @@ async fn take_in_note(
     notebook_id: &str,
     doc: &OkfDoc,
     path: &Path,
+    reserved_id: Option<&str>,
 ) -> Result<Option<Taken>, String> {
     if doc.body.trim().is_empty() {
         return Ok(None);
     }
     let ts = file_mtime_ms(path).max(1);
     let note = Note {
-        id: new_id(),
+        id: reserved_id
+            .ok_or("Missing reserved import identity")?
+            .to_string(),
         notebook_id: notebook_id.to_string(),
         title: doc.str("title").unwrap_or_else(|| {
             path.file_stem()
@@ -4639,7 +4818,8 @@ async fn take_in_note(
         created_at: ts,
         updated_at: ts,
     };
-    e(crate::commands::add_note_indexed(state, &note).await)?;
+    e(state.db.add_note(&note).await)?;
+    crate::commands::queue_note_index(state, &note).await;
     crate::note!("okf: took in note \"{}\" from disk", note.title);
     let local_hash = local_concept_hash(&note_concept(
         &note,
@@ -4657,6 +4837,7 @@ async fn take_in_source(
     doc: &OkfDoc,
     path: &Path,
     bundle: &Path,
+    reserved_id: Option<&str>,
 ) -> Result<Option<Taken>, String> {
     if doc.body.trim().is_empty() {
         return Ok(None);
@@ -4700,23 +4881,21 @@ async fn take_in_source(
         text: doc.body.clone(),
     });
     // A duplicate is success, not failure — the same rule import follows.
-    match crate::commands::store_extracted(state, notebook_id, extracted).await {
+    let reserved_id = reserved_id.ok_or("Missing reserved import identity")?;
+    let device = doc.nested("alchemy", "device").unwrap_or_default();
+    let tags = doc.nested("alchemy", "tags").unwrap_or_default();
+    match crate::commands::store_extracted_with_id(
+        state,
+        notebook_id,
+        extracted,
+        reserved_id,
+        &tags,
+        &device,
+    )
+    .await
+    {
         Ok(mut landed) => {
-            if let Some(tags) = doc.nested("alchemy", "tags") {
-                let _ = state.db.set_source_tags(&landed.id, &tags).await;
-                landed.tags = tags;
-            }
-            // Where its `resource` is a real path (§5.8). Recorded only when
-            // the bundle names another Mac; this one's name is the default.
-            if let Some(device) = doc.nested("alchemy", "device") {
-                landed.origin_device = device.clone();
-                crate::device::note_origin_device(
-                    &app_data_dir(state),
-                    notebook_id,
-                    &landed.id,
-                    &device,
-                );
-            }
+            landed.origin_device = device;
             crate::note!("okf: took in source \"{title}\" from disk");
             let edits = load_okf_edits(&app_data_dir(state), notebook_id);
             let local_hash = local_concept_hash(&source_concept(
@@ -4764,7 +4943,7 @@ async fn update_note_from_disk(
     });
     e(state.db.set_note_status(id, &status).await)?;
     if let Some(fresh) = e(state.db.get_note(id).await)? {
-        crate::commands::index_note(state, &fresh).await;
+        crate::commands::queue_note_index(state, &fresh).await;
     }
     crate::note!("okf: took in an edit to note \"{title}\"");
     let updated = Note {

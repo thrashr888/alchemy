@@ -1436,6 +1436,51 @@ pub(crate) async fn store_extracted(
     Ok(src)
 }
 
+/// Sync reserves this identity durably before insertion. Other import paths
+/// continue allocating their own identities through store_new_source.
+pub(crate) async fn store_extracted_with_id(
+    state: &AppState,
+    notebook_id: &str,
+    extracted: ingest::Extracted,
+    source_id: &str,
+    tags: &str,
+    device: &str,
+) -> anyhow::Result<Source> {
+    anyhow::ensure!(
+        state.db.get_source(source_id).await?.is_none(),
+        "Reserved source identity already exists"
+    );
+    if let Some(title) = find_duplicate(state, notebook_id, &extracted.text).await? {
+        anyhow::bail!("Already in this notebook as \"{title}\" — skipped duplicate");
+    }
+    crate::device::note_origin_device_checked(
+        state
+            .config_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Missing application data directory"))?,
+        notebook_id,
+        source_id,
+        device,
+    )?;
+    let mtime = if !extracted.url.is_empty() && !is_web_url(&extracted.url) {
+        file_mtime(std::path::Path::new(&extracted.url))
+    } else {
+        0
+    };
+    store_new_source_with_id(
+        state,
+        notebook_id,
+        extracted,
+        "",
+        mtime,
+        None,
+        true,
+        source_id.to_string(),
+        tags.to_string(),
+    )
+    .await
+}
+
 /// Classify and persist a new source row IMMEDIATELY, then hand chunking and
 /// embedding to the background stage (docs/RFC-import-pipeline.md §2) — the
 /// row lands as `"processing"` and flips to `"ready"` when its chunks do.
@@ -1451,6 +1496,32 @@ pub(crate) async fn store_new_source(
     code_ctx: Option<&str>,
     embed: bool,
 ) -> anyhow::Result<Source> {
+    store_new_source_with_id(
+        state,
+        notebook_id,
+        extracted,
+        parent_id,
+        mtime,
+        code_ctx,
+        embed,
+        new_id(),
+        String::new(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn store_new_source_with_id(
+    state: &AppState,
+    notebook_id: &str,
+    extracted: ingest::Extracted,
+    parent_id: &str,
+    mtime: i64,
+    code_ctx: Option<&str>,
+    embed: bool,
+    source_id: String,
+    tags: String,
+) -> anyhow::Result<Source> {
     let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
     // Repository-tier code children store their content but skip embedding —
     // the ripgrep leg reaches them at query time (RFC-git-sources §4). They
@@ -1461,7 +1532,7 @@ pub(crate) async fn store_new_source(
         remote: false,
         image_url: extracted.image_url.clone(),
         author: extracted.author.clone(),
-        id: new_id(),
+        id: source_id,
         notebook_id: notebook_id.to_string(),
         title: presentable_title(&extracted.title, &extracted.url),
         source_type: extracted.source_type.clone(),
@@ -1478,12 +1549,24 @@ pub(crate) async fn store_new_source(
         error,
         parent_id: parent_id.to_string(),
         mtime,
-        tags: String::new(),
+        tags,
         note: String::new(),
         fetched_at: now(),
         fetch_failures: 0,
     };
     state.db.insert_source(&source, &[], &[]).await?;
+    #[cfg(test)]
+    {
+        let flag = state
+            .config_path
+            .parent()
+            .unwrap()
+            .join("test-interrupt-source-insert");
+        if flag.is_file() {
+            std::fs::remove_file(flag)?;
+            anyhow::bail!("test interruption after source insertion");
+        }
+    }
     state.db.touch_notebook(notebook_id, now()).await?;
 
     if processing {
@@ -5621,9 +5704,10 @@ async fn backfill_note_index(state: &AppState) {
     if DONE.swap(true, Ordering::SeqCst) {
         return;
     }
-    let (notes, indexed) = match tokio::try_join!(
+    let (notes, indexed, pending) = match tokio::try_join!(
         state.db.recent_notes(usize::MAX),
-        state.db.indexed_note_ids()
+        state.db.indexed_note_ids(),
+        state.db.pending_note_index_ids()
     ) {
         Ok(pair) => pair,
         Err(err) => {
@@ -5632,9 +5716,12 @@ async fn backfill_note_index(state: &AppState) {
         }
     };
     for note in notes {
-        if note.kind != "audio_overview" && note.status != "archived" && !indexed.contains(&note.id)
+        if pending.contains(&note.id)
+            || (note.kind != "audio_overview"
+                && note.status != "archived"
+                && !indexed.contains(&note.id))
         {
-            index_note(state, &note).await;
+            queue_note_index(state, &note).await;
         }
     }
 }
@@ -10227,7 +10314,10 @@ pub async fn add_note_indexed(state: &AppState, note: &Note) -> anyhow::Result<(
 /// the source chunk table under `source_id = "note:<id>"`.
 pub async fn index_note(state: &AppState, note: &Note) {
     if let Err(err) = try_index_note(state, note).await {
-        crate::note!("indexing note {} failed: {err:#}", note.id);
+        crate::diagnostics::error(
+            "note-index",
+            format!("Indexing note {} failed: {err:#}", note.id),
+        );
     }
     // Every note create and every note edit re-indexes, which makes this the
     // one place a note's current text is known — and so where a bound
@@ -10235,37 +10325,33 @@ pub async fn index_note(state: &AppState, note: &Note) {
     crate::okf::schedule_write(&note.notebook_id);
 }
 
-async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
-    state.db.delete_note_chunks(&note.id).await?;
-    // Audio Overview scripts are two-host podcast dialogue — retrieval noise.
+/// Queue derived search work without waiting for inference inside sync.
+pub(crate) async fn queue_note_index(state: &AppState, note: &Note) {
+    // Podcast dialogue is deliberately excluded from retrieval; clearing its
+    // old derived rows is local work and does not need a background job.
     if note.kind == "audio_overview" {
-        return Ok(());
+        if let Err(err) = try_index_note(state, note).await {
+            crate::diagnostics::error(
+                "note-index",
+                format!("Clearing podcast index failed: {err:#}"),
+            );
+        }
+        return;
     }
-    let chunks = ingest::chunk_text(&note.title, &note.content);
-    if chunks.is_empty() {
-        return Ok(());
+    if let Err(err) = crate::note_index::mark_pending(&state.db, &note.id).await {
+        crate::diagnostics::error(
+            "note-index",
+            format!("Could not checkpoint indexing for {}: {err:#}", note.id),
+        );
     }
-    let inputs: Vec<String> = chunks.iter().map(|c| c.embed_text.clone()).collect();
-    let embeddings = {
-        let ai = state.ai.read().await.clone();
-        ai.embed(&inputs).await?
-    };
-    let tuples: Vec<(String, i32, String)> = chunks
-        .iter()
-        .enumerate()
-        .map(|(j, c)| (new_id(), j as i32, c.text.clone()))
-        .collect();
-    let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
-    state
-        .db
-        .add_chunks_ctx(
-            &note.notebook_id,
-            &format!("{}{}", crate::db::NOTE_CHUNK_PREFIX, note.id),
-            &tuples,
-            &contexts,
-            &embeddings,
-        )
-        .await
+    let ai = state.ai.read().await.clone();
+    crate::note_index::enqueue(state.db.clone(), ai, &note.id);
+}
+
+async fn try_index_note(state: &AppState, note: &Note) -> anyhow::Result<()> {
+    crate::note_index::mark_pending(&state.db, &note.id).await?;
+    let ai = state.ai.read().await.clone();
+    crate::note_index::index(&state.db, &ai, note).await
 }
 
 #[tauri::command]

@@ -117,19 +117,41 @@ pub fn load_origin_devices(data_dir: &Path, notebook_id: &str) -> HashMap<String
 /// This Mac's own name is not recorded: absent means ours, so the file stays
 /// the size of what actually travelled rather than a row per source.
 pub fn note_origin_device(data_dir: &Path, notebook_id: &str, source_id: &str, device: &str) {
+    if let Err(err) = note_origin_device_checked(data_dir, notebook_id, source_id, device) {
+        crate::diagnostics::error("source-device", err.to_string());
+    }
+}
+
+/// Sync must persist provenance before publishing a source row. A damaged
+/// sidecar is an error here, rather than permission to replace its history.
+pub(crate) fn note_origin_device_checked(
+    data_dir: &Path,
+    notebook_id: &str,
+    source_id: &str,
+    device: &str,
+) -> anyhow::Result<()> {
+    use std::io::Write;
     let device = device.trim();
     if device.is_empty() || same_device(device, this_device()) {
-        return;
+        return Ok(());
     }
     let path = devices_path(data_dir, notebook_id);
-    let mut map = load_origin_devices(data_dir, notebook_id);
+    let mut map: HashMap<String, String> = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(err) => return Err(err.into()),
+    };
     map.insert(source_id.to_string(), device.to_string());
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(&map) {
-        let _ = std::fs::write(path, json);
-    }
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing device record directory"))?;
+    std::fs::create_dir_all(dir)?;
+    let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+    staged.write_all(&serde_json::to_vec_pretty(&map)?)?;
+    staged.as_file().sync_all()?;
+    staged.persist(&path).map_err(|err| err.error)?;
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
 /// Fill in `origin_device` and `remote` for a notebook's sources.

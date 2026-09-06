@@ -256,6 +256,9 @@ fn apply_diversity(
 
 pub struct Db {
     conn: Connection,
+    /// Serialize note mutations with index publication; never held during inference.
+    pub(crate) note_index_lock: tokio::sync::Mutex<()>,
+    pub(crate) note_index_queue: std::sync::Mutex<crate::note_index::Queue>,
     /// Bound overlapping full-table scans from foreground panes and
     /// background work. Each scan may open many Lance fragments; the OS
     /// descriptor limit alone does not bound that multiplied workload.
@@ -384,6 +387,8 @@ impl Db {
             .context("failed to open LanceDB")?;
         let db = Self {
             conn,
+            note_index_lock: tokio::sync::Mutex::new(()),
+            note_index_queue: std::sync::Mutex::new(crate::note_index::Queue::default()),
             scan_slots: tokio::sync::Semaphore::new(4),
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
@@ -1321,6 +1326,7 @@ impl Db {
     }
 
     pub async fn delete_notebook(&self, id: &str) -> Result<()> {
+        let _index_guard = self.note_index_lock.lock().await;
         let pred = format!("notebook_id = '{}'", esc(id));
         self.delete_where(T_SOURCES, &pred).await?;
         self.delete_where(T_CHUNKS, &pred).await?;
@@ -3448,6 +3454,7 @@ impl Db {
         content: &str,
         updated_at: i64,
     ) -> Result<()> {
+        let _index_guard = self.note_index_lock.lock().await;
         let tbl = self.conn.open_table(T_NOTES).execute().await?;
         tbl.update()
             .only_if(format!("id = '{}'", esc(id)))
@@ -3491,6 +3498,7 @@ impl Db {
     }
 
     pub async fn delete_note(&self, id: &str) -> Result<()> {
+        let _index_guard = self.note_index_lock.lock().await;
         self.delete_note_chunks(id).await?;
         self.delete_where(T_NOTE_USAGE, &format!("note_id = '{}'", esc(id)))
             .await?;
@@ -3502,6 +3510,7 @@ impl Db {
     /// total — indexed chunks, usage rows, note rows — whatever the
     /// selection size, mirroring `delete_sources`.
     pub async fn delete_notes(&self, ids: &[String]) -> Result<()> {
+        let _index_guard = self.note_index_lock.lock().await;
         if ids.is_empty() {
             return Ok(());
         }
@@ -4180,6 +4189,28 @@ impl Db {
             }
         }
         Ok(None)
+    }
+
+    /// Retrieve indexing retry markers in one scan, rather than one read per note.
+    pub(crate) async fn pending_note_index_ids(&self) -> Result<std::collections::HashSet<String>> {
+        if !self.table_exists(T_KV).await? {
+            return Ok(Default::default());
+        }
+        let batches = self
+            .collect(
+                T_KV,
+                Some("key LIKE 'note-index-pending:%' AND value = 'pending'"),
+            )
+            .await?;
+        let mut ids = std::collections::HashSet::new();
+        for batch in &batches {
+            for key in str_col(batch, "key")?.iter().flatten() {
+                if let Some(id) = key.strip_prefix("note-index-pending:") {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        Ok(ids)
     }
 
     /// Set (replace) one value. Delete-then-append: the table is tiny and

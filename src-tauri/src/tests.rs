@@ -2863,6 +2863,25 @@ fn okf_two_machines_share_one_folder() {
             ..c.clone()
         })
         .collect();
+    // Real binding claims each incoming path under the row created in B's
+    // database before its writer runs. Keep the classifier-only fixture's
+    // setup faithful to that ownership step rather than overwriting unclaimed
+    // files merely because their title happens to choose the same slug.
+    let mut adopted_b = crate::okf::OkfManifest::default();
+    for (id, entry) in load_manifest(&mac_a).concepts {
+        let text = std::fs::read_to_string(shared.join(&entry.path)).unwrap();
+        crate::okf::adopt(
+            &mut adopted_b,
+            &format!("b-{id}"),
+            &entry.path,
+            &okf_hash(&text),
+            entry.file_mtime,
+            entry.file_len,
+            &crate::okf::parse_okf_doc(&text),
+        );
+    }
+    std::fs::create_dir_all(mac_b.parent().unwrap()).unwrap();
+    std::fs::write(&mac_b, serde_json::to_vec(&adopted_b).unwrap()).unwrap();
     // B edits the summary.
     b_notes[0].content = "Edited on the other Mac.".into();
     b_notes[0].generated_by = "human:other".into();

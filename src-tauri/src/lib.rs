@@ -38,6 +38,7 @@ mod macwatch;
 mod mcp;
 mod menu;
 mod models;
+mod note_index;
 mod notion;
 mod okf;
 mod outline;
