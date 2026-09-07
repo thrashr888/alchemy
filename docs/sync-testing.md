@@ -33,6 +33,27 @@ finish, then verifies that a stale response cannot replace the latest index.
 `note_index.rs` also tests unavailable inference, deletion during indexing,
 queue coalescing, and durable retry markers across database reopen.
 
+Binding storage tests also run concurrent threads and child processes against
+the same record. Live callsite tests verify that corrupt or missing established
+bindings stop reconciliation, writes, and unbinding before changing rows, and
+that a migration cannot restore a concurrent unbind or discard a newer write
+timestamp. Unbinding waits for the actual notebook writer lock.
+
+Discovery tests interrupt before/after notebook creation and between imported
+rows, including legacy folders without notebook IDs. Durable reservations and
+the ordinary journaled reconciler resume the same notebook and binding. Local
+deletion receipts distinguish an insertion that never happened from a notebook,
+note, or source deliberately deleted after insertion. Explicitly restored rows
+remain valid.
+
+Conflict tests cover both winning directions. A divergent local version or
+losing remote version is saved as inspectable Markdown in `conflicts/` and
+recorded in `log.md` before replacement. Preservation failures leave the
+original row/file untouched. Conditional database updates compare the entire
+inspected row, including same-timestamp edits, so changes made during conflict
+preservation cannot be silently overwritten. Retries do not duplicate recovery
+copies or log entries; sequential edits do not create unnecessary copies.
+
 Four database-backed regressions were reproduced before the fixes: overlapping
 reconcilers imported five notes twice; an applied edit was reported again on the
 next pass; a stale writer recreated a remotely deleted file; and an unrelated
@@ -72,7 +93,9 @@ two-machine delivery timing still need a transport check. Local deletion history
 recognizes exact versions this installation observed; it cannot recognize an
 unseen revision or inform a device that never saw the deletion. Portable
 deletion identity and transport validation remain in `alchemy-release-alv`.
-Atomic binding-record recovery remains in `alchemy-release-2c3`; missing
-established manifests currently require restoration, rather than automatic
-reconstruction. Existing duplicate notebooks are not automatically merged or
-deleted by these tests.
+Binding records now use checked atomic transactions with process locking;
+missing established records require restoration rather than automatic
+reconstruction. Portable identity across rename/recreation, shared deletion
+records, and the explicit archive-merge path still require further validation.
+Existing duplicate notebooks are not automatically merged or deleted by these
+tests.

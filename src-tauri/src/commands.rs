@@ -2819,6 +2819,30 @@ pub(crate) async fn reingest_with(
     embed: bool,
     quiet: bool,
 ) -> anyhow::Result<Source> {
+    reingest_inner(state, existing, extracted, code_ctx, embed, quiet, false).await
+}
+
+/// Publish sync content only if the full row inspected for conflict recovery
+/// is still current. A failed comparison leaves it unread for the next pass.
+pub(crate) async fn reingest_if_unchanged(
+    state: &AppState,
+    existing: &Source,
+    extracted: ingest::Extracted,
+    code_ctx: Option<&str>,
+    embed: bool,
+) -> anyhow::Result<Source> {
+    reingest_inner(state, existing, extracted, code_ctx, embed, false, true).await
+}
+
+async fn reingest_inner(
+    state: &AppState,
+    existing: &Source,
+    extracted: ingest::Extracted,
+    code_ctx: Option<&str>,
+    embed: bool,
+    quiet: bool,
+    compare_existing: bool,
+) -> anyhow::Result<Source> {
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
@@ -2881,11 +2905,22 @@ pub(crate) async fn reingest_with(
         fetched_at: now(),
         fetch_failures: 0,
     };
+    if compare_existing {
+        anyhow::ensure!(
+            state
+                .db
+                .replace_source_row_if_unchanged(existing, &updated)
+                .await?,
+            "Source changed during sync; retry reconciliation"
+        );
+    }
     if processing {
         // Row first, chunks in the background — the stage's content claim
         // (spawn_embed_stage) settles racing refreshes in the newest one's
         // favor.
-        state.db.replace_source_row(&updated).await?;
+        if !compare_existing {
+            state.db.replace_source_row(&updated).await?;
+        }
         spawn_embed_stage(
             state,
             &updated,
@@ -2897,7 +2932,11 @@ pub(crate) async fn reingest_with(
     } else {
         // No embedding to wait for (code children, errored extractions):
         // the full swap stays synchronous, old chunks dropped with it.
-        state.db.replace_source(&updated, &[], &[]).await?;
+        if compare_existing {
+            state.db.delete_source_chunks(&updated.id).await?;
+        } else {
+            state.db.replace_source(&updated, &[], &[]).await?;
+        }
     }
     // A refreshed PDF may have a new first page, a refreshed page a new
     // hero image — drop the stale caches so the gallery re-renders them.
@@ -5622,7 +5661,7 @@ pub async fn add_source_folder(
     // close a loop: the writer lays down concept files, the folder source
     // ingests them, the new sources are written as more concepts, and so on
     // (docs/RFC-okf-live.md §5).
-    if let Some(binding) = crate::okf::binding_for(&app_data_dir(&state), &notebook_id) {
+    if let Some(binding) = crate::okf::binding_for_checked(&app_data_dir(&state), &notebook_id)? {
         if binding.path == path {
             return Err(
                 "This notebook already keeps itself in that folder — it can't also read it as a source"

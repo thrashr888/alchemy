@@ -64,7 +64,7 @@ impl AlchemyMcp {
         // `okfPath` is machine-local (it lives in a sidecar, not a column), so
         // it rides alongside the row rather than inside it.
         let data_dir = crate::commands::app_data_dir(&self.state());
-        let bindings = crate::okf::load_bindings(&data_dir);
+        let bindings = crate::okf::load_bindings_checked(&data_dir).map_err(internal)?;
         let rows: Vec<serde_json::Value> = nbs
             .iter()
             .map(|nb| {

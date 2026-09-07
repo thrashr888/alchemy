@@ -5,6 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod deletions;
+mod sync_update;
+
 use anyhow::{anyhow, Context, Result};
 use arrow_array::types::Float32Type;
 use arrow_array::{
@@ -1327,6 +1330,7 @@ impl Db {
 
     pub async fn delete_notebook(&self, id: &str) -> Result<()> {
         let _index_guard = self.note_index_lock.lock().await;
+        self.record_deletions("notebook", &[id])?;
         let pred = format!("notebook_id = '{}'", esc(id));
         self.delete_where(T_SOURCES, &pred).await?;
         self.delete_where(T_CHUNKS, &pred).await?;
@@ -2257,6 +2261,7 @@ impl Db {
     }
 
     pub async fn delete_source(&self, source_id: &str) -> Result<()> {
+        self.record_deletions("source", &[source_id])?;
         // Chunks, the source's gist row, and its annotation rows go together
         // (the gist sweep would also catch a stray gist later, but immediate
         // is cleaner).
@@ -2286,6 +2291,10 @@ impl Db {
         // Every owner id whose chunks (verbatim + gist + annotation rows)
         // must go: each selected source plus each child.
         let owners: Vec<&String> = ids.iter().chain(child_ids.iter()).collect();
+        self.record_deletions(
+            "source",
+            &owners.iter().map(|id| id.as_str()).collect::<Vec<_>>(),
+        )?;
         let quoted = |prefix: &str| {
             owners
                 .iter()
@@ -3499,6 +3508,7 @@ impl Db {
 
     pub async fn delete_note(&self, id: &str) -> Result<()> {
         let _index_guard = self.note_index_lock.lock().await;
+        self.record_deletions("note", &[id])?;
         self.delete_note_chunks(id).await?;
         self.delete_where(T_NOTE_USAGE, &format!("note_id = '{}'", esc(id)))
             .await?;
@@ -3514,6 +3524,7 @@ impl Db {
         if ids.is_empty() {
             return Ok(());
         }
+        self.record_deletions("note", &ids.iter().map(String::as_str).collect::<Vec<_>>())?;
         let quoted = |prefix: &str| {
             ids.iter()
                 .map(|id| format!("'{prefix}{}'", esc(id)))

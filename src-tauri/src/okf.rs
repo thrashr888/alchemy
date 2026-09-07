@@ -28,6 +28,14 @@ use crate::ingest;
 use crate::models::{Note, Notebook, Source};
 use crate::rag;
 
+#[cfg(test)]
+mod binding_callsite_tests;
+mod bindings;
+mod conflicts;
+#[cfg(test)]
+mod deletion_recovery_tests;
+mod discovery;
+pub(crate) use discovery::discover_bundle;
 mod recovery;
 mod write_recovery;
 
@@ -1827,21 +1835,32 @@ pub(crate) fn is_system_notebook(notebook: &Notebook) -> bool {
 /// Give a notebook its folder and seed it (§5.7). Silent and best-effort:
 /// creating a notebook must not fail because a disk did.
 pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
+    if let Err(error) = bind_new_notebook_checked(state, notebook).await {
+        crate::diagnostics::error("okf-bindings", error);
+    }
+}
+
+pub(crate) async fn bind_new_notebook_checked(
+    state: &AppState,
+    notebook: &Notebook,
+) -> Result<(), String> {
+    let lock = notebook_sync_lock(state, &notebook.id);
+    let guard = lock.lock().await;
     if is_system_notebook(notebook) || crate::examples::is_starter_title(&notebook.title) {
-        return;
+        return Ok(());
     }
     let (root, keep) = notebooks_home(state).await;
     if !keep || root.as_os_str().is_empty() {
-        return;
+        return Ok(());
     }
-    if binding_for(&app_data_dir(state), &notebook.id).is_some() {
-        return;
+    if binding_for_checked(&app_data_dir(state), &notebook.id)?.is_some() {
+        return Ok(());
     }
     if let Err(err) = std::fs::create_dir_all(&root) {
         crate::diagnostics::error("okf", format!("could not make the Notebooks folder: {err}"));
-        return;
+        return Ok(());
     }
-    let taken: std::collections::HashSet<String> = load_bindings(&app_data_dir(state))
+    let taken: std::collections::HashSet<String> = load_bindings_checked(&app_data_dir(state))?
         .values()
         .filter_map(|b| {
             Path::new(&b.path)
@@ -1852,25 +1871,28 @@ pub(crate) async fn bind_new_notebook(state: &AppState, notebook: &Notebook) {
     let folder = claim_notebook_folder(&root, &notebook.title, &taken);
     if let Err(err) = std::fs::create_dir_all(&folder) {
         crate::diagnostics::error("okf", format!("could not make {folder:?}: {err}"));
-        return;
+        return Ok(());
     }
     let data_dir = app_data_dir(state);
-    set_binding(
+    replace_binding_checked(
         &data_dir,
         &notebook.id,
+        None,
         Some(OkfBinding {
             path: folder.to_string_lossy().to_string(),
             id: new_id(),
             last_write_at: 0,
             lost: false,
         }),
-    );
+    )?;
+    drop(guard);
     if let Err(err) = write_bound(state, &notebook.id).await {
         crate::diagnostics::error("okf", format!("seed pass failed: {err}"));
     }
     if let Some(app) = crate::commands::app_handle() {
         crate::fswatch::rearm(&app).await;
     }
+    Ok(())
 }
 
 /// Keep every active notebook on disk — the upgrade offer's Keep button
@@ -1895,7 +1917,7 @@ pub(crate) async fn bind_all_notebooks(app: &AppHandle, state: &AppState) -> Res
             serde_json::json!({ "done": done, "total": total, "title": nb.title }),
         );
         bind_new_notebook(state, nb).await;
-        if binding_for(&app_data_dir(state), &nb.id).is_some() {
+        if binding_for_checked(&app_data_dir(state), &nb.id)?.is_some() {
             bound += 1;
         }
     }
@@ -2175,13 +2197,13 @@ pub(crate) fn prefer_shared_twin(
 
 /// Carry out the swaps: the twin the folder names comes back and takes it,
 /// the other is unbound, archived, and its own folder set aside.
-async fn apply_twin_swaps(state: &AppState, data_dir: &Path) {
+async fn apply_twin_swaps(state: &AppState, data_dir: &Path) -> Result<(), String> {
     let (root, _) = notebooks_home(state).await;
     if root.as_os_str().is_empty() || !root.is_dir() {
-        return;
+        return Ok(());
     }
     let Ok(rows) = state.db.list_notebooks().await else {
-        return;
+        return Ok(());
     };
     let notebooks: Vec<HealNotebook> = rows
         .into_iter()
@@ -2192,33 +2214,43 @@ async fn apply_twin_swaps(state: &AppState, data_dir: &Path) {
             archived: n.status == "archived",
         })
         .collect();
-    let bindings = load_bindings(data_dir);
+    let bindings = load_bindings_checked(data_dir)?;
     let swaps = prefer_shared_twin(&bindings, &notebooks, &bundles_under(&root));
     if swaps.is_empty() {
-        return;
+        return Ok(());
     }
     let mut aside_taken = names_in(&root.join(DUPLICATES_DIR));
     for swap in swaps {
         // Bring back the one the folder names, and give it the folder. A
         // fresh binding id, so the reconciler reads the bundle once in full
         // rather than trusting the other twin's hashes.
-        if state.db.set_notebook_status(&swap.keep, "").await.is_err() {
-            continue;
-        }
-        set_binding(
-            data_dir,
+        let replacement = OkfBinding {
+            path: swap.bundle.to_string_lossy().to_string(),
+            id: new_id(),
+            last_write_at: 0,
+            lost: false,
+        };
+        adopt_imported_files(
+            state,
             &swap.keep,
-            Some(OkfBinding {
-                path: swap.bundle.to_string_lossy().to_string(),
-                id: new_id(),
-                last_write_at: 0,
-                lost: false,
-            }),
-        );
+            &swap.bundle,
+            &manifest_path(data_dir, &replacement.id),
+        )
+        .await?;
+        update_bindings_checked(data_dir, |current| {
+            if current.get(&swap.keep) != bindings.get(&swap.keep)
+                || current.get(&swap.hide) != bindings.get(&swap.hide)
+            {
+                return Err("Notebook bindings changed during duplicate recovery".into());
+            }
+            current.insert(swap.keep.clone(), replacement);
+            current.remove(&swap.hide);
+            Ok(())
+        })?;
+        e(state.db.set_notebook_status(&swap.keep, "").await)?;
         // And stand the other one down before it writes anywhere else.
         cancel_pending_write(&swap.hide);
-        set_binding(data_dir, &swap.hide, None);
-        let _ = state.db.set_notebook_status(&swap.hide, "archived").await;
+        e(state.db.set_notebook_status(&swap.hide, "archived").await)?;
         let mut also = String::new();
         if let Some(old) = &swap.aside {
             let aside = root.join(DUPLICATES_DIR);
@@ -2243,6 +2275,7 @@ async fn apply_twin_swaps(state: &AppState, data_dir: &Path) {
             swap.hide
         ));
     }
+    Ok(())
 }
 
 /// Put the duplicate bundles that already exist out of the way.
@@ -2264,15 +2297,25 @@ async fn apply_twin_swaps(state: &AppState, data_dir: &Path) {
 /// something anybody asked for — so it is safe to keep running. It costs one
 /// readdir plus one `index.md` read per root folder.
 pub(crate) async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &Path) {
+    if let Err(error) = consolidate_duplicate_bundles_checked(state, data_dir).await {
+        crate::diagnostics::error("okf-bindings", error);
+    }
+}
+
+pub(crate) async fn consolidate_duplicate_bundles_checked(
+    state: &AppState,
+    data_dir: &Path,
+) -> Result<(), String> {
+    load_bindings_checked(data_dir)?;
     let (root, _) = notebooks_home(state).await;
     if root.as_os_str().is_empty() || !root.is_dir() {
-        return;
+        return Ok(());
     }
     let bundles = bundles_under(&root);
     // Notebook id -> the folder that keeps it, so a binding aimed at a copy
     // can be repointed rather than left aimed at `Duplicates/`.
     for (notebook, was) in apply_consolidation(&root, &bundles) {
-        let Some(binding) = binding_for(data_dir, &notebook) else {
+        let Some(binding) = binding_for_checked(data_dir, &notebook)? else {
             continue;
         };
         if Path::new(&binding.path) != was {
@@ -2281,21 +2324,23 @@ pub(crate) async fn consolidate_duplicate_bundles(state: &AppState, data_dir: &P
         let Some(keeper) = find_bundle_with_id(&root, &notebook) else {
             continue;
         };
-        restat_manifest(&manifest_path(data_dir, &binding.id), &keeper);
-        set_binding(
+        restat_manifest(&manifest_path(data_dir, &binding.id), &keeper)?;
+        replace_binding_checked(
             data_dir,
             &notebook,
+            Some(&binding),
             Some(OkfBinding {
                 path: keeper.to_string_lossy().to_string(),
                 lost: false,
-                ..binding
+                ..binding.clone()
             }),
-        );
+        )?;
         okf_notice(format!(
             "the binding for that notebook now points at {}.",
             keeper.display()
         ));
     }
+    Ok(())
 }
 
 /// Carry out the consolidation on disk, and say, per notebook id, which
@@ -2469,14 +2514,20 @@ const HEAL_VERSION: &str = "3";
 /// Best-effort throughout: a heal that cannot read the store leaves
 /// everything as it found it and tries again next time.
 pub(crate) async fn heal_bindings(state: &AppState) {
+    if let Err(error) = heal_bindings_checked(state).await {
+        crate::diagnostics::error("okf-bindings", error);
+    }
+}
+
+pub(crate) async fn heal_bindings_checked(state: &AppState) -> Result<(), String> {
     let data_dir = app_data_dir(state);
     let stamp = data_dir.join("okf-healed");
     if std::fs::read_to_string(&stamp).is_ok_and(|v| v.trim() == HEAL_VERSION) {
-        return;
+        return Ok(());
     }
-    let bindings = load_bindings(&data_dir);
+    let bindings = load_bindings_checked(&data_dir)?;
     let Ok(rows) = state.db.list_notebooks().await else {
-        return;
+        return Ok(());
     };
     let notebooks: Vec<HealNotebook> = rows
         .into_iter()
@@ -2511,7 +2562,7 @@ pub(crate) async fn heal_bindings(state: &AppState) {
                     .map(|b| b.path.clone())
                     .unwrap_or_default();
                 cancel_pending_write(&notebook);
-                set_binding(&data_dir, &notebook, None);
+                set_binding_checked(&data_dir, &notebook, None)?;
                 okf_notice(format!(
                     "stopped keeping \u{201c}{}\u{201d} at {path} \u{2014} {why}. The folder is untouched.",
                     title_of(&notebook)
@@ -2535,13 +2586,14 @@ pub(crate) async fn heal_bindings(state: &AppState) {
     // Read the store back rather than reusing the snapshot above: the swap
     // asks which twin is archived, and the steps just applied are what
     // archived some of them.
-    apply_twin_swaps(state, &data_dir).await;
+    apply_twin_swaps(state, &data_dir).await?;
     // The consolidation used to run here, under the stamp. It runs on every
     // pass now (`tidy_notebooks_folder`): a duplicate that arrives after the
     // stamp is written is still a duplicate.
     if let Err(err) = std::fs::write(&stamp, HEAL_VERSION) {
         crate::note!("okf: couldn't stamp the heal: {err}");
     }
+    Ok(())
 }
 
 /// Say something worth reading later. `crate::note!` alone is stderr, which
@@ -2566,16 +2618,16 @@ pub(crate) struct KnownNotebooks {
     pub folders: std::collections::HashSet<PathBuf>,
 }
 
-fn known_notebooks(data_dir: &Path, notebooks: &[Notebook]) -> KnownNotebooks {
-    let bindings = load_bindings(data_dir);
-    KnownNotebooks {
+fn known_notebooks(data_dir: &Path, notebooks: &[Notebook]) -> Result<KnownNotebooks, String> {
+    let bindings = load_bindings_checked(data_dir)?;
+    Ok(KnownNotebooks {
         titles: notebooks
             .iter()
             .map(|n| (n.id.clone(), n.title.clone()))
             .collect(),
         bound: bindings.keys().cloned().collect(),
         folders: bindings.values().map(|b| same_folder(&b.path)).collect(),
-    }
+    })
 }
 
 /// One path spelling per folder, so a symlinked or trailing-slash binding
@@ -2807,38 +2859,57 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
     tidy_notebooks_folder(state).await;
     let out = open_found_bundles_inner(app, state, &root).await;
     OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
-    out
+    match out {
+        Ok(count) => count,
+        Err(error) => {
+            crate::diagnostics::error("okf-bindings", error);
+            0
+        }
+    }
 }
 
 static OPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path) -> usize {
+async fn open_found_bundles_inner(
+    app: &AppHandle,
+    state: &AppState,
+    root: &Path,
+) -> Result<usize, String> {
     let data_dir = app_data_dir(state);
-    let bound: std::collections::HashSet<String> = load_bindings(&data_dir)
+    let bound: std::collections::HashSet<String> = load_bindings_checked(&data_dir)?
         .values()
         .map(|b| b.path.clone())
         .collect();
-    let found = unopened_bundles(root, &bound);
+    let mut found = unopened_bundles(root, &bound);
+    let normalized_bound: std::collections::HashSet<PathBuf> =
+        bound.iter().map(same_folder).collect();
+    found.retain(|folder| !normalized_bound.contains(&same_folder(folder)));
+    found.extend(discovery::unfinished_folders(&data_dir, root)?);
+    found.sort();
+    found.dedup();
     if found.is_empty() {
-        return 0;
+        return Ok(0);
     }
-    let notebooks = e(state.db.list_notebooks().await).unwrap_or_default();
-
     let mut opened = Vec::new();
     for folder in found {
         let path = folder.to_string_lossy().to_string();
         // Re-read the bindings for every folder: a bind may have landed
         // since the listing was taken, and acting on a stale map is how one
         // folder ended up with two notebooks writing into it.
-        let known = known_notebooks(&data_dir, &notebooks);
+        let notebooks = e(state.db.list_notebooks().await)?;
+        let known = known_notebooks(&data_dir, &notebooks)?;
         let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
         let doc = parse_okf_doc(&index);
-        let decision = decide_bundle(
-            &folder,
-            doc.nested("alchemy", "id").as_deref(),
-            doc.str("title").as_deref(),
-            &known,
-        );
+        let decision = if discovery::has_reservation(&data_dir, &folder)? {
+            FoundBundle::Import
+        } else {
+            decide_bundle(
+                &folder,
+                doc.nested("alchemy", "id").as_deref(),
+                doc.str("title").as_deref(),
+                &known,
+            )
+        };
         let outcome = match decision {
             FoundBundle::Skip(why) => {
                 crate::note!("okf: left {path} alone: {why}");
@@ -2847,7 +2918,7 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
             // The same notebook by another route — the other Mac's copy, a
             // share, a folder moved — rebinds rather than duplicating.
             FoundBundle::Rebind(id) => {
-                let existing = binding_for(&data_dir, &id);
+                let existing = binding_for_checked(&data_dir, &id)?;
                 let binding_id = existing
                     .as_ref()
                     .map(|binding| binding.id.clone())
@@ -2862,7 +2933,7 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
                     crate::diagnostics::error("okf", format!("could not bind {path}: {error}"));
                     continue;
                 }
-                set_binding(
+                set_binding_checked(
                     &data_dir,
                     &id,
                     Some(OkfBinding {
@@ -2871,46 +2942,13 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
                         last_write_at: 0,
                         lost: false,
                     }),
-                );
+                )?;
                 write_bound(state, &id).await.map(|_| id)
             }
-            // Import creates the notebook — reusing the bundle's own
-            // `alchemy.id` when nothing here claims it — and the binding is
-            // recorded before the first write, so the writer's own output
-            // can never read as a second arrival.
-            FoundBundle::Import => {
-                let binding_id = new_id();
-                let manifest_at = manifest_path(&data_dir, &binding_id);
-                if let Err(error) = save_manifest_checked(&manifest_at, &OkfManifest::default()) {
-                    crate::diagnostics::error("okf", format!("could not import {path}: {error}"));
-                    continue;
-                }
-                match crate::commands::import_bundle(app, state, folder.clone(), None).await {
-                    Ok(nb) => {
-                        if let Err(error) =
-                            adopt_imported_files(state, &nb.id, &folder, &manifest_at).await
-                        {
-                            crate::diagnostics::error(
-                                "okf",
-                                format!("could not bind {path}: {error}"),
-                            );
-                            continue;
-                        }
-                        set_binding(
-                            &data_dir,
-                            &nb.id,
-                            Some(OkfBinding {
-                                path: path.clone(),
-                                id: binding_id,
-                                last_write_at: 0,
-                                lost: false,
-                            }),
-                        );
-                        write_bound(state, &nb.id).await.map(|_| nb.id)
-                    }
-                    Err(err) => Err(err),
-                }
-            }
+            FoundBundle::Import => match discover_bundle(state, &folder).await {
+                Ok(id) => write_bound(state, &id).await.map(|_| id),
+                Err(error) => Err(error),
+            },
         };
         match outcome {
             Ok(_) => {
@@ -2933,7 +2971,7 @@ async fn open_found_bundles_inner(app: &AppHandle, state: &AppState, root: &Path
         );
         crate::commands::notify_changed("notebooks", None);
     }
-    opened.len()
+    Ok(opened.len())
 }
 
 // ---- Originals in `references/` (docs/RFC-okf-live.md §6) -------------------
@@ -3276,64 +3314,76 @@ fn bindings_path(data_dir: &Path) -> PathBuf {
     data_dir.join("okf-bindings.json")
 }
 
+pub fn load_bindings_checked(data_dir: &Path) -> Result<HashMap<String, OkfBinding>, String> {
+    bindings::load(data_dir)
+}
+
+#[cfg(test)]
 pub fn load_bindings(data_dir: &Path) -> HashMap<String, OkfBinding> {
-    std::fs::read_to_string(bindings_path(data_dir))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    load_bindings_checked(data_dir).unwrap_or_default()
 }
 
-fn save_bindings(data_dir: &Path, map: &HashMap<String, OkfBinding>) {
-    let path = bindings_path(data_dir);
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(map) {
-        let _ = std::fs::write(path, json);
-    }
+pub fn binding_for_checked(
+    data_dir: &Path,
+    notebook_id: &str,
+) -> Result<Option<OkfBinding>, String> {
+    Ok(load_bindings_checked(data_dir)?.remove(notebook_id))
 }
 
+#[cfg(test)]
 pub fn binding_for(data_dir: &Path, notebook_id: &str) -> Option<OkfBinding> {
-    load_bindings(data_dir).remove(notebook_id)
+    binding_for_checked(data_dir, notebook_id).unwrap_or_default()
 }
 
-/// Serializes every read-modify-write of the bindings file. Without it an
-/// unbind and a write-through both read the map, both edit their copy, and
-/// the later save puts the other's change back — which is how a notebook
-/// reported as unbound kept writing its bundle (§5.5).
-fn bindings_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    &LOCK
+/// Run a synchronous read-modify-write transaction while holding both local
+/// and process locks. Bulk callers must apply their decisions to this current
+/// map rather than replace it using a snapshot read before asynchronous work.
+pub fn update_bindings_checked<R>(
+    data_dir: &Path,
+    update: impl FnOnce(&mut HashMap<String, OkfBinding>) -> Result<R, String>,
+) -> Result<R, String> {
+    bindings::update(data_dir, update)
 }
 
-/// Bind, rebind, or (with `None`) unbind. Unbinding leaves the files where
-/// they are — the folder is the user's, and stopping the sync is not a
-/// reason to take it away.
+pub fn set_binding_checked(
+    data_dir: &Path,
+    notebook_id: &str,
+    binding: Option<OkfBinding>,
+) -> Result<(), String> {
+    update_bindings_checked(data_dir, |map| {
+        match binding {
+            Some(binding) => map.insert(notebook_id.to_string(), binding),
+            None => map.remove(notebook_id),
+        };
+        Ok(())
+    })
+}
+
+#[cfg(test)]
 pub fn set_binding(data_dir: &Path, notebook_id: &str, binding: Option<OkfBinding>) {
-    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let mut map = load_bindings(data_dir);
-    match binding {
-        Some(b) => map.insert(notebook_id.to_string(), b),
-        None => map.remove(notebook_id),
-    };
-    save_bindings(data_dir, &map);
+    let _ = set_binding_checked(data_dir, notebook_id, binding);
 }
 
-/// Note that the bundle is current — but only while this is still the
-/// notebook's binding.
-///
-/// A write that started before an unbind finishes after it, and saving the
-/// whole map back from the copy it took would resurrect the entry it was
-/// told to drop. The write already happened and the files are the user's;
-/// the record of it is what must not come back.
+pub(crate) fn touch_last_write_checked(
+    data_dir: &Path,
+    notebook_id: &str,
+    binding_id: &str,
+    at: i64,
+) -> Result<(), String> {
+    update_bindings_checked(data_dir, |map| {
+        if let Some(binding) = map
+            .get_mut(notebook_id)
+            .filter(|binding| binding.id == binding_id)
+        {
+            binding.last_write_at = at;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn touch_last_write(data_dir: &Path, notebook_id: &str, binding_id: &str, at: i64) {
-    let _guard = bindings_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let mut map = load_bindings(data_dir);
-    match map.get_mut(notebook_id) {
-        Some(binding) if binding.id == binding_id => binding.last_write_at = at,
-        _ => return,
-    }
-    save_bindings(data_dir, &map);
+    let _ = touch_last_write_checked(data_dir, notebook_id, binding_id, at);
 }
 
 // ---- The manifest (§5.1) ----------------------------------------------------
@@ -3429,10 +3479,12 @@ pub fn manifest_path(data_dir: &Path, binding_id: &str) -> PathBuf {
     data_dir.join("okf").join(format!("{binding_id}.json"))
 }
 
+#[cfg(test)]
 pub fn load_manifest(path: &Path) -> OkfManifest {
     load_manifest_checked(path).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn save_manifest(path: &Path, manifest: &OkfManifest) {
     let _ = save_manifest_checked(path, manifest);
 }
@@ -3665,7 +3717,7 @@ pub fn schedule_write(notebook_id: &str) {
     let Ok(data_dir) = app.path().app_data_dir() else {
         return;
     };
-    if binding_for(&data_dir, notebook_id).is_none() {
+    if !matches!(binding_for_checked(&data_dir, notebook_id), Ok(Some(_))) {
         return;
     }
     let id = notebook_id.to_string();
@@ -3700,7 +3752,7 @@ pub fn schedule_write(notebook_id: &str) {
         // Unbound while the debounce ran: nothing to write, and no error to
         // report — the user asked for exactly this.
         let mut failed = false;
-        if binding_for(&data_dir, &id).is_some() {
+        if matches!(binding_for_checked(&data_dir, &id), Ok(Some(_))) {
             // A few writers at a time, not one per notebook: each write scans
             // the store per source, and nineteen at once after a rebind ran a
             // second Mac out of file descriptors.
@@ -3828,7 +3880,7 @@ async fn recover_binding(
     state: &AppState,
     notebook_id: &str,
     binding: &OkfBinding,
-) -> Option<OkfBinding> {
+) -> Result<Option<OkfBinding>, String> {
     let data_dir = app_data_dir(state);
     let (root, _) = notebooks_home(state).await;
     let reachable = !root.as_os_str().is_empty() && root.is_dir();
@@ -3845,42 +3897,44 @@ async fn recover_binding(
             lost: false,
             ..binding.clone()
         };
-        restat_manifest(&manifest_path(&data_dir, &binding.id), &found);
-        set_binding(&data_dir, notebook_id, Some(moved.clone()));
+        restat_manifest(&manifest_path(&data_dir, &binding.id), &found)?;
+        replace_binding_checked(&data_dir, notebook_id, Some(binding), Some(moved.clone()))?;
         okf_notice(format!(
             "{} moved to {}; the binding followed it.",
             binding.path,
             found.display()
         ));
-        return Some(moved);
+        return Ok(Some(moved));
     }
     if plan == LostFolder::Wait {
         if !binding.lost {
-            set_binding(
+            replace_binding_checked(
                 &data_dir,
                 notebook_id,
+                Some(binding),
                 Some(OkfBinding {
                     lost: true,
                     ..binding.clone()
                 }),
-            );
+            )?;
             okf_notice(format!(
                 "{} is not there any more and no bundle under the Notebooks folder claims this notebook. Nothing written; waiting a pass in case it is still arriving.",
                 binding.path
             ));
         }
-        return None;
+        return Ok(None);
     }
     // Still lost, still unclaimed: give the notebook a folder of its own.
     let title = state
         .db
         .list_notebooks()
         .await
-        .ok()?
+        .map_err(|err| err.to_string())?
         .into_iter()
         .find(|n| n.id == notebook_id)
-        .map(|n| n.title)?;
-    let taken: std::collections::HashSet<String> = load_bindings(&data_dir)
+        .map(|n| n.title)
+        .ok_or_else(|| "Notebook no longer exists".to_string())?;
+    let taken: std::collections::HashSet<String> = load_bindings_checked(&data_dir)?
         .values()
         .filter_map(|b| Path::new(&b.path).file_name())
         .map(|n| n.to_string_lossy().to_string())
@@ -3888,7 +3942,7 @@ async fn recover_binding(
     let folder = claim_notebook_folder(&root, &title, &taken);
     if let Err(err) = std::fs::create_dir_all(&folder) {
         crate::diagnostics::error("okf", format!("could not make {folder:?}: {err}"));
-        return None;
+        return Ok(None);
     }
     // A different folder is a different bundle: a fresh binding id, and so a
     // fresh manifest, because inheriting the old one's paths and hashes would
@@ -3899,12 +3953,12 @@ async fn recover_binding(
         last_write_at: 0,
         lost: false,
     };
-    set_binding(&data_dir, notebook_id, Some(fresh.clone()));
+    replace_binding_checked(&data_dir, notebook_id, Some(binding), Some(fresh.clone()))?;
     okf_notice(format!(
         "\u{201c}{title}\u{201d} lost its folder and nothing claimed it, so it starts again at {}.",
         folder.display()
     ));
-    Some(fresh)
+    Ok(Some(fresh))
 }
 
 /// Make the manifest's clocks describe the files that are actually there.
@@ -3915,10 +3969,10 @@ async fn recover_binding(
 /// claim may be about a file that no longer exists. So every entry is
 /// re-stat'd and any whose clock does not match what was recorded is zeroed,
 /// which reads as changed: one full read pass, and an honest skip after it.
-fn restat_manifest(manifest_at: &Path, bundle: &Path) {
-    let mut manifest = load_manifest(manifest_at);
+fn restat_manifest(manifest_at: &Path, bundle: &Path) -> Result<(), String> {
+    let mut manifest = load_manifest_checked(manifest_at)?;
     if manifest.concepts.is_empty() {
-        return;
+        return Ok(());
     }
     for entry in manifest.concepts.values_mut() {
         let (mtime, len) = file_clock(&bundle.join(&entry.path));
@@ -3930,7 +3984,7 @@ fn restat_manifest(manifest_at: &Path, bundle: &Path) {
         // missing now that the binding has caught up with it.
         entry.missing_since = 0;
     }
-    save_manifest(manifest_at, &manifest);
+    save_manifest_checked(manifest_at, &manifest)
 }
 
 /// Bring a bound notebook's bundle up to date. The seed pass and every write
@@ -3940,7 +3994,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let lock = notebook_sync_lock(state, notebook_id);
     let _guard = lock.lock().await;
     let data_dir = app_data_dir(state);
-    let mut binding = binding_for(&data_dir, notebook_id)
+    let mut binding = binding_for_checked(&data_dir, notebook_id)?
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
     // The writer does not build a bundle root it did not find. Making one is
     // bind's job and seed's job; here a missing root means the folder went
@@ -3948,7 +4002,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     // 0.56.0 resurrected eighteen folders the other Mac had just moved out of
     // iCloud Drive, on both machines at once.
     if !PathBuf::from(&binding.path).is_dir() {
-        match recover_binding(state, notebook_id, &binding).await {
+        match recover_binding(state, notebook_id, &binding).await? {
             Some(found) => binding = found,
             None => return Ok(OkfWrite::default()),
         }
@@ -3960,7 +4014,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
-    touch_last_write(&data_dir, notebook_id, &binding.id, now_ms());
+    touch_last_write_checked(&data_dir, notebook_id, &binding.id, now_ms())?;
     Ok(written)
 }
 
@@ -3973,7 +4027,7 @@ pub async fn notebook_okf_binding(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<Option<OkfBinding>, String> {
-    Ok(binding_for(&app_data_dir(&state), &notebook_id))
+    binding_for_checked(&app_data_dir(&state), &notebook_id)
 }
 
 /// Keep a notebook on disk as an OKF bundle at `path`.
@@ -3988,6 +4042,9 @@ pub(crate) async fn bind_impl(
     notebook_id: &str,
     path: &str,
 ) -> Result<String, String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let guard = lock.lock().await;
+    load_bindings_checked(&app_data_dir(state))?;
     let bundle = PathBuf::from(path);
     // §5.5 says an empty folder gets the seed pass, and the UI's picker always
     // hands over one it just made. The MCP and CLI surfaces had to `mkdir`
@@ -4010,7 +4067,9 @@ pub(crate) async fn bind_impl(
         );
     }
     let data_dir = app_data_dir(state);
-    let existing = binding_for(&data_dir, notebook_id)
+    let original_binding = binding_for_checked(&data_dir, notebook_id)?;
+    let existing = original_binding
+        .clone()
         .filter(|binding| same_folder(&binding.path) == same_folder(&bundle));
     let id = existing
         .as_ref()
@@ -4033,16 +4092,18 @@ pub(crate) async fn bind_impl(
     if existing.is_none() {
         adopt_imported_files(state, notebook_id, &bundle, &manifest).await?;
     }
-    set_binding(
+    replace_binding_checked(
         &data_dir,
         notebook_id,
+        original_binding.as_ref(),
         Some(OkfBinding {
             path: path.to_string(),
             id,
             last_write_at: 0,
             lost: false,
         }),
-    );
+    )?;
+    drop(guard);
     write_bound(state, notebook_id).await?;
     // Watch it now, not on the next minute tick: a folder somebody just
     // asked the app to keep in step should be in step from the next save
@@ -4073,8 +4134,11 @@ pub async fn bind_notebook_okf(
 /// `okfPath: null` over a binding that is still writing is the one answer
 /// this must never give.
 pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(), String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let guard = lock.lock().await;
     let data_dir = app_data_dir(state);
-    set_binding(&data_dir, notebook_id, None);
+    set_binding_checked(&data_dir, notebook_id, None)?;
+    drop(guard);
     cancel_pending_write(notebook_id);
     for _ in 0..40 {
         let running = flushing()
@@ -4086,7 +4150,7 @@ pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    if binding_for(&data_dir, notebook_id).is_some() {
+    if binding_for_checked(&data_dir, notebook_id)?.is_some() {
         return Err(
             "Couldn't stop keeping this notebook on disk \u{2014} a write is still running.              Try again in a moment."
                 .into(),
@@ -4412,7 +4476,7 @@ pub async fn reconcile(state: &AppState, notebook_id: &str) -> Result<OkfReconci
 
 async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReconcile, String> {
     let data_dir = app_data_dir(state);
-    let Some(binding) = binding_for(&data_dir, notebook_id) else {
+    let Some(binding) = binding_for_checked(&data_dir, notebook_id)? else {
         return Ok(OkfReconcile::default());
     };
     let bundle = PathBuf::from(&binding.path);
@@ -4590,7 +4654,16 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                     }
                 }
                 ("notes", Some(id)) => {
-                    match update_note_from_disk(state, &id, &doc, mtime).await? {
+                    let conflict = conflicts::Context {
+                        bundle: &bundle,
+                        rel: &rel,
+                        base_local_hash: manifest
+                            .concepts
+                            .get(&id)
+                            .map(|entry| entry.local_hash.as_str())
+                            .unwrap_or_default(),
+                    };
+                    match update_note_from_disk(state, &id, &doc, mtime, &conflict).await? {
                         Verdict::Applied(local_hash) => {
                             out.updated += 1;
                             adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
@@ -4612,7 +4685,17 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                     }
                 }
                 ("sources", Some(id)) => {
-                    match update_source_from_disk(state, &id, &doc, &path, mtime).await? {
+                    let conflict = conflicts::Context {
+                        bundle: &bundle,
+                        rel: &rel,
+                        base_local_hash: manifest
+                            .concepts
+                            .get(&id)
+                            .map(|entry| entry.local_hash.as_str())
+                            .unwrap_or_default(),
+                    };
+                    match update_source_from_disk(state, &id, &doc, &path, mtime, &conflict).await?
+                    {
                         Verdict::Applied(local_hash) => {
                             out.updated += 1;
                             adopt(&mut manifest, &id, &rel, &hash, mtime, len, &doc);
@@ -4697,18 +4780,9 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         );
     }
 
-    // Nothing is lost silently (§5.4): the text that lost the race is written
-    // into the log beside the entry that recorded the overwrite.
+    // Each losing version was durably preserved before its verdict was
+    // accepted. Only scheduling the winning local bytes remains here.
     if !losers.is_empty() {
-        let _ = okf_log_append(
-            &bundle,
-            &format!(
-                "Kept the app's newer version of {} file(s); the disk text follows.\n\n```\n{}\n```",
-                losers.len(),
-                losers.join("\n\n---\n\n")
-            ),
-        );
-        // The app's version wins, so put it back on disk.
         schedule_write(notebook_id);
     }
     if out.changed() {
@@ -4920,20 +4994,22 @@ async fn update_note_from_disk(
     id: &str,
     doc: &OkfDoc,
     mtime: i64,
+    conflict: &conflicts::Context<'_>,
 ) -> Result<Verdict, String> {
     let Some(note) = e(state.db.get_note(id).await)? else {
         return Ok(Verdict::Gone);
     };
     // Last writer wins by clock (§5.4). A tie goes to disk: the file is what
     // a person or an agent just saved, and it is the visible artifact.
+    let title = doc.str("title").unwrap_or_else(|| note.title.clone());
     if !disk_wins(mtime, note.updated_at) {
+        conflict.preserve_remote(doc)?;
         return Ok(Verdict::Overruled(doc.body.clone()));
     }
-    let title = doc.str("title").unwrap_or_else(|| note.title.clone());
-    e(state.db.update_note(id, &title, &doc.body, mtime).await)?;
+    let edits = load_okf_edits(&app_data_dir(state), &note.notebook_id);
+    conflict.preserve_local_if_diverged(&note_concept(&note, &edits), &title, &doc.body)?;
     // An edit that names its author keeps that attribution; one that does not
     // is a deliberate edit and takes ownership, exactly as an in-app edit does.
-    e(state.db.set_note_origin(id, &outside_actor(doc)).await)?;
     let status = doc.nested("alchemy", "status").unwrap_or_else(|| {
         if doc.str("status").as_deref() == Some("deprecated") {
             "archived".into()
@@ -4941,19 +5017,19 @@ async fn update_note_from_disk(
             String::new()
         }
     });
-    e(state.db.set_note_status(id, &status).await)?;
-    if let Some(fresh) = e(state.db.get_note(id).await)? {
-        crate::commands::queue_note_index(state, &fresh).await;
-    }
-    crate::note!("okf: took in an edit to note \"{title}\"");
     let updated = Note {
         title,
         content: doc.body.clone(),
         origin: outside_actor(doc),
         status,
         updated_at: mtime,
-        ..note
+        ..note.clone()
     };
+    if !e(state.db.update_note_if_unchanged(&note, &updated).await)? {
+        return Err("Note changed during sync; retry reconciliation".into());
+    }
+    crate::commands::queue_note_index(state, &updated).await;
+    crate::note!("okf: took in an edit to note \"{}\"", updated.title);
     let edits = load_okf_edits(&app_data_dir(state), &updated.notebook_id);
     Ok(Verdict::Applied(local_concept_hash(&note_concept(
         &updated, &edits,
@@ -4966,15 +5042,26 @@ async fn update_source_from_disk(
     doc: &OkfDoc,
     path: &Path,
     mtime: i64,
+    conflict: &conflicts::Context<'_>,
 ) -> Result<Verdict, String> {
-    let Some(source) = e(state.db.get_source(id).await)? else {
+    let Some(mut source) = e(state.db.get_source(id).await)? else {
         return Ok(Verdict::Gone);
     };
     // A source has no `updated_at`; `fetched_at` is when its text last came
     // in, which is the same question here.
     if !disk_wins(mtime, source.fetched_at.max(source.created_at)) {
+        conflict.preserve_remote(doc)?;
         return Ok(Verdict::Overruled(doc.body.clone()));
     }
+    crate::device::mark_remote(
+        &app_data_dir(state),
+        &source.notebook_id.clone(),
+        std::slice::from_mut(&mut source),
+    );
+    let edits = load_okf_edits(&app_data_dir(state), &source.notebook_id);
+    let local = source_concept(&source, source.content.clone(), conflict.bundle, 0, &edits);
+    let incoming_title = doc.str("title").unwrap_or_else(|| source.title.clone());
+    conflict.preserve_local_if_diverged(&local, &incoming_title, &doc.body)?;
     let extracted = ingest::Extracted {
         feeds: Vec::new(),
         image_url: source.image_url.clone(),
@@ -4985,7 +5072,8 @@ async fn update_source_from_disk(
         text: doc.body.clone(),
     };
     let title = extracted.title.clone();
-    let updated = e(crate::commands::reingest(state, &source, extracted, None, true).await)?;
+    let updated =
+        e(crate::commands::reingest_if_unchanged(state, &source, extracted, None, true).await)?;
     crate::note!(
         "okf: re-read source \"{title}\" from disk ({})",
         path.display()
@@ -5006,7 +5094,10 @@ async fn update_source_from_disk(
 /// window the folder sweep already runs on.
 pub async fn reconcile_all(state: &AppState) {
     let data_dir = app_data_dir(state);
-    for notebook_id in load_bindings(&data_dir).keys() {
+    let Ok(bindings) = load_bindings_checked(&data_dir) else {
+        return;
+    };
+    for notebook_id in bindings.keys() {
         if let Err(err) = reconcile(state, notebook_id).await {
             crate::diagnostics::error("okf", format!("reconcile failed: {err}"));
         }
@@ -5152,7 +5243,7 @@ pub async fn reveal_notebook_folder(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<String, String> {
-    let binding = binding_for(&app_data_dir(&state), &notebook_id)
+    let binding = binding_for_checked(&app_data_dir(&state), &notebook_id)?
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
     Ok(binding.path)
 }
@@ -5494,18 +5585,25 @@ fn move_folder(from: &Path, to: &Path) -> bool {
 /// this is about the folder Alchemy itself chose and then left behind. And
 /// nothing is touched while a write for that notebook is in flight.
 pub(crate) async fn tidy_old_notebooks_folder(state: &AppState) {
+    if let Err(error) = tidy_old_notebooks_folder_checked(state).await {
+        crate::diagnostics::error("okf-bindings", error);
+    }
+}
+
+pub(crate) async fn tidy_old_notebooks_folder_checked(state: &AppState) -> Result<(), String> {
     let home = home_dir();
     let to = crate::ai::icloud_container_documents(&home);
     let (dir, _) = notebooks_home(state).await;
     if dir != to || !to.is_dir() {
-        return;
+        return Ok(());
     }
     let from = crate::ai::icloud_drive_alchemy(&home);
     if from == to || !from.is_dir() {
-        return;
+        return Ok(());
     }
     let data_dir = app_data_dir(state);
-    let mut bindings = load_bindings(&data_dir);
+    let mut bindings = load_bindings_checked(&data_dir)?;
+    let original_bindings = bindings.clone();
     let bundles = bundles_under(&from);
     let empties = stale_empty_dirs(&from, now_ms());
     if bundles.is_empty() && empties.is_empty() {
@@ -5516,7 +5614,7 @@ pub(crate) async fn tidy_old_notebooks_folder(state: &AppState) {
                 from.display()
             ));
         }
-        return;
+        return Ok(());
     }
     let already: HashMap<String, PathBuf> = bundles_under(&to)
         .into_iter()
@@ -5599,7 +5697,7 @@ pub(crate) async fn tidy_old_notebooks_folder(state: &AppState) {
         }
     }
     if rebound {
-        save_bindings(&data_dir, &bindings);
+        merge_binding_moves(&data_dir, &original_bindings, &bindings)?;
     }
     if remove_if_empty(&from) {
         okf_notice(format!(
@@ -5607,6 +5705,7 @@ pub(crate) async fn tidy_old_notebooks_folder(state: &AppState) {
             from.display()
         ));
     }
+    Ok(())
 }
 
 /// The first name in the destination this folder can have, claiming it: the
@@ -5634,6 +5733,55 @@ pub(crate) fn rebind_moved(bindings: &mut HashMap<String, OkfBinding>, moves: &[
     }
 }
 
+/// Merge only the paths this migration moved. A concurrent unbind/rebind
+/// owns its newer decision; a successful writer owns its newer timestamp.
+fn merge_binding_moves(
+    data_dir: &Path,
+    before: &HashMap<String, OkfBinding>,
+    after: &HashMap<String, OkfBinding>,
+) -> Result<(), String> {
+    update_bindings_checked(data_dir, |current| {
+        for (id, desired) in after {
+            let Some(original) = before.get(id) else {
+                continue;
+            };
+            if desired.path == original.path && desired.lost == original.lost {
+                continue;
+            }
+            if let Some(binding) = current
+                .get_mut(id)
+                .filter(|binding| binding.id == original.id && binding.path == original.path)
+            {
+                binding.path = desired.path.clone();
+                binding.lost = desired.lost;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn replace_binding_checked(
+    data_dir: &Path,
+    notebook_id: &str,
+    expected: Option<&OkfBinding>,
+    replacement: Option<OkfBinding>,
+) -> Result<(), String> {
+    update_bindings_checked(data_dir, |current| {
+        if current.get(notebook_id) != expected {
+            return Err("The notebook binding changed during this operation; retry using its current location".into());
+        }
+        match replacement {
+            Some(binding) => {
+                current.insert(notebook_id.to_string(), binding);
+            }
+            None => {
+                current.remove(notebook_id);
+            }
+        }
+        Ok(())
+    })
+}
+
 fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
@@ -5654,7 +5802,7 @@ pub async fn icloud_container_offer(state: State<'_, AppState>) -> Result<Icloud
         crate::ai::bundle_has_icloud_container(),
         asked,
         &dir,
-        &load_bindings(&app_data_dir(&state)),
+        &load_bindings_checked(&app_data_dir(&state))?,
         &bundles_under(&dir),
     ))
 }
@@ -5714,7 +5862,8 @@ pub async fn move_notebooks_to_icloud_container(
             config.icloud_move_asked,
         )
     };
-    let mut bindings = load_bindings(&data_dir);
+    let mut bindings = load_bindings_checked(&data_dir)?;
+    let original_bindings = bindings.clone();
     let strays = bundles_under(&from);
     let offer = icloud_move_plan(
         &home,
@@ -5829,7 +5978,7 @@ pub async fn move_notebooks_to_icloud_container(
     }
 
     rebind_moved(&mut bindings, &done);
-    save_bindings(&data_dir, &bindings);
+    merge_binding_moves(&data_dir, &original_bindings, &bindings)?;
 
     let mut config = state.ai.read().await.config().clone();
     config.notebooks_dir = offer.to.clone();

@@ -44,6 +44,7 @@ pub(super) async fn recover_imports(
     manifest_at: &Path,
 ) -> Result<(), String> {
     let mut recovered = Vec::new();
+    let mut deleted = Vec::new();
     for (rel, pending) in &manifest.imports {
         let owner = if rel.starts_with("notes/") {
             e(state.db.get_note(&pending.id).await)?.map(|note| note.notebook_id)
@@ -52,6 +53,16 @@ pub(super) async fn recover_imports(
         } else {
             return Err("Invalid path in pending notebook import".into());
         };
+        let kind = if rel.starts_with("notes/") {
+            "note"
+        } else {
+            "source"
+        };
+        if owner.is_none() && e(state.db.was_deleted(kind, &pending.id))? {
+            deleted.push((rel.clone(), pending.entry.clone()));
+            recovered.push(rel.clone());
+            continue;
+        }
         if let Some(owner) = owner {
             if owner != notebook_id || pending.entry.path != *rel {
                 return Err("Pending notebook import does not match its reserved item".into());
@@ -65,6 +76,11 @@ pub(super) async fn recover_imports(
         }
     }
     if !recovered.is_empty() {
+        for (rel, entry) in deleted {
+            let hashes = manifest.tombstones.entry(rel).or_default();
+            hashes.extend(entry.seen_hashes);
+            hashes.insert(entry.hash);
+        }
         for rel in recovered {
             manifest.imports.remove(&rel);
         }

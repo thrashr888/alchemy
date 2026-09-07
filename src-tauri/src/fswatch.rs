@@ -327,7 +327,11 @@ pub async fn rearm(app: &AppHandle) {
     // every bind, so the watch is live from the moment there is something to
     // watch rather than up to a minute later.
     if let Ok(data_dir) = app.path().app_data_dir() {
-        for (notebook_id, binding) in crate::okf::load_bindings(&data_dir) {
+        let Ok(bindings) = crate::okf::load_bindings_checked(&data_dir) else {
+            // Keep existing watches while the binding record is unavailable.
+            return;
+        };
+        for (notebook_id, binding) in bindings {
             if !open.contains(&notebook_id) {
                 continue;
             }
