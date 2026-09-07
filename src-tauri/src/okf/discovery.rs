@@ -100,6 +100,11 @@ pub(super) fn unfinished_folders(data_dir: &Path, root: &Path) -> Result<Vec<Pat
 pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<String, String> {
     let folder = same_folder(folder);
     let data_dir = app_data_dir(state);
+    if bindings::discovery_blocked(&data_dir, declared_id(&folder).as_deref(), &folder)? {
+        return Err(
+            "This notebook was explicitly unbound; bind it explicitly to resume syncing".into(),
+        );
+    }
     let path = record_path(&data_dir, &folder);
     let lock = notebook_sync_lock(
         state,
@@ -219,7 +224,7 @@ pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<S
         let manifest = load_manifest_checked(&manifest_at)?;
         save_manifest_checked(&manifest_at, &manifest)?;
     }
-    update_bindings_checked(&data_dir, |bindings| {
+    let published = bindings::update_discovered(&data_dir, &notebook_id, &folder, |bindings| {
         if let Some(binding) = bindings.get(&notebook_id) {
             if binding.id != record.binding_id || same_folder(&binding.path) != folder {
                 return Err(
@@ -250,6 +255,9 @@ pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<S
         }
         Ok(())
     })?;
+    if published.is_none() {
+        return Err("This notebook was explicitly unbound during discovery".into());
+    }
     if record.phase == Phase::Complete {
         return Ok(notebook_id);
     }

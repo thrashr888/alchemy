@@ -45,9 +45,12 @@ fn load_unlocked(data_dir: &Path) -> Result<Bindings, String> {
 }
 
 fn persist(data_dir: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+    persist_at(data_dir, &bindings_path(data_dir), value)
+}
+
+fn persist_at(data_dir: &Path, path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     // Serialization failure must not change even the initialization marker.
     let bytes = serde_json::to_vec_pretty(value).map_err(report)?;
-    let path = bindings_path(data_dir);
     let result = (|| -> std::io::Result<()> {
         std::fs::create_dir_all(data_dir)?;
         let mut staged = tempfile::NamedTempFile::new_in(data_dir)?;
@@ -66,7 +69,7 @@ fn persist(data_dir: &Path, value: &impl serde::Serialize) -> Result<(), String>
         // A crash during first initialization must never make established
         // records appear to be an unused installation on the next startup.
         std::fs::File::open(data_dir)?.sync_all()?;
-        staged.persist(&path).map_err(|error| error.error)?;
+        staged.persist(path).map_err(|error| error.error)?;
         std::fs::File::open(data_dir)?.sync_all()?;
         Ok(())
     })();
@@ -108,6 +111,13 @@ pub(super) fn update<R>(
         .lock()
         .map_err(|_| report("Binding transaction lock is poisoned"))?;
     let _file = process_lock(data_dir)?;
+    update_unlocked(data_dir, update)
+}
+
+fn update_unlocked<R>(
+    data_dir: &Path,
+    update: impl FnOnce(&mut Bindings) -> Result<R, String>,
+) -> Result<R, String> {
     let mut current = load_unlocked(data_dir)?;
     let original = current.clone();
     let result = update(&mut current)?;
@@ -122,6 +132,146 @@ pub(super) fn update<R>(
         persist(data_dir, &current)?;
     }
     Ok(result)
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Detached {
+    notebooks: std::collections::BTreeMap<String, Option<OkfBinding>>,
+    folders: std::collections::BTreeSet<PathBuf>,
+}
+
+fn detached_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("okf-detached.json")
+}
+
+fn detached_unlocked(data_dir: &Path) -> Result<Detached, String> {
+    let path = detached_path(data_dir);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(report),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if path
+                .with_extension("initialized")
+                .try_exists()
+                .map_err(report)?
+            {
+                return Err(report("The established notebook detach record is missing; restore it before discovering notebooks"));
+            }
+            Ok(Detached::default())
+        }
+        Err(error) => Err(report(error)),
+    }
+}
+
+fn blocked(detached: &Detached, notebook_id: Option<&str>, folder: &Path) -> bool {
+    notebook_id.is_some_and(|id| detached.notebooks.contains_key(id))
+        || detached.folders.contains(&same_folder(folder))
+}
+
+pub(super) fn discovery_blocked(
+    data_dir: &Path,
+    notebook_id: Option<&str>,
+    folder: &Path,
+) -> Result<bool, String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    Ok(blocked(&detached_unlocked(data_dir)?, notebook_id, folder))
+}
+
+/// The detach intent becomes durable before removal of the active binding.
+/// A crash between the two must never authorize automatic reattachment.
+pub(super) fn detach(data_dir: &Path, notebook_id: &str) -> Result<(), String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    let current = load_unlocked(data_dir)?;
+    let mut detached = detached_unlocked(data_dir)?;
+    if let Some(binding) = current.get(notebook_id) {
+        detached
+            .notebooks
+            .insert(notebook_id.to_string(), Some(binding.clone()));
+        detached.folders.insert(same_folder(&binding.path));
+    } else {
+        detached
+            .notebooks
+            .entry(notebook_id.to_string())
+            .or_insert(None);
+    }
+    persist_at(data_dir, &detached_path(data_dir), &detached)?;
+    update_unlocked(data_dir, |bindings| {
+        bindings.remove(notebook_id);
+        Ok(())
+    })
+}
+
+/// Called only after an explicit binding has been published, while its
+/// notebook lock is still held. A failed import leaves detach intent intact.
+pub(super) fn allow_explicit(
+    data_dir: &Path,
+    notebook_id: &str,
+    folder: &Path,
+    binding_id: &str,
+) -> Result<(), String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    if !load_unlocked(data_dir)?
+        .get(notebook_id)
+        .is_some_and(|binding| {
+            binding.id == binding_id && same_folder(&binding.path) == same_folder(folder)
+        })
+    {
+        return Err(report(
+            "The explicit binding changed before its detach intent could be cleared",
+        ));
+    }
+    let mut detached = detached_unlocked(data_dir)?;
+    let notebook = detached.notebooks.remove(notebook_id).is_some();
+    let folder = detached.folders.remove(&same_folder(folder));
+    if notebook || folder {
+        persist_at(data_dir, &detached_path(data_dir), &detached)?;
+    }
+    Ok(())
+}
+
+/// An explicit resume of the same folder retains the previous manifest and
+/// its local row identities, instead of importing its files as fresh items.
+pub(super) fn detached_binding(
+    data_dir: &Path,
+    notebook_id: &str,
+    folder: &Path,
+) -> Result<Option<OkfBinding>, String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    Ok(detached_unlocked(data_dir)?
+        .notebooks
+        .remove(notebook_id)
+        .flatten()
+        .filter(|binding| same_folder(&binding.path) == same_folder(folder)))
+}
+
+/// Recheck explicit detach intent under the same process lock that publishes
+/// automatic bindings, so an earlier discovery scan cannot undo an unbind.
+pub(super) fn update_discovered<R>(
+    data_dir: &Path,
+    notebook_id: &str,
+    folder: &Path,
+    update: impl FnOnce(&mut Bindings) -> Result<R, String>,
+) -> Result<Option<R>, String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    if blocked(&detached_unlocked(data_dir)?, Some(notebook_id), folder) {
+        return Ok(None);
+    }
+    update_unlocked(data_dir, update).map(Some)
 }
 
 #[cfg(test)]

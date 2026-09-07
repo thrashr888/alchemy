@@ -49,6 +49,8 @@ mod manifest_tests;
 mod sync_index_tests;
 #[cfg(test)]
 mod sync_tests;
+#[cfg(test)]
+mod unbind_tests;
 use import_claims::adopt_imported_files;
 
 // ---- OKF export ------------------------------------------------------------
@@ -2959,7 +2961,7 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
     // Tidy first, then look: a folder that is about to be set aside as a
     // duplicate should not be opened as an arrival on the way there.
     tidy_notebooks_folder(state).await;
-    let out = open_found_bundles_inner(app, state, &root).await;
+    let out = open_found_bundles_inner(Some(app), state, &root).await;
     OPENING.store(false, std::sync::atomic::Ordering::SeqCst);
     match out {
         Ok(count) => count,
@@ -2973,7 +2975,7 @@ pub(crate) async fn open_found_bundles(app: &AppHandle, state: &AppState) -> usi
 static OPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 async fn open_found_bundles_inner(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     state: &AppState,
     root: &Path,
 ) -> Result<usize, String> {
@@ -3002,6 +3004,10 @@ async fn open_found_bundles_inner(
         let known = known_notebooks(&data_dir, &notebooks)?;
         let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
         let doc = parse_okf_doc(&index);
+        if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), &folder)?
+        {
+            continue;
+        }
         let decision = if discovery::has_reservation(&data_dir, &folder)? {
             FoundBundle::Import
         } else {
@@ -3035,16 +3041,24 @@ async fn open_found_bundles_inner(
                     crate::diagnostics::error("okf", format!("could not bind {path}: {error}"));
                     continue;
                 }
-                set_binding_checked(
-                    &data_dir,
-                    &id,
-                    Some(OkfBinding {
-                        path: path.clone(),
-                        id: binding_id,
-                        last_write_at: 0,
-                        lost: false,
-                    }),
-                )?;
+                let published = bindings::update_discovered(&data_dir, &id, &folder, |bindings| {
+                    if bindings.get(&id) != existing.as_ref() {
+                        return Err("The notebook binding changed during discovery".into());
+                    }
+                    bindings.insert(
+                        id.clone(),
+                        OkfBinding {
+                            path: path.clone(),
+                            id: binding_id,
+                            last_write_at: 0,
+                            lost: false,
+                        },
+                    );
+                    Ok(())
+                })?;
+                if published.is_none() {
+                    continue;
+                }
                 write_bound(state, &id).await.map(|_| id)
             }
             FoundBundle::Import => match discover_bundle(state, &folder).await {
@@ -3067,10 +3081,12 @@ async fn open_found_bundles_inner(
     if !opened.is_empty() {
         // One announcement, however many arrived: forty folders on a first
         // launch is one event, not forty.
-        let _ = app.emit(
-            "okf://opened",
-            serde_json::json!({ "count": opened.len(), "titles": opened }),
-        );
+        if let Some(app) = app {
+            let _ = app.emit(
+                "okf://opened",
+                serde_json::json!({ "count": opened.len(), "titles": opened }),
+            );
+        }
         crate::commands::notify_changed("notebooks", None);
     }
     Ok(opened.len())
@@ -4177,7 +4193,8 @@ pub async fn bind_notebook_okf(
 /// Stop keeping a notebook on disk. The files stay where they are — the
 /// folder is the user's, and ending the sync is no reason to take it away.
 ///
-/// The order matters. The binding goes first, so a debounced write that has
+/// The order matters. Durable detach intent prevents automatic rediscovery;
+/// then the binding goes, so a debounced write that has
 /// not started yet finds nothing to write; then the pending deadline is
 /// dropped; then a write already inside `write_bundle` is given a moment to
 /// finish, which it may, because its record of the write is conditional and
@@ -4189,7 +4206,7 @@ pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(
     let lock = notebook_sync_lock(state, notebook_id);
     let guard = lock.lock().await;
     let data_dir = app_data_dir(state);
-    set_binding_checked(&data_dir, notebook_id, None)?;
+    bindings::detach(&data_dir, notebook_id)?;
     bind_import::cancel_imports(&data_dir, notebook_id)?;
     drop(guard);
     cancel_pending_write(notebook_id);

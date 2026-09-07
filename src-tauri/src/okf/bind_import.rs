@@ -198,6 +198,7 @@ pub(crate) async fn bind_folder(
         let manifest_at = manifest_path(&data_dir, &active.id);
         adopt_legacy_manifest(&target, &manifest_at);
         load_manifest_checked(&manifest_at)?;
+        bindings::allow_explicit(&data_dir, notebook_id, &target, &active.id)?;
         drop(guard);
         write_bound(state, notebook_id).await?;
         return Ok(path.into());
@@ -214,13 +215,24 @@ pub(crate) async fn bind_folder(
             ));
         }
     }
-    let mut session = prior_session.unwrap_or_else(|| Session {
-        notebook_id: notebook_id.into(),
-        target: target.clone(),
-        binding_id: new_id(),
-        original: current.clone(),
-        phase: Phase::Importing,
-    });
+    let detached = bindings::detached_binding(&data_dir, notebook_id, &target)?;
+    let mut session = if let Some(binding) = detached {
+        Session {
+            notebook_id: notebook_id.into(),
+            target: target.clone(),
+            binding_id: binding.id,
+            original: current.clone(),
+            phase: Phase::Importing,
+        }
+    } else {
+        prior_session.unwrap_or_else(|| Session {
+            notebook_id: notebook_id.into(),
+            target: target.clone(),
+            binding_id: new_id(),
+            original: current.clone(),
+            phase: Phase::Importing,
+        })
+    };
     if session.notebook_id != notebook_id || session.target != target {
         return Err("Binding import session names a different notebook or folder".into());
     }
@@ -252,6 +264,7 @@ pub(crate) async fn bind_folder(
     fault(state, "after-binding")?;
     session.phase = Phase::Committed;
     save(&session_at, &session)?;
+    bindings::allow_explicit(&data_dir, notebook_id, &target, &session.binding_id)?;
     drop(guard);
     write_bound(state, notebook_id).await?;
     Ok(path.into())
