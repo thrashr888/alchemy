@@ -5762,29 +5762,6 @@ async fn backfill_note_index(state: &AppState) {
     }
 }
 
-/// One-shot per launch: collapse each schedule's timestamped report notes
-/// ("{name} — 2026-07-13 09:00", one per run, from before reports became
-/// living notes) into a single stable-titled note. Newest content wins.
-async fn collapse_old_report_piles(state: &AppState) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static DONE: AtomicBool = AtomicBool::new(false);
-    if DONE.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let schedules = match state.db.all_report_schedules().await {
-        Ok(s) => s,
-        Err(err) => {
-            crate::note!("report collapse: listing schedules failed: {err:#}");
-            return;
-        }
-    };
-    for s in schedules {
-        if let Err(err) = collapse_report_notes(state, &s.notebook_id, &s.name).await {
-            crate::note!("report collapse for \"{}\" failed: {err:#}", s.name);
-        }
-    }
-}
-
 // ---- Note curator (docs/RFC-note-curator.md phase 4) -----------------------
 
 /// Staleness thresholds in APP-OPEN days — days the app actually ran, not
@@ -6198,9 +6175,6 @@ pub(crate) async fn resync_sources_filtered(
     // One-shot per app run: index notes written before notes joined the
     // retrieval index (or whose indexing failed at write time).
     backfill_note_index(state).await;
-    // One-shot per app run: collapse timestamped report piles from before
-    // reports became living notes (one note per schedule, newest wins).
-    collapse_old_report_piles(state).await;
     // Curator: track app-open days; runs its pass at most weekly.
     note_curator_tick(&app, state).await;
     // A manual folder add/refresh is already scanning — skip this tick rather

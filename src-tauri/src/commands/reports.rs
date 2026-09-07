@@ -129,28 +129,17 @@ fn report_notes_for<'a>(notes: &'a [Note], name: &str) -> Vec<&'a Note> {
         .collect()
 }
 
-pub(super) async fn collapse_report_notes(
-    state: &AppState,
+/// Select the prior run without deleting or renaming independent artifacts.
+/// Matching titles identify candidates for a schedule, not duplicate notes.
+pub(super) async fn latest_report_note(
+    db: &crate::db::Db,
     notebook_id: &str,
     name: &str,
 ) -> anyhow::Result<Option<Note>> {
-    let notes = state.db.list_notes(notebook_id).await?;
+    let notes = db.list_notes(notebook_id).await?;
     let mut matches = report_notes_for(&notes, name);
     matches.sort_by_key(|note| std::cmp::Reverse(note.updated_at));
-    let mut iter = matches.into_iter();
-    let Some(survivor) = iter.next() else {
-        return Ok(None);
-    };
-    for stale in iter {
-        state.db.delete_note(&stale.id).await?;
-    }
-    if survivor.title != name {
-        state
-            .db
-            .update_note(&survivor.id, name, &survivor.content, survivor.updated_at)
-            .await?;
-    }
-    state.db.get_note(&survivor.id).await
+    Ok(matches.into_iter().next().cloned())
 }
 
 #[tauri::command]
@@ -181,10 +170,10 @@ pub(crate) async fn run_report_inner(
 
     refresh_notebook_urls(&app, state, &schedule.notebook_id).await;
 
-    // Collapse before generating so the survivor doubles as the prior run —
+    // Read the most recent report as the prior run without changing history —
     // its content lets the model report changes since last time (its first
     // line is the `_Run …_` stamp, so the date travels with it).
-    let existing = e(collapse_report_notes(state, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(latest_report_note(&state.db, &schedule.notebook_id, &schedule.name).await)?;
     let prior_content = existing.as_ref().map(|note| note.content.clone());
 
     let _ = app.emit("report://step", "Generating report".to_string());
@@ -211,7 +200,7 @@ pub(crate) async fn run_report_inner(
 
 /// The write side of any scheduled run — reports and briefs share it: stamp
 /// the run, update the living note (or create it), re-index, mark the
-/// schedule run, and announce. The survivor note doubles as the next run's
+/// schedule run, and announce. The selected note doubles as the next run's
 /// prior for change tracking.
 pub(super) async fn persist_report_run(
     app: &AppHandle,
@@ -261,4 +250,135 @@ pub(super) async fn persist_report_run(
         .await)?;
     let _ = app.emit("generate://done", &note);
     Ok(note)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn prior_report_selection_preserves_distinct_versions_and_provenance_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let name = "portfolio value review";
+        let original = Note {
+            id: "original-report".into(),
+            notebook_id: "finance".into(),
+            title: name.into(),
+            content: "Original portfolio analysis and its evidence.".into(),
+            kind: "report".into(),
+            prompt: "Original review scope".into(),
+            origin: "alchemy/0.56.2".into(),
+            status: String::new(),
+            created_at: 10,
+            updated_at: 20,
+        };
+        let newer = Note {
+            id: "newer-report".into(),
+            content: "Different, newer portfolio analysis.".into(),
+            prompt: "New review scope".into(),
+            origin: "alchemy/0.56.0".into(),
+            created_at: 30,
+            updated_at: 40,
+            ..original.clone()
+        };
+        let historic = Note {
+            id: "historic-report".into(),
+            title: format!("{name} — 2026-07-13 09:00"),
+            content: "Timestamped historical analysis.".into(),
+            updated_at: 25,
+            ..original.clone()
+        };
+        let other_provenance = Note {
+            id: "separate-provenance".into(),
+            origin: "human:reviewer".into(),
+            prompt: "Different evidence scope".into(),
+            status: "archived".into(),
+            ..original.clone()
+        };
+        let regular_note = Note {
+            id: "regular-note".into(),
+            kind: "note".into(),
+            updated_at: 100,
+            ..original.clone()
+        };
+        let other_report = Note {
+            id: "other-report".into(),
+            title: format!("{name} extended"),
+            updated_at: 100,
+            ..original.clone()
+        };
+        for note in [
+            &original,
+            &newer,
+            &historic,
+            &other_provenance,
+            &regular_note,
+            &other_report,
+        ] {
+            db.add_note(note).await.unwrap();
+        }
+        let before = serde_json::to_value(db.list_notes("finance").await.unwrap()).unwrap();
+        for _ in 0..2 {
+            let prior = latest_report_note(&db, "finance", name)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(prior.id, newer.id);
+            assert_eq!(prior.content, newer.content);
+            assert_eq!(prior.origin, newer.origin);
+            assert_eq!(
+                serde_json::to_value(db.list_notes("finance").await.unwrap()).unwrap(),
+                before
+            );
+            for id in [&original.id, &newer.id, &historic.id, &other_provenance.id] {
+                assert!(!db.was_deleted("note", id).unwrap());
+            }
+        }
+        drop(db);
+        let reopened = crate::db::Db::open(dir.path()).await.unwrap();
+        assert_eq!(
+            latest_report_note(&reopened, "finance", name)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            newer.id
+        );
+        assert_eq!(
+            serde_json::to_value(reopened.list_notes("finance").await.unwrap()).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn choosing_latest_timestamped_report_does_not_rename_its_historical_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let note = Note {
+            id: "historic".into(),
+            notebook_id: "notebook".into(),
+            title: "Review — 2026-07-13 09:00".into(),
+            content: "Original stamped report.".into(),
+            kind: "report".into(),
+            prompt: "Original scope".into(),
+            origin: "human:author".into(),
+            status: String::new(),
+            created_at: 1,
+            updated_at: 2,
+        };
+        db.add_note(&note).await.unwrap();
+        let selected = latest_report_note(&db, "notebook", "Review")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&selected).unwrap(),
+            serde_json::to_value(&note).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(db.get_note(&note.id).await.unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&note).unwrap()
+        );
+    }
 }

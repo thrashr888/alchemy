@@ -295,7 +295,7 @@ pub(crate) async fn run_brief(
     state: &AppState,
     schedule: ReportSchedule,
 ) -> Result<Note, String> {
-    let existing = e(collapse_report_notes(state, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(latest_report_note(&state.db, &schedule.notebook_id, &schedule.name).await)?;
     let since = existing
         .as_ref()
         .map(|n| n.updated_at)
