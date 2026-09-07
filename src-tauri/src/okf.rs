@@ -28,6 +28,7 @@ use crate::ingest;
 use crate::models::{Note, Notebook, Source};
 use crate::rag;
 
+mod bind_import;
 #[cfg(test)]
 mod binding_callsite_tests;
 mod bindings;
@@ -35,6 +36,8 @@ mod conflicts;
 #[cfg(test)]
 mod deletion_recovery_tests;
 mod discovery;
+mod portable;
+mod portable_deletions;
 pub(crate) use discovery::discover_bundle;
 mod recovery;
 mod write_recovery;
@@ -535,6 +538,16 @@ pub fn write_bundle(
         .map(load_manifest_checked)
         .transpose()?
         .unwrap_or_default();
+    portable::check_protocol(bundle)?;
+    let live = sources
+        .iter()
+        .chain(notes)
+        .map(|concept| concept.id.clone())
+        .collect();
+    portable::drop_dead_aliases(&mut manifest, &live);
+    let mut deleted = portable_deletions::read_deleted(bundle)?;
+    deleted.extend(manifest.deleted_entities.iter().cloned());
+    portable::prepare(bundle, &mut manifest, &deleted)?;
     let mut out = OkfWrite::default();
 
     // Place everything first: a note's `sources:` entries cite bundle paths,
@@ -629,6 +642,21 @@ pub fn write_bundle(
                     .map(|m| m.extra.clone())
                     .unwrap_or_default(),
             );
+            let mut portable_id = manifest
+                .concepts
+                .get(&concept.id)
+                .filter(|entry| !entry.portable_id.is_empty())
+                .map(|entry| entry.portable_id.clone())
+                .unwrap_or_else(|| portable::local_identity(dir, &concept.id));
+            if deleted.contains(&portable_id) {
+                if manifest.concepts.contains_key(&concept.id) {
+                    return Err("A deleted entity must be reconciled before writing".into());
+                }
+                portable_id = new_id();
+            }
+            concept
+                .alchemy
+                .push(("sync_id".into(), portable_id.clone()));
             // The original, if the bundle is its sensible home (§6).
             // `resource:` says which way it went — a `references/` path means
             // the bytes are here, anything else is provenance to a place this
@@ -668,11 +696,30 @@ pub fn write_bundle(
                     .alchemy
                     .push(("origin".into(), concept.origin_uri.clone()));
             }
-            let text = format!(
+            let mut text = format!(
                 "{}{}\n",
                 okf_frontmatter(&concept, &description, &placements),
                 concept.content
             );
+            if let Some(entry) = manifest.concepts.get(&concept.id) {
+                if !entry.portable_written
+                    && !entry.local_hash.is_empty()
+                    && entry.local_hash == local_hash
+                    && entry.links_hash
+                        == okf_hash(&format!("{:?}", parse_okf_doc(&text).get("sources")))
+                    && bundle.join(&entry.path).is_file()
+                {
+                    let original = std::fs::read_to_string(bundle.join(&entry.path))
+                        .map_err(|err| err.to_string())?;
+                    if okf_hash(&original) != entry.hash {
+                        return Err(
+                            "A file changed during sync identity migration; retry reconciliation"
+                                .into(),
+                        );
+                    }
+                    text = portable::attach_identity(&original, &portable_id)?;
+                }
+            }
             let hash = okf_hash(&text);
             let links_hash = okf_hash(&format!("{:?}", parse_okf_doc(&text).get("sources")));
             let prior = manifest.concepts.get(&concept.id).cloned();
@@ -697,11 +744,36 @@ pub fn write_bundle(
                 }
             }
             let identity_changes = prior.as_ref().is_none_or(|p| p.path != rel);
+            if let Some(prior) = &prior {
+                let unchanged_projection = prior.portable_written
+                    && (prior.hash == hash
+                        || (!prior.local_hash.is_empty()
+                            && prior.local_hash == local_hash
+                            && prior.links_hash == links_hash));
+                if identity_changes || !unchanged_projection {
+                    let path = bundle.join(&prior.path);
+                    if !is_evicted_stub(&path) {
+                        let current = std::fs::read_to_string(&path).map_err(|err| {
+                            format!("Could not verify {} before writing: {err}", prior.path)
+                        })?;
+                        let current_hash = okf_hash(&current);
+                        if current_hash != prior.hash && current_hash != hash {
+                            return Err(format!(
+                                "{} changed after reconciliation; retry syncing before writing",
+                                prior.path
+                            ));
+                        }
+                    }
+                }
+            }
             if identity_changes {
                 if manifest_at.is_some() && bundle.join(&rel).exists() {
                     return Err(format!("Cannot replace an unclaimed concept at {rel}"));
                 }
                 let mut entry = prior.clone().unwrap_or_default();
+                entry.portable_id = portable_id.clone();
+                entry.portable_written = true;
+                entry.rewrite_pending = false;
                 entry.path = rel.clone();
                 entry.hash = hash.clone();
                 entry.local_hash = local_hash.clone();
@@ -752,10 +824,11 @@ pub fn write_bundle(
             }
             let unchanged = !identity_changes
                 && prior.as_ref().is_some_and(|p| {
-                    p.hash == hash
-                        || (!p.local_hash.is_empty()
-                            && p.local_hash == local_hash
-                            && p.links_hash == links_hash)
+                    p.portable_written
+                        && (p.hash == hash
+                            || (!p.local_hash.is_empty()
+                                && p.local_hash == local_hash
+                                && p.links_hash == links_hash))
                 })
                 && at.exists();
             if unchanged {
@@ -788,6 +861,9 @@ pub fn write_bundle(
             manifest.concepts.insert(
                 concept.id.clone(),
                 OkfManifestEntry {
+                    portable_id,
+                    portable_written: true,
+                    rewrite_pending: false,
                     path: rel,
                     adopted,
                     hash,
@@ -834,6 +910,28 @@ pub fn write_bundle(
                 continue;
             }
             recovery::remember_deleted(&mut manifest, &id);
+            match std::fs::read_to_string(bundle.join(&entry.path)) {
+                Ok(text) if okf_hash(&text) != entry.hash => {
+                    conflicts::Context {
+                        bundle,
+                        rel: &entry.path,
+                        base_local_hash: &entry.local_hash,
+                    }
+                    .preserve_remote(&parse_okf_doc(&text))?;
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "Could not preserve {} before deletion: {err}",
+                        entry.path
+                    ))
+                }
+            }
+            if !entry.portable_id.is_empty() {
+                portable_deletions::record_deleted(bundle, &entry.portable_id)?;
+                manifest.deleted_entities.insert(entry.portable_id.clone());
+            }
             if let Some(path) = manifest_at {
                 save_manifest_checked(path, &manifest)?;
             }
@@ -923,6 +1021,10 @@ pub fn write_bundle(
     out.referenced = references.len();
     out.sources = listings.get("sources").map(Vec::len).unwrap_or(0);
     out.notes = listings.get("notes").map(Vec::len).unwrap_or(0);
+    if portable::migration_ready(bundle, &manifest)? {
+        portable::publish_protocol(bundle)?;
+        manifest.protocol_version = 1;
+    }
     if let Some(path) = manifest_at {
         save_manifest_checked(path, &manifest)?;
     }
@@ -3392,6 +3494,14 @@ pub(crate) fn touch_last_write(data_dir: &Path, notebook_id: &str, binding_id: &
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OkfManifestEntry {
+    /// Entity lifetime shared by every replica, independent of its database ID.
+    #[serde(default)]
+    pub portable_id: String,
+    #[serde(default)]
+    pub portable_written: bool,
+    /// A preserved losing file still needs the winning local projection.
+    #[serde(default)]
+    pub rewrite_pending: bool,
     /// Bundle-relative path, so a moved bundle's manifest still reads.
     pub path: String,
     /// The file came in from disk rather than out of the writer's slug, so
@@ -3450,6 +3560,10 @@ pub struct OkfManifestEntry {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OkfManifest {
+    #[serde(default)]
+    protocol_version: u32,
+    #[serde(default)]
+    deleted_entities: std::collections::BTreeSet<String>,
     #[serde(default)]
     outgoing: HashMap<String, write_recovery::PendingWrite>,
     #[serde(default)]
@@ -3996,6 +4110,9 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let data_dir = app_data_dir(state);
     let mut binding = binding_for_checked(&data_dir, notebook_id)?
         .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
+    if bind_import::blocks_existing_write(&data_dir, notebook_id, &binding.id)? {
+        return Err("A folder import is paused; retry binding that folder or unbind to cancel it before writing".into());
+    }
     // The writer does not build a bundle root it did not find. Making one is
     // bind's job and seed's job; here a missing root means the folder went
     // somewhere, and `create_dir_all` would put the old one back — which on
@@ -4033,83 +4150,18 @@ pub async fn notebook_okf_binding(
 /// Keep a notebook on disk as an OKF bundle at `path`.
 ///
 /// An empty folder gets the seed pass. A folder that already is a bundle is
-/// imported first and then bound, so binding to a colleague's checkout adds
-/// what it holds rather than overwriting it — duplicates skip, as import
-/// always does. Returns the path, so the caller can say where it went.
+/// imported under durable per-file claims before changing the active binding.
+/// Distinct incoming documents retain their own identities, and an interrupted
+/// import resumes without duplicating its rows. Returns the chosen path.
 pub(crate) async fn bind_impl(
     app: &AppHandle,
     state: &AppState,
     notebook_id: &str,
     path: &str,
 ) -> Result<String, String> {
-    let lock = notebook_sync_lock(state, notebook_id);
-    let guard = lock.lock().await;
-    load_bindings_checked(&app_data_dir(state))?;
-    let bundle = PathBuf::from(path);
-    // §5.5 says an empty folder gets the seed pass, and the UI's picker always
-    // hands over one it just made. The MCP and CLI surfaces had to `mkdir`
-    // first, which nothing said — so make it here, parents and all.
-    if !bundle.exists() {
-        std::fs::create_dir_all(&bundle)
-            .map_err(|err| format!("Couldn't make the folder {path}: {err}"))?;
-    }
-    if !bundle.is_dir() {
-        return Err(format!("Not a folder: {path}"));
-    }
-    // The other half of the loop guard in `add_source_folder`: a folder this
-    // notebook already reads as a source cannot also be where it writes.
-    if e(state.db.list_sources(notebook_id).await)?
-        .iter()
-        .any(|s| s.url == path)
-    {
-        return Err(
-            "This notebook already reads that folder as a source — pick a different one".into(),
-        );
-    }
-    let data_dir = app_data_dir(state);
-    let original_binding = binding_for_checked(&data_dir, notebook_id)?;
-    let existing = original_binding
-        .clone()
-        .filter(|binding| same_folder(&binding.path) == same_folder(&bundle));
-    let id = existing
-        .as_ref()
-        .map(|binding| binding.id.clone())
-        .unwrap_or_else(new_id);
-    let manifest = manifest_path(&data_dir, &id);
-    // Earlier builds of this branch kept the manifest inside the bundle.
-    // Take it over so a folder already bound keeps its hashes instead of
-    // rewriting every file, then leave the bundle machine-state-free.
-    adopt_legacy_manifest(&bundle, &manifest);
-    let record = load_manifest_checked(&manifest)?;
-    save_manifest_checked(&manifest, &record)?;
-    // A bundle already living here has content the notebook does not; take it
-    // in before the writer starts treating this folder as its own. A binding
-    // to the same folder keeps its claims instead of importing edits as rows.
-    if existing.is_none() && crate::commands::find_bundle_root(bundle.clone()).is_ok() {
-        crate::commands::import_bundle(app, state, bundle.clone(), Some(notebook_id.to_string()))
-            .await?;
-    }
-    if existing.is_none() {
-        adopt_imported_files(state, notebook_id, &bundle, &manifest).await?;
-    }
-    replace_binding_checked(
-        &data_dir,
-        notebook_id,
-        original_binding.as_ref(),
-        Some(OkfBinding {
-            path: path.to_string(),
-            id,
-            last_write_at: 0,
-            lost: false,
-        }),
-    )?;
-    drop(guard);
-    write_bound(state, notebook_id).await?;
-    // Watch it now, not on the next minute tick: a folder somebody just
-    // asked the app to keep in step should be in step from the next save
-    // (docs/RFC-okf-live.md §5.3).
+    let bound = bind_import::bind_folder(state, notebook_id, path).await?;
     crate::fswatch::rearm(app).await;
-    Ok(path.to_string())
+    Ok(bound)
 }
 
 #[tauri::command]
@@ -4138,6 +4190,7 @@ pub(crate) async fn unbind_impl(state: &AppState, notebook_id: &str) -> Result<(
     let guard = lock.lock().await;
     let data_dir = app_data_dir(state);
     set_binding_checked(&data_dir, notebook_id, None)?;
+    bind_import::cancel_imports(&data_dir, notebook_id)?;
     drop(guard);
     cancel_pending_write(notebook_id);
     for _ in 0..40 {
@@ -4216,7 +4269,7 @@ pub fn classify(rel: &str, hash: &str, manifest: &OkfManifest) -> OkfAction {
         .iter()
         .find(|(_, entry)| entry.path == rel)
     {
-        Some((_, entry)) if entry.hash == hash => OkfAction::Echo,
+        Some((_, entry)) if entry.hash == hash && !entry.rewrite_pending => OkfAction::Echo,
         Some((id, _)) => OkfAction::Update(id.clone()),
         None => OkfAction::Create,
     }
@@ -4492,14 +4545,38 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     let mut manifest = load_manifest_checked(&manifest_at)?;
     write_recovery::recover_writes(state, notebook_id, &bundle, &mut manifest, &manifest_at)
         .await?;
+    if portable::migrate_pending(&bundle, &mut manifest)? {
+        save_manifest_checked(&manifest_at, &manifest)?;
+    }
+    portable_deletions::publish_pending_deletions(state, &bundle, &manifest).await?;
     recovery::recover_imports(state, notebook_id, &mut manifest, &manifest_at).await?;
+    if portable::repair_dead_aliases(state, notebook_id, &mut manifest).await? {
+        save_manifest_checked(&manifest_at, &manifest)?;
+    }
+    let mut deleted = portable_deletions::read_deleted(&bundle)?;
+    deleted.extend(manifest.deleted_entities.iter().cloned());
+    if portable::prepare(&bundle, &mut manifest, &deleted)? {
+        save_manifest_checked(&manifest_at, &manifest)?;
+    }
+    let deleted_count = portable_deletions::apply_deleted(
+        state,
+        notebook_id,
+        &bundle,
+        &mut manifest,
+        &manifest_at,
+        &deleted,
+    )
+    .await?;
     // Path → entity id, the direction the reconciler reads in.
     let by_path: HashMap<String, String> = manifest
         .concepts
         .iter()
         .map(|(id, entry)| (entry.path.clone(), id.clone()))
         .collect();
-    let mut out = OkfReconcile::default();
+    let mut out = OkfReconcile {
+        deleted: deleted_count,
+        ..Default::default()
+    };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut losers: Vec<String> = Vec::new();
     let mut restore_replay = false;
@@ -4559,6 +4636,21 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 continue;
             };
             let hash = okf_hash(&text);
+            let doc = parse_okf_doc(&text);
+            if deleted.contains(&portable::identity(&doc, &rel, &hash)?) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                    if let Some(entry) = manifest.concepts.get_mut(id) {
+                        entry.hash = hash.clone();
+                        entry.rewrite_pending = true;
+                        entry.local_hash.clear();
+                        entry.file_mtime = 0;
+                        dirty = true;
+                        restore_replay = true;
+                    }
+                }
+                continue;
+            }
             if recovery::is_deleted_replay(&manifest, &rel, &hash) {
                 if let Some(id) = by_path.get(&rel) {
                     seen.insert(id.clone());
@@ -4567,7 +4659,8 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                             // A newer item can reuse this path. An old deleted
                             // version must not overwrite that new generation.
                             // Force the writer to restore its current bytes.
-                            entry.hash.clear();
+                            entry.hash = hash.clone();
+                            entry.rewrite_pending = true;
                             entry.local_hash.clear();
                             entry.file_mtime = 0;
                             dirty = true;
@@ -4602,7 +4695,6 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 }
                 OkfAction::Create => None,
             };
-            let doc = parse_okf_doc(&text);
             let reserved = if known.is_none() && !doc.body.trim().is_empty() {
                 Some(recovery::reserve_import(
                     &mut manifest,
@@ -4675,7 +4767,8 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                             out.overruled += 1;
                             losers.push(format!("{rel}\n\n{text}"));
                             if let Some(entry) = manifest.concepts.get_mut(&id) {
-                                entry.hash.clear();
+                                entry.hash = hash.clone();
+                                entry.rewrite_pending = true;
                                 entry.local_hash.clear();
                                 entry.file_mtime = 0;
                                 dirty = true;
@@ -4707,7 +4800,8 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                             out.overruled += 1;
                             losers.push(format!("{rel}\n\n{text}"));
                             if let Some(entry) = manifest.concepts.get_mut(&id) {
-                                entry.hash.clear();
+                                entry.hash = hash.clone();
+                                entry.rewrite_pending = true;
                                 entry.local_hash.clear();
                                 entry.file_mtime = 0;
                                 dirty = true;
@@ -4749,16 +4843,25 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     }
     let mut removed: Vec<String> = Vec::new();
     for (id, rel) in verdict.delete {
-        recovery::remember_deleted(&mut manifest, &id);
-        save_manifest_checked(&manifest_at, &manifest)?;
-        if rel.starts_with("notes/") {
-            e(state.db.delete_note(&id).await)?;
-        } else {
-            e(state.db.delete_source(&id).await)?;
+        let Some(entry) = manifest.concepts.get(&id) else {
+            continue;
+        };
+        if entry.portable_id.is_empty() {
+            return Err(format!(
+                "Restore {rel} to establish its sync identity before deleting it"
+            ));
         }
-        manifest.concepts.remove(&id);
-        save_manifest_checked(&manifest_at, &manifest)?;
-        out.deleted += 1;
+        portable_deletions::record_deleted(&bundle, &entry.portable_id)?;
+        deleted.insert(entry.portable_id.clone());
+        out.deleted += portable_deletions::apply_deleted(
+            state,
+            notebook_id,
+            &bundle,
+            &mut manifest,
+            &manifest_at,
+            &deleted,
+        )
+        .await?;
         okf_notice(format!("{rel} was deleted on disk; removed it here too"));
         removed.push(rel);
     }
@@ -4813,6 +4916,12 @@ pub(crate) fn adopt(
     len: u64,
     doc: &OkfDoc,
 ) {
+    let portable_id = manifest
+        .concepts
+        .get(id)
+        .filter(|entry| !entry.portable_id.is_empty())
+        .map(|entry| entry.portable_id.clone())
+        .unwrap_or_else(|| portable::identity(doc, rel, hash).unwrap_or_default());
     let mut seen_hashes = manifest
         .concepts
         .get(id)
@@ -4827,6 +4936,9 @@ pub(crate) fn adopt(
     manifest.concepts.insert(
         id.to_string(),
         OkfManifestEntry {
+            portable_id,
+            portable_written: portable::explicit_id(doc).ok().flatten().is_some(),
+            rewrite_pending: false,
             path: rel.to_string(),
             adopted: true,
             hash: hash.to_string(),
@@ -4954,7 +5066,7 @@ async fn take_in_source(
         url: resource,
         text: doc.body.clone(),
     });
-    // A duplicate is success, not failure — the same rule import follows.
+    // Distinct file identities remain distinct even when their text matches.
     let reserved_id = reserved_id.ok_or("Missing reserved import identity")?;
     let device = doc.nested("alchemy", "device").unwrap_or_default();
     let tags = doc.nested("alchemy", "tags").unwrap_or_default();
@@ -4984,7 +5096,6 @@ async fn take_in_source(
                 local_hash,
             }))
         }
-        Err(err) if err.to_string().starts_with("Already in this notebook as ") => Ok(None),
         Err(err) => Err(format!("Could not import {}: {err:#}", path.display())),
     }
 }

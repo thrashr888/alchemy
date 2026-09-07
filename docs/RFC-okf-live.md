@@ -513,6 +513,45 @@ own, the log carries both actors, and neither pass echoes.
 
 ### Shared folders, as built
 
+- **Portable lifetimes survive moves and deletion.** Each concept carries a
+  UUID in `alchemy.sync_id`, separate from either machine's database ID. A
+  renamed file retains its local row and conflict baseline. Immutable
+  `sync/deletions/<uuid>.json` records suppress every revision of a deleted
+  lifetime, including versions a replica never saw. Accepted deletions also
+  remain in its local manifest. Recreating an item uses a new lifetime; changing
+  only the body of a deleted file does not restore it. Edited local content is
+  preserved under `conflicts/` before an incoming deletion removes the row.
+- **Migration preserves the original document.** Adding an identity to an
+  otherwise unchanged imported file preserves its body and all frontmatter
+  values. `sync/protocol.json` records version 1 once locally visible legacy
+  concepts have identities. An established replica remembers that version if
+  the marker temporarily disappears. Update Alchemy on every participating
+  machine: a legacy Alchemy file that loses its new identity causes sync to
+  stop with an error instead of allocating another row. Plain Markdown remains
+  importable; moving a document while stripping all identity metadata cannot
+  be distinguished from adding a new document.
+- **Identity collisions preserve both files.** Two files with the same
+  portable ID are ambiguous, including cloud conflict copies. They stay on
+  disk and reconciliation stops before importing either arbitrarily. Review
+  them and retain one identity, or assign an intentional independent copy a
+  new UUID. This supersedes the earlier assumption that every cloud conflict
+  copy can safely become an unrelated note automatically.
+- **Explicit binding imports resume.** Per-file row reservations and a local
+  binding-import session survive interruption. The previous folder remains
+  bound and its writer pauses until importing finishes or unbind cancels the
+  session. Retry the same target to resume; imported rows keep their IDs,
+  including distinct files with identical content. After binding publication,
+  later target edits use the ordinary conflict-preserving reconciler.
+- **Validation separates replicas from transport.** Isolated tests run real
+  independent databases, bindings, writers and reconcilers on one Mac. They
+  cover renames, deletion replay, same-path recreation, interrupted imports,
+  concurrent edits, protocol downgrade and identity collisions. A separate
+  September 2026 iCloud smoke uploaded a generated 256 KiB file, evicted it to
+  `SF_DATALESS`, downloaded it with `brctl`, and verified its SHA-256 before
+  removing the fixture. This proves this Mac's hydration path; independent
+  laptops' delivery order, offline queues and concurrent FileProvider state
+  still require a two-device transport check.
+
 - **Unbinding is a claim, so it has to be true.** §5.5 says unbinding leaves
   the files where they are, and said nothing about what happens when a write
   is in flight — so the command removed the entry, an already-running write

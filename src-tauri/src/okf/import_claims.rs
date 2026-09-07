@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_import_claims_noncanonical_path_and_writer_leaves_bytes_alone() {
+    fn initial_import_keeps_path_and_body_while_adding_portable_identity() {
         let dir = tempfile::tempdir().unwrap();
         let path = file(dir.path(), "outside-name.md", "Exact body");
         let before = std::fs::read(&path).unwrap();
@@ -154,7 +154,21 @@ mod tests {
             generated_at: 1,
         };
         write_bundle(&notebook, &[], &notes, dir.path(), Some(&manifest_at)).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let migrated = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            parse_okf_doc(&migrated).body,
+            parse_okf_doc(std::str::from_utf8(&before).unwrap()).body
+        );
+        assert!(portable::explicit_id(&parse_okf_doc(&migrated))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            write_bundle(&notebook, &[], &notes, dir.path(), Some(&manifest_at))
+                .unwrap()
+                .written,
+            0
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), migrated);
         assert!(!dir.path().join("notes/original-title.md").exists());
     }
 

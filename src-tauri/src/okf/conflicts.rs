@@ -22,6 +22,17 @@ impl Context<'_> {
         {
             return Ok(());
         }
+        self.preserve_local(local)
+    }
+
+    pub fn preserve_local_before_delete(&self, local: &OkfConcept) -> Result<(), String> {
+        if !self.base_local_hash.is_empty() && local_concept_hash(local) == self.base_local_hash {
+            return Ok(());
+        }
+        self.preserve_local(local)
+    }
+
+    fn preserve_local(&self, local: &OkfConcept) -> Result<(), String> {
         // An absent baseline cannot prove that overwriting is safe. Preserve
         // the existing text conservatively when recovering a legacy claim.
         let text = format!(

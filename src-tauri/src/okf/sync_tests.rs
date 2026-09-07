@@ -259,7 +259,12 @@ async fn old_deleted_versions_cannot_overwrite_a_new_item_at_the_same_path() {
         assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
         assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 4);
     }
-    let fresh = first.replace("Original content 0", "A new item reuses this path");
+    let old_identity = portable::explicit_id(&parse_okf_doc(&first))
+        .unwrap()
+        .unwrap();
+    let fresh = first
+        .replace("Original content 0", "A new item reuses this path")
+        .replace(&old_identity, &new_id());
     std::fs::write(&path, &fresh).unwrap();
     assert_eq!(reconcile(&a, "shared-notebook").await.unwrap().created, 1);
     for old in [&first, &second] {
@@ -343,7 +348,9 @@ async fn unrelated_write_does_not_resurrect_remote_deletion() {
         }
     }
     save_manifest(&manifest_at, &manifest);
-    assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().deleted, 1);
+    // The explicit shared deletion was already applied by write_bound above;
+    // only unmarked filesystem disappearances wait for the grace period.
+    assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().deleted, 0);
     write_bound(&b, "shared-notebook").await.unwrap();
     assert_eq!(b.db.list_notes("shared-notebook").await.unwrap().len(), 4);
     assert!(!reconcile(&b, "shared-notebook").await.unwrap().changed());

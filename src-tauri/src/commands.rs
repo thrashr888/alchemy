@@ -1450,9 +1450,6 @@ pub(crate) async fn store_extracted_with_id(
         state.db.get_source(source_id).await?.is_none(),
         "Reserved source identity already exists"
     );
-    if let Some(title) = find_duplicate(state, notebook_id, &extracted.text).await? {
-        anyhow::bail!("Already in this notebook as \"{title}\" — skipped duplicate");
-    }
     crate::device::note_origin_device_checked(
         state
             .config_path

@@ -2463,7 +2463,9 @@ fn okf_outside_keys_survive_later_writes() {
         "src-orders".into(),
         OkfManifestEntry {
             path: "sources/orders-table.md".into(),
-            hash: String::new(),
+            hash: crate::okf::okf_hash(
+                &std::fs::read_to_string(bundle.join("sources/orders-table.md")).unwrap(),
+            ),
             wrote_at: 0,
             extra,
             ..Default::default()
