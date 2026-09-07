@@ -220,6 +220,90 @@ pub(super) fn publish_protocol(bundle: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A pre-portable manifest may already own a returning file under a different
+/// path. Only its original row identity or exact observed file bytes prove
+/// that relationship; title and extracted-content similarity do not.
+fn recover_legacy_paths(
+    bundle: &Path,
+    candidate: &mut OkfManifest,
+    deleted: &HashSet<String>,
+) -> Result<bool, String> {
+    let missing: Vec<_> = candidate
+        .concepts
+        .iter()
+        .filter(|(_, entry)| entry.portable_id.is_empty() && !bundle.join(&entry.path).exists())
+        .map(|(id, entry)| (id.clone(), entry.clone()))
+        .collect();
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let mut assigned = HashMap::new();
+    let mut unresolved = Vec::new();
+    for kind in ["notes", "sources"] {
+        for path in concept_files(bundle, kind) {
+            let rel = path
+                .strip_prefix(bundle)
+                .map_err(|err| err.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if candidate.concepts.values().any(|entry| entry.path == rel) || is_dataless(&path) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .map_err(|err| format!("Could not inspect returning legacy file {rel}: {err}"))?;
+            let hash = okf_hash(&text);
+            if recovery::is_deleted_replay(candidate, &rel, &hash) {
+                continue;
+            }
+            let doc = parse_okf_doc(&text);
+            let legacy_id = doc.nested("alchemy", "id");
+            let explicit = explicit_id(&doc)?;
+            let portable_id = identity(&doc, &rel, &hash)?;
+            let matches: Vec<_> = missing
+                .iter()
+                .filter(|(id, entry)| {
+                    entry.path.split('/').next() == Some(kind)
+                        && (legacy_id.as_ref() == Some(id)
+                            || entry.hash == hash
+                            || entry.seen_hashes.contains(&hash))
+                })
+                .collect();
+            if matches.len() > 1 {
+                return Err(format!("Cannot identify returning legacy file {rel}: multiple existing rows match its identity or file history. Restore the original paths before syncing; all rows and files were preserved"));
+            }
+            if let Some((id, _)) = matches.first() {
+                if let Some(previous) = assigned.insert(id.clone(), rel.clone()) {
+                    return Err(format!("Returning legacy files {previous} and {rel} both match one existing row. Restore the original paths before syncing; all rows and files were preserved"));
+                }
+                let entry = candidate.concepts.get_mut(id).unwrap();
+                entry.portable_id = portable_id;
+                entry.portable_written = explicit.is_some();
+                entry.path = rel;
+                entry.adopted = true;
+                entry.file_mtime = 0;
+                entry.file_len = 0;
+                entry.missing_since = 0;
+            } else if (explicit.is_some() || legacy_id.is_some())
+                && !deleted.contains(&portable_id)
+                && !candidate
+                    .concepts
+                    .values()
+                    .any(|entry| entry.portable_id == portable_id)
+            {
+                unresolved.push((kind, rel));
+            }
+        }
+    }
+    for (kind, rel) in unresolved {
+        if missing.iter().any(|(id, entry)| {
+            entry.path.split('/').next() == Some(kind) && !assigned.contains_key(id)
+        }) {
+            return Err(format!("Cannot identify returning legacy file {rel} while older {kind} are missing. Restore their original paths or original file versions before syncing; no new rows were imported"));
+        }
+    }
+    Ok(!assigned.is_empty())
+}
+
 /// Validate the whole set before importing any row. A moved file takes its
 /// existing local row and conflict baseline with it. Simultaneous copies of
 /// one identity are ambiguous, so keep both files and require repair.
@@ -231,6 +315,7 @@ pub(super) fn prepare(
     let mut changed = false;
     let versioned = check_protocol(bundle)? || manifest.protocol_version == 1;
     let mut candidate = manifest.clone();
+    changed |= recover_legacy_paths(bundle, &mut candidate, deleted)?;
     if versioned && candidate.protocol_version != 1 {
         candidate.protocol_version = 1;
         changed = true;
@@ -373,6 +458,203 @@ mod tests {
             .await
             .unwrap();
         write_bound(state, "shared-notebook").await.unwrap();
+    }
+
+    async fn legacy_fixture(remote_id: &str) -> (Lab, AppState, PathBuf, PathBuf, String) {
+        let lab = Lab::new();
+        let bundle = lab.0.join("bundle");
+        let state = lab.replica("a", &bundle).await;
+        seed(&state).await;
+        let path = bundle.join("notes/original.md");
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.contains("sync_id:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace("local-note", remote_id);
+        std::fs::write(&path, &text).unwrap();
+        std::fs::remove_file(bundle.join("sync/protocol.json")).unwrap();
+        let at = manifest_path(&app_data_dir(&state), "a");
+        let mut manifest = load_manifest_checked(&at).unwrap();
+        manifest.protocol_version = 0;
+        let entry = manifest.concepts.get_mut("local-note").unwrap();
+        entry.portable_id.clear();
+        entry.portable_written = false;
+        entry.hash = okf_hash(&text);
+        entry.seen_hashes = [entry.hash.clone()].into();
+        entry.file_mtime = 0;
+        save_manifest_checked(&at, &manifest).unwrap();
+        (lab, state, bundle, at, text)
+    }
+
+    #[tokio::test]
+    async fn first_upgrade_recovers_renamed_edited_legacy_note_by_exact_row_identity() {
+        let (_lab, state, bundle, at, text) = legacy_fixture("local-note").await;
+        state
+            .db
+            .update_note("local-note", "Original", "Unpublished local version", 2)
+            .await
+            .unwrap();
+        std::fs::remove_file(bundle.join("notes/original.md")).unwrap();
+        std::fs::write(
+            bundle.join("notes/returned.md"),
+            text.replace("First version", "Returned edited version"),
+        )
+        .unwrap();
+        let result = reconcile(&state, "shared-notebook").await.unwrap();
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 1);
+        let rows = state.db.list_notes("shared-notebook").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "local-note");
+        assert!(rows[0].content.contains("Returned edited version"));
+        let manifest = load_manifest_checked(&at).unwrap();
+        assert_eq!(manifest.concepts["local-note"].path, "notes/returned.md");
+        let copies: Vec<_> = std::fs::read_dir(bundle.join("conflicts"))
+            .unwrap()
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert!(std::fs::read_to_string(copies[0].as_ref().unwrap().path())
+            .unwrap()
+            .contains("Unpublished local version"));
+        assert!(!reconcile(&state, "shared-notebook")
+            .await
+            .unwrap()
+            .changed());
+    }
+
+    #[tokio::test]
+    async fn first_upgrade_recovers_remote_legacy_identity_by_exact_observed_file_hash() {
+        let (_lab, state, bundle, at, _) = legacy_fixture("other-machine-row").await;
+        let before = load_manifest_checked(&at).unwrap().concepts["local-note"]
+            .local_hash
+            .clone();
+        std::fs::rename(
+            bundle.join("notes/original.md"),
+            bundle.join("notes/returned.md"),
+        )
+        .unwrap();
+        assert_eq!(
+            reconcile(&state, "shared-notebook").await.unwrap().created,
+            0
+        );
+        let rows = state.db.list_notes("shared-notebook").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "local-note");
+        let manifest = load_manifest_checked(&at).unwrap();
+        let entry = &manifest.concepts["local-note"];
+        assert_eq!(entry.path, "notes/returned.md");
+        assert_eq!(entry.local_hash, before);
+        assert_eq!(
+            entry.portable_id,
+            local_identity("notes", "other-machine-row")
+        );
+    }
+
+    #[tokio::test]
+    async fn first_upgrade_refuses_unproven_returning_legacy_file_without_mutating_rows_or_files() {
+        let (_lab, state, bundle, at, text) = legacy_fixture("other-machine-row").await;
+        std::fs::remove_file(bundle.join("notes/original.md")).unwrap();
+        let returned = text.replace("First version", "Different unproven version");
+        let path = bundle.join("notes/returned.md");
+        std::fs::write(&path, &returned).unwrap();
+        let manifest = std::fs::read(&at).unwrap();
+        let rows =
+            serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap();
+        assert!(reconcile(&state, "shared-notebook")
+            .await
+            .unwrap_err()
+            .contains("Cannot identify returning legacy file"));
+        assert_eq!(std::fs::read(&at).unwrap(), manifest);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), returned);
+        assert_eq!(
+            serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap(),
+            rows
+        );
+    }
+
+    #[test]
+    fn first_upgrade_refuses_ambiguous_exact_file_history() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sources")).unwrap();
+        let text = "---\nalchemy:\n  id: remote-row\n---\nExact observed version";
+        std::fs::write(dir.path().join("sources/returned.md"), text).unwrap();
+        let mut manifest = OkfManifest::default();
+        for id in ["local-one", "local-two"] {
+            manifest.concepts.insert(
+                id.into(),
+                OkfManifestEntry {
+                    path: format!("sources/{id}.md"),
+                    hash: okf_hash(text),
+                    ..Default::default()
+                },
+            );
+        }
+        let before = serde_json::to_value(&manifest).unwrap();
+        assert!(prepare(dir.path(), &mut manifest, &HashSet::new())
+            .unwrap_err()
+            .contains("multiple existing rows"));
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn first_upgrade_refuses_unknown_modern_identity_while_legacy_rows_are_missing() {
+        let (_lab, state, bundle, at, text) = legacy_fixture("other-machine-row").await;
+        std::fs::remove_file(bundle.join("notes/original.md")).unwrap();
+        let returned = attach_identity(
+            &text.replace("First version", "Newer unknown version"),
+            &new_id(),
+        )
+        .unwrap();
+        let path = bundle.join("notes/returned.md");
+        std::fs::write(&path, &returned).unwrap();
+        let manifest = std::fs::read(&at).unwrap();
+        let rows =
+            serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap();
+        assert!(reconcile(&state, "shared-notebook")
+            .await
+            .unwrap_err()
+            .contains("Cannot identify returning legacy file"));
+        assert_eq!(std::fs::read(&at).unwrap(), manifest);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), returned);
+        assert_eq!(
+            serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap(),
+            rows
+        );
+    }
+
+    #[test]
+    fn first_upgrade_refuses_multiple_files_proving_the_same_local_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sources")).unwrap();
+        let mut manifest = OkfManifest::default();
+        manifest.concepts.insert(
+            "local-row".into(),
+            OkfManifestEntry {
+                path: "sources/missing.md".into(),
+                local_hash: "original baseline".into(),
+                ..Default::default()
+            },
+        );
+        for filename in ["one.md", "two.md"] {
+            std::fs::write(
+                dir.path().join("sources").join(filename),
+                format!("---\nalchemy:\n  id: local-row\n---\nDifferent body for {filename}"),
+            )
+            .unwrap();
+        }
+        let before = serde_json::to_value(&manifest).unwrap();
+        assert!(prepare(dir.path(), &mut manifest, &HashSet::new())
+            .unwrap_err()
+            .contains("both match one existing row"));
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("sources"))
+                .unwrap()
+                .count(),
+            2
+        );
     }
 
     #[tokio::test]
