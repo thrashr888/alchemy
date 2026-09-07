@@ -1201,7 +1201,7 @@ pub(crate) async fn gather_bundle_for(
         .into_iter()
         .find(|n| n.id == notebook_id)
         .ok_or_else(|| "Notebook not found".to_string())?;
-    let mut sources = e(state.db.list_sources(notebook_id).await)?;
+    let mut sources = e(state.db.sources_with_content(notebook_id).await)?;
     // Each source's origin device, so a bundle that travels twice keeps
     // saying where each source actually came from rather than renaming every
     // one of them after whichever Mac wrote last (§5.8).
@@ -1216,8 +1216,8 @@ pub(crate) async fn gather_bundle_for(
     // Who has touched what, read once per pass rather than once per source.
     let edits = load_okf_edits(&app_data_dir(state), notebook_id);
     let mut source_concepts = Vec::with_capacity(sources.len());
-    for s in &sources {
-        let content = e(state.db.source_content(&s.id).await)?;
+    for s in &mut sources {
+        let content = std::mem::take(&mut s.content);
         source_concepts.push(source_concept(s, content, bundle, cap_bytes, &edits));
     }
 
