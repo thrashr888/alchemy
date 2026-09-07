@@ -511,7 +511,10 @@ impl Db {
         // "any", which is exactly what every pre-filter schedule meant.
         self.add_string_column(T_REPORTS, "watch_sources", "")
             .await?;
-        self.add_string_column(T_REPORTS, "watch_kinds", "").await
+        self.add_string_column(T_REPORTS, "watch_kinds", "").await?;
+        // The living report's id. Empty means "not yet pinned": the next run
+        // adopts by receipt or by a conservative title match, then pins.
+        self.add_string_column(T_REPORTS, "note_id", "").await
     }
 
     /// Lateness came after receipts did; 0 reads as "not recorded", which is
@@ -4085,6 +4088,7 @@ impl Db {
             let created = i64_col(b, "created_at")?;
             let watch_sources = opt_str_col(b, "watch_sources");
             let watch_kinds = opt_str_col(b, "watch_kinds");
+            let note_id = opt_str_col(b, "note_id");
             let opt = |col: Option<&StringArray>, i: usize| {
                 col.map(|c| c.value(i).to_string()).unwrap_or_default()
             };
@@ -4092,6 +4096,7 @@ impl Db {
                 out.push(ReportSchedule {
                     watch_sources: opt(watch_sources, i),
                     watch_kinds: opt(watch_kinds, i),
+                    note_id: opt(note_id, i),
                     id: id.value(i).to_string(),
                     notebook_id: nb.value(i).to_string(),
                     name: name.value(i).to_string(),
@@ -4612,6 +4617,41 @@ impl Db {
             .execute()
             .await?;
         Ok(())
+    }
+
+    /// Pin the living report a schedule updates in place. Written once per
+    /// adoption or creation; a run that finds the pin still valid never
+    /// rewrites it.
+    pub async fn set_report_note(&self, id: &str, note_id: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_REPORTS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("note_id", format!("'{}'", esc(note_id)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    /// The note the schedule's most recent successful run wrote, from its
+    /// receipts — the evidence a pre-pin schedule has for which same-title
+    /// note is its own. None when no receipt in the window says.
+    pub async fn last_written_note(&self, schedule_id: &str) -> Result<Option<String>> {
+        let filter = format!(
+            "schedule_id = '{}' AND status = 'ok' AND note_id != ''",
+            esc(schedule_id)
+        );
+        let batches = self.collect(T_RECEIPTS, Some(&filter)).await?;
+        let mut best: Option<(i64, String)> = None;
+        for b in &batches {
+            let note_id = str_col(b, "note_id")?;
+            let ended = i64_col(b, "ended_at")?;
+            for i in 0..b.num_rows() {
+                if best.as_ref().is_none_or(|(at, _)| ended.value(i) > *at) {
+                    best = Some((ended.value(i), note_id.value(i).to_string()));
+                }
+            }
+        }
+        Ok(best.map(|(_, id)| id))
     }
 
     pub async fn set_report_last_run(&self, id: &str, ts: i64) -> Result<()> {
@@ -5372,6 +5412,7 @@ fn reports_schema() -> SchemaRef {
         Field::new("created_at", DataType::Int64, false),
         Field::new("watch_sources", DataType::Utf8, false),
         Field::new("watch_kinds", DataType::Utf8, false),
+        Field::new("note_id", DataType::Utf8, false),
     ]))
 }
 
@@ -5392,6 +5433,7 @@ fn report_batch(schema: &SchemaRef, r: &ReportSchedule) -> Result<RecordBatch> {
             Arc::new(Int64Array::from(vec![r.created_at])),
             Arc::new(StringArray::from(vec![r.watch_sources.clone()])),
             Arc::new(StringArray::from(vec![r.watch_kinds.clone()])),
+            Arc::new(StringArray::from(vec![r.note_id.clone()])),
         ],
     )?)
 }

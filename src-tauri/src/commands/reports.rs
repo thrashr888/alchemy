@@ -54,6 +54,7 @@ pub async fn create_report_schedule(
         not_before: 0,
         interval_secs,
         enabled: true,
+        note_id: String::new(),
         last_run_at: 0,
         created_at: now(),
     };
@@ -129,17 +130,72 @@ fn report_notes_for<'a>(notes: &'a [Note], name: &str) -> Vec<&'a Note> {
         .collect()
 }
 
-/// Select the prior run without deleting or renaming independent artifacts.
-/// Matching titles identify candidates for a schedule, not duplicate notes.
-pub(super) async fn latest_report_note(
+/// Could this schedule write into this note without overwriting someone
+/// else's work? Its own runs and the app's own writes (origin "" or an
+/// `alchemy/…` by-line, the shape sync stamps on the app's notes) qualify;
+/// a note another author or agent signed, or one the curator archived, is
+/// a version to keep, not a target.
+fn adoptable(schedule: &ReportSchedule, note: &Note) -> bool {
+    note.notebook_id == schedule.notebook_id
+        && note.kind == "report"
+        && note.status != "archived"
+        && (note.origin.is_empty() || note.origin.starts_with("alchemy/"))
+}
+
+/// The note a schedule updates in place, by identity rather than title:
+///
+/// 1. the pinned `note_id`, when it still names a live report here — a
+///    pin that dangles (the note was deleted or archived) yields None, so
+///    the run starts a fresh note instead of adopting a look-alike;
+/// 2. otherwise the note this schedule's last successful receipt wrote,
+///    the strongest evidence a pre-pin schedule has;
+/// 3. otherwise the one same-title report the schedule could safely own
+///    (`adoptable`), which is how schedules from before the pin migrate —
+///    once, since the run that follows pins its choice. Two or more such
+///    candidates is a guess, and this does not guess: the run starts a
+///    fresh note and every existing version keeps its text.
+///
+/// Nothing here deletes, renames, or reorders notes; every same-title
+/// version stays exactly where it was.
+pub(super) async fn living_report_note(
     db: &crate::db::Db,
-    notebook_id: &str,
-    name: &str,
+    schedule: &ReportSchedule,
 ) -> anyhow::Result<Option<Note>> {
-    let notes = db.list_notes(notebook_id).await?;
-    let mut matches = report_notes_for(&notes, name);
-    matches.sort_by_key(|note| std::cmp::Reverse(note.updated_at));
-    Ok(matches.into_iter().next().cloned())
+    if !schedule.note_id.is_empty() {
+        return Ok(db
+            .get_note(&schedule.note_id)
+            .await?
+            .filter(|note| adoptable(schedule, note)));
+    }
+    if let Some(id) = db.last_written_note(&schedule.id).await? {
+        if let Some(note) = db.get_note(&id).await? {
+            if adoptable(schedule, &note) {
+                return Ok(Some(note));
+            }
+        }
+    }
+    let notes = db.list_notes(&schedule.notebook_id).await?;
+    let candidates: Vec<&Note> = report_notes_for(&notes, &schedule.name)
+        .into_iter()
+        .filter(|note| adoptable(schedule, note))
+        .collect();
+    // The living note carries the bare name; a "name — stamp" title is a
+    // historical version by construction and only stands in when no bare
+    // one exists.
+    let exact: Vec<&Note> = candidates
+        .iter()
+        .copied()
+        .filter(|note| note.title == schedule.name)
+        .collect();
+    let pool = if exact.is_empty() {
+        &candidates
+    } else {
+        &exact
+    };
+    Ok(match pool.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    })
 }
 
 #[tauri::command]
@@ -173,7 +229,7 @@ pub(crate) async fn run_report_inner(
     // Read the most recent report as the prior run without changing history —
     // its content lets the model report changes since last time (its first
     // line is the `_Run …_` stamp, so the date travels with it).
-    let existing = e(latest_report_note(&state.db, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(living_report_note(&state.db, &schedule).await)?;
     let prior_content = existing.as_ref().map(|note| note.content.clone());
 
     let _ = app.emit("report://step", "Generating report".to_string());
@@ -243,6 +299,11 @@ pub(super) async fn persist_report_run(
             note
         }
     };
+    // Pin the identity the run just acted on, so the next run goes by id
+    // and never by title again. Only written when it changes.
+    if schedule.note_id != note.id {
+        e(state.db.set_report_note(&schedule.id, &note.id).await)?;
+    }
     e(state.db.set_report_last_run(&schedule.id, timestamp).await)?;
     e(state
         .db
@@ -256,93 +317,226 @@ pub(super) async fn persist_report_run(
 mod tests {
     use super::*;
 
+    fn schedule(notebook_id: &str, name: &str) -> ReportSchedule {
+        ReportSchedule {
+            id: "schedule-1".into(),
+            notebook_id: notebook_id.into(),
+            name: name.into(),
+            kind: "briefing".into(),
+            prompt: String::new(),
+            trigger: "interval".into(),
+            not_before: 0,
+            interval_secs: 86_400,
+            enabled: true,
+            watch_sources: String::new(),
+            watch_kinds: String::new(),
+            note_id: String::new(),
+            last_run_at: 0,
+            created_at: 1,
+        }
+    }
+
+    fn report(id: &str, name: &str, updated_at: i64) -> Note {
+        Note {
+            id: id.into(),
+            notebook_id: "finance".into(),
+            title: name.into(),
+            content: format!("Report body of {id}."),
+            kind: "report".into(),
+            prompt: "scope".into(),
+            origin: "alchemy/0.56.2".into(),
+            status: String::new(),
+            created_at: updated_at - 5,
+            updated_at,
+        }
+    }
+
+    fn receipt(schedule_id: &str, note_id: &str, ended_at: i64) -> crate::models::RunReceipt {
+        crate::models::RunReceipt {
+            id: format!("receipt-{ended_at}"),
+            schedule_id: schedule_id.into(),
+            notebook_id: "finance".into(),
+            name: "portfolio value review".into(),
+            kind: "briefing".into(),
+            trigger: "interval".into(),
+            status: "ok".into(),
+            detail: String::new(),
+            error: String::new(),
+            note_id: note_id.into(),
+            provider: "ollama".into(),
+            model: String::new(),
+            cost_micros: 0,
+            due_at: ended_at,
+            started_at: ended_at,
+            ended_at,
+        }
+    }
+
     #[tokio::test]
-    async fn prior_report_selection_preserves_distinct_versions_and_provenance_across_restart() {
+    async fn pinned_note_wins_over_newer_same_title_report() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::Db::open(dir.path()).await.unwrap();
         let name = "portfolio value review";
-        let original = Note {
-            id: "original-report".into(),
-            notebook_id: "finance".into(),
-            title: name.into(),
-            content: "Original portfolio analysis and its evidence.".into(),
-            kind: "report".into(),
-            prompt: "Original review scope".into(),
-            origin: "alchemy/0.56.2".into(),
-            status: String::new(),
-            created_at: 10,
-            updated_at: 20,
+        let original = report("original", name, 20);
+        let newer = report("newer", name, 40);
+        db.add_note(&original).await.unwrap();
+        db.add_note(&newer).await.unwrap();
+        let mut s = schedule("finance", name);
+        s.note_id = original.id.clone();
+        let chosen = living_report_note(&db, &s).await.unwrap().unwrap();
+        assert_eq!(chosen.id, original.id);
+        assert_eq!(chosen.content, original.content);
+    }
+
+    #[tokio::test]
+    async fn dangling_archived_or_foreign_pin_starts_fresh_instead_of_guessing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let name = "portfolio value review";
+        let lookalike = report("lookalike", name, 40);
+        db.add_note(&lookalike).await.unwrap();
+        let mut s = schedule("finance", name);
+        s.note_id = "deleted-long-ago".into();
+        assert!(living_report_note(&db, &s).await.unwrap().is_none());
+
+        let archived = Note {
+            status: "archived".into(),
+            ..report("archived", name, 50)
         };
+        db.add_note(&archived).await.unwrap();
+        s.note_id = archived.id.clone();
+        assert!(living_report_note(&db, &s).await.unwrap().is_none());
+
+        let elsewhere = Note {
+            notebook_id: "other-notebook".into(),
+            ..report("elsewhere", name, 60)
+        };
+        db.add_note(&elsewhere).await.unwrap();
+        s.note_id = elsewhere.id.clone();
+        assert!(living_report_note(&db, &s).await.unwrap().is_none());
+        // Nothing was touched to reach that answer.
+        assert_eq!(db.list_notes("finance").await.unwrap().len(), 2);
+        assert_eq!(db.list_notes("other-notebook").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pre_pin_schedule_adopts_the_note_its_receipt_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let name = "portfolio value review";
+        let own = report("own-run", name, 20);
+        let newer = report("imported-newer", name, 40);
+        db.add_note(&own).await.unwrap();
+        db.add_note(&newer).await.unwrap();
+        let s = schedule("finance", name);
+        let now = crate::commands::now();
+        db.add_receipt(&receipt(&s.id, &newer.id, now - 3_000))
+            .await
+            .unwrap();
+        db.add_receipt(&receipt(&s.id, &own.id, now - 1_000))
+            .await
+            .unwrap();
+        // A failed run names no note and must not count.
+        let mut failed = receipt(&s.id, "", now);
+        failed.status = "failed".into();
+        db.add_receipt(&failed).await.unwrap();
+        // Another schedule's receipt is not evidence for this one.
+        db.add_receipt(&receipt("schedule-2", &newer.id, now + 1_000))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.last_written_note(&s.id).await.unwrap().as_deref(),
+            Some("own-run")
+        );
+        assert_eq!(
+            living_report_note(&db, &s).await.unwrap().unwrap().id,
+            own.id
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_pin_fallback_with_two_versions_starts_fresh_and_touches_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let name = "portfolio value review";
+        let original = report("original", name, 20);
         let newer = Note {
-            id: "newer-report".into(),
-            content: "Different, newer portfolio analysis.".into(),
-            prompt: "New review scope".into(),
             origin: "alchemy/0.56.0".into(),
-            created_at: 30,
-            updated_at: 40,
-            ..original.clone()
+            ..report("newer", name, 40)
+        };
+        db.add_note(&original).await.unwrap();
+        db.add_note(&newer).await.unwrap();
+        let before = serde_json::to_value(db.list_notes("finance").await.unwrap()).unwrap();
+        let s = schedule("finance", name);
+        assert!(living_report_note(&db, &s).await.unwrap().is_none());
+        drop(db);
+        let reopened = crate::db::Db::open(dir.path()).await.unwrap();
+        assert!(living_report_note(&reopened, &s).await.unwrap().is_none());
+        assert_eq!(
+            serde_json::to_value(reopened.list_notes("finance").await.unwrap()).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_pin_fallback_skips_archived_and_foreign_versions_without_touching_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let name = "portfolio value review";
+        let newer = Note {
+            origin: "alchemy/0.56.0".into(),
+            ..report("newer", name, 40)
         };
         let historic = Note {
-            id: "historic-report".into(),
-            title: format!("{name} — 2026-07-13 09:00"),
-            content: "Timestamped historical analysis.".into(),
-            updated_at: 25,
-            ..original.clone()
+            title: format!("{name} \u{2014} 2026-07-13 09:00"),
+            ..report("historic", name, 25)
         };
-        let other_provenance = Note {
-            id: "separate-provenance".into(),
-            origin: "human:reviewer".into(),
-            prompt: "Different evidence scope".into(),
+        let archived = Note {
             status: "archived".into(),
-            ..original.clone()
+            ..report("archived", name, 100)
         };
-        let regular_note = Note {
-            id: "regular-note".into(),
+        let human = Note {
+            origin: "human:reviewer".into(),
+            ..report("human", name, 200)
+        };
+        let agent = Note {
+            origin: "codex/1.0".into(),
+            ..report("agent", name, 300)
+        };
+        let regular = Note {
             kind: "note".into(),
-            updated_at: 100,
-            ..original.clone()
+            ..report("regular", name, 400)
         };
-        let other_report = Note {
-            id: "other-report".into(),
-            title: format!("{name} extended"),
-            updated_at: 100,
-            ..original.clone()
-        };
+        let other_title = report("other", &format!("{name} extended"), 500);
         for note in [
-            &original,
             &newer,
             &historic,
-            &other_provenance,
-            &regular_note,
-            &other_report,
+            &archived,
+            &human,
+            &agent,
+            &regular,
+            &other_title,
         ] {
             db.add_note(note).await.unwrap();
         }
         let before = serde_json::to_value(db.list_notes("finance").await.unwrap()).unwrap();
+        let s = schedule("finance", name);
         for _ in 0..2 {
-            let prior = latest_report_note(&db, "finance", name)
-                .await
-                .unwrap()
-                .unwrap();
+            let prior = living_report_note(&db, &s).await.unwrap().unwrap();
             assert_eq!(prior.id, newer.id);
-            assert_eq!(prior.content, newer.content);
             assert_eq!(prior.origin, newer.origin);
             assert_eq!(
                 serde_json::to_value(db.list_notes("finance").await.unwrap()).unwrap(),
                 before
             );
-            for id in [&original.id, &newer.id, &historic.id, &other_provenance.id] {
+            for id in [&newer.id, &historic.id, &archived.id, &human.id, &agent.id] {
                 assert!(!db.was_deleted("note", id).unwrap());
             }
         }
         drop(db);
         let reopened = crate::db::Db::open(dir.path()).await.unwrap();
         assert_eq!(
-            latest_report_note(&reopened, "finance", name)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
+            living_report_note(&reopened, &s).await.unwrap().unwrap().id,
             newer.id
         );
         assert_eq!(
@@ -358,17 +552,17 @@ mod tests {
         let note = Note {
             id: "historic".into(),
             notebook_id: "notebook".into(),
-            title: "Review — 2026-07-13 09:00".into(),
+            title: "Review \u{2014} 2026-07-13 09:00".into(),
             content: "Original stamped report.".into(),
             kind: "report".into(),
             prompt: "Original scope".into(),
-            origin: "human:author".into(),
+            origin: String::new(),
             status: String::new(),
             created_at: 1,
             updated_at: 2,
         };
         db.add_note(&note).await.unwrap();
-        let selected = latest_report_note(&db, "notebook", "Review")
+        let selected = living_report_note(&db, &schedule("notebook", "Review"))
             .await
             .unwrap()
             .unwrap();
@@ -380,5 +574,27 @@ mod tests {
             serde_json::to_value(db.get_note(&note.id).await.unwrap().unwrap()).unwrap(),
             serde_json::to_value(&note).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn pin_survives_a_reopen_and_reads_empty_on_older_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(dir.path()).await.unwrap();
+        let s = schedule("finance", "portfolio value review");
+        db.add_report_schedule(&s).await.unwrap();
+        assert_eq!(
+            db.get_report_schedule(&s.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .note_id,
+            ""
+        );
+        db.set_report_note(&s.id, "living-note").await.unwrap();
+        drop(db);
+        let reopened = crate::db::Db::open(dir.path()).await.unwrap();
+        let stored = reopened.get_report_schedule(&s.id).await.unwrap().unwrap();
+        assert_eq!(stored.note_id, "living-note");
+        assert_eq!(stored.name, s.name);
     }
 }

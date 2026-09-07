@@ -439,6 +439,14 @@ pub struct ReportSchedule {
     /// Space-separated `EVENT_KINDS` that pull the trigger; empty means any.
     #[serde(default)]
     pub watch_kinds: String,
+    /// The living report this schedule updates in place — pinned by id the
+    /// first time a run writes or adopts one, so later runs never pick a
+    /// same-title note that is archived, imported, or someone else's
+    /// (docs/RFC-night-shift.md §Living reports). Empty until then; a
+    /// pinned note that has since been deleted makes the next run start a
+    /// fresh one rather than guess.
+    #[serde(default)]
+    pub note_id: String,
     /// Unix millis of the last successful run; 0 = never run.
     pub last_run_at: i64,
     pub created_at: i64,

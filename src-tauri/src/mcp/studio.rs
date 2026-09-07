@@ -302,6 +302,7 @@ impl AlchemyMcp {
             enabled: true,
             watch_sources,
             watch_kinds,
+            note_id: String::new(),
             last_run_at: 0,
             created_at: commands::now(),
         };

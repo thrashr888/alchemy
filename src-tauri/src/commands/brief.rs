@@ -77,6 +77,7 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
         not_before: 0,
         interval_secs: 86_400,
         enabled: true,
+        note_id: String::new(),
         // Aligned so the first run lands at the next 7 AM local rather than
         // 24h from whenever the app happened to first launch this build.
         last_run_at: crate::scheduler::next_local_hour_ms(7) - 86_400_000,
@@ -295,7 +296,7 @@ pub(crate) async fn run_brief(
     state: &AppState,
     schedule: ReportSchedule,
 ) -> Result<Note, String> {
-    let existing = e(latest_report_note(&state.db, &schedule.notebook_id, &schedule.name).await)?;
+    let existing = e(living_report_note(&state.db, &schedule).await)?;
     let since = existing
         .as_ref()
         .map(|n| n.updated_at)

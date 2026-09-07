@@ -8151,6 +8151,7 @@ pub(crate) fn build_commission(
         // if a user later flips it to a recurring order.
         interval_secs: 86_400,
         enabled: true,
+        note_id: String::new(),
         last_run_at: 0,
         created_at: now(),
     })
@@ -8284,6 +8285,7 @@ async fn create_schedule_reply(
         not_before: 0,
         interval_secs,
         enabled: true,
+        note_id: String::new(),
         last_run_at: 0,
         created_at: now(),
     };

@@ -5,7 +5,9 @@
 //! to recover after a crash or sleep: a Mac asleep past a due time runs the
 //! report on the first tick after wake, because the filter is wall-clock.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -63,6 +65,56 @@ const WEAVE_EVERY_MS: i64 = 60 * 60 * 1000;
 /// and the model it wakes stays resident for half an hour after.
 static LAST_SWEEP: AtomicI64 = AtomicI64::new(0);
 const SWEEP_EVERY_MS: i64 = 60 * 60 * 1000;
+
+/// Consecutive failures per schedule and the earliest next attempt. A run
+/// that fails leaves `last_run_at` alone (it did not run), which used to
+/// make it due again on the very next pass: with a provider down, every
+/// failing order re-tried once a minute, each try a new receipt and a
+/// new error record, until the log was nothing but the same line. Kept in
+/// memory on purpose — a restart is a fair moment to try again.
+fn retry_state() -> &'static Mutex<HashMap<String, (u32, i64)>> {
+    static STATE: OnceLock<Mutex<HashMap<String, (u32, i64)>>> = OnceLock::new();
+    STATE.get_or_init(Default::default)
+}
+
+/// How long to wait after the `failures`th consecutive failure: five
+/// minutes, doubling, capped at an hour and never past the order's own
+/// interval — a failing hourly report should not wait longer than the
+/// next hour anyway.
+pub(crate) fn retry_delay_ms(failures: u32, interval_secs: i64) -> i64 {
+    const BASE_MS: i64 = 5 * 60 * 1000;
+    const CAP_MS: i64 = 60 * 60 * 1000;
+    let doubled = BASE_MS.saturating_mul(1i64 << failures.saturating_sub(1).min(8));
+    doubled
+        .min(CAP_MS)
+        .min(interval_secs.saturating_mul(1000).max(BASE_MS))
+}
+
+/// Is this schedule still waiting out a failure?
+pub(crate) fn backing_off(schedule_id: &str, now: i64) -> bool {
+    retry_state()
+        .lock()
+        .map(|m| m.get(schedule_id).is_some_and(|(_, until)| now < *until))
+        .unwrap_or(false)
+}
+
+/// Record a failed run; returns when the next attempt may start.
+pub(crate) fn note_failure(schedule_id: &str, interval_secs: i64, now: i64) -> i64 {
+    let Ok(mut m) = retry_state().lock() else {
+        return now;
+    };
+    let entry = m.entry(schedule_id.to_string()).or_insert((0, 0));
+    entry.0 = entry.0.saturating_add(1);
+    entry.1 = now.saturating_add(retry_delay_ms(entry.0, interval_secs));
+    entry.1
+}
+
+/// A successful run clears the streak.
+pub(crate) fn clear_failure(schedule_id: &str) {
+    if let Ok(mut m) = retry_state().lock() {
+        m.remove(schedule_id);
+    }
+}
 
 /// Quit for real: mark the exit as intentional, then exit.
 pub fn request_quit(app: &AppHandle) {
@@ -707,6 +759,8 @@ async fn run_pass(app: &AppHandle) {
         let due: Vec<_> = schedules
             .into_iter()
             .filter(|s| is_due(s, now, &archived, &events))
+            // A failed run waits its backoff out before the next attempt.
+            .filter(|s| !backing_off(&s.id, now))
             .map(|s| {
                 let due_at = due_at(&s, &events);
                 (s, due_at)
@@ -734,6 +788,7 @@ async fn run_pass(app: &AppHandle) {
                     match outcome {
                         Ok(note) => {
                             finished += 1;
+                            clear_failure(&schedule.id);
                             let receipt = schedule_receipt(
                                 &state,
                                 &schedule,
@@ -798,9 +853,15 @@ async fn run_pass(app: &AppHandle) {
                             }
                         }
                         Err(err) => {
+                            let until =
+                                note_failure(&schedule.id, schedule.interval_secs, now_ms());
+                            let wait_min = ((until - now_ms()) / 60_000).max(1);
                             crate::diagnostics::error(
                                 "night-shift",
-                                format!("report {} failed: {err}", schedule.name),
+                                format!(
+                                    "report {} failed: {err} \u{2014} next try in {wait_min} min",
+                                    schedule.name
+                                ),
                             );
                             let receipt = schedule_receipt(
                                 &state,
@@ -862,9 +923,38 @@ mod tests {
             enabled: true,
             watch_sources: String::new(),
             watch_kinds: String::new(),
+            note_id: String::new(),
             last_run_at: 0,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn failed_runs_back_off_instead_of_retrying_every_pass() {
+        const MIN: i64 = 60_000;
+        assert_eq!(retry_delay_ms(1, 86_400), 5 * MIN);
+        assert_eq!(retry_delay_ms(2, 86_400), 10 * MIN);
+        assert_eq!(retry_delay_ms(3, 86_400), 20 * MIN);
+        assert_eq!(retry_delay_ms(4, 86_400), 40 * MIN);
+        assert_eq!(retry_delay_ms(5, 86_400), 60 * MIN);
+        assert_eq!(retry_delay_ms(40, 86_400), 60 * MIN);
+        // Never past the order's own interval, never under the floor.
+        assert_eq!(retry_delay_ms(5, 1_200), 20 * MIN);
+        assert_eq!(retry_delay_ms(1, 60), 5 * MIN);
+
+        let id = "backoff-test-schedule";
+        let now = 1_000_000;
+        assert!(!backing_off(id, now));
+        let until = note_failure(id, 86_400, now);
+        assert_eq!(until, now + 5 * MIN);
+        assert!(backing_off(id, now + 4 * MIN));
+        assert!(!backing_off(id, until));
+        let until = note_failure(id, 86_400, until);
+        assert_eq!(until, now + 5 * MIN + 10 * MIN);
+        clear_failure(id);
+        assert!(!backing_off(id, now));
+        assert_eq!(note_failure(id, 86_400, now), now + 5 * MIN);
+        clear_failure(id);
     }
 
     fn event(at: i64) -> SourceEvent {

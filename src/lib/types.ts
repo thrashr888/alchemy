@@ -532,6 +532,9 @@ export interface ReportSchedule {
    *  ids and event kinds; empty = any. Ignored unless trigger is "change". */
   watchSources: string;
   watchKinds: string;
+  /** The living report this schedule updates in place, pinned by id after
+   *  its first run; "" until then. */
+  noteId: string;
   lastRunAt: number;
   createdAt: number;
 }
