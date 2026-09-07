@@ -36,6 +36,7 @@ mod conflicts;
 #[cfg(test)]
 mod deletion_recovery_tests;
 mod discovery;
+mod missing_rows;
 mod portable;
 mod portable_deletions;
 pub(crate) use discovery::discover_bundle;
@@ -1391,6 +1392,7 @@ pub(crate) async fn export_all(
         // in the bundle — so tonight can drop the concepts last night wrote
         // for a source that has since gone.
         let manifest = manifest_path(&app_data_dir(state), &format!("nightly-{slug}"));
+        missing_rows::preflight(state, &sources, &notes, &dir, &manifest)?;
         let written = write_bundle(&notebook, &sources, &notes, &dir, Some(&manifest))?;
         concepts += written.sources + written.notes;
         kept.insert(slug);
@@ -4146,6 +4148,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let bundle = PathBuf::from(&binding.path);
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
+    missing_rows::preflight(state, &sources, &notes, &bundle, &manifest)?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
     touch_last_write_checked(&data_dir, notebook_id, &binding.id, now_ms())?;
     Ok(written)
