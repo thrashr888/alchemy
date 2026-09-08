@@ -624,6 +624,9 @@ pub fn write_bundle(
     // any more can go; and the originals that stayed behind, for the log.
     let mut references: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut linked: Vec<String> = Vec::new();
+    // Files the pre-write check would not touch this pass. They are reported
+    // at the end, after everything else has landed.
+    let mut refused: Vec<String> = Vec::new();
     for (dir, concepts) in &order {
         if concepts.is_empty() {
             continue;
@@ -747,6 +750,7 @@ pub fn write_bundle(
                 }
             }
             let identity_changes = prior.as_ref().is_none_or(|p| p.path != rel);
+            let mut refuse = false;
             if let Some(prior) = &prior {
                 let unchanged_projection = prior.portable_written
                     && (prior.hash == hash
@@ -756,18 +760,44 @@ pub fn write_bundle(
                 if identity_changes || !unchanged_projection {
                     let path = bundle.join(&prior.path);
                     if !is_evicted_stub(&path) {
-                        let current = std::fs::read_to_string(&path).map_err(|err| {
-                            format!("Could not verify {} before writing: {err}", prior.path)
-                        })?;
-                        let current_hash = okf_hash(&current);
-                        if current_hash != prior.hash && current_hash != hash {
-                            return Err(format!(
-                                "{} changed after reconciliation; retry syncing before writing",
-                                prior.path
-                            ));
+                        // The read-back sweep trusts the clock: a file whose
+                        // mtime and length still match its last observation
+                        // is skipped unread (`is_untouched`), so a hash the
+                        // manifest recorded before a clock-only observation
+                        // can lag bytes the sweep has already accepted.
+                        // Judge by the same clock here, or a stale hash
+                        // refuses the file on every pass forever.
+                        let (mtime, len) = file_clock(&path);
+                        let observed = prior.file_mtime != 0
+                            && prior.file_mtime == mtime
+                            && prior.file_len == len;
+                        if !observed {
+                            let current = std::fs::read_to_string(&path).map_err(|err| {
+                                format!("Could not verify {} before writing: {err}", prior.path)
+                            })?;
+                            let current_hash = okf_hash(&current);
+                            refuse = current_hash != prior.hash && current_hash != hash;
                         }
                     }
                 }
+            }
+            if refuse {
+                // Refuse this one file, not the pass. Aborting the bundle
+                // here used to hold every other concept, every deletion and
+                // the indexes hostage to one file another Mac had just
+                // touched. The concept keeps its claim and its listing so
+                // the cleanup below never mistakes the file for an orphan;
+                // the next read-back takes the outside edit in, and the
+                // write after that projects it.
+                let path = prior
+                    .as_ref()
+                    .map(|p| p.path.clone())
+                    .unwrap_or_else(|| rel.clone());
+                let slug = placement_at(dir, &path, &concept.title).slug;
+                refused.push(path);
+                still_ours.insert(concept.id.clone());
+                entries.push((slug, concept.title.clone(), description));
+                continue;
             }
             if identity_changes {
                 if manifest_at.is_some() && bundle.join(&rel).exists() {
@@ -1066,6 +1096,12 @@ pub fn write_bundle(
                 ),
             )?;
         }
+    }
+    if !refused.is_empty() {
+        return Err(format!(
+            "{} changed after reconciliation; retry syncing before writing",
+            refused.join(", ")
+        ));
     }
     Ok(out)
 }

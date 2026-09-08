@@ -518,3 +518,78 @@ async fn older_remote_edit_is_preserved_in_log_and_overruled_once() {
     assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
     assert_eq!(write_bound(&a, "shared-notebook").await.unwrap().written, 0);
 }
+
+#[tokio::test]
+async fn stale_manifest_hash_with_matching_clock_does_not_refuse_the_write() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    // A manifest whose hash predates a clock-only observation of the same
+    // bytes (what a heal pass left behind): the file is exactly what the
+    // sweep last accepted, but the hash on record is not its hash.
+    let at = manifest_path(&app_data_dir(&a), "a");
+    let mut manifest = load_manifest(&at);
+    let entry = manifest.concepts.get_mut("note-0").unwrap();
+    let (mtime, len) = file_clock(&bundle.join(&entry.path));
+    assert_eq!((entry.file_mtime, entry.file_len), (mtime, len));
+    entry.hash = "0000000000000000".into();
+    entry.portable_written = false;
+    save_manifest_checked(&at, &manifest).unwrap();
+    a.db.update_note("note-0", "Note 0", "Edited locally", now_ms())
+        .await
+        .unwrap();
+    write_bound(&a, "shared-notebook").await.unwrap();
+    let text = std::fs::read_to_string(bundle.join("notes/note-0.md")).unwrap();
+    assert!(text.ends_with("Edited locally\n"), "{text}");
+    assert!(load_manifest(&at).concepts["note-0"].portable_written);
+}
+
+#[tokio::test]
+async fn one_refused_file_does_not_hold_the_rest_of_the_pass_hostage() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    // Another Mac's bytes land on note-0 after reconciliation looked; the
+    // local row for note-0 changes too, so the writer would project over it.
+    let touched = bundle.join("notes/note-0.md");
+    let remote = std::fs::read_to_string(&touched)
+        .unwrap()
+        .replace("Original content 0", "Incoming remote content, longer");
+    std::fs::write(&touched, &remote).unwrap();
+    a.db.update_note("note-0", "Note 0", "Local edit that must wait", now_ms())
+        .await
+        .unwrap();
+    a.db.update_note("note-1", "Note 1", "Local edit that must land", now_ms())
+        .await
+        .unwrap();
+    a.db.delete_note("note-2").await.unwrap();
+    // The writer alone, as the sweep would run it after reconciliation had
+    // already looked: the remote bytes arrived after that look.
+    let (notebook, sources, notes) = gather_bundle_for(&a, "shared-notebook", &bundle)
+        .await
+        .unwrap();
+    let at = manifest_path(&app_data_dir(&a), "a");
+    let err = write_bundle(&notebook, &sources, &notes, &bundle, Some(&at)).unwrap_err();
+    assert!(
+        err.contains("notes/note-0.md changed after reconciliation"),
+        "{err}"
+    );
+    // The refused file keeps the other Mac's bytes and its claim...
+    assert_eq!(std::fs::read_to_string(&touched).unwrap(), remote);
+    let manifest = load_manifest(&at);
+    assert_eq!(manifest.concepts["note-0"].path, "notes/note-0.md");
+    // ...while the edit next to it landed, the deletion published, and the
+    // listing still names every note the notebook has.
+    let landed = std::fs::read_to_string(bundle.join("notes/note-1.md")).unwrap();
+    assert!(landed.ends_with("Local edit that must land\n"), "{landed}");
+    assert!(!bundle.join("notes/note-2.md").exists());
+    assert_eq!(manifest.deleted_entities.len(), 1);
+    assert!(!portable_deletions::read_deleted(&bundle)
+        .unwrap()
+        .is_empty());
+    let index = std::fs::read_to_string(bundle.join("notes/index.md")).unwrap();
+    assert!(index.contains("note-0.md") && index.contains("note-1.md"));
+    assert!(!index.contains("note-2.md"));
+}
