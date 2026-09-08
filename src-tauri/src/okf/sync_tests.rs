@@ -593,3 +593,79 @@ async fn one_refused_file_does_not_hold_the_rest_of_the_pass_hostage() {
     assert!(index.contains("note-0.md") && index.contains("note-1.md"));
     assert!(!index.contains("note-2.md"));
 }
+
+#[tokio::test]
+async fn new_concept_takes_the_next_free_slug_past_an_unclaimed_file() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    // Another Mac's file sits where "Note 5" would slug to, and a row this
+    // pass no longer has still owns note-1.md until cleanup takes it.
+    let stranger = "---\ntype: Note\ntitle: Stranger\n---\n\nNot ours\n";
+    std::fs::write(bundle.join("notes/note-5.md"), stranger).unwrap();
+    a.db.delete_note("note-1").await.unwrap();
+    for (id, title) in [("note-5", "Note 5"), ("note-1-again", "Note 1")] {
+        a.db.add_note(&Note {
+            id: id.into(),
+            notebook_id: "shared-notebook".into(),
+            title: title.into(),
+            content: format!("Body of {id}"),
+            kind: "audio_overview".into(),
+            prompt: String::new(),
+            origin: "human:test".into(),
+            status: String::new(),
+            created_at: 2,
+            updated_at: 2,
+        })
+        .await
+        .unwrap();
+    }
+    let (notebook, sources, notes) = gather_bundle_for(&a, "shared-notebook", &bundle)
+        .await
+        .unwrap();
+    let at = manifest_path(&app_data_dir(&a), "a");
+    let out = write_bundle(&notebook, &sources, &notes, &bundle, Some(&at)).unwrap();
+    assert_eq!(out.written, 2, "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("notes/note-5.md")).unwrap(),
+        stranger
+    );
+    let manifest = load_manifest(&at);
+    assert_eq!(manifest.concepts["note-5"].path, "notes/note-5-2.md");
+    assert_eq!(manifest.concepts["note-1-again"].path, "notes/note-1-2.md");
+    // The departed row's file went with it; the newcomer never sat on it.
+    assert!(!bundle.join("notes/note-1.md").exists());
+    assert!(bundle.join("notes/note-1-2.md").exists());
+    assert!(!manifest.concepts.contains_key("note-1"));
+}
+
+#[tokio::test]
+async fn retitled_concept_moves_past_an_occupied_slug_and_leaves_it_alone() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    let stranger = "---\ntype: Note\ntitle: Stranger\n---\n\nNot ours\n";
+    std::fs::write(bundle.join("notes/renamed.md"), stranger).unwrap();
+    a.db.update_note("note-0", "Renamed", "Original content 0", now_ms())
+        .await
+        .unwrap();
+    let (notebook, sources, notes) = gather_bundle_for(&a, "shared-notebook", &bundle)
+        .await
+        .unwrap();
+    let at = manifest_path(&app_data_dir(&a), "a");
+    let out = write_bundle(&notebook, &sources, &notes, &bundle, Some(&at)).unwrap();
+    assert_eq!(out.moved, 1, "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(bundle.join("notes/renamed.md")).unwrap(),
+        stranger
+    );
+    assert_eq!(
+        load_manifest(&at).concepts["note-0"].path,
+        "notes/renamed-2.md"
+    );
+    assert!(!bundle.join("notes/note-0.md").exists());
+    let text = std::fs::read_to_string(bundle.join("notes/renamed-2.md")).unwrap();
+    assert!(text.contains("Renamed"), "{text}");
+}

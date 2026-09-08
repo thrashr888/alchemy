@@ -601,6 +601,10 @@ pub fn write_bundle(
             let base = okf_slug(&concept.title);
             let key = format!("{dir}/{base}");
             let mut n = *used.get(&key).unwrap_or(&0);
+            let own = manifest
+                .concepts
+                .get(&concept.id)
+                .map(|entry| entry.path.clone());
             let path = loop {
                 n += 1;
                 let slug = if n == 1 {
@@ -609,6 +613,14 @@ pub fn write_bundle(
                     format!("{base}-{n}")
                 };
                 let path = format!("{dir}/{slug}.md");
+                // A file already there is never this concept's to take — it
+                // belongs to a concept that left this pass and has not been
+                // cleaned up yet, or to nobody the manifest knows (another
+                // Mac's write, a conflict copy). Either way the next free
+                // slug is the honest answer; refusing the whole pass was not.
+                if own.as_deref() != Some(path.as_str()) && bundle.join(&path).exists() {
+                    continue;
+                }
                 if taken.insert(path.clone()) {
                     break path;
                 }
@@ -745,7 +757,14 @@ pub fn write_bundle(
             }
             let mut rel = place.path.clone();
             if let Some(prior) = &prior {
-                if prior.path != rel && claimed_by_another(&manifest, &concept.id, &rel) {
+                // A rename onto a path another concept holds, or an
+                // unclaimed file occupies, does not happen: the concept keeps
+                // the path it has. The file it would have moved onto stays
+                // exactly as it is.
+                if prior.path != rel
+                    && (claimed_by_another(&manifest, &concept.id, &rel)
+                        || bundle.join(&rel).exists())
+                {
                     rel = prior.path.clone();
                 }
             }
@@ -794,14 +813,18 @@ pub fn write_bundle(
                     .map(|p| p.path.clone())
                     .unwrap_or_else(|| rel.clone());
                 let slug = placement_at(dir, &path, &concept.title).slug;
-                refused.push(path);
+                refused.push(format!("{path} changed after reconciliation"));
                 still_ours.insert(concept.id.clone());
                 entries.push((slug, concept.title.clone(), description));
                 continue;
             }
             if identity_changes {
                 if manifest_at.is_some() && bundle.join(&rel).exists() {
-                    return Err(format!("Cannot replace an unclaimed concept at {rel}"));
+                    // Placement skips occupied paths, so this is a file that
+                    // landed between placement and now. Leave it, and leave
+                    // this one concept for the next pass.
+                    refused.push(format!("{rel} is occupied by an unclaimed file"));
+                    continue;
                 }
                 let mut entry = prior.clone().unwrap_or_default();
                 entry.portable_id = portable_id.clone();
@@ -1099,8 +1122,8 @@ pub fn write_bundle(
     }
     if !refused.is_empty() {
         return Err(format!(
-            "{} changed after reconciliation; retry syncing before writing",
-            refused.join(", ")
+            "{}; retry syncing before writing",
+            refused.join("; ")
         ));
     }
     Ok(out)
