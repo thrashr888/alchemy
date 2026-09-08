@@ -794,6 +794,19 @@ fn write_bundle_with(
                 }
             }
             let identity_changes = prior.as_ref().is_none_or(|p| p.path != rel);
+            // A file the identity pass is holding (portable::prepare) keeps
+            // its claim and its listing and is otherwise left exactly as it
+            // is — quietly, since the hold was logged when it began.
+            if prior
+                .as_ref()
+                .is_some_and(|p| manifest.held.contains(&p.path))
+            {
+                let path = prior.as_ref().map(|p| p.path.clone()).unwrap_or_default();
+                let slug = placement_at(dir, &path, &concept.title).slug;
+                still_ours.insert(concept.id.clone());
+                entries.push((slug, concept.title.clone(), description));
+                continue;
+            }
             let mut refuse = false;
             if let Some(prior) = &prior {
                 let unchanged_projection = prior.portable_written

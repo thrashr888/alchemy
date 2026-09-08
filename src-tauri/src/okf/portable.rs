@@ -381,9 +381,11 @@ pub(super) fn prepare(
                 match &known {
                     // A file this bundle wrote with portable identity has
                     // come back without it: an older client rewrote it.
-                    // Nothing here can say which version is right.
+                    // Nothing here can say which version is right, so it is
+                    // held the same way — not imported, not overwritten.
                     Some((_, entry)) if entry.portable_written => {
-                        return Err(format!("{rel} lost its portable sync identity. Update every Alchemy client and restore the file identity before syncing"));
+                        candidate.held.insert(rel.clone());
+                        continue;
                     }
                     // A path nobody here claims, written by an older client
                     // in a bundle that has moved on: hold it — not imported
@@ -740,16 +742,21 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&path, &downgraded).unwrap();
-        // A downgraded file at a path this replica never claimed is held:
-        // not imported, not touched, and not a reason to stop the pass.
+        // A downgraded file is held on both sides: not imported, not
+        // touched, and not a reason to stop the pass.
         assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().created, 0);
         assert!(b.db.list_notes("shared-notebook").await.unwrap().is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), downgraded);
-        // The replica that wrote it with identity still refuses the loss.
-        assert!(reconcile(&a, "shared-notebook")
+        assert_eq!(reconcile(&a, "shared-notebook").await.unwrap().updated, 0);
+        assert_eq!(
+            a.db.get_note("local-note").await.unwrap().unwrap().content,
+            "First version"
+        );
+        // The owner's own edit neither overwrites the held file nor fails.
+        a.db.update_note("local-note", "Original", "Second version", now_ms())
             .await
-            .unwrap_err()
-            .contains("lost its portable sync identity"));
+            .unwrap();
+        write_bound(&a, "shared-notebook").await.unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), downgraded);
     }
 
