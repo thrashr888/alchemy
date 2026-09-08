@@ -514,6 +514,31 @@ pub fn write_bundle(
     bundle: &Path,
     manifest_at: Option<&Path>,
 ) -> Result<OkfWrite, String> {
+    write_bundle_with(notebook, sources, notes, bundle, manifest_at, false)
+}
+
+/// The same write into a folder only this app writes — the nightly copy.
+/// With no other writer to protect, a file whose bytes the manifest does
+/// not recognise is our own earlier pass that never got to record itself,
+/// and refusing it would only leave the copy incomplete.
+pub(crate) fn write_bundle_private(
+    notebook: &OkfNotebook,
+    sources: &[OkfConcept],
+    notes: &[OkfConcept],
+    bundle: &Path,
+    manifest_at: Option<&Path>,
+) -> Result<OkfWrite, String> {
+    write_bundle_with(notebook, sources, notes, bundle, manifest_at, true)
+}
+
+fn write_bundle_with(
+    notebook: &OkfNotebook,
+    sources: &[OkfConcept],
+    notes: &[OkfConcept],
+    bundle: &Path,
+    manifest_at: Option<&Path>,
+    private: bool,
+) -> Result<OkfWrite, String> {
     std::fs::create_dir_all(bundle).map_err(|err| format!("Failed to create {bundle:?}: {err}"))?;
     let write = |path: &Path, text: &str| -> Result<(i64, u64), String> {
         use std::io::Write;
@@ -790,7 +815,7 @@ pub fn write_bundle(
                         let observed = prior.file_mtime != 0
                             && prior.file_mtime == mtime
                             && prior.file_len == len;
-                        if !observed {
+                        if !observed && !private {
                             let current = std::fs::read_to_string(&path).map_err(|err| {
                                 format!("Could not verify {} before writing: {err}", prior.path)
                             })?;
@@ -936,10 +961,13 @@ pub fn write_bundle(
                     extra: std::mem::take(&mut concept.extra),
                 },
             );
-            if manifest.outgoing.remove(&concept.id).is_some() {
-                if let Some(path) = manifest_at {
-                    save_manifest_checked(path, &manifest)?;
-                }
+            manifest.outgoing.remove(&concept.id);
+            // Record the file the moment it exists. A pass that stops after
+            // this write and before its final save used to leave a file on
+            // disk whose bytes the manifest never learned, and the next pass
+            // then refused it as someone else's.
+            if let Some(path) = manifest_at {
+                save_manifest_checked(path, &manifest)?;
             }
             still_ours.insert(concept.id.clone());
             entries.push((slug, concept.title.clone(), description));
@@ -1452,7 +1480,7 @@ pub(crate) async fn export_all(
         // for a source that has since gone.
         let manifest = manifest_path(&app_data_dir(state), &format!("nightly-{slug}"));
         missing_rows::preflight(state, &sources, &notes, &dir, &manifest)?;
-        let written = write_bundle(&notebook, &sources, &notes, &dir, Some(&manifest))?;
+        let written = write_bundle_private(&notebook, &sources, &notes, &dir, Some(&manifest))?;
         concepts += written.sources + written.notes;
         kept.insert(slug);
     }
@@ -3656,6 +3684,12 @@ pub struct OkfManifest {
     /// says which names in `references/` the writer chose and may remove.
     #[serde(default)]
     pub references: HashMap<String, String>,
+    /// Files this pass will neither import nor touch: an older client's
+    /// legacy-identity file at a path nobody here claims, in a bundle that
+    /// has already moved to portable identity. Recomputed every pass by
+    /// `portable::prepare`, never persisted.
+    #[serde(skip)]
+    pub(crate) held: std::collections::BTreeSet<String>,
 }
 
 /// Where a binding's manifest lives: `<app-data>/okf/<binding-id>.json`,
@@ -4377,6 +4411,40 @@ pub fn disk_wins(file_mtime: i64, entity_updated_at: i64) -> bool {
     file_mtime >= entity_updated_at
 }
 
+/// Say once, per notebook, which files a pass is holding — and say it again
+/// only when the set changes, since the sweep runs every minute and the
+/// same line every minute is not a log, it is noise.
+fn note_held(notebook_id: &str, bundle: &Path, held: &std::collections::BTreeSet<String>) {
+    static LAST: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, std::collections::BTreeSet<String>>>,
+    > = std::sync::OnceLock::new();
+    let last = LAST.get_or_init(Default::default);
+    let Ok(mut map) = last.lock() else {
+        return;
+    };
+    let previous = map.insert(notebook_id.to_string(), held.clone());
+    if held.is_empty() || previous.as_ref() == Some(held) {
+        return;
+    }
+    let list: Vec<&str> = held.iter().map(String::as_str).take(12).collect();
+    let more = held.len().saturating_sub(list.len());
+    let suffix = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    crate::diagnostics::record(
+        crate::diagnostics::Event::new(crate::diagnostics::Level::Warn, "rust", "okf").message(
+            format!(
+                "{} file(s) in {} carry an older Alchemy's identity and are left alone until every Alchemy is updated: {}{suffix}",
+                held.len(),
+                bundle.display(),
+                list.join(", ")
+            ),
+        ),
+    );
+}
+
 /// Is Alchemy's own write for this notebook still in flight? Reconciling
 /// mid-write would read half a bundle and call it an outside edit.
 fn write_in_flight(notebook_id: &str) -> bool {
@@ -4637,6 +4705,7 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     if portable::prepare(&bundle, &mut manifest, &deleted)? {
         save_manifest_checked(&manifest_at, &manifest)?;
     }
+    note_held(notebook_id, &bundle, &manifest.held);
     let deleted_count = portable_deletions::apply_deleted(
         state,
         notebook_id,
@@ -4699,6 +4768,12 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
                 if let Some(id) = by_path.get(&rel) {
                     seen.insert(id.clone());
                 }
+                continue;
+            }
+            // An older client's file this pass is holding at arm's length:
+            // not imported, not touched, named in the log until every
+            // Alchemy is updated (portable::prepare).
+            if manifest.held.contains(&rel) {
                 continue;
             }
             // One stat, and most of the time that is the whole cost. Reading

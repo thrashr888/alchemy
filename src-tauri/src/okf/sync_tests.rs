@@ -669,3 +669,67 @@ async fn retitled_concept_moves_past_an_occupied_slug_and_leaves_it_alone() {
     let text = std::fs::read_to_string(bundle.join("notes/renamed-2.md")).unwrap();
     assert!(text.contains("Renamed"), "{text}");
 }
+
+#[tokio::test]
+async fn older_clients_file_is_held_without_stopping_the_notebook() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    assert!(
+        bundle.join("sync/protocol.json").exists(),
+        "bundle should be versioned"
+    );
+    // A file from a client that predates portable identity, at a path no
+    // row here claims.
+    let legacy = "---\ntype: Note\ntitle: Legacy\nalchemy:\n  id: \"11111111-1111-4111-8111-111111111111\"\n---\n\nWritten by an older Alchemy\n";
+    let path = bundle.join("notes/legacy.md");
+    std::fs::write(&path, legacy).unwrap();
+    let out = reconcile(&a, "shared-notebook").await.unwrap();
+    assert_eq!(out.created, 0, "{out:?}");
+    assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 5);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+    // The notebook keeps syncing its own rows around it.
+    a.db.update_note("note-1", "Note 1", "Still syncing", now_ms())
+        .await
+        .unwrap();
+    write_bound(&a, "shared-notebook").await.unwrap();
+    let landed = std::fs::read_to_string(bundle.join("notes/note-1.md")).unwrap();
+    assert!(landed.ends_with("Still syncing\n"), "{landed}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+    assert!(!load_manifest(&manifest_path(&app_data_dir(&a), "a"))
+        .concepts
+        .values()
+        .any(|entry| entry.path == "notes/legacy.md"));
+}
+
+#[tokio::test]
+async fn private_copy_overwrites_its_own_unrecorded_bytes() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("copy");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    // A file our own earlier pass wrote but never recorded, as an aborted
+    // nightly export leaves behind. Nobody else writes this folder.
+    let path = bundle.join("notes/note-0.md");
+    let stray = std::fs::read_to_string(&path).unwrap().replace(
+        "Original content 0",
+        "Bytes from an interrupted pass, longer",
+    );
+    std::fs::write(&path, &stray).unwrap();
+    a.db.update_note("note-0", "Note 0", "Tonight's content", now_ms())
+        .await
+        .unwrap();
+    let (notebook, sources, notes) = gather_bundle_for(&a, "shared-notebook", &bundle)
+        .await
+        .unwrap();
+    let at = manifest_path(&app_data_dir(&a), "a");
+    assert!(
+        write_bundle(&notebook, &sources, &notes, &bundle, Some(&at))
+            .unwrap_err()
+            .contains("changed after reconciliation")
+    );
+    write_bundle_private(&notebook, &sources, &notes, &bundle, Some(&at)).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.ends_with("Tonight's content\n"), "{text}");
+}

@@ -377,14 +377,24 @@ pub(super) fn prepare(
                     portable_id = entry.portable_id.clone();
                 }
             }
-            if versioned
-                && explicit.is_none()
-                && doc.nested("alchemy", "id").is_some()
-                && known
-                    .as_ref()
-                    .is_none_or(|(_, entry)| entry.portable_written)
-            {
-                return Err(format!("{rel} lost its portable sync identity. Update every Alchemy client and restore the file identity before syncing"));
+            if versioned && explicit.is_none() && doc.nested("alchemy", "id").is_some() {
+                match &known {
+                    // A file this bundle wrote with portable identity has
+                    // come back without it: an older client rewrote it.
+                    // Nothing here can say which version is right.
+                    Some((_, entry)) if entry.portable_written => {
+                        return Err(format!("{rel} lost its portable sync identity. Update every Alchemy client and restore the file identity before syncing"));
+                    }
+                    // A path nobody here claims, written by an older client
+                    // in a bundle that has moved on: hold it — not imported
+                    // as a new row, not touched, not a reason to stop the
+                    // rest of the notebook syncing. It is named in the log.
+                    None => {
+                        candidate.held.insert(rel.clone());
+                        continue;
+                    }
+                    Some(_) => {}
+                }
             }
             if let Some((id, _)) = known {
                 let entry = candidate.concepts.get_mut(&id).unwrap();
@@ -730,7 +740,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&path, &downgraded).unwrap();
-        assert!(reconcile(&b, "shared-notebook")
+        // A downgraded file at a path this replica never claimed is held:
+        // not imported, not touched, and not a reason to stop the pass.
+        assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().created, 0);
+        assert!(b.db.list_notes("shared-notebook").await.unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), downgraded);
+        // The replica that wrote it with identity still refuses the loss.
+        assert!(reconcile(&a, "shared-notebook")
             .await
             .unwrap_err()
             .contains("lost its portable sync identity"));
