@@ -773,12 +773,24 @@ fn write_bundle_with(
                 .as_ref()
                 .is_some_and(|p| !bundle.join(&p.path).exists())
             {
-                if let Some(p) = &prior {
-                    hydrate_if_evicted(&bundle.join(&p.path));
+                // ...unless the bundle keeps deletion records, none names
+                // this concept, and the grace has run out: then the absence
+                // is a lost file, not a delete, and the row's file comes
+                // back.
+                let restore = prior.as_ref().is_some_and(|p| {
+                    manifest.protocol_version == 1
+                        && !deleted.contains(&portable_id)
+                        && p.missing_since != 0
+                        && now_ms() - p.missing_since >= OKF_MISSING_GRACE_MS
+                });
+                if !restore {
+                    if let Some(p) = &prior {
+                        hydrate_if_evicted(&bundle.join(&p.path));
+                    }
+                    still_ours.insert(concept.id.clone());
+                    entries.push((place.slug.clone(), concept.title.clone(), description));
+                    continue;
                 }
-                still_ours.insert(concept.id.clone());
-                entries.push((place.slug.clone(), concept.title.clone(), description));
-                continue;
             }
             let mut rel = place.path.clone();
             if let Some(prior) = &prior {
@@ -816,7 +828,7 @@ fn write_bundle_with(
                             && prior.links_hash == links_hash));
                 if identity_changes || !unchanged_projection {
                     let path = bundle.join(&prior.path);
-                    if !is_evicted_stub(&path) {
+                    if path.exists() && !is_evicted_stub(&path) {
                         // The read-back sweep trusts the clock: a file whose
                         // mtime and length still match its last observation
                         // is skipped unread (`is_untouched`), so a hash the
@@ -4787,6 +4799,9 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
             // not imported, not touched, named in the log until every
             // Alchemy is updated (portable::prepare).
             if manifest.held.contains(&rel) {
+                if let Some(id) = by_path.get(&rel) {
+                    seen.insert(id.clone());
+                }
                 continue;
             }
             // One stat, and most of the time that is the whole cost. Reading
@@ -5017,6 +5032,18 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
             return Err(format!(
                 "Restore {rel} to establish its sync identity before deleting it"
             ));
+        }
+        // In a bundle that has moved to portable identity, a delete is a
+        // record, not an absence: every updated client writes one. A file
+        // that simply vanished — an older client tidying, a folder tool, a
+        // cloud hiccup that outlasted the grace — is not intent, and a row
+        // is not something to lose on a guess. Keep it; the writer puts the
+        // file back once the grace has passed (§5.3).
+        if manifest.protocol_version == 1 && !deleted.contains(&entry.portable_id) {
+            okf_notice(format!(
+                "{rel} is missing without a deletion record; keeping the row and restoring the file"
+            ));
+            continue;
         }
         portable_deletions::record_deleted(&bundle, &entry.portable_id)?;
         deleted.insert(entry.portable_id.clone());
