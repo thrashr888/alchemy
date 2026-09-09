@@ -1240,6 +1240,24 @@ fn okf_source_actor(source: &Source, edits: &OkfEdits) -> String {
 /// One source as the bundle carries it. Split out of `gather_bundle_for` so
 /// the by-line rule can be asserted against a real concept without an
 /// `AppState`, which a unit test cannot stand up (§5.6, as built).
+/// The `alchemy.device` a source's file should carry (§5.8): the recorded
+/// origin, this Mac when the file is here, nothing when it is nowhere here.
+fn origin_device_stamp(s: &Source) -> String {
+    let this = crate::device::this_device();
+    let origin = s.origin_device.trim();
+    if !origin.is_empty() && !crate::device::same_device(origin, this) {
+        return origin.to_string();
+    }
+    let here = crate::device::origin_path(s, &HashMap::new())
+        .map(Path::new)
+        .is_none_or(|p| p.exists() || is_evicted_stub(p));
+    if here {
+        this.to_string()
+    } else {
+        String::new()
+    }
+}
+
 pub(crate) fn source_concept(
     s: &Source,
     content: String,
@@ -1279,16 +1297,12 @@ pub(crate) fn source_concept(
             ("author".into(), s.author.clone()),
             ("image_url".into(), s.image_url.clone()),
             // Which Mac this source's `resource` is a real path on (§5.8).
-            // A source marked by `device::mark_remote` carries the device it
-            // came from; anything unmarked was imported here.
-            (
-                "device".into(),
-                if s.origin_device.trim().is_empty() {
-                    crate::device::this_device().to_string()
-                } else {
-                    s.origin_device.clone()
-                },
-            ),
+            // A recorded origin travels as it is. An unrecorded one is only
+            // ours if the file is actually here; a file that is nowhere on
+            // this Mac is left unattributed, so the Mac that has it is the
+            // one that says so — stamping our name on it would teach every
+            // other Mac that the file lives here, and it does not.
+            ("device".into(), origin_device_stamp(s)),
         ],
         parent: s.parent_id.clone(),
         ..OkfConcept::blank()
@@ -5352,6 +5366,12 @@ async fn update_source_from_disk(
     let Some(mut source) = e(state.db.get_source(id).await)? else {
         return Ok(Verdict::Gone);
     };
+    // Provenance is metadata, not text: whichever way the body conflict
+    // goes, a file that names the Mac its resource lives on has told us
+    // something the store never knew (§5.8).
+    if let Some(device) = doc.nested("alchemy", "device") {
+        crate::device::note_origin_device(&app_data_dir(state), &source.notebook_id, id, &device);
+    }
     // A source has no `updated_at`; `fetched_at` is when its text last came
     // in, which is the same question here.
     if !disk_wins(mtime, source.fetched_at.max(source.created_at)) {

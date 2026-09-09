@@ -128,6 +128,32 @@ fn effective_fetched_at(source: &Source) -> i64 {
 /// are the same import. Below this, only an origin can prove a duplicate.
 const DUPLICATE_MIN_CHARS: usize = 60;
 
+/// How good a keeper a copy makes: 0 refreshes from here, 1 is whole on
+/// another Mac, 2 is a local file that is gone.
+fn keeper_rank(s: &Source) -> u8 {
+    if has_file(s) {
+        0
+    } else if s.remote {
+        1
+    } else {
+        2
+    }
+}
+
+/// Can this copy still be refreshed from where it came from? A web page or
+/// a Mac item always can; a file can when it is here (or evicted, which is
+/// downloadable); a remote source's file is on another Mac by definition.
+fn has_file(s: &Source) -> bool {
+    if s.remote {
+        return false;
+    }
+    if !is_file_path(s) {
+        return true;
+    }
+    let p = std::path::Path::new(s.url.trim());
+    p.exists() || crate::okf::is_evicted_stub(p)
+}
+
 /// A hash of the text, for grouping only: compared inside one classify pass
 /// and never stored, so a fast non-cryptographic hasher is the right tool.
 fn content_hash(text: &str) -> u64 {
@@ -175,11 +201,54 @@ fn duplicate_key(s: &Source) -> Option<String> {
 /// review surfaces call.
 pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneIssue> {
     let cadence_ms = i64::from(cadence_days).saturating_mul(86_400_000);
-    // First-seen source per identity; later holders of the same identity are
-    // the duplicates (keep the oldest — it carries the history).
-    let mut first_seen: HashMap<String, &Source> = HashMap::new();
     let mut by_age: Vec<&Source> = sources.iter().collect();
     by_age.sort_by_key(|s| s.created_at);
+
+    // Identities first, verdicts second. Every copy of one identity is
+    // grouped before any is judged, so a copy whose file is gone is still
+    // seen as a copy — and the keeper is the one that can still refresh:
+    // the oldest copy with its file present, or the oldest if none has one.
+    // Judging missing files first used to hide exactly the pairs a second
+    // Mac produces: its original with a path that is not here, ours with
+    // the file beside it, each looking like the only one.
+    let mut groups: Vec<(String, Vec<&Source>)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for s in &by_age {
+        if is_folder_like(s) || s.fetch_failures >= UNREACHABLE_AFTER {
+            continue;
+        }
+        if let Some(key) = duplicate_key(s) {
+            let slot = *at.entry(key.clone()).or_insert_with(|| {
+                groups.push((key, Vec::new()));
+                groups.len() - 1
+            });
+            groups[slot].1.push(s);
+        }
+    }
+    let mut duplicate_of: HashMap<&str, (&Source, &str)> = HashMap::new();
+    for (key, group) in &groups {
+        if group.len() < 2 {
+            continue;
+        }
+        // Oldest wins among equals; a copy that can refresh beats one that
+        // cannot, and a remote copy — whole on its own Mac — beats a local
+        // one whose file is gone.
+        let keeper = group
+            .iter()
+            .copied()
+            .min_by_key(|s| (keeper_rank(s), s.created_at))
+            .unwrap_or(group[0]);
+        let how = if key.starts_with("url:") {
+            "same URL as"
+        } else {
+            "same content as"
+        };
+        for s in group {
+            if s.id != keeper.id {
+                duplicate_of.insert(s.id.as_str(), (keeper, how));
+            }
+        }
+    }
 
     let mut issues = Vec::new();
     for s in by_age {
@@ -201,6 +270,16 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
             ));
             continue;
         }
+        if let Some((keeper, how)) = duplicate_of.get(s.id.as_str()) {
+            issues.push(HygieneIssue {
+                keeper_id: keeper.id.clone(),
+                ..issue(
+                    "duplicate",
+                    format!("{how} \u{201c}{}\u{201d}", keeper.title),
+                )
+            });
+            continue;
+        }
         // Loose files only: folder children that vanish are the rescan's to
         // reconcile, and a cloud-evicted file is downloadable, not missing —
         // whether it is a legacy `.icloud` placeholder or, on current macOS
@@ -218,24 +297,6 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
                 ));
                 continue;
             }
-        }
-        if let Some(key) = duplicate_key(s) {
-            if let Some(first) = first_seen.get(key.as_str()) {
-                let how = if key.starts_with("url:") {
-                    "same URL as"
-                } else {
-                    "same content as"
-                };
-                issues.push(HygieneIssue {
-                    keeper_id: first.id.clone(),
-                    ..issue(
-                        "duplicate",
-                        format!("{how} \u{201c}{}\u{201d}", first.title),
-                    )
-                });
-                continue;
-            }
-            first_seen.insert(key, s);
         }
         if s.status == "error" && s.char_count == 0 && now - s.created_at > HUSK_AFTER_MS {
             issues.push(issue("husk", "failed import with no content".into()));
@@ -726,10 +787,37 @@ mod tests {
         away.origin_device = "Paul's MacBook Pro".into();
         away.remote = true;
 
-        assert_eq!(
-            buckets(&classify(&[here, away], 30, now)),
-            vec![("here", "missing-file")]
-        );
+        let issues = classify(&[here, away], 30, now);
+        // The dead local copy is the one to remove — and it is a copy of the
+        // remote one, which is whole on its own Mac and keeps the identity.
+        assert_eq!(buckets(&issues), vec![("here", "duplicate")]);
+        assert_eq!(issues[0].keeper_id, "away");
+    }
+
+    /// Two Macs each imported the same document: the other's original names a
+    /// path that is not here, ours sits beside its file. The copy with the
+    /// file keeps the identity, whichever came first — a keeper that cannot
+    /// refresh would leave the notebook with the worse copy.
+    #[test]
+    fn duplicate_keeper_prefers_the_copy_whose_file_is_here() {
+        let now = 100 * DAY;
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("plan.md");
+        std::fs::write(&present, "x").unwrap();
+        let body: String = "the same document, word for word, ".repeat(5);
+        let mut theirs = src("theirs", "markdown");
+        theirs.url = "/Users/someone/OneDrive/plan.md".into();
+        theirs.content = body.clone();
+        theirs.created_at = now - 2 * DAY;
+        theirs.fetched_at = now;
+        let mut ours = src("ours", "markdown");
+        ours.url = present.to_string_lossy().into_owned();
+        ours.content = format!("{body}\n\n");
+        ours.created_at = now - DAY;
+        ours.fetched_at = now;
+        let issues = classify(&[theirs, ours], 30, now);
+        assert_eq!(buckets(&issues), vec![("theirs", "duplicate")]);
+        assert_eq!(issues[0].keeper_id, "ours");
     }
 
     /// An old errored import with no content is a husk; a recent one is not

@@ -3129,12 +3129,22 @@ fn okf_source_concept_names_the_mac_it_came_from() {
     let bundle = dir.join("nb");
     let edits = load_okf_edits(&data, "nb");
 
-    // Imported here: the writer stamps this Mac without being told.
-    let mine = okf_src("s-mine", "/Users/paul/plan.pdf");
+    // Imported here, file here: the writer stamps this Mac without being
+    // told. The same source with its file nowhere on this Mac is left
+    // unattributed — the Mac that has the file is the one to say so.
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let here = dir.join("plan.pdf");
+    std::fs::write(&here, "x").expect("plan");
+    let mine = okf_src("s-mine", &here.to_string_lossy());
     let concept = source_concept(&mine, "body".into(), &bundle, 50 * 1024 * 1024, &edits);
     assert!(concept
         .alchemy
         .contains(&("device".to_string(), this_device().to_string())));
+    let gone = okf_src("s-gone", "/Users/paul/plan.pdf");
+    let concept = source_concept(&gone, "body".into(), &bundle, 50 * 1024 * 1024, &edits);
+    assert!(concept
+        .alchemy
+        .contains(&("device".to_string(), String::new())));
 
     // Came in from the other Mac: that name travels on, so a bundle that
     // makes the round trip does not rename every source after its last writer.

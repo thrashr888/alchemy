@@ -20,31 +20,51 @@ use std::sync::OnceLock;
 
 use crate::models::Source;
 
-/// This Mac's name, as its owner would say it — "Paul's MacBook Pro", not a
-/// Bonjour host name. That is what a hint has to name for the sentence to be
-/// worth reading, and `scutil` is where macOS keeps it.
+/// This Mac, as its owner would say it and as no other Mac can: "MacBook
+/// Pro (C02XYZ)". The name alone is what a hint has to say for the sentence
+/// to be worth reading, and `scutil` is where macOS keeps it — but two Macs
+/// bought the same year are both called "MacBook Pro", and a device record
+/// that cannot tell them apart calls every source from the other one ours
+/// and every file it never had missing. The serial is the part that is
+/// only ever one machine's.
 ///
-/// Read once: the answer is a subprocess, and every source listing asks.
+/// Read once: the answer is two subprocesses, and every source listing asks.
 pub fn this_device() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
-        for (bin, args) in [
+        let name = [
             ("/usr/sbin/scutil", &["--get", "ComputerName"][..]),
             ("/bin/hostname", &["-s"][..]),
-        ] {
-            if let Some(name) = std::process::Command::new(bin)
-                .args(args)
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-            {
-                return name;
-            }
+        ]
+        .into_iter()
+        .find_map(|(bin, args)| run(bin, args))
+        .unwrap_or_else(|| "unknown".to_string());
+        match serial_number() {
+            Some(serial) => format!("{name} ({serial})"),
+            None => name,
         }
-        "unknown".to_string()
     })
+}
+
+fn run(bin: &str, args: &[&str]) -> Option<String> {
+    std::process::Command::new(bin)
+        .args(args)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// The hardware serial, from the same registry entry About This Mac reads.
+fn serial_number() -> Option<String> {
+    let out = run("/usr/sbin/ioreg", &["-rd1", "-c", "IOPlatformExpertDevice"])?;
+    out.lines()
+        .find(|line| line.contains("IOPlatformSerialNumber"))
+        .and_then(|line| line.split('"').nth(3))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Two device names for the same Mac. Case and stray spacing are not a

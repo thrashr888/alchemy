@@ -766,3 +766,44 @@ async fn another_identity_at_our_path_moves_our_row_aside() {
         "{moved}"
     );
 }
+
+/// Which Mac a source's file is stamped as living on: a recorded origin as
+/// it is, this Mac when the file is here, nothing when it is nowhere here —
+/// so the Mac that does have it is the one that says so (§5.8).
+#[test]
+fn device_stamp_names_only_a_mac_that_has_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let present = dir.path().join("plan.pdf");
+    std::fs::write(&present, "x").unwrap();
+    let mut s = Source {
+        id: "s".into(),
+        notebook_id: "nb".into(),
+        title: "Plan".into(),
+        source_type: "pdf".into(),
+        url: present.to_string_lossy().into_owned(),
+        origin_device: crate::device::this_device().to_string(),
+        remote: false,
+        content: String::new(),
+        char_count: 1,
+        chunk_count: 1,
+        created_at: 0,
+        status: "ready".into(),
+        error: String::new(),
+        parent_id: String::new(),
+        mtime: 0,
+        author: String::new(),
+        image_url: String::new(),
+        tags: String::new(),
+        note: String::new(),
+        fetched_at: 0,
+        fetch_failures: 0,
+    };
+    assert_eq!(origin_device_stamp(&s), crate::device::this_device());
+    s.url = "/Volumes/OneDrive-Work/Q3/plan.pdf".into();
+    assert_eq!(origin_device_stamp(&s), "");
+    s.origin_device = "Other MacBook Pro (C02OTHER)".into();
+    assert_eq!(origin_device_stamp(&s), "Other MacBook Pro (C02OTHER)");
+    s.url = "https://example.com/plan".into();
+    s.origin_device = String::new();
+    assert_eq!(origin_device_stamp(&s), crate::device::this_device());
+}
