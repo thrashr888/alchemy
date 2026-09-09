@@ -27,6 +27,9 @@
     "postinstall": "scripts/fetch-pdfium.sh && scripts/build-fm-sidecar.sh"
   },
   "dependencies": {
+    "@eraserlabs/diagrams": "0.1.0",
+    "@eraserlabs/render": "0.1.0",
+    "@eraserlabs/resolve": "0.1.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-virtual": "^3.14.10",
     "@tauri-apps/api": "^2.11.1",

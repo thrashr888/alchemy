@@ -639,6 +639,7 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "infographic",
     "mind_map",
     "uml",
+    "architecture",
     "problems",
     "evidence",
     "prd",
@@ -646,6 +647,66 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "rfc",
     "skill",
 ];
+
+/// The icons an architecture diagram may name: the curated set vendored
+/// under `src/assets/diagrams/icons` (docs/RFC-diagrams.md), so a diagram
+/// renders with no network. A frontend test holds this list and that
+/// directory to the same contents.
+pub const ARCHITECTURE_ICONS: &str = "activity alert-triangle android ansible anthropic \
+app-window apple arrow-right auth0 aws aws-api-gateway aws-cloudfront aws-cloudwatch \
+aws-dynamodb aws-ec2 aws-lambda aws-rds azure bar-chart bell binary bot box brain building \
+bun calendar chart check-circle chrome clock cloud cloudflare code cog component cpu \
+credit-card css3 database database-zap datadog deno docker dollar-sign download duckdb \
+elasticsearch electron external-link eye eye-off factory figma file file-code file-text \
+firebase firefox folder gauge git git-branch git-merge git-pull-request github \
+github-actions globe go google-cloud grafana graphql hard-drive hard-drive-download \
+headphones help-circle home homebrew html5 hugging-face image info ios java javascript \
+jenkins jira json kafka key kubernetes langchain laptop layers linear link linux list lock \
+mail markdown message-square mic microchip milvus mongodb monitor mysql network nginx node \
+notion npm nvidia obsidian okta ollama openai opensearch package pinecone planetscale play \
+plug postgres prisma prometheus puzzle python pytorch qdrant rabbitmq raspberry-pi react \
+redis refresh-cw repeat rust safari search send sentry server server-cog server-off \
+settings share-2 shield shopping-cart slack smartphone sparkles sqlite stripe supabase \
+swift table tailwind-css tensorflow terminal terraform timer truck typescript ubuntu upload \
+user users vercel vite volume-2 weaviate webhook wifi windows workflow x-circle zap";
+
+/// The architecture prompt: the eraser-diagrams document contract
+/// (docs/RFC-diagrams.md) compact enough to carry in a system prompt, with
+/// the icon vocabulary appended. Placement is deliberately not the model's
+/// job — the renderer lays the topology out.
+fn architecture_instruction() -> String {
+    format!(
+        "Draw the system the sources below describe as ONE architecture diagram, written as a \
+         single JSON document for a diagram renderer. The document:\n\
+         {{\"title\": \"<3-6 words>\", \"direction\": \"down\" | \"right\", \
+         \"entities\": [...], \"connections\": [...]}}\n\
+         Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
+         Group, Lane, or Pool):\n\
+         - Group — a tier, host, process, or service boundary: \
+         {{\"tag\":\"Group\",\"id\":\"backend\",\"title\":{{\"text\":\"Rust backend\",\"icon\":\"rust\"}},\"color\":\"blue\"}}. \
+         Lane and Pool are the same with a vertical title band — use them for swimlanes (one per \
+         actor or stage) when the sources describe a process rather than a system.\n\
+         - Icon — a component drawn as its technology's icon with a caption: \
+         {{\"tag\":\"Icon\",\"id\":\"db\",\"icon\":\"postgres\",\"texts\":[{{\"text\":\"Postgres\"}}],\"containerId\":\"backend\"}}.\n\
+         - Shape — a box: \
+         {{\"tag\":\"Shape\",\"id\":\"api\",\"shape\":\"rectangle\",\"icon\":\"server\",\"texts\":[{{\"text\":\"REST API\"}}],\"color\":\"green\",\"containerId\":\"backend\"}}. \
+         \"shape\" is rectangle, cylinder (a store), diamond (a decision), hexagon, circle, or \
+         document; \"icon\" is optional.\n\
+         - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Syncs every 5 min\"}}.\n\
+         Connections: {{\"from\":\"api\",\"to\":\"db\",\"label\":\"SQL\"}}, optionally with \
+         \"lineStyle\": \"dashed\" | \"dotted\", \"startArrowhead\": \"arrow\", \"endArrowhead\": \
+         \"triangle\" | \"arrow\" | \"dot\" | null, \"color\": <palette>.\n\
+         Colors are palette tokens only: white yellow green blue purple red orange black.\n\
+         Icons come from this set only — omit the icon when nothing fits: {icons}.\n\
+         Never write x, y, width, or height; placement is automatic.\n\
+         Rules: 6-16 entities in 1-5 groups. Name components exactly as the sources name them; \
+         never invent a part the corpus does not describe, and leave out anything you would have \
+         to guess at. Label every connection with the protocol, data, or action that travels it, \
+         in 4 words or fewer. Output ONLY the JSON object: no code fences, no headings, no prose \
+         before or after.",
+        icons = ARCHITECTURE_ICONS
+    )
+}
 
 /// (title, instruction) for each generated artifact kind.
 pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
@@ -914,6 +975,11 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
              Mermaid source, starting with the diagram-type keyword: no code fences, no \
              headings, no prose before or after.",
         )),
+        "architecture" => {
+            static INSTRUCTION: std::sync::LazyLock<String> =
+                std::sync::LazyLock::new(architecture_instruction);
+            Some(("Architecture Diagram", INSTRUCTION.as_str()))
+        }
         "problems" => Some((
             "Problems",
             "Critically analyze the sources below and identify the problems in them: factual errors, unsupported \

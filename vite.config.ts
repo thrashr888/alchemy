@@ -15,6 +15,20 @@ export default defineConfig(async () => ({
   // local and CI build.
   build: {
     reportCompressedSize: false,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        // The eraser render frame (docs/RFC-diagrams.md): its own page so
+        // the engine's global stylesheet never reaches the app document.
+        diagramFrame: path.resolve(__dirname, "diagram-frame.html"),
+      },
+    },
+  },
+
+  // @eraserlabs/layout reads process.env unguarded (dev warnings, debug
+  // dumps); an empty object keeps those reads inert in the WebView.
+  define: {
+    "process.env": "{}",
   },
 
   resolve: {

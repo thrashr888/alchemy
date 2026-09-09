@@ -10,4 +10,8 @@ interface Window {
    *  (export.rs). */
   __ALCHEMY_PRINT_EXPORT__?: string;
   __ALCHEMY_FRESH__?: boolean;
+  /** Set by diagram-frame.html (src/diagramFrame.ts): the eraser render
+   *  frame is booted and its fonts are registered. Read by
+   *  lib/eraserDiagram.ts across the iframe boundary. */
+  __alchemyDiagramFrame?: { ready: Promise<void> };
 }
