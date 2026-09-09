@@ -833,6 +833,42 @@ fn ipc_errors_read_like_sentences() {
 
     // Ordinary errors pass through untouched.
     assert_eq!(friendly_error("Source not found"), "Source not found");
+
+    // Most Lance variants say `, /path/file.rs:12:3` with no `location:`
+    // prefix at all; those paths go too, and nothing else on the line does.
+    let bare = "indexing failed: lance error: LanceError(IO): Operation aborted, \
+                /Users/x/.cargo/registry/src/lance-core-10.0.0/src/io/commit.rs:401:17";
+    let cleaned = friendly_error(bare);
+    assert_eq!(
+        cleaned,
+        "indexing failed: lance error: LanceError(IO): Operation aborted"
+    );
+    assert_eq!(
+        friendly_error("failed at 2026-09-08T10:00:00Z, retry at 12:30:00"),
+        "failed at 2026-09-08T10:00:00Z, retry at 12:30:00"
+    );
+
+    // Out of file descriptors is a sentence about waiting, not a path.
+    let emfile = "lance error: LanceError(IO): Too many open files (os error 24), \
+                  /Users/x/.cargo/registry/src/lance-core-10.0.0/src/io/reader.rs:77:9";
+    let friendly = friendly_error(emfile);
+    assert!(friendly.contains("open-file limit"), "{friendly}");
+    assert!(!friendly.contains(".rs:"), "{friendly}");
+}
+
+/// The embed stage retries the Lance writes that fail for passing reasons
+/// and gives up at once on everything else.
+#[test]
+fn transient_lance_errors_are_the_retryable_ones() {
+    use crate::db::transient_lance_error;
+    assert!(transient_lance_error(
+        "LanceError(IO): Too many open files (os error 24)"
+    ));
+    assert!(transient_lance_error(
+        "Retryable commit conflict for version 12"
+    ));
+    assert!(!transient_lance_error("Append with different schema"));
+    assert!(!transient_lance_error("Source not found"));
 }
 
 /// RFC-self-resolve phase 1: the known provider failure shapes come out as

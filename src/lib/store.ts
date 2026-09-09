@@ -100,21 +100,39 @@ export async function removeSourcesGuarded(
     confirmLabel?: string;
     danger?: boolean;
   }) => Promise<boolean>,
+  opts: {
+    /** Ask even when every source is restorable. A menu click is a
+     *  deliberate verb; a Delete keypress on a live selection is one
+     *  slip away from removing thirty things, so the key path asks. */
+    always?: boolean;
+  } = {},
 ): Promise<void> {
   const sources = useStore.getState().sources.filter((s) => ids.includes(s.id));
   const blocked = sources.filter((s) => !sourceRestorable(s));
-  if (blocked.length > 0) {
-    const ok = await confirmFn({
-      title:
-        ids.length === 1
-          ? `Remove “${sources[0]?.title ?? "source"}”?`
-          : `Remove ${ids.length} sources?`,
-      message:
-        "Connected sources can't be brought back by undo — restoring means reconnecting. Nothing on disk is touched.",
-      items: blocked.map((s) => s.title),
-      confirmLabel: "Remove",
-      danger: true,
-    });
+  if (blocked.length > 0 || opts.always) {
+    const title =
+      ids.length === 1
+        ? `Remove “${sources[0]?.title ?? "source"}”?`
+        : `Remove ${ids.length} sources?`;
+    const ok = await confirmFn(
+      blocked.length > 0
+        ? {
+            title,
+            message:
+              "Connected sources can't be brought back by undo — restoring means reconnecting. Nothing on disk is touched.",
+            items: blocked.map((s) => s.title),
+            confirmLabel: "Remove",
+            danger: true,
+          }
+        : {
+            title,
+            message:
+              "Undo from the toast brings them back. Nothing on disk is touched.",
+            items: sources.map((s) => s.title),
+            confirmLabel: "Remove",
+            danger: true,
+          },
+    );
     if (!ok) return;
   }
   await useStore.getState().deleteSourcesBatch(ids);
@@ -346,6 +364,9 @@ async function runQueued(
   set: Setter,
   item: QueueItem,
   fn: () => Promise<unknown>,
+  // Only work the user queued by hand (an add, a write-back) cues a failure
+  // audibly; a re-fetch from a live card or a sweep stays a quiet toast.
+  opts: { sound?: boolean } = {},
 ) {
   const patch = (p: Partial<QueueItem>) =>
     set({
@@ -363,9 +384,9 @@ async function runQueued(
       status: "error",
       error: e instanceof Error ? e.message : String(e),
       // A failed import keeps its work attached — Retry re-runs it in place.
-      retry: () => void runQueued(get, set, item, fn),
+      retry: () => void runQueued(get, set, item, fn, opts),
     });
-    playError();
+    if (opts.sound) playError();
   }
 }
 
@@ -839,7 +860,7 @@ export const useStore = create<AppState>((set, get) => {
         if (p.status === "error" && prev !== "error") {
           set({ audioProgress: null });
           get().pushToast("error", p.detail || "Generation failed", undefined, {
-            silent: p.origin !== "",
+            sound: p.origin === "",
           });
         }
         if (p.status === "waiting" && prev !== "waiting")
@@ -1992,7 +2013,13 @@ export const useStore = create<AppState>((set, get) => {
         importingFolders: [...get().importingFolders, tempId],
         error: null,
       });
-      await runQueued(get, set, item, () => api.addSourceFolder(id, picked));
+      await runQueued(
+        get,
+        set,
+        item,
+        () => api.addSourceFolder(id, picked),
+        { sound: true },
+      );
       set({
         folderScan: null,
         importingFolders: get().importingFolders.filter((f) => f !== tempId),
@@ -2019,8 +2046,12 @@ export const useStore = create<AppState>((set, get) => {
       set({ ingestQueue: [...get().ingestQueue, ...items], error: null });
 
       for (let i = 0; i < paths.length; i++) {
-        await runQueued(get, set, items[i], () =>
-          api.addSourceFile(id, paths[i]),
+          await runQueued(
+          get,
+          set,
+          items[i],
+          () => api.addSourceFile(id, paths[i]),
+          { sound: true },
         );
         if (get().currentId === id) set({ sources: await api.listSources(id) });
       }
@@ -2035,7 +2066,13 @@ export const useStore = create<AppState>((set, get) => {
         status: "pending",
       };
       set({ ingestQueue: [...get().ingestQueue, item], error: null });
-      await runQueued(get, set, item, () => api.addSourceUrl(id, url, include));
+      await runQueued(
+        get,
+        set,
+        item,
+        () => api.addSourceUrl(id, url, include),
+        { sound: true },
+      );
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 
@@ -2048,7 +2085,13 @@ export const useStore = create<AppState>((set, get) => {
         status: "pending",
       };
       set({ ingestQueue: [...get().ingestQueue, item], error: null });
-      await runQueued(get, set, item, () => api.addSourceText(id, title, text));
+      await runQueued(
+        get,
+        set,
+        item,
+        () => api.addSourceText(id, title, text),
+        { sound: true },
+      );
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 
@@ -2061,8 +2104,12 @@ export const useStore = create<AppState>((set, get) => {
         status: "pending",
       };
       set({ ingestQueue: [...get().ingestQueue, item], error: null });
-      await runQueued(get, set, item, () =>
-        api.addSourceMac(id, provider, collection, label),
+      await runQueued(
+        get,
+        set,
+        item,
+        () => api.addSourceMac(id, provider, collection, label),
+        { sound: true },
       );
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
@@ -2076,8 +2123,12 @@ export const useStore = create<AppState>((set, get) => {
         status: "pending",
       };
       set({ ingestQueue: [...get().ingestQueue, item], error: null });
-      await runQueued(get, set, item, () =>
-        api.updateSourceText(sourceId, title, text),
+      await runQueued(
+        get,
+        set,
+        item,
+        () => api.updateSourceText(sourceId, title, text),
+        { sound: true },
       );
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
@@ -2134,7 +2185,7 @@ export const useStore = create<AppState>((set, get) => {
       await runQueued(get, set, item, async () => {
         await api.updateMacNote(sourceId, body);
         get().pushToast("success", "Saved to Apple Notes");
-      });
+      }, { sound: true });
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 
@@ -2151,7 +2202,7 @@ export const useStore = create<AppState>((set, get) => {
       await runQueued(get, set, item, async () => {
         await api.addMacReminder(sourceId, title, notes);
         get().pushToast("success", `Added to ${src?.title ?? "Reminders"}`);
-      });
+      }, { sound: true });
       if (get().currentId === id) set({ sources: await api.listSources(id) });
     },
 
@@ -2618,6 +2669,7 @@ export const useStore = create<AppState>((set, get) => {
             error: e instanceof Error ? e.message : String(e),
             failedInput: content,
           });
+          playError();
         }
       } finally {
         // sending/steps are global in-flight flags — always clear them, even if
@@ -3073,7 +3125,7 @@ export const useStore = create<AppState>((set, get) => {
         const nb = await api.importNotebookOkf(path, notebookId);
         imported = nb;
         get().pushToast("success", `Imported into “${nb.title}”`);
-      });
+      }, { sound: true });
       await get().refreshNotebooks();
       const nb = imported as { id: string; title: string } | null;
       if (nb) await get().selectNotebook(nb.id);
@@ -3229,7 +3281,7 @@ export const useStore = create<AppState>((set, get) => {
     setError: (e) => set({ error: e }),
 
     pushToast: (kind, message, onClick, options) => {
-      if (kind === "error" && !options?.silent) playError();
+      if (kind === "error" && options?.sound) playError();
       const id = `toast-${++toastSeq}`;
       set({ toasts: [...get().toasts, { id, kind, message, onClick }] });
       // Clickable toasts linger — the user needs time to notice and act.
@@ -3479,11 +3531,10 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 }
 
-// User-facing error banners cue once. Toasts choose their audio policy at
-// creation so background job failures can stay visible without making noise.
-useStore.subscribe((s, prev) => {
-  if (s.error && s.error !== prev.error) playError();
-});
+// No audio rides on the legacy `error` field: it is set from launch loads,
+// summary refreshes and sweeps as often as from a click, and App.tsx turns
+// every one into an error toast anyway. A failure that answers something
+// the user just asked for cues itself where it happens (sendMessage).
 
 // Remember the precise open view — dashboard vs notebook, and the center
 // mode (chat / reader / ledger) with the reader's current doc — so a reload

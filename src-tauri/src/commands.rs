@@ -836,6 +836,13 @@ pub(crate) fn friendly_error(raw: &str) -> String {
     if let Some(msg) = classify_model_error(raw) {
         return msg;
     }
+    // Out of file descriptors mid-batch. The write path retries this on
+    // its own; if it still lands here the fix is time, not a stack trace.
+    if raw.contains("Too many open files") || raw.contains("os error 24") {
+        return "Alchemy hit the system's open-file limit. Let the running imports \
+                finish, then try again. If it keeps happening, restart Alchemy."
+            .into();
+    }
     // Drop `, location: /path/to/file.rs:12:3` fragments and collapse the
     // duplicate sentence Lance nests inside its own context chain.
     let mut out = String::with_capacity(raw.len());
@@ -850,6 +857,7 @@ pub(crate) fn friendly_error(raw: &str) -> String {
             out.push_str(rest.1);
         }
     }
+    let out = strip_code_locations(&out);
     let out = out.trim().trim_end_matches(':').to_string();
     if let Some((head, tail)) = out.split_once(": ") {
         if tail.starts_with(head) {
@@ -857,6 +865,44 @@ pub(crate) fn friendly_error(raw: &str) -> String {
         }
     }
     out
+}
+
+/// Remove bare `, /path/to/file.rs:12:3` tokens — the shape most Lance
+/// errors use for their source location (only a few say `location:`).
+/// A cargo registry path tells the user nothing about their notebook.
+fn strip_code_locations(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for (i, piece) in raw.split(", ").enumerate() {
+        let (token, rest) = match piece.split_once(' ') {
+            Some((t, r)) => (t, Some(r)),
+            None => (piece, None),
+        };
+        let token = token.trim_end_matches(':');
+        if i > 0 && looks_like_code_location(token) {
+            if let Some(rest) = rest {
+                out.push(' ');
+                out.push_str(rest);
+            }
+            continue;
+        }
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(piece);
+    }
+    out
+}
+
+/// `…/name.rs:186:17` or `…/name.rs:186`, and nothing else.
+fn looks_like_code_location(token: &str) -> bool {
+    let Some((path, tail)) = token.split_once(".rs:") else {
+        return false;
+    };
+    !path.is_empty()
+        && !tail.is_empty()
+        && tail
+            .split(':')
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Deterministic first pass over provider/model failures (RFC-self-resolve
@@ -1600,6 +1646,32 @@ async fn store_new_source_with_id(
 /// one rebuild, not one per file.
 static EMBED_QUEUE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Run a Lance write again, a few times with a growing pause, while it fails
+/// for a reason that clears itself (see `db::transient_lance_error`). Any
+/// other error, or the last attempt's, comes back as-is.
+async fn retry_transient<T, F, Fut>(mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    const ATTEMPTS: u32 = 5;
+    let mut attempt = 1;
+    loop {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(err)
+                if attempt < ATTEMPTS && crate::db::transient_lance_error(&format!("{err:#}")) =>
+            {
+                crate::note!("embed stage: retrying after transient Lance error (attempt {attempt}): {err:#}");
+                tokio::time::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)))
+                    .await;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 /// Stage two of an import OR a reingest (docs/RFC-import-pipeline.md §2):
 /// chunk, embed, and index in the background, then flip the row from
 /// "processing" to "ready" and kick the after-import intelligence. ONE
@@ -1637,22 +1709,30 @@ pub(crate) async fn spawn_embed_stage(
                     if current.status == "processing" && current.content == extracted.text => {}
                 _ => return Ok(None),
             }
-            if replace_chunks {
-                db.delete_source_chunks(&source.id).await?;
-            }
             let tuples: Vec<(String, i32, String)> = chunks
                 .iter()
                 .enumerate()
                 .map(|(i, c)| (new_id(), i as i32, c.text.clone()))
                 .collect();
             let contexts: Vec<String> = chunks.iter().map(|c| c.context.clone()).collect();
-            db.add_chunks_ctx(
-                &source.notebook_id,
-                &source.id,
-                &tuples,
-                &contexts,
-                &embeddings,
-            )
+            // The Lance writes are the part that fails for reasons that
+            // pass: a commit race with another writer, or the process out
+            // of file descriptors while a folder drop is still closing
+            // its own. Those get a few patient retries before the row is
+            // stamped errored; the embed above is not redone.
+            retry_transient(|| async {
+                if replace_chunks {
+                    db.delete_source_chunks(&source.id).await?;
+                }
+                db.add_chunks_ctx(
+                    &source.notebook_id,
+                    &source.id,
+                    &tuples,
+                    &contexts,
+                    &embeddings,
+                )
+                .await
+            })
             .await?;
             Ok(Some(tuples.len()))
         }
@@ -1667,9 +1747,17 @@ pub(crate) async fn spawn_embed_stage(
             Ok(None) => {}
             Err(err) => {
                 // A failed stage is an errored row with the reason, retryable
-                // via Refresh — never a silent disappearance.
+                // via Refresh — never a silent disappearance. The reason is
+                // the user's to read, so it goes through the same translation
+                // as an IPC error: no cargo paths, no line numbers.
+                let reason = friendly_error(&format!("{err:#}"));
                 let _ = db
-                    .finish_processing(&source.id, 0, "error", &format!("indexing failed: {err:#}"))
+                    .finish_processing(
+                        &source.id,
+                        0,
+                        "error",
+                        &format!("indexing failed: {reason}"),
+                    )
                     .await;
             }
         }
@@ -1787,7 +1875,7 @@ async fn store_failed_url(
         chunk_count: 0,
         created_at: now(),
         status: "error".to_string(),
-        error: reason,
+        error: friendly_error(&reason),
         parent_id: String::new(),
         mtime: 0,
         tags: String::new(),
@@ -3030,7 +3118,7 @@ async fn mark_source_failed(
         char_count: 0,
         chunk_count: 0,
         status: "error".to_string(),
-        error: reason,
+        error: friendly_error(&reason),
         ..existing.clone()
     };
     state.db.replace_source(&failed, &[], &[]).await?;
@@ -4957,7 +5045,7 @@ async fn store_failed_child(
         chunk_count: 0,
         created_at: now(),
         status: "error".to_string(),
-        error: reason,
+        error: friendly_error(&reason),
         parent_id: folder.id.clone(),
         mtime,
         tags: String::new(),
@@ -5349,7 +5437,7 @@ async fn rescan_one_folder_inner(
                     // embedded text to protect, so show the real failure.
                     let failed = Source {
                         status: "error".to_string(),
-                        error: err.to_string(),
+                        error: friendly_error(&format!("{err:#}")),
                         mtime,
                         ..(*child).clone()
                     };

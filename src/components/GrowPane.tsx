@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
+  growthSourceRevision,
   HYGIENE_LABEL,
   growthAttention,
   visibleGrowthProposals,
@@ -80,6 +81,7 @@ export function GrowPane() {
     () => growthAttention(hygiene, loadHygieneKept(currentId)),
     [hygiene, currentId],
   );
+  const attentionRef = useRef<HTMLDivElement>(null);
   // "Keep" on an unreachable source resets real backend state (the strike
   // count); every other flag is suppressed locally. Returns whether it
   // touched the backend, so the bulk path can wait for those.
@@ -299,10 +301,31 @@ export function GrowPane() {
     [loadSection],
   );
 
+  // The sidebar badge re-reads feeds and links whenever the source list
+  // changes; the pane used to load once per visit and then hold whatever it
+  // had, so the badge could say 3 while the pane still showed a failure or
+  // an older answer. The cheap tiers follow the same revision here — the
+  // slow ones (Spotlight, the duplicate scan) still run once per visit.
+  const growthRevision = useMemo(() => growthSourceRevision(sources), [sources]);
+  const loadedRevision = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentId) return;
+    if (loadedRevision.current === null) {
+      loadedRevision.current = growthRevision;
+      return;
+    }
+    if (loadedRevision.current === growthRevision) return;
+    loadedRevision.current = growthRevision;
+    void loadSection(currentId, "queries", () => api.growthQueries(currentId));
+    void loadSection(currentId, "feeds", () => api.growthFeeds(currentId));
+    void loadSection(currentId, "links", () => api.growthLinks(currentId));
+  }, [currentId, growthRevision, loadSection]);
+
   useEffect(() => {
     setWeb(null);
     setWebOn(false);
     setFailed({});
+    loadedRevision.current = null;
     if (!currentId) return;
     // Backend-owned opt-in (the sweep acts on it); the old localStorage
     // flag migrates over the first time this notebook's pane opens.
@@ -588,15 +611,15 @@ export function GrowPane() {
           </div>
         )}
       </div>
-      {state.error ? (
-        errorLine(state.error)
-      ) : state.pending ? (
-        pendingLine(state.pending)
-      ) : items.length === 0 ? (
-        errorLine("Nothing right now.")
-      ) : (
-        items.map(row)
-      )}
+      {/* A failed refresh keeps the last rows on screen under its notice
+          (the sidebar badge still counts them); only an empty section says
+          nothing at all. */}
+      {state.error && errorLine(state.error)}
+      {state.pending
+        ? pendingLine(state.pending)
+        : items.length === 0
+          ? !state.error && errorLine("Nothing right now.")
+          : items.map(row)}
     </div>
   );
 
@@ -645,6 +668,30 @@ export function GrowPane() {
               {freeTiersSettled && !freeTiersFailed && freeTiersEmpty ? (
                 <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
                   Nothing new on this Mac or in your sources right now.
+                  {/* The sidebar's count includes attention flags; when
+                      those are all it had, say where they went. */}
+                  {attention.length > 0 && (
+                    <>
+                      {" "}
+                      {attention.length === 1
+                        ? "One item needs attention"
+                        : `${attention.length} items need attention`}
+                      {" — "}
+                      <button
+                        type="button"
+                        className="underline decoration-border underline-offset-2 hover:text-foreground"
+                        onClick={() =>
+                          attentionRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "start",
+                          })
+                        }
+                      >
+                        see below
+                      </button>
+                      .
+                    </>
+                  )}
                 </div>
               ) : (
                 <>
@@ -755,7 +802,7 @@ export function GrowPane() {
               {/* Needs attention (RFC-source-hygiene), merged in from the
                   Sources panel: tending what's broken is the other half of
                   growing. Nothing is removed unless you say so. */}
-              <div className="flex flex-col gap-2">
+              <div ref={attentionRef} className="flex flex-col gap-2">
                 <div className={`${headerBase} flex flex-col gap-1`}>
                   <div className="flex items-center gap-2">
                     <AlertCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

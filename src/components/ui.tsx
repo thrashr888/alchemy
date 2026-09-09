@@ -144,6 +144,10 @@ export function useHoverCard(side: "left" | "right") {
   // beat; while a card is up, moving to the next row switches instantly.
   // `hide` grace keeps it warm across the row gap.
   const warm = React.useRef(false);
+  // The row the card describes. Deleting that row unmounts it without a
+  // mouseleave, so the card would otherwise stay up describing a source
+  // that no longer exists until the pointer found another row.
+  const anchor = React.useRef<Element | null>(null);
 
   // `Element`, not `HTMLElement`: the graph's rows are SVG <g> nodes, and
   // all this needs is getBoundingClientRect.
@@ -152,6 +156,7 @@ export function useHoverCard(side: "left" | "right") {
     data: HoverCardData,
   ) => {
     const el = e.currentTarget;
+    anchor.current = el;
     window.clearTimeout(timer.current);
     const reveal = () => {
       if (!el.isConnected) return;
@@ -173,7 +178,21 @@ export function useHoverCard(side: "left" | "right") {
       setState(null);
     }, 120);
   };
+  /** Swap the card's contents in place while it is up (a live list whose
+   *  rows change under a resting pointer). No-op when nothing is showing. */
+  const update = (data: HoverCardData) =>
+    setState((s) => (s ? { ...s, data } : s));
   React.useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  // The host list re-renders when its rows change; if the row under the
+  // card is gone from the DOM by then, the card goes with it.
+  React.useEffect(() => {
+    if (state && anchor.current && !anchor.current.isConnected) {
+      window.clearTimeout(timer.current);
+      warm.current = false;
+      setState(null);
+    }
+  });
 
   // Scrolling the list under the cursor won't fire mouseleave — drop the
   // card on any scroll instead of letting it drift from its row.
@@ -207,7 +226,14 @@ export function useHoverCard(side: "left" | "right") {
           }}
         >
           <div className="flex items-baseline gap-2">
-            <span className="min-w-0 truncate text-body font-medium text-foreground">
+            <span
+              className={cn(
+                "min-w-0 text-body font-medium text-foreground",
+                state.data.layout === "stacked"
+                  ? "whitespace-normal break-words"
+                  : "truncate",
+              )}
+            >
               {state.data.title}
             </span>
             {state.data.time && (
@@ -265,7 +291,7 @@ export function useHoverCard(side: "left" | "right") {
       )
     : null;
 
-  return { show, hide, card };
+  return { show, hide, update, card };
 }
 
 /** macOS-style toggle switch for settings rows: a pill track with a sliding

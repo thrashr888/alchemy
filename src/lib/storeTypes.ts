@@ -582,7 +582,10 @@ export interface AppState {
     kind: ToastKind,
     message: string,
     onClick?: () => void,
-    options?: { silent?: boolean },
+    /** `sound`: cue the error audibly. Off by default — a toast is already
+     *  visible, and most failures belong to background work the user never
+     *  asked for. Only a failure that answers an explicit request opts in. */
+    options?: { sound?: boolean },
   ) => void;
   dismissToast: (id: string) => void;
   /** Record a reversible mutation silently — for changes that need no toast

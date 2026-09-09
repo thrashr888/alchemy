@@ -59,7 +59,7 @@ export function InferenceActivity() {
 // Mount hover state only while activity exists. Returning null from the same
 // component preserves a stale card and its reveal timer across idle periods.
 function ActiveInferenceActivity({ items }: { items: ActivityItem[] }) {
-  const { show, hide, card } = useHoverCard("left");
+  const { show, hide, update, card } = useHoverCard("left");
 
   // One glyph per engine family in flight, never one per call: eight parallel
   // embed calls are one machine working, not eight. Anything we didn't draw
@@ -86,6 +86,12 @@ function ActiveInferenceActivity({ items }: { items: ActivityItem[] }) {
       value: i.model || providerName(i.kind),
     })),
   };
+  // The pointer can rest on the glyph through several calls; the card
+  // follows the list instead of freezing on whatever was running at entry.
+  useEffect(() => {
+    update(details);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   return (
     <>

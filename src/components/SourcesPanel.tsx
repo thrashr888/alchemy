@@ -592,8 +592,14 @@ export function SourcesPanel() {
     // click-to-undo toast; only connector sources still ask.
     await removeSourcesGuarded(ids, confirm);
   }
-  const confirmRemoveBatchRef = useRef(confirmRemoveBatch);
-  confirmRemoveBatchRef.current = confirmRemoveBatch;
+  // The Delete key is the one path that always asks: it fires on whatever
+  // is selected, and nothing about a keypress says "I meant these thirty".
+  async function confirmRemoveBatchByKey(ids: string[]) {
+    hideCard();
+    await removeSourcesGuarded(ids, confirm, { always: true });
+  }
+  const confirmRemoveBatchRef = useRef(confirmRemoveBatchByKey);
+  confirmRemoveBatchRef.current = confirmRemoveBatchByKey;
 
   // ⌘A selects every visible row, Escape clears, Delete removes the
   // selection (after the app confirm). Guarded by shortcutBlocked; ⌘A also

@@ -377,6 +377,18 @@ fn load_counts(dir: &std::path::Path) -> Option<NotebookCounts> {
     serde_json::from_slice(&raw).ok()
 }
 
+/// A Lance failure worth a second try rather than an errored row: commit
+/// races between concurrent writers, and the process running out of file
+/// descriptors mid-batch (`os error 24`), which a moment's wait clears as
+/// the other writers close theirs.
+pub(crate) fn transient_lance_error(msg: &str) -> bool {
+    msg.contains("Retryable")
+        || msg.contains("commit conflict")
+        || msg.contains("preempted")
+        || msg.contains("Too many open files")
+        || msg.contains("os error 24")
+}
+
 impl Db {
     /// Open (creating if needed) the Lance database at `dir` and ensure the
     /// fixed-schema tables exist. The chunks table is created lazily once we
@@ -2205,10 +2217,7 @@ impl Db {
                     return Ok(());
                 }
                 Err(msg) => {
-                    let retryable = msg.contains("Retryable")
-                        || msg.contains("commit conflict")
-                        || msg.contains("preempted");
-                    if retryable && attempt < 5 {
+                    if transient_lance_error(&msg) && attempt < 5 {
                         attempt += 1;
                         tokio::time::sleep(std::time::Duration::from_millis(
                             40 * u64::from(attempt),
