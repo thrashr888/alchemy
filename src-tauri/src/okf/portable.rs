@@ -2,7 +2,8 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-fn deterministic_id(value: &str) -> String {
+/// A UUID that is a pure function of its input: the same name on every Mac.
+pub(crate) fn deterministic_id(value: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(value.as_bytes());
     let mut bytes = [0; 16];

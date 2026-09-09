@@ -40,6 +40,7 @@ mod missing_rows;
 mod portable;
 mod portable_deletions;
 pub(crate) use discovery::discover_bundle;
+pub(crate) use portable::deterministic_id;
 mod recovery;
 mod write_recovery;
 

@@ -975,6 +975,13 @@ pub fn build_wiki_index(
     md
 }
 
+/// The id a wiki page gets when it is first written: the same on every Mac
+/// that generates it, so the shared folder sees one page per title rather
+/// than one per machine.
+pub fn wiki_page_id(notebook_id: &str, title: &str) -> String {
+    crate::okf::deterministic_id(&format!("alchemy-wiki-v1\0{notebook_id}\0{title}"))
+}
+
 /// Create-or-refresh a notebook's wiki: the index note plus one page per
 /// entity the registry files here. Upserts by title, write-skipping
 /// unchanged bodies; returns the index note (None when the notebook has
@@ -1032,8 +1039,11 @@ pub async fn upsert_wiki(
                 note
             }
             None => {
+                // The page's id is a function of the notebook and the title,
+                // so two Macs that each generate "Entity: MSFT" mint one
+                // note, not two that then collide in the shared folder.
                 let note = Note {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: wiki_page_id(notebook_id, &title),
                     notebook_id: notebook_id.to_string(),
                     title,
                     content: body,
@@ -1153,6 +1163,23 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wiki_page_ids_are_the_same_on_every_mac() {
+        assert_eq!(
+            wiki_page_id("nb", "Entity: MSFT"),
+            wiki_page_id("nb", "Entity: MSFT")
+        );
+        assert_ne!(
+            wiki_page_id("nb", "Entity: MSFT"),
+            wiki_page_id("nb", "Entity: AAPL")
+        );
+        assert_ne!(
+            wiki_page_id("nb", "Entity: MSFT"),
+            wiki_page_id("other", "Entity: MSFT")
+        );
+        assert!(uuid::Uuid::parse_str(&wiki_page_id("nb", "Notebook index")).is_ok());
+    }
 
     #[test]
     fn web_cache_ttl_paces_budget_across_notebooks() {
