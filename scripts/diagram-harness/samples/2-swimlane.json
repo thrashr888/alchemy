@@ -1,0 +1,29 @@
+{
+  "title": "Support escalation",
+  "direction": "down",
+  "entities": [
+    { "tag": "Lane", "id": "customer", "title": { "text": "Customer" }, "color": "purple" },
+    { "tag": "Shape", "id": "report", "shape": "rectangle", "icon": "mail", "texts": [{ "text": "Report a problem" }], "containerId": "customer" },
+    { "tag": "Shape", "id": "confirm", "shape": "rectangle", "icon": "check-circle", "texts": [{ "text": "Confirm the fix" }], "containerId": "customer" },
+
+    { "tag": "Lane", "id": "support", "title": { "text": "Support" }, "color": "blue" },
+    { "tag": "Shape", "id": "triage", "shape": "rectangle", "icon": "search", "texts": [{ "text": "Triage ticket" }], "containerId": "support" },
+    { "tag": "Shape", "id": "known", "shape": "diamond", "texts": [{ "text": "Known issue?" }], "containerId": "support" },
+    { "tag": "Shape", "id": "reply", "shape": "rectangle", "icon": "message-square", "texts": [{ "text": "Reply with workaround" }], "containerId": "support" },
+
+    { "tag": "Lane", "id": "eng", "title": { "text": "Engineering" }, "color": "green" },
+    { "tag": "Shape", "id": "repro", "shape": "rectangle", "icon": "terminal", "texts": [{ "text": "Reproduce" }], "containerId": "eng" },
+    { "tag": "Shape", "id": "fix", "shape": "rectangle", "icon": "git-pull-request", "texts": [{ "text": "Ship a fix" }], "containerId": "eng" },
+    { "tag": "Shape", "id": "release", "shape": "document", "icon": "package", "texts": [{ "text": "Release notes" }], "containerId": "eng" }
+  ],
+  "connections": [
+    { "from": "report", "to": "triage", "label": "ticket" },
+    { "from": "triage", "to": "known" },
+    { "from": "known", "to": "reply", "label": "yes" },
+    { "from": "known", "to": "repro", "label": "no" },
+    { "from": "repro", "to": "fix" },
+    { "from": "fix", "to": "release" },
+    { "from": "release", "to": "reply", "label": "notify" },
+    { "from": "reply", "to": "confirm" }
+  ]
+}

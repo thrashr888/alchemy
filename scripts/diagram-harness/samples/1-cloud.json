@@ -1,0 +1,36 @@
+{
+  "title": "Storefront on AWS",
+  "direction": "down",
+  "entities": [
+    { "tag": "Group", "id": "clients", "title": { "text": "Clients", "icon": "users" }, "color": "purple" },
+    { "tag": "Icon", "id": "web", "icon": "chrome", "texts": [{ "text": "Web app" }], "containerId": "clients" },
+    { "tag": "Icon", "id": "mobile", "icon": "smartphone", "texts": [{ "text": "iOS app" }], "containerId": "clients" },
+
+    { "tag": "Group", "id": "edge", "title": { "text": "Edge", "icon": "cloudflare" }, "color": "orange" },
+    { "tag": "Icon", "id": "cdn", "icon": "aws-cloudfront", "texts": [{ "text": "CloudFront" }], "containerId": "edge" },
+    { "tag": "Icon", "id": "gateway", "icon": "aws-api-gateway", "texts": [{ "text": "API Gateway" }], "containerId": "edge" },
+
+    { "tag": "Group", "id": "aws", "title": { "text": "AWS us-east-1", "icon": "aws" }, "color": "blue" },
+    { "tag": "Icon", "id": "orders", "icon": "aws-lambda", "texts": [{ "text": "orders-fn" }], "containerId": "aws" },
+    { "tag": "Icon", "id": "catalog", "icon": "aws-lambda", "texts": [{ "text": "catalog-fn" }], "containerId": "aws" },
+    { "tag": "Icon", "id": "dynamo", "icon": "aws-dynamodb", "texts": [{ "text": "orders table" }], "containerId": "aws" },
+    { "tag": "Icon", "id": "rds", "icon": "aws-rds", "texts": [{ "text": "catalog (Postgres)" }], "containerId": "aws" },
+    { "tag": "Icon", "id": "logs", "icon": "aws-cloudwatch", "texts": [{ "text": "CloudWatch" }], "containerId": "aws" },
+
+    { "tag": "Group", "id": "third", "title": { "text": "Third parties" }, "color": "green" },
+    { "tag": "Icon", "id": "stripe", "icon": "stripe", "texts": [{ "text": "Stripe" }], "containerId": "third" },
+    { "tag": "Icon", "id": "sentry", "icon": "sentry", "texts": [{ "text": "Sentry" }], "containerId": "third" }
+  ],
+  "connections": [
+    { "from": "web", "to": "cdn", "label": "HTTPS" },
+    { "from": "mobile", "to": "gateway", "label": "HTTPS" },
+    { "from": "cdn", "to": "gateway", "label": "/api/*" },
+    { "from": "gateway", "to": "orders", "label": "invoke" },
+    { "from": "gateway", "to": "catalog", "label": "invoke" },
+    { "from": "orders", "to": "dynamo", "label": "PutItem" },
+    { "from": "catalog", "to": "rds", "label": "SQL" },
+    { "from": "orders", "to": "stripe", "label": "charge", "lineStyle": "dashed" },
+    { "from": "orders", "to": "logs", "label": "logs", "color": "black", "lineStyle": "dotted" },
+    { "from": "catalog", "to": "sentry", "label": "errors", "lineStyle": "dashed" }
+  ]
+}

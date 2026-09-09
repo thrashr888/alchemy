@@ -1,0 +1,45 @@
+{
+  "title": "Alchemy",
+  "direction": "down",
+  "entities": [
+    { "tag": "Icon", "id": "sources", "icon": "file-text", "texts": [{ "text": "Sources: PDFs, web pages, Apple Notes" }] },
+    { "tag": "Group", "id": "agents", "title": { "text": "Agents", "icon": "bot" }, "color": "purple" },
+    { "tag": "Icon", "id": "claude", "icon": "anthropic", "texts": [{ "text": "Claude Code" }], "containerId": "agents" },
+    { "tag": "Icon", "id": "codex", "icon": "openai", "texts": [{ "text": "Codex" }], "containerId": "agents" },
+
+    { "tag": "Group", "id": "app", "title": { "text": "Alchemy.app — Tauri 2", "icon": "apple" }, "color": "blue" },
+    { "tag": "Group", "id": "webview", "title": { "text": "WKWebView — React 19", "icon": "react" }, "color": "white", "containerId": "app" },
+    { "tag": "Shape", "id": "ui", "shape": "rectangle", "icon": "app-window", "texts": [{ "text": "Studio, Chat, Reader" }], "containerId": "webview" },
+    { "tag": "Shape", "id": "store", "shape": "rectangle", "icon": "layers", "texts": [{ "text": "Zustand store" }], "containerId": "webview" },
+
+    { "tag": "Group", "id": "rust", "title": { "text": "Rust backend", "icon": "rust" }, "color": "orange", "containerId": "app" },
+    { "tag": "Shape", "id": "commands", "shape": "rectangle", "icon": "plug", "texts": [{ "text": "commands.rs (IPC)" }], "containerId": "rust" },
+    { "tag": "Shape", "id": "ingest", "shape": "rectangle", "icon": "download", "texts": [{ "text": "ingest.rs" }], "containerId": "rust" },
+    { "tag": "Shape", "id": "rag", "shape": "rectangle", "icon": "search", "texts": [{ "text": "rag.rs hybrid search" }], "containerId": "rust" },
+    { "tag": "Shape", "id": "mcp", "shape": "rectangle", "icon": "network", "texts": [{ "text": "MCP server 127.0.0.1:41414" }], "containerId": "rust" },
+    { "tag": "Shape", "id": "lance", "shape": "cylinder", "icon": "database", "texts": [{ "text": "LanceDB" }], "color": "green", "containerId": "rust" },
+    { "tag": "Shape", "id": "inference", "shape": "rectangle", "icon": "brain", "texts": [{ "text": "inference/ providers" }], "containerId": "rust" },
+
+    { "tag": "Group", "id": "models", "title": { "text": "On-device models" }, "color": "yellow" },
+    { "tag": "Icon", "id": "ollama", "icon": "ollama", "texts": [{ "text": "Ollama" }], "containerId": "models" },
+    { "tag": "Icon", "id": "fm", "icon": "apple", "texts": [{ "text": "alchemy-fm sidecar (Swift)" }], "containerId": "models" },
+    { "tag": "Icon", "id": "embed", "icon": "microchip", "texts": [{ "text": "Built-in embedder" }], "containerId": "models" }
+  ],
+  "connections": [
+    { "from": "sources", "to": "ingest", "label": "import" },
+    { "from": "ui", "to": "store" },
+    { "from": "store", "to": "commands", "label": "invoke" },
+    { "from": "commands", "to": "rag", "label": "chat" },
+    { "from": "commands", "to": "ingest", "label": "add source" },
+    { "from": "ingest", "to": "lance", "label": "chunks + vectors" },
+    { "from": "rag", "to": "lance", "label": "vector + BM25" },
+    { "from": "rag", "to": "inference", "label": "prompt" },
+    { "from": "ingest", "to": "embed", "label": "embed" },
+    { "from": "inference", "to": "ollama", "label": "HTTP 11434" },
+    { "from": "inference", "to": "fm", "label": "stdio" },
+    { "from": "claude", "to": "mcp", "label": "streamable HTTP", "lineStyle": "dashed" },
+    { "from": "codex", "to": "mcp", "label": "streamable HTTP", "lineStyle": "dashed" },
+    { "from": "mcp", "to": "lance", "label": "CRUD + search" },
+    { "from": "commands", "to": "ui", "label": "chat://token", "lineStyle": "dotted", "color": "black" }
+  ]
+}

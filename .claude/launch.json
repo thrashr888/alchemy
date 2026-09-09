@@ -19,6 +19,17 @@
         "8791"
       ],
       "port": 8791
+    },
+    {
+      "name": "diagrams",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "--config",
+        "scripts/diagram-harness/vite.config.ts"
+      ],
+      "port": 8792
     }
   ]
 }

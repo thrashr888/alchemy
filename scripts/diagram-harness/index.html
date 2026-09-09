@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" data-status="pending">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Architecture diagram harness</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        padding: 24px 32px 48px;
+        font: 13px/1.5 -apple-system, system-ui, sans-serif;
+        color: #1a1a1a;
+        background: #f4f4f2;
+      }
+      h1 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      p.lede {
+        margin: 0 0 24px;
+        color: #666;
+      }
+      section {
+        margin-bottom: 40px;
+      }
+      section h2 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 8px;
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+      }
+      section h2 small {
+        font-weight: 400;
+        color: #777;
+      }
+      .frame {
+        display: inline-block;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        overflow: hidden;
+        background: #fff;
+      }
+      .warnings {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        color: #8a5a00;
+      }
+      .error {
+        color: #b3261e;
+        white-space: pre-wrap;
+      }
+      details {
+        margin-top: 8px;
+      }
+      details pre {
+        max-height: 320px;
+        overflow: auto;
+        font: 11px/1.45 ui-monospace, SF Mono, Menlo, monospace;
+        background: #fff;
+        border: 1px solid #e3e3e3;
+        border-radius: 6px;
+        padding: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Architecture diagrams</h1>
+    <p class="lede">
+      Three hand-written documents through the app's own pipeline: placement
+      (<code>src/lib/diagramLayout.ts</code>), <code>@eraserlabs/resolve</code>, and
+      <code>@eraserlabs/render</code> in the render frame. No Chromium, no network.
+    </p>
+    <main id="samples"></main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
