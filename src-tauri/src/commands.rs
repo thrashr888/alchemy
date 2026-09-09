@@ -8646,6 +8646,7 @@ async fn try_tool_route(
                 None,
                 None,
                 None,
+                None,
             )
             .await
             {
@@ -10807,6 +10808,12 @@ pub async fn convert_note_to_source(
 /// previous run's output for scheduled reports — included so the model can
 /// report what changed since, instead of apologizing that it can't.
 #[allow(clippy::too_many_arguments)]
+/// Where a generation's progress lines go (a cold model load, an agent
+/// CLI retry): the queue turns them into the running note's detail; other
+/// callers pass None and the lines stay on stderr.
+pub(crate) type StepSink = Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>;
+
+#[allow(clippy::too_many_arguments)]
 async fn generate_content(
     state: &AppState,
     app: Option<&AppHandle>,
@@ -10820,6 +10827,7 @@ async fn generate_content(
     // (the queue's per-job stream) instead of the window-global
     // `artifact://token`.
     stream_note: Option<&str>,
+    steps: StepSink,
 ) -> anyhow::Result<(String, String)> {
     // Instruction base by kind precedence: "template:<id>" resolves the
     // template at RUN time (a schedule tracks the template's current body,
@@ -10960,12 +10968,24 @@ async fn generate_content(
             "## Previous report run (for change tracking — not a source)\n\n{clipped}\n\n"
         ));
     }
+    // A relationship map draws the cast; the Registry already knows part of
+    // it (docs/RFC-registry.md). Its cards for this notebook ride along as
+    // a context block — name, kind, one line — so the entities line up with
+    // cards the person can inspect, never as a source of new facts.
+    if kind == "relationship" {
+        let source_ids: Vec<&str> = sources.iter().map(|s| s.id.as_str()).collect();
+        let block = registry_context_block(state, notebook_id, &source_ids).await;
+        if !block.is_empty() {
+            corpus.push_str(&block);
+        }
+    }
     let persona = {
         let ai = state.ai.read().await.clone();
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let mut content = run_generation_chat(state, app, &messages, provider, stream_note).await?;
+    let mut content =
+        run_generation_chat(state, app, &messages, provider, stream_note, steps.clone()).await?;
 
     // A twenty-minute episode is ~3,000 words, and chat models routinely fade
     // early. Continue the episode (dropping any premature outro) until it's
@@ -10979,7 +10999,9 @@ async fn generate_content(
             }
             let trimmed = strip_outro(&content);
             let messages = rag::build_audio_continuation(&instruction, &corpus, &persona, &trimmed);
-            let more = run_generation_chat(state, app, &messages, provider, stream_note).await?;
+            let more =
+                run_generation_chat(state, app, &messages, provider, stream_note, steps.clone())
+                    .await?;
             // A tiny continuation means the model considers the episode done.
             if more.split_whitespace().count() < 100 {
                 break;
@@ -10992,12 +11014,13 @@ async fn generate_content(
 
 /// One artifact-generation chat call: stream tokens to the UI when a window
 /// is listening, and record model throughput either way.
-async fn run_generation_chat(
+pub(crate) async fn run_generation_chat(
     state: &AppState,
     app: Option<&AppHandle>,
     messages: &[crate::ai::ChatTurn],
     provider: Option<&str>,
     stream_note: Option<&str>,
+    steps: StepSink,
 ) -> anyhow::Result<String> {
     let emit_tok = {
         let note_id = stream_note.map(|s| s.to_string());
@@ -11062,9 +11085,16 @@ async fn run_generation_chat(
             (None, Some(app)) => {
                 let app = app.clone();
                 let emit_tok = emit_tok.clone();
-                ai.chat_role_stream(crate::inference::Role::Generate, messages, move |tok| {
-                    emit_tok(&app, tok)
-                })
+                ai.chat_role_stream_steps(
+                    crate::inference::Role::Generate,
+                    messages,
+                    move |tok| emit_tok(&app, tok),
+                    |step| {
+                        if let Some(sink) = &steps {
+                            sink(step.label);
+                        }
+                    },
+                )
                 .await?
             }
             (None, None) => ai.chat(messages).await?,
@@ -11185,7 +11215,11 @@ pub(crate) async fn generate_content_for_job(
     app: &AppHandle,
     job: &crate::genqueue::GenJob,
     cancel: &tokio_util::sync::CancellationToken,
+    steps: impl Fn(crate::inference::Step<'_>) + Send + Sync + 'static,
 ) -> anyhow::Result<(String, String)> {
+    let sink: StepSink = Some(std::sync::Arc::new(move |label: &str| {
+        steps(crate::inference::Step::new(label))
+    }));
     let (title, content) = generate_content(
         state,
         Some(app),
@@ -11196,6 +11230,7 @@ pub(crate) async fn generate_content_for_job(
         None,
         job.provider.as_deref(),
         Some(&job.note_id),
+        sink,
     )
     .await?;
     if job.kind == "audio_overview" {
@@ -11289,7 +11324,7 @@ pub async fn generate_artifact(
     let prompt = prompt.unwrap_or_default();
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None, None, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, source_ids.as_deref(), None, None, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -11353,7 +11388,7 @@ pub async fn rebuild_note(
 ) -> Result<Note, String> {
     let cancel = state.begin_generation(&format!("artifact:{}", window.label()));
     let produced = tokio::select! {
-        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None, None, None) => Some(e(r)?),
+        r = generate_content(&state, Some(&app), &notebook_id, &kind, &prompt, None, None, None, None, None) => Some(e(r)?),
         _ = cancel.cancelled() => None,
     };
     let (title, content) = match produced {
@@ -12019,6 +12054,7 @@ pub async fn generate_notebook_summary(
         "custom",
         "Write a 2-4 sentence plain-prose overview of what these sources collectively cover. \
          No lists, headings, or preamble — just the overview.",
+        None,
         None,
         None,
         None,
@@ -12950,6 +12986,10 @@ pub(crate) fn note_kind_from_label(label: &str) -> String {
         "mind_map",
         "uml",
         "architecture",
+        "process",
+        "data_model",
+        "relationship",
+        "journey",
         "data_table",
         "round_table",
         "problems",
@@ -13495,6 +13535,63 @@ pub(crate) fn card_passage_text(card: &crate::models::RegistryCard) -> String {
         out.push_str(&format!(" Note: {}.", card.note.trim()));
     }
     out
+}
+
+/// The Registry cards filed against this notebook's selected sources, as a
+/// context block for a generator — one line per card: name, kind, and the
+/// card's own note or first fact. Dismissed cards and rejected filings stay
+/// out; a proposed filing counts, since the suggester saw the name in these
+/// documents. Empty when the notebook has no cards. Capped so a corpus-wide
+/// Registry cannot crowd the sources out of the window.
+pub(crate) async fn registry_context_block(
+    state: &AppState,
+    notebook_id: &str,
+    source_ids: &[&str],
+) -> String {
+    const CAP: usize = 40;
+    let cards = state.db.list_registry().await.unwrap_or_default();
+    let mut lines: Vec<String> = cards
+        .iter()
+        .filter(|c| c.origin != "dismissed")
+        .filter(|c| {
+            c.attachments.iter().any(|a| {
+                a.status != "rejected"
+                    && a.notebook_id == notebook_id
+                    && source_ids.contains(&a.source_id.as_str())
+            })
+        })
+        .take(CAP)
+        .map(|c| {
+            let about = c
+                .note
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    c.facts
+                        .iter()
+                        .find(|f| !f.value.trim().is_empty())
+                        .map(|f| format!("{}: {}", f.label.trim(), f.value.trim()))
+                })
+                .unwrap_or_default();
+            let about: String = about.chars().take(160).collect();
+            if about.is_empty() {
+                format!("- {} ({})", c.name.trim(), c.kind)
+            } else {
+                format!("- {} ({}) — {about}", c.name.trim(), c.kind)
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    lines.sort();
+    format!(
+        "## Registry cards for this notebook (names the Registry already holds — use these \
+         spellings; not a source of facts)\n\n{}\n\n",
+        lines.join("\n")
+    )
 }
 
 /// Registry cards matching a question, as meta citations (RFC-registry ×

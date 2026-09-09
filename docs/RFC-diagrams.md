@@ -1,12 +1,15 @@
-# RFC: Architecture diagrams with eraser-diagrams
+# RFC: Diagrams with eraser-diagrams
 
-Studio draws one kind of diagram today: `uml`, Mermaid source the model
-writes and the WebView renders. Mermaid is right for class, sequence,
+Studio drew one kind of diagram before this: `uml`, Mermaid source the
+model writes and the WebView renders. Mermaid is right for class, sequence,
 state, and ER diagrams and wrong for the diagram people actually want from
 a corpus about a system — boxes with the technology's icon on them, grouped
 by tier or host, with labeled lines. This RFC evaluates
 [eraser-diagrams](https://github.com/eraserlabs/eraser-diagrams) (MIT) for
-that job and ships a prototype: a new `architecture` artifact.
+that job, ships an `architecture` artifact on it, and then four more kinds
+on the same pipeline: `process` (swimlanes), `data_model` (tables and
+cardinalities), `relationship` (who relates to whom), and `journey`
+(stages, touchpoints, pain points). Mind maps stay native.
 
 **Verdict:** yes, in the WebView, with one piece of our own. eraser's
 resolve and render packages run in WKWebView with no Chromium and no
@@ -101,10 +104,116 @@ width like `uml`. No canvas, no foreignObject, no Chromium.
   suggests the fix (did-you-mean on tags, icons, enums).
 - The note stores the document verbatim, so it is also a valid input to
   the upstream CLI — portable, per the sovereignty invariant.
-- Harness: `scripts/diagram-harness/` renders three hand-written samples
-  through the real pipeline (`pnpm exec vite --config
+- Harness: `scripts/diagram-harness/` renders the hand-written samples —
+  three architecture documents and one per other kind, each naming its
+  `kind` — through the real pipeline (`pnpm exec vite --config
   scripts/diagram-harness/vite.config.ts`, then
   `node scripts/diagram-harness/snap.mjs` to refresh `docs/images/`).
+
+## The other four kinds
+
+One document contract, five vocabularies. `src/lib/diagramDoc.ts` owns the
+kinds: each admits the stock tags its prompt teaches (`KIND_TAGS`) and the
+parser rejects an entity or connection tagged outside that set, naming the
+entity and the kind's own tags — a data model cannot quietly become an
+architecture diagram, and the error is a fix, not a shrug. `rag.rs` carries
+the same lists as `DIAGRAM_TAGS`; a vitest holds the two in lockstep and a
+Rust test checks every prompt actually names its tags. The viewer is one
+component (`DiagramView`, keyed by kind), the print sheet one
+(`PrintDiagram`), and the note-viewer switches route every kind in
+`DIAGRAM_KINDS` to them. Studio: Process map and Journey map sit in the
+documents family; Data model and Relationship map beside Architecture in
+learning. MCP's `generate`, the chat router, and report schedules take the
+kinds through `ARTIFACT_KINDS` with no further wiring.
+
+Each kind asks something different of the layout (`layoutHints` in
+`eraserDiagram.ts`, flags on `LayoutNode`):
+
+**Process map** — `Pool`/`Lane` with BPMN `Activity`, `Event`, `Gateway`,
+scene direction `down`. A lane holding steps runs them across the flow and
+is a `lane`: every lane in the scene, siblings or lanes in different pools,
+ranks its steps together and shares one set of columns, so a step's column
+is its place in the whole process (the "global step alignment across
+nested lanes" the first cut left out). A pool holding lanes stacks them as
+rows in document order — a level with lanes in it never ranks them side by
+side because no edge happened to order them. The prompt asks for 2–6
+lanes, 6–20 steps, one start event and at least one end, gateways with one
+labeled edge per outcome. An `Event`'s caption is wider than its 56px disc
+and centered under it; pass 2 shifts the body inside its box by the ink's
+left overhang so the caption never runs over a lane's title band.
+
+![Process map](images/diagrams-process.png)
+
+**Data model** — `DatabaseTable` (label, `fields` of `name`/`type`/`meta`,
+exactly the stock schema) in optional `Group`s, direction `right`. The
+prompt asks for the label form of a relationship — `"n..1"` on the
+referencing side — and `prepareForRender` turns a label that reads as a
+cardinality (`1..n`, `n..n`, `one-to-many`, `1:n`) into a
+`DatabaseRelationship` with the matching `relType`, so eraser's crow's feet
+draw from what the sources said. The stored note is untouched; the
+derivation happens at render time. Tables size themselves; the estimate is
+a row per field.
+
+![Data model](images/diagrams-data_model.png)
+
+**Relationship map** — `Icon`/`Shape` for people, organizations, works,
+places, in `Group`s per era, team, or domain; every edge directed and
+labeled with the relation the sources state; `lineStyle: dashed` for a
+contested one. For this kind only, `generate_content` appends a "Registry
+cards for this notebook" block to the corpus — name, kind, one line, for
+cards filed against the selected sources (`registry_context_block`) — so
+the entities line up with cards the person can already inspect. It is
+labeled as spellings, not facts.
+
+![Relationship map](images/diagrams-relationship.png)
+
+**Journey map** — stages as columns, direction `right`: one `Group` per
+stage with `sequence` set, so its members stack top to bottom in document
+order (touchpoint `Shape`s first, then pain-point `Textbox`es), and the
+level aligns column tops (`align: "start"`) rather than centering columns
+of unequal height. Optional `Event`s at the root open and close the
+journey. The stages are `Group`s rather than `Lane`s on purpose: eraser
+draws a Lane's title as a vertical band with `writing-mode: sideways-lr`,
+and six stage names read sideways are not a journey map.
+
+![Journey map](images/diagrams-journey.png)
+
+## Rough edges from the first in-app run, and what changed
+
+- **Opened at 100% and cropped.** `PanCanvas` takes the scene's size
+  (`fit`) and opens with the whole thing in view — scaled down to the
+  pane, never past 100% — and its reset control returns to that view.
+  Mind maps and UML pass nothing and keep their old behavior.
+- **A label on a line, a label on a group title.** eraser sets a
+  connection's label at its path's midpoint; on a tight rank gap that
+  midpoint lands on the next box or on a group's title chip. The layout
+  now gives every rank boundary that a labeled edge crosses extra room
+  (`labelRoom`), and counts the run a path makes through a container's
+  padding and title on the way to a nested box, so the midpoint stays in
+  the gap. Diagrams got taller for it; a label clear of a title is worth
+  that. What is still eraser's: labels on long horizontal segments of a
+  fan-out (three labels in a row under one box) and a label wrapped
+  mid-word on a short segment.
+- **The scene card narrower than its content.** Not reproducible in the
+  harness (Chrome): every sample's ink sits inside its scene box, measured.
+  See the in-app section for what the WebView does.
+- **A first attempt that failed and retried without a word.** The retry
+  was already there and already bounded: `AgentCli::chat_stream_steps`
+  runs a CLI once more when the first attempt died inside 20 seconds with
+  no output. It was silent because `crate::note!` is stderr-only — nothing
+  reached the log or the note. Now the retry records a `warn` in the
+  diagnostics log with the reason, and the queue runs generation through
+  `chat_stream_steps`, so an engine's progress lines ("First attempt
+  failed (…); retrying once…", "Loading … into memory…") become the
+  running note's status detail in Studio. A job parked as `waiting` (engine
+  down) and a job that fails both record to the log too, with the job,
+  kind, notebook, and engine.
+- **`path`/`fs`/`url`/`source-map-js` externalized warnings.** postcss,
+  which `@eraserlabs/resolve` uses to parse the template library's CSS,
+  names the four at module top level for the source-map and file paths it
+  never takes here. `src/lib/nodeShims.ts` stands in for them (every export
+  throws if reached) via a Vite alias; the harness renders every sample
+  with a clean console.
 
 ## Risks
 
@@ -132,7 +241,6 @@ width like `uml`. No canvas, no foreignObject, no Chromium.
 
 ## Not in this RFC
 
-BPMN tags (`Activity`/`Event`/`Gateway`), `DatabaseTable` (an ER-shaped
-kind eraser could also draw), the fetch-and-cache icon fallback, a dark
-palette, global step alignment across nested lanes, and letting a user
-edit the document in place with a re-render.
+The fetch-and-cache icon fallback, a dark palette, `Legend` and `Badge`,
+personas as rows on a journey map (one persona per map for now), and
+letting a user edit the document in place with a re-render.

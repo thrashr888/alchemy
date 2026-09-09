@@ -147,3 +147,151 @@ describe("estimateSize", () => {
     expect(box.width).toBeLessThanOrEqual(260);
   });
 });
+
+describe("placeNodes for the diagram kinds", () => {
+  const lane = (id: string, containerId?: string): LayoutNode => ({
+    ...group(id, containerId),
+    flow: "right",
+    band: true,
+    lane: true,
+  });
+
+  it("keeps one global step order across lanes nested in different pools", () => {
+    // Two pools, two lanes each; the process snakes through all four.
+    const nodes = [
+      { ...group("p1"), band: true },
+      lane("a", "p1"),
+      lane("b", "p1"),
+      { ...group("p2"), band: true },
+      lane("c", "p2"),
+      lane("d", "p2"),
+      leaf("s1", "a"),
+      leaf("s2", "c"),
+      leaf("s3", "b"),
+      leaf("s4", "d"),
+      leaf("s5", "a"),
+    ];
+    const edges = [
+      { from: "s1", to: "s2" },
+      { from: "s2", to: "s3" },
+      { from: "s3", to: "s4" },
+      { from: "s4", to: "s5" },
+    ];
+    const placed = placeNodes(nodes, edges, { direction: "down" });
+    const xs = ["s1", "s2", "s3", "s4", "s5"].map((id) => (placed.boxes.get(id) as Box).x);
+    // Strictly increasing columns, each step one column past the last —
+    // even across the pool boundary — and lanes are all the same width.
+    for (let i = 1; i < xs.length; i += 1) expect(xs[i]).toBeGreaterThan(xs[i - 1]);
+    const widths = ["a", "b", "c", "d"].map((id) => (placed.boxes.get(id) as Box).width);
+    expect(new Set(widths).size).toBe(1);
+    // Members stay inside their lane, lanes inside their pool.
+    for (const [step, holder] of [
+      ["s1", "a"],
+      ["s2", "c"],
+      ["s3", "b"],
+      ["s4", "d"],
+      ["a", "p1"],
+      ["d", "p2"],
+    ])
+      expect(inside(placed.boxes.get(step) as Box, placed.boxes.get(holder) as Box)).toBe(true);
+    // A band title sits on the left: the first step starts past the inset.
+    const a = placed.boxes.get("a") as Box;
+    expect((placed.boxes.get("s1") as Box).x - a.x).toBeGreaterThanOrEqual(40 + 28);
+  });
+
+  it("stacks a sequence container's members in input order, edges or not", () => {
+    const stage: LayoutNode = { ...group("stage"), flow: "down", sequence: true };
+    const nodes = [stage, leaf("touch", "stage"), leaf("pain", "stage"), leaf("need", "stage")];
+    const placed = placeNodes(nodes, [], { direction: "right" });
+    const [t, p, n] = ["touch", "pain", "need"].map((id) => placed.boxes.get(id) as Box);
+    expect(t.x).toBe(p.x);
+    expect(p.x).toBe(n.x);
+    expect(t.y).toBeLessThan(p.y);
+    expect(p.y).toBeLessThan(n.y);
+    // Two stages side by side as columns, the journey running left to right.
+    const two = [
+      stage,
+      { ...group("next"), flow: "down" as const, sequence: true },
+      leaf("t1", "stage"),
+      leaf("t2", "next"),
+    ];
+    const cols = placeNodes(two, [{ from: "t1", to: "t2" }], { direction: "right" });
+    expect((cols.boxes.get("next") as Box).x).toBeGreaterThan((cols.boxes.get("stage") as Box).x);
+    expect((cols.boxes.get("next") as Box).y).toBe((cols.boxes.get("stage") as Box).y);
+    // Columns of unequal height center by default and share a top edge
+    // when asked to.
+    const uneven = [...two, leaf("t3", "next")];
+    const centered = placeNodes(uneven, [{ from: "t1", to: "t2" }], { direction: "right" });
+    const flush = placeNodes(uneven, [{ from: "t1", to: "t2" }], {
+      direction: "right",
+      align: "start",
+    });
+    expect((centered.boxes.get("stage") as Box).y).toBeGreaterThan(
+      (centered.boxes.get("next") as Box).y,
+    );
+    expect((flush.boxes.get("stage") as Box).y).toBe((flush.boxes.get("next") as Box).y);
+  });
+
+  it("widens a rank gap that a labeled connection crosses", () => {
+    const nodes = () => [leaf("a"), leaf("b"), leaf("c")];
+    const chain = (labeled: boolean) => [
+      { from: "a", to: "b", labeled },
+      { from: "b", to: "c" },
+    ];
+    const plain = placeNodes(nodes(), chain(false), { direction: "down", gap: 40, labelRoom: 30 });
+    const roomy = placeNodes(nodes(), chain(true), { direction: "down", gap: 40, labelRoom: 30 });
+    const gapBetween = (p: typeof plain, from: string, to: string) =>
+      (p.boxes.get(to) as Box).y - ((p.boxes.get(from) as Box).y + (p.boxes.get(from) as Box).height);
+    expect(gapBetween(plain, "a", "b")).toBe(40);
+    expect(gapBetween(roomy, "a", "b")).toBe(70);
+    // The unlabeled boundary keeps the plain gap.
+    expect(gapBetween(roomy, "b", "c")).toBe(40);
+    expect(roomy.height).toBe(plain.height + 30);
+    // A labeled edge into a box inside a group needs the group's padding
+    // and title band too, or the label lands on the title.
+    const into = placeNodes(
+      [leaf("src"), group("g"), leaf("in", "g")],
+      [{ from: "src", to: "in", labeled: true }],
+      { direction: "down", gap: 40, labelRoom: 30, padding: 20, titleInset: 30 },
+    );
+    expect(gapBetween(into, "src", "g")).toBe(40 + 30 + 20 + 30);
+    // Leaving a group costs its padding; a band title on the left is not
+    // in a downward path's way.
+    const across = placeNodes(
+      [group("a"), leaf("x", "a"), { ...group("b"), band: true }, leaf("y", "b")],
+      [{ from: "x", to: "y", labeled: true }],
+      { direction: "down", gap: 40, labelRoom: 30, padding: 20, titleInset: 30 },
+    );
+    expect(gapBetween(across, "a", "b")).toBe(40 + 30 + 20 + 20);
+    // Shared lane columns get the same room.
+    const lanes = [lane("l1"), lane("l2"), leaf("s1", "l1"), leaf("s2", "l2"), leaf("s3", "l1")];
+    const laneEdges = [
+      { from: "s1", to: "s2", labeled: true },
+      { from: "s2", to: "s3" },
+    ];
+    const cols = placeNodes(lanes, laneEdges, { direction: "down", gap: 40, labelRoom: 30 });
+    const s = (id: string) => cols.boxes.get(id) as Box;
+    expect(s("s2").x - (s("s1").x + s("s1").width)).toBe(70);
+    expect(s("s3").x - (s("s2").x + s("s2").width)).toBe(40);
+  });
+});
+
+describe("estimateSize for the BPMN and table tags", () => {
+  it("gives events and gateways a disc plus caption, tables a row per field", () => {
+    const bare = estimateSize({ tag: "Event" });
+    expect(bare).toEqual({ width: 56, height: 56 });
+    const captioned = estimateSize({ tag: "Gateway", texts: [{ text: "Known issue?" }] });
+    expect(captioned.height).toBe(80);
+    expect(captioned.width).toBeGreaterThan(56);
+    const table = estimateSize({
+      tag: "DatabaseTable",
+      label: "orders",
+      fields: [{ name: "id", type: "uuid", meta: "PK" }, { name: "customer_id", type: "uuid" }],
+    });
+    expect(table.height).toBe(40 + 24 * 2);
+    expect(table.width).toBeGreaterThanOrEqual(160);
+    const activity = estimateSize({ tag: "Activity", icon: "search", texts: [{ text: "Triage" }] });
+    expect(activity.width).toBeGreaterThanOrEqual(120);
+    expect(activity.height).toBe(56);
+  });
+});

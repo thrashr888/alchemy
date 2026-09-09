@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { PrintPortal } from "./printExport";
@@ -210,11 +210,39 @@ export function MindMap({ content }: { content: string }) {
 
 /** Infinite-canvas panning and zooming (Photoshop-style): drag with a grab
  *  cursor or two-finger scroll to move; pinch (ctrl+wheel on macOS) or the
- *  corner buttons to zoom around the cursor. Shared with the UML viewer. */
-export function PanCanvas({ children }: { children: React.ReactNode }) {
+ *  corner buttons to zoom around the cursor. Shared with the UML and eraser
+ *  diagram viewers. Given the content's size (`fit`), it opens with the
+ *  whole thing in view — scaled down to fit the pane, never past 100% —
+ *  and the reset control returns to that view. */
+export function PanCanvas({
+  children,
+  fit,
+}: {
+  children: React.ReactNode;
+  fit?: { width: number; height: number };
+}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+
+  /** The view that shows all of `fit` inside the pane, centered. */
+  const fitted = () => {
+    const r = viewportRef.current?.getBoundingClientRect();
+    if (!fit || !r || !fit.width || !fit.height) return { x: 0, y: 0, scale: 1 };
+    const scale = Math.max(0.25, Math.min(1, r.width / fit.width, r.height / fit.height));
+    return {
+      scale,
+      x: Math.max(0, (r.width - fit.width * scale) / 2),
+      y: Math.max(0, (r.height - fit.height * scale) / 2),
+    };
+  };
+  const fitKey = fit ? `${fit.width}x${fit.height}` : "";
+  // A new scene (or the first) opens fitted; a pane resize does not yank a
+  // view the person has already moved.
+  useLayoutEffect(() => {
+    if (fit) setView(fitted());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey]);
 
   /** Zoom by a factor keeping the given viewport point fixed. */
   const zoomAt = (factor: number, cx: number, cy: number) => {
@@ -317,9 +345,9 @@ export function PanCanvas({ children }: { children: React.ReactNode }) {
         </button>
         <button
           type="button"
-          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
-          title="Reset to 100%"
-          aria-label="Reset zoom to 100%"
+          onClick={() => setView(fit ? fitted() : { x: 0, y: 0, scale: 1 })}
+          title={fit ? "Fit to view" : "Reset to 100%"}
+          aria-label={fit ? "Fit the diagram to the view" : "Reset zoom to 100%"}
           className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
         >
           <RotateCcw className="h-3.5 w-3.5" />

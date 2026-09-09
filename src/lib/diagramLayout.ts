@@ -13,10 +13,13 @@
  * them (longest path through the lifted edges, cycles broken in DFS order)
  * and stacked as bands along the main axis. Swimlanes are the exception
  * that proves the rule: a Lane runs its steps across the scene's flow, and
- * sibling lanes share one set of columns so a step's column is its place in
- * the whole process, not just in its lane. The renderer measures what it
- * drew and the caller runs placement again with real sizes, so the sizes
- * given here are floors and estimates, never the truth.
+ * every lane in the scene — siblings, or lanes nested in different pools —
+ * shares one set of columns, so a step's column is its place in the whole
+ * process, not just in its lane. A rank that a labeled connection leaves
+ * gets extra room, since eraser places the label mid-line and a tight gap
+ * puts it on the next box or a group's title. The renderer measures what
+ * it drew and the caller runs placement again with real sizes, so the
+ * sizes given here are floors and estimates, never the truth.
  */
 
 export interface LayoutNode {
@@ -26,8 +29,18 @@ export interface LayoutNode {
   container: boolean;
   /** Containers only: the axis their members flow along, when it differs
    *  from the scene's. A swimlane stacks with its siblings but runs its
-   *  steps the other way, with its title as a band on the left edge. */
+   *  steps the other way. */
   flow?: "down" | "right";
+  /** Containers only: the title is a vertical band on the left edge (a
+   *  Lane or Pool) rather than a chip along the top (a Group). */
+  band?: boolean;
+  /** Containers only: a swimlane whose steps share columns with every
+   *  other lane in the scene, at any depth — global step order. */
+  lane?: boolean;
+  /** Containers only: members stack along the flow in input order, edges
+   *  or no edges — a journey stage listing its touchpoint, then its pain
+   *  points. A level holding lanes behaves this way on its own. */
+  sequence?: boolean;
   /** Estimated or measured size. A container's is its minimum. */
   width: number;
   height: number;
@@ -36,6 +49,8 @@ export interface LayoutNode {
 export interface LayoutEdge {
   from: string;
   to: string;
+  /** Carries a label eraser will place mid-line. */
+  labeled?: boolean;
 }
 
 export interface Box {
@@ -57,6 +72,12 @@ export interface LayoutOptions {
   titleInset?: number;
   /** Margin around the whole scene. */
   margin?: number;
+  /** Extra room after a rank that a labeled connection leaves. */
+  labelRoom?: number;
+  /** How a rank's members line up across the main axis: centered on the
+   *  widest rank (the default), or flush with its start — columns of a
+   *  journey map share a top edge. */
+  align?: "center" | "start";
 }
 
 export interface Placement {
@@ -103,7 +124,11 @@ function ancestorAt(
  * from each node in input order. Every node gets a rank; a cycle just
  * loses the edge that closes it.
  */
-function rank(ids: string[], edges: [string, string][]): Map<string, number> {
+/** A lifted edge: endpoints at one level, and the room its label needs
+ *  between ranks (0 when unlabeled). */
+type Edge = [from: string, to: string, room: number];
+
+function rank(ids: string[], edges: Edge[]): Map<string, number> {
   const out = new Map<string, string[]>(ids.map((id) => [id, []]));
   for (const [from, to] of edges) {
     if (from !== to && out.has(from) && out.has(to)) out.get(from)?.push(to);
@@ -139,11 +164,7 @@ function rank(ids: string[], edges: [string, string][]): Map<string, number> {
 }
 
 /** Ranks → ordered layers, each sorted by the mean position of its predecessors. */
-function layers(
-  ids: string[],
-  ranks: Map<string, number>,
-  edges: [string, string][],
-): string[][] {
+function layers(ids: string[], ranks: Map<string, number>, edges: Edge[]): string[][] {
   const depth = Math.max(0, ...ids.map((id) => ranks.get(id) ?? 0));
   const result: string[][] = Array.from({ length: depth + 1 }, () => []);
   for (const id of ids) result[ranks.get(id) ?? 0].push(id);
@@ -174,6 +195,8 @@ export function placeNodes(
   const padding = options.padding ?? 28;
   const titleInset = options.titleInset ?? 40;
   const margin = options.margin ?? 24;
+  const labelRoom = options.labelRoom ?? 28;
+  const align = options.align ?? "center";
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
   // Parent of each node: the named container when it exists and is one,
@@ -209,12 +232,96 @@ export function placeNodes(
   /** A container's title takes room on one edge: below a Group's chip, or
    *  right of a Lane's vertical band. */
   const inset = (node: LayoutNode) =>
-    node.flow ? { left: titleInset, top: 0 } : { left: 0, top: titleInset };
+    node.band ? { left: titleInset, top: 0 } : { left: 0, top: titleInset };
 
-  const ensureSize = (member: LayoutNode, direction: Direction, shared?: SharedRanks) => {
+  /** Where a rank's band starts along the main axis, given each band's
+   *  extent and the label room each boundary needs. */
+  const offsetsOf = (bands: number[], roomAfter: number[]) => {
+    const offsets: number[] = [];
+    let cursor = 0;
+    bands.forEach((b, r) => {
+      offsets[r] = cursor;
+      cursor += (b ?? 0) + gap + (roomAfter[r] ?? 0);
+    });
+    const last = bands.length - 1;
+    const length = last < 0 ? 0 : offsets[last] + (bands[last] ?? 0);
+    return { offsets, length };
+  };
+
+  /** The label room each rank boundary needs: after rank r, the most any
+   *  labeled edge running from rank ≤ r to rank > r (or back) asks for. */
+  const labeledBoundaries = (ranks: Map<string, number>, ranked: Edge[]) => {
+    const after: number[] = [];
+    for (const [from, to, room] of ranked) {
+      if (!room) continue;
+      const a = ranks.get(from);
+      const b = ranks.get(to);
+      if (a === undefined || b === undefined || a === b) continue;
+      for (let r = Math.min(a, b); r < Math.max(a, b); r += 1)
+        after[r] = Math.max(after[r] ?? 0, room);
+    }
+    return after;
+  };
+
+  /** Room for an edge's label between ranks. eraser sets the label at the
+   *  path's midpoint; when an end sits inside a container at this level,
+   *  the path runs on through that container's padding — and, entering,
+   *  its title when the title is on that edge — before it reaches the box,
+   *  plus whatever sideways jog the router adds, and the midpoint drifts
+   *  out of the gap onto the title unless the gap grows by as much. The
+   *  whole run is counted, not the difference: a label clear of a title is
+   *  worth a taller diagram. */
+  const labelRoomFor = (edge: LayoutEdge, from: string, to: string, down: boolean) => {
+    if (!edge.labeled) return 0;
+    // A path leaves a container by its far edge, which holds no title;
+    // it enters the next by the near edge, which may.
+    const outward = edge.from === from ? 0 : padding;
+    const inward = () => {
+      if (edge.to === to) return 0;
+      const holder = byId.get(to);
+      const band = holder ? inset(holder) : { left: 0, top: 0 };
+      return padding + (down ? band.top : band.left);
+    };
+    return labelRoom + outward + inward();
+  };
+
+  // Every lane in the scene — siblings or lanes in different pools — ranks
+  // its steps together and gives each rank one column, so a step's column
+  // is its place in the whole process. Computed once, on first use.
+  let laneColumns: SharedRanks | undefined;
+  const sharedLanes = (): SharedRanks => {
+    if (laneColumns) return laneColumns;
+    const lanes = nodes.filter((n) => n.container && n.lane);
+    const laneIds = new Set(lanes.map((l) => l.id));
+    const steps = nodes.filter((n) => laneIds.has(parentOf.get(n.id) ?? ""));
+    const laneFlow = lanes[0]?.flow ?? options.direction;
+    for (const step of steps) ensureSize(step, laneFlow);
+    const stepIds = new Set(steps.map((s) => s.id));
+    const stepEdges = edges
+      .filter((e) => stepIds.has(e.from) && stepIds.has(e.to))
+      .map((e): Edge => [e.from, e.to, e.labeled ? labelRoom : 0]);
+    const ranks = rank([...stepIds], stepEdges);
+    const laneDown = laneFlow === "down";
+    const band: number[] = [];
+    for (const step of steps) {
+      const r = ranks.get(step.id) ?? 0;
+      const d = size.get(step.id) ?? { width: 0, height: 0 };
+      band[r] = Math.max(band[r] ?? 0, laneDown ? d.height : d.width);
+    }
+    for (let r = 0; r < band.length; r += 1) band[r] ??= 0;
+    const { offsets, length } = offsetsOf(band, labeledBoundaries(ranks, stepEdges));
+    laneColumns = { ranks, offsets, length };
+    return laneColumns;
+  };
+
+  const ensureSize = (member: LayoutNode, direction: Direction) => {
     if (size.has(member.id)) return;
     if (member.container) {
-      const inner = layoutLevel(member.id, member.flow ?? direction, shared);
+      const inner = layoutLevel(
+        member.id,
+        member.flow ?? direction,
+        member.lane ? sharedLanes() : undefined,
+      );
       const band = inset(member);
       size.set(member.id, {
         width: Math.max(member.width, inner.width + padding * 2 + band.left),
@@ -237,49 +344,23 @@ export function placeNodes(
       return down ? d.width : d.height;
     };
 
-    // Sibling swimlanes: rank every step across all of them at once and
-    // give each rank one column, so the lanes line up.
-    const lanes = members.filter((m) => m.container && (m.flow ?? direction) !== direction);
-    let laneColumns: SharedRanks | undefined;
-    if (lanes.length) {
-      const laneIds = new Set(lanes.map((l) => l.id));
-      const steps = nodes.filter((n) => laneIds.has(parentOf.get(n.id) ?? ""));
-      const laneFlow = lanes[0].flow ?? direction;
-      for (const step of steps) ensureSize(step, laneFlow);
-      const stepIds = new Set(steps.map((s) => s.id));
-      const stepEdges = edges
-        .filter((e) => stepIds.has(e.from) && stepIds.has(e.to))
-        .map((e): [string, string] => [e.from, e.to]);
-      const ranks = rank([...stepIds], stepEdges);
-      const laneDown = laneFlow === "down";
-      const band: number[] = [];
-      for (const step of steps) {
-        const r = ranks.get(step.id) ?? 0;
-        const d = size.get(step.id) ?? { width: 0, height: 0 };
-        band[r] = Math.max(band[r] ?? 0, laneDown ? d.height : d.width);
-      }
-      const offsets: number[] = [];
-      let cursor = 0;
-      band.forEach((b, r) => {
-        offsets[r] = cursor;
-        cursor += (b ?? 0) + gap;
-      });
-      laneColumns = { ranks, offsets, length: Math.max(0, cursor - gap) };
-    }
-
-    for (const member of members)
-      ensureSize(member, direction, laneColumns && lanes.includes(member) ? laneColumns : undefined);
+    for (const member of members) ensureSize(member, direction);
 
     const ids = members.map((m) => m.id);
-    const lifted: [string, string][] = [];
+    const lifted: Edge[] = [];
     for (const edge of edges) {
       const from = ancestorAt(edge.from, top, parentOf);
       const to = ancestorAt(edge.to, top, parentOf);
-      if (from && to && from !== to) lifted.push([from, to]);
+      if (from && to && from !== to) lifted.push([from, to, labelRoomFor(edge, from, to, down)]);
     }
+    // Swimlanes stack, one band each, in the order the document lists
+    // them — never side by side because no edge happened to rank them.
+    const sequence = byId.get(top ?? "")?.sequence || members.some((m) => m.lane);
     const ranks = shared
       ? new Map(ids.map((id) => [id, shared.ranks.get(id) ?? 0]))
-      : rank(ids, lifted);
+      : sequence
+        ? new Map(ids.map((id, i) => [id, i]))
+        : rank(ids, lifted);
     const ordered = layers(ids, ranks, lifted);
     const rel = new Map<string, Box>();
     // Along the main axis each rank is one band; across it, the rank's
@@ -288,12 +369,14 @@ export function placeNodes(
       (layer) => layer.reduce((sum, id) => sum + across(id), 0) + gap * Math.max(0, layer.length - 1),
     );
     const maxAcross = Math.max(0, ...bandAcross);
-    let mainCursor = 0;
+    const bandAlong = ordered.map((layer) => Math.max(0, ...layer.map(along)));
+    const { offsets, length } = shared
+      ? shared
+      : offsetsOf(bandAlong, labeledBoundaries(ranks, lifted));
     ordered.forEach((layer, i) => {
-      if (shared) mainCursor = shared.offsets[i] ?? mainCursor;
       if (!layer.length) return;
-      const bandAlong = Math.max(0, ...layer.map(along));
-      let crossCursor = (maxAcross - bandAcross[i]) / 2;
+      const mainCursor = offsets[i] ?? 0;
+      let crossCursor = align === "start" ? 0 : (maxAcross - bandAcross[i]) / 2;
       for (const id of layer) {
         const { width, height } = size.get(id) ?? { width: 0, height: 0 };
         rel.set(id, {
@@ -304,13 +387,11 @@ export function placeNodes(
         });
         crossCursor += across(id) + gap;
       }
-      mainCursor += bandAlong + gap;
     });
-    const mainTotal = shared ? shared.length : Math.max(0, mainCursor - gap);
     const level: Level = {
       rel,
-      width: down ? maxAcross : mainTotal,
-      height: down ? mainTotal : maxAcross,
+      width: down ? maxAcross : length,
+      height: down ? length : maxAcross,
     };
     levels.set(top, level);
     return level;
@@ -374,6 +455,30 @@ export function estimateSize(entity: {
     case "Lane":
     case "Pool":
       return { width: 160, height: 80 };
+    case "Activity":
+      return {
+        width: Math.min(260, Math.max(120, longest * 7.5 + 48 + (entity.icon ? 30 : 0))),
+        height: 56 + 18 * Math.max(0, lines - 1),
+      };
+    case "Event":
+    case "Gateway":
+      // A 56px disc or diamond with its caption hanging below.
+      return { width: Math.max(56, longest * 7 + 8), height: 56 + (texts.length ? 24 : 0) };
+    case "DatabaseTable": {
+      const fields = Array.isArray(entity.fields) ? entity.fields : [];
+      const rows = fields.map((f) =>
+        f && typeof f === "object"
+          ? ["name", "type", "meta"]
+              .map((k) => (k in f ? String((f as Record<string, unknown>)[k] ?? "") : ""))
+              .join("  ")
+          : "",
+      );
+      const widest = Math.max(String(entity.label ?? "").length + 4, ...rows.map((r) => r.length));
+      return {
+        width: Math.min(360, Math.max(160, widest * 7.2 + 32)),
+        height: 40 + 24 * fields.length,
+      };
+    }
     case "Shape": {
       const tall = entity.shape === "cylinder" || entity.shape === "diamond";
       const iconRoom = entity.icon ? 36 : 0;

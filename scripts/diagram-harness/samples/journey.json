@@ -1,0 +1,34 @@
+{
+  "kind": "journey",
+  "title": "First-time buyer: a laptop stand",
+  "direction": "right",
+  "entities": [
+    { "tag": "Event", "id": "start", "texts": [{ "text": "Neck hurts" }], "color": "green" },
+    { "tag": "Group", "id": "discover", "title": { "text": "1. Discover" }, "color": "blue" },
+    { "tag": "Shape", "id": "search", "shape": "rectangle", "icon": "search", "texts": [{ "text": "Searches for stands" }], "containerId": "discover" },
+    { "tag": "Shape", "id": "reads", "shape": "rectangle", "icon": "file-text", "texts": [{ "text": "Reads a roundup" }], "containerId": "discover" },
+    { "tag": "Textbox", "id": "p1", "text": "Overwhelmed: 40 near-identical stands", "color": "#b3261e", "containerId": "discover" },
+
+    { "tag": "Group", "id": "compare", "title": { "text": "2. Compare" }, "color": "blue" },
+    { "tag": "Shape", "id": "shortlist", "shape": "rectangle", "icon": "list", "texts": [{ "text": "Shortlists three" }], "containerId": "compare" },
+    { "tag": "Textbox", "id": "p2", "text": "Need: height range, in one place", "color": "#8a5a00", "containerId": "compare" },
+    { "tag": "Textbox", "id": "p3", "text": "Pain: prices hidden behind sign-in", "color": "#b3261e", "containerId": "compare" },
+
+    { "tag": "Group", "id": "buy", "title": { "text": "3. Buy" }, "color": "blue" },
+    { "tag": "Shape", "id": "checkout", "shape": "rectangle", "icon": "shopping-cart", "texts": [{ "text": "Checks out" }], "containerId": "buy" },
+    { "tag": "Textbox", "id": "p4", "text": "Relieved: free returns", "color": "#1b6e3a", "containerId": "buy" },
+
+    { "tag": "Group", "id": "use", "title": { "text": "4. Use" }, "color": "blue" },
+    { "tag": "Shape", "id": "unbox", "shape": "rectangle", "icon": "package", "texts": [{ "text": "Sets it up" }], "containerId": "use" },
+    { "tag": "Shape", "id": "adjust", "shape": "rectangle", "icon": "settings", "texts": [{ "text": "Adjusts the height" }], "containerId": "use" },
+    { "tag": "Textbox", "id": "p5", "text": "Goal: eye level, no wobble", "color": "#8a5a00", "containerId": "use" },
+    { "tag": "Event", "id": "end", "texts": [{ "text": "Recommends it" }], "color": "red" }
+  ],
+  "connections": [
+    { "from": "start", "to": "search" },
+    { "from": "search", "to": "shortlist", "label": "picks a style" },
+    { "from": "shortlist", "to": "checkout" },
+    { "from": "checkout", "to": "unbox", "label": "two days" },
+    { "from": "unbox", "to": "end" }
+  ]
+}

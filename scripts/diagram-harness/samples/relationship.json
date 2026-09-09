@@ -1,0 +1,37 @@
+{
+  "kind": "relationship",
+  "title": "Alchemy's lineage",
+  "direction": "right",
+  "entities": [
+    { "tag": "Group", "id": "hellenistic", "title": { "text": "Hellenistic Egypt, 1st–4th c." }, "color": "yellow" },
+    { "tag": "Icon", "id": "hermes", "icon": "sparkles", "texts": [{ "text": "Hermes Trismegistus" }], "containerId": "hellenistic" },
+    { "tag": "Shape", "id": "tablet", "shape": "document", "texts": [{ "text": "Emerald Tablet" }], "color": "green", "containerId": "hellenistic" },
+    { "tag": "Icon", "id": "maria", "icon": "user", "texts": [{ "text": "Maria the Jewess" }], "containerId": "hellenistic" },
+    { "tag": "Icon", "id": "zosimos", "icon": "user", "texts": [{ "text": "Zosimos of Panopolis" }], "containerId": "hellenistic" },
+
+    { "tag": "Group", "id": "islamic", "title": { "text": "Islamic world, 8th–11th c." }, "color": "blue" },
+    { "tag": "Icon", "id": "jabir", "icon": "user", "texts": [{ "text": "Jābir ibn Ḥayyān" }], "containerId": "islamic" },
+    { "tag": "Icon", "id": "razi", "icon": "user", "texts": [{ "text": "al-Rāzī" }], "containerId": "islamic" },
+    { "tag": "Shape", "id": "secretum", "shape": "document", "texts": [{ "text": "Secretum Secretorum" }], "color": "green", "containerId": "islamic" },
+
+    { "tag": "Group", "id": "latin", "title": { "text": "Latin Europe, 12th–17th c." }, "color": "purple" },
+    { "tag": "Icon", "id": "toledo", "icon": "building", "texts": [{ "text": "Toledo translators" }], "containerId": "latin" },
+    { "tag": "Icon", "id": "bacon", "icon": "user", "texts": [{ "text": "Roger Bacon" }], "containerId": "latin" },
+    { "tag": "Icon", "id": "paracelsus", "icon": "user", "texts": [{ "text": "Paracelsus" }], "containerId": "latin" },
+    { "tag": "Icon", "id": "newton", "icon": "user", "texts": [{ "text": "Isaac Newton" }], "containerId": "latin" },
+    { "tag": "Textbox", "id": "n1", "text": "Attributions to Hermes are legendary" }
+  ],
+  "connections": [
+    { "from": "hermes", "to": "tablet", "label": "attributed", "lineStyle": "dashed" },
+    { "from": "maria", "to": "zosimos", "label": "cited by" },
+    { "from": "zosimos", "to": "jabir", "label": "influenced" },
+    { "from": "tablet", "to": "jabir", "label": "transmitted" },
+    { "from": "jabir", "to": "razi", "label": "succeeded by" },
+    { "from": "jabir", "to": "secretum", "label": "attributed", "lineStyle": "dashed" },
+    { "from": "secretum", "to": "toledo", "label": "translated" },
+    { "from": "razi", "to": "toledo", "label": "translated" },
+    { "from": "toledo", "to": "bacon", "label": "read by" },
+    { "from": "bacon", "to": "paracelsus", "label": "influenced" },
+    { "from": "paracelsus", "to": "newton", "label": "influenced" }
+  ]
+}

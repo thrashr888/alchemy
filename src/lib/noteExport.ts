@@ -1,3 +1,4 @@
+import { isDiagramKind } from "./diagramDoc";
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
@@ -41,7 +42,7 @@ export function exportTargets(n: Note): ExportTarget[] {
     n.kind === "infographic" ||
     n.kind === "mind_map" ||
     n.kind === "uml" ||
-    n.kind === "architecture"
+    isDiagramKind(n.kind)
   )
     return [
       { label: "Export PNG", format: "png", ext: "png", name: "PNG image" },

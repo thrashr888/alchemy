@@ -8,7 +8,8 @@ import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
-import { ArchitectureDiagram } from "./ArchitectureDiagram";
+import { DiagramView } from "./DiagramView";
+import { isDiagramKind } from "@/lib/diagramDoc";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { LazyRichEditor } from "./LazyRichEditor";
@@ -136,8 +137,8 @@ export function StudioNoteViewer({
                 <MindMap content={live.content} />
               ) : live.kind === "uml" ? (
                 <UmlDiagram content={live.content} />
-              ) : live.kind === "architecture" ? (
-                <ArchitectureDiagram content={live.content} />
+              ) : isDiagramKind(live.kind) ? (
+                <DiagramView kind={live.kind} content={live.content} />
               ) : live.kind === "flashcards" ? (
                 <Flashcards content={live.content} noteId={live.id} />
               ) : live.kind === "quiz" ? (

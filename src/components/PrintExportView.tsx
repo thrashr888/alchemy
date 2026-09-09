@@ -6,7 +6,8 @@ import { PrintPortal } from "./printExport";
 import { parseInfographic, PrintInfographic } from "./Infographic";
 import { PrintMindMap } from "./MindMap";
 import { PrintUml } from "./UmlDiagram";
-import { PrintArchitecture } from "./ArchitectureDiagram";
+import { PrintDiagram } from "./DiagramView";
+import { isDiagramKind } from "@/lib/diagramDoc";
 import { parseDeck, PrintDeck } from "./SlideDeck";
 import { parseCards, PrintCards } from "./Flashcards";
 
@@ -37,7 +38,7 @@ export function PrintExportView({
   // before they answer ships a blank page. The sheet says when it has
   // settled (diagram or error) and the timeout keeps a wedged render from
   // leaving the window open forever.
-  const asyncSheet = note?.kind === "uml" || note?.kind === "architecture";
+  const asyncSheet = note?.kind === "uml" || (!!note && isDiagramKind(note.kind));
   const [sheetReady, setSheetReady] = useState(false);
   useEffect(() => {
     if (!asyncSheet) return;
@@ -65,9 +66,13 @@ export function PrintExportView({
     return (
       <PrintUml content={note.content} onReady={() => setSheetReady(true)} />
     );
-  if (note.kind === "architecture")
+  if (isDiagramKind(note.kind))
     return (
-      <PrintArchitecture content={note.content} onReady={() => setSheetReady(true)} />
+      <PrintDiagram
+        kind={note.kind}
+        content={note.content}
+        onReady={() => setSheetReady(true)}
+      />
     );
   if (deck) return <PrintDeck deck={deck} />;
   if (note.kind === "flashcards") {

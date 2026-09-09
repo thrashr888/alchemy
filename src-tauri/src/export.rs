@@ -106,7 +106,10 @@ pub async fn export_note_file(
             // Mind maps and diagrams scale to fit one sheet, so rasterize
             // them wider to keep node labels crisp; posters get poster
             // width.
-            let width = if matches!(note.kind.as_str(), "mind_map" | "uml" | "architecture") {
+            let width = if note.kind == "mind_map"
+                || note.kind == "uml"
+                || crate::rag::is_diagram_kind(&note.kind)
+            {
                 2200
             } else {
                 1600

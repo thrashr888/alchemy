@@ -1,0 +1,58 @@
+{
+  "kind": "data_model",
+  "title": "Alchemy LanceDB tables",
+  "direction": "right",
+  "entities": [
+    { "tag": "Group", "id": "corpus", "title": { "text": "Corpus" }, "color": "blue" },
+    { "tag": "DatabaseTable", "id": "notebooks", "label": "notebooks", "fields": [
+      { "name": "id", "type": "string", "meta": "PK" },
+      { "name": "title", "type": "string" },
+      { "name": "color", "type": "string" },
+      { "name": "status", "type": "string" },
+      { "name": "okf_path", "type": "string", "meta": "nullable" }
+    ], "containerId": "corpus" },
+    { "tag": "DatabaseTable", "id": "sources", "label": "sources", "fields": [
+      { "name": "id", "type": "string", "meta": "PK" },
+      { "name": "notebook_id", "type": "string", "meta": "FK" },
+      { "name": "title", "type": "string" },
+      { "name": "url", "type": "string" },
+      { "name": "content", "type": "text" },
+      { "name": "tags", "type": "string" }
+    ], "containerId": "corpus" },
+    { "tag": "DatabaseTable", "id": "notes", "label": "notes", "fields": [
+      { "name": "id", "type": "string", "meta": "PK" },
+      { "name": "notebook_id", "type": "string", "meta": "FK" },
+      { "name": "kind", "type": "string" },
+      { "name": "content", "type": "text" },
+      { "name": "status", "type": "string" }
+    ], "containerId": "corpus" },
+    { "tag": "Group", "id": "index", "title": { "text": "Index (lazy, once the embedder answers)" }, "color": "green" },
+    { "tag": "DatabaseTable", "id": "chunks", "label": "chunks", "fields": [
+      { "name": "id", "type": "string", "meta": "PK" },
+      { "name": "source_id", "type": "string", "meta": "FK" },
+      { "name": "notebook_id", "type": "string", "meta": "FK" },
+      { "name": "text", "type": "text", "meta": "BM25" },
+      { "name": "vector", "type": "float32[]", "meta": "ANN" }
+    ], "containerId": "index" },
+    { "tag": "DatabaseTable", "id": "routes", "label": "routes", "fields": [
+      { "name": "source_id", "type": "string", "meta": "FK" },
+      { "name": "route", "type": "string" },
+      { "name": "vector", "type": "float32[]" }
+    ], "containerId": "index" },
+    { "tag": "DatabaseTable", "id": "registry", "label": "registry_cards", "fields": [
+      { "name": "id", "type": "string", "meta": "PK" },
+      { "name": "kind", "type": "string" },
+      { "name": "name", "type": "string" },
+      { "name": "identifiers", "type": "string" },
+      { "name": "attachments", "type": "json" }
+    ] },
+    { "tag": "Textbox", "id": "n1", "text": "One table per entity, filtered by notebook_id — not relational" }
+  ],
+  "connections": [
+    { "from": "sources", "to": "notebooks", "label": "n..1", "fromField": "notebook_id", "toField": "id" },
+    { "from": "notes", "to": "notebooks", "label": "n..1" },
+    { "from": "chunks", "to": "sources", "label": "n..1", "fromField": "source_id", "toField": "id" },
+    { "from": "routes", "to": "sources", "label": "n..1" },
+    { "from": "registry", "to": "sources", "label": "n..n", "fromField": "attachments" }
+  ]
+}

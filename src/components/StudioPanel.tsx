@@ -873,12 +873,14 @@ export function StudioPanel() {
                     {n.status === "generating" ? (
                       <span className="pointer-events-auto flex items-center gap-1.5 text-micro text-subtle-foreground">
                         {genStatus[n.id]?.status === "waiting"
-                          ? "Waiting for the model engine…"
+                          ? genStatus[n.id]?.detail || "Waiting for the model engine…"
                           : n.kind === "audio_overview" && audioProgress
                             ? `Voicing ${audioProgress.done}/${audioProgress.total}`
                             : genProgress[n.id]
                               ? `Generating — ${(genProgress[n.id] / 1000).toFixed(1)}k chars`
-                              : "Queued"}
+                              : genStatus[n.id]?.status === "running"
+                                ? genStatus[n.id]?.detail || "Generating"
+                                : "Queued"}
                         <button
                           type="button"
                           onClick={() => void api.cancelGenerationJob(n.id)}

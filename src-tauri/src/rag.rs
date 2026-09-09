@@ -640,6 +640,10 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "mind_map",
     "uml",
     "architecture",
+    "process",
+    "data_model",
+    "relationship",
+    "journey",
     "problems",
     "evidence",
     "prd",
@@ -648,11 +652,50 @@ pub const ARTIFACT_KINDS: &[&str] = &[
     "skill",
 ];
 
-/// The icons an architecture diagram may name: the curated set vendored
-/// under `src/assets/diagrams/icons` (docs/RFC-diagrams.md), so a diagram
+/// The artifact kinds eraser-diagrams renders (docs/RFC-diagrams.md):
+/// one JSON document contract, five vocabularies.
+pub const DIAGRAM_KINDS: &[&str] = &[
+    "architecture",
+    "process",
+    "data_model",
+    "relationship",
+    "journey",
+];
+
+pub fn is_diagram_kind(kind: &str) -> bool {
+    DIAGRAM_KINDS.contains(&kind)
+}
+
+/// The stock eraser tags each diagram kind's prompt teaches — entity tags,
+/// then connection tags. `src/lib/diagramDoc.ts` admits exactly these per
+/// kind and a frontend test holds the two in lockstep; a Rust test checks
+/// every prompt actually names its tags.
+#[cfg_attr(not(test), allow(dead_code))] // a contract the frontend reads, not code
+pub const DIAGRAM_TAGS: &[(&str, &str, &str)] = &[
+    (
+        "architecture",
+        "Group Lane Pool Icon Shape Textbox",
+        "Relationship",
+    ),
+    (
+        "process",
+        "Pool Lane Activity Event Gateway Textbox",
+        "Relationship",
+    ),
+    (
+        "data_model",
+        "Group DatabaseTable Textbox",
+        "Relationship DatabaseRelationship",
+    ),
+    ("relationship", "Group Icon Shape Textbox", "Relationship"),
+    ("journey", "Group Shape Textbox Event", "Relationship"),
+];
+
+/// The icons a diagram may name: the curated set vendored under
+/// `src/assets/diagrams/icons` (docs/RFC-diagrams.md), so a diagram
 /// renders with no network. A frontend test holds this list and that
 /// directory to the same contents.
-pub const ARCHITECTURE_ICONS: &str = "activity alert-triangle android ansible anthropic \
+pub const DIAGRAM_ICONS: &str = "activity alert-triangle android ansible anthropic \
 app-window apple arrow-right auth0 aws aws-api-gateway aws-cloudfront aws-cloudwatch \
 aws-dynamodb aws-ec2 aws-lambda aws-rds azure bar-chart bell binary bot box brain building \
 bun calendar chart check-circle chrome clock cloud cloudflare code cog component cpu \
@@ -669,6 +712,22 @@ redis refresh-cw repeat rust safari search send sentry server server-cog server-
 settings share-2 shield shopping-cart slack smartphone sparkles sqlite stripe supabase \
 swift table tailwind-css tensorflow terminal terraform timer truck typescript ubuntu upload \
 user users vercel vite volume-2 weaviate webhook wifi windows workflow x-circle zap";
+
+/// The tail every diagram prompt shares: placement is the renderer's, the
+/// icon vocabulary is closed, and the answer is the JSON object alone.
+fn diagram_envelope(icons: bool) -> String {
+    let icons = if icons {
+        format!(
+            "Icons come from this set only — omit the icon when nothing fits: {DIAGRAM_ICONS}.\n"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{icons}Never write x, y, width, or height; placement is automatic. \
+         Output ONLY the JSON object: no code fences, no headings, no prose before or after."
+    )
+}
 
 /// The architecture prompt: the eraser-diagrams document contract
 /// (docs/RFC-diagrams.md) compact enough to carry in a system prompt, with
@@ -693,18 +752,160 @@ fn architecture_instruction() -> String {
          \"shape\" is rectangle, cylinder (a store), diamond (a decision), hexagon, circle, or \
          document; \"icon\" is optional.\n\
          - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Syncs every 5 min\"}}.\n\
-         Connections: {{\"from\":\"api\",\"to\":\"db\",\"label\":\"SQL\"}}, optionally with \
-         \"lineStyle\": \"dashed\" | \"dotted\", \"startArrowhead\": \"arrow\", \"endArrowhead\": \
-         \"triangle\" | \"arrow\" | \"dot\" | null, \"color\": <palette>.\n\
+         Connections (tag Relationship, the default): {{\"from\":\"api\",\"to\":\"db\",\"label\":\"SQL\"}}, \
+         optionally with \"lineStyle\": \"dashed\" | \"dotted\", \"startArrowhead\": \"arrow\", \
+         \"endArrowhead\": \"triangle\" | \"arrow\" | \"dot\" | null, \"color\": <palette>.\n\
          Colors are palette tokens only: white yellow green blue purple red orange black.\n\
-         Icons come from this set only — omit the icon when nothing fits: {icons}.\n\
-         Never write x, y, width, or height; placement is automatic.\n\
          Rules: 6-16 entities in 1-5 groups. Name components exactly as the sources name them; \
          never invent a part the corpus does not describe, and leave out anything you would have \
          to guess at. Label every connection with the protocol, data, or action that travels it, \
-         in 4 words or fewer. Output ONLY the JSON object: no code fences, no headings, no prose \
-         before or after.",
-        icons = ARCHITECTURE_ICONS
+         in 4 words or fewer.\n{tail}",
+        tail = diagram_envelope(true)
+    )
+}
+
+/// The process-map prompt: BPMN swimlanes. Lanes are the actors, steps
+/// flow left to right through them, and the layout keeps one global step
+/// order across every lane.
+fn process_instruction() -> String {
+    format!(
+        "Draw the process the sources below describe as ONE swimlane process map, written as a \
+         single JSON document for a diagram renderer. The document:\n\
+         {{\"title\": \"<3-6 words>\", \"direction\": \"down\", \"entities\": [...], \
+         \"connections\": [...]}}\n\
+         Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
+         Lane or Pool):\n\
+         - Lane — one swimlane per actor, team, system, or stage: \
+         {{\"tag\":\"Lane\",\"id\":\"support\",\"title\":{{\"text\":\"Support\"}},\"color\":\"blue\"}}. \
+         Pool — an optional outer band holding the lanes of one organization: \
+         {{\"tag\":\"Pool\",\"id\":\"acme\",\"title\":{{\"text\":\"Acme\"}}}}, with each Lane's \
+         \"containerId\" set to it.\n\
+         - Activity — one step of work, in a lane: \
+         {{\"tag\":\"Activity\",\"id\":\"triage\",\"icon\":\"search\",\"texts\":[{{\"text\":\"Triage the ticket\"}}],\"containerId\":\"support\"}}. \
+         \"icon\" is optional.\n\
+         - Event — where the process starts or ends, in a lane: \
+         {{\"tag\":\"Event\",\"id\":\"start\",\"texts\":[{{\"text\":\"Ticket opened\"}}],\"color\":\"green\",\"containerId\":\"customer\"}}; \
+         give end events \"color\":\"red\".\n\
+         - Gateway — a decision, in a lane: \
+         {{\"tag\":\"Gateway\",\"id\":\"known\",\"texts\":[{{\"text\":\"Known issue?\"}}],\"containerId\":\"support\"}}, \
+         with one outgoing connection per outcome, labeled (\"yes\", \"no\", \"approved\"…).\n\
+         - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"SLA: 4 hours\"}}.\n\
+         Connections (tag Relationship, the default) carry the flow from each step to the next: \
+         {{\"from\":\"triage\",\"to\":\"known\"}}, with a \"label\" only where it says which \
+         outcome or what is handed over, in 3 words or fewer.\n\
+         Colors are palette tokens only: white yellow green blue purple red orange black.\n\
+         Rules: 2-6 lanes, 6-20 steps, exactly one start Event and at least one end Event. Name \
+         actors and steps exactly as the sources name them, in the order the sources give; never \
+         invent a step the corpus does not describe. Every step except the end events has an \
+         outgoing connection; every step except the start has an incoming one.\n{tail}",
+        tail = diagram_envelope(true)
+    )
+}
+
+/// The data-model prompt: tables with typed columns and keys, relationships
+/// with cardinality. The renderer turns a cardinality label into crow's
+/// feet, so the model writes what the sources say and nothing more.
+fn data_model_instruction() -> String {
+    format!(
+        "Draw the data model the sources below describe as ONE entity-relationship diagram, \
+         written as a single JSON document for a diagram renderer. The document:\n\
+         {{\"title\": \"<3-6 words>\", \"direction\": \"right\", \"entities\": [...], \
+         \"connections\": [...]}}\n\
+         Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
+         Group):\n\
+         - DatabaseTable — one table, collection, or record type with its columns: \
+         {{\"tag\":\"DatabaseTable\",\"id\":\"orders\",\"label\":\"orders\",\"fields\":[\
+         {{\"name\":\"id\",\"type\":\"uuid\",\"meta\":\"PK\"}},\
+         {{\"name\":\"customer_id\",\"type\":\"uuid\",\"meta\":\"FK\"}},\
+         {{\"name\":\"total\",\"type\":\"decimal\"}}],\"color\":\"blue\"}}. \
+         \"meta\" marks keys and constraints: PK, FK, unique, index, nullable.\n\
+         - Group — an optional schema, service, or store boundary: \
+         {{\"tag\":\"Group\",\"id\":\"billing\",\"title\":{{\"text\":\"Billing\"}}}}.\n\
+         - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Soft-deleted rows keep their id\"}}.\n\
+         Connections (tag Relationship, the default) join a referencing table to the table it \
+         references, labeled with the cardinality read from the referencing side: \
+         {{\"from\":\"orders\",\"to\":\"customers\",\"label\":\"n..1\"}} — use \"1..1\", \"1..n\", \
+         \"n..1\", or \"n..n\". Add \"fromField\" and \"toField\" naming the columns when the \
+         sources name them. (A DatabaseRelationship tag with \"relType\" one-to-many etc. is the \
+         long form; the label form is enough.)\n\
+         Colors are palette tokens only: white yellow green blue purple red orange black.\n\
+         Rules: 3-14 tables. Name tables and columns exactly as the sources name them, with the \
+         types the sources give; never invent a table or column the corpus does not describe, \
+         and leave out anything you would have to guess at. Every table connects to at least \
+         one other unless the sources show it standing alone.\n{tail}",
+        tail = diagram_envelope(false)
+    )
+}
+
+/// The relationship-map prompt: who and what relate to whom, and how.
+/// When the notebook has Registry cards they ride in as extra context
+/// (`generate_content`), so the entities line up with what the Registry
+/// already knows.
+fn relationship_instruction() -> String {
+    format!(
+        "Draw the people, organizations, projects, works, and places in the sources below as \
+         ONE relationship map, written as a single JSON document for a diagram renderer. The \
+         document:\n\
+         {{\"title\": \"<3-6 words>\", \"direction\": \"down\" | \"right\", \
+         \"entities\": [...], \"connections\": [...]}}\n\
+         Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
+         Group):\n\
+         - Group — an era, team, school, family, or domain the members share: \
+         {{\"tag\":\"Group\",\"id\":\"alexandria\",\"title\":{{\"text\":\"Alexandria, 1st-3rd c.\"}},\"color\":\"yellow\"}}.\n\
+         - Icon — an entity drawn as a glyph with a caption: \
+         {{\"tag\":\"Icon\",\"id\":\"zosimos\",\"icon\":\"user\",\"texts\":[{{\"text\":\"Zosimos of Panopolis\"}}],\"containerId\":\"alexandria\"}}. \
+         Use user for a person, users for a group of people, building for an organization, \
+         file-text or book-like icons for a work, home or globe for a place, folder for a project.\n\
+         - Shape — an entity as a box when it needs more than a caption: \
+         {{\"tag\":\"Shape\",\"id\":\"emerald\",\"shape\":\"document\",\"texts\":[{{\"text\":\"Emerald Tablet\"}}],\"color\":\"green\"}}. \
+         \"shape\" is rectangle, document (a work), hexagon, circle, or ellipse.\n\
+         - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Dates are disputed\"}}.\n\
+         Connections (tag Relationship, the default) are directed and always labeled with the \
+         relation the sources state, in 3 words or fewer: \
+         {{\"from\":\"jabir\",\"to\":\"zosimos\",\"label\":\"cited\"}} — founded, wrote, cited, \
+         taught, succeeded, acquired, influenced, married, funded, opposed. Add \"lineStyle\": \
+         \"dashed\" for a relation the sources call uncertain.\n\
+         Colors are palette tokens only: white yellow green blue purple red orange black.\n\
+         Rules: 6-24 entities, grouped where the sources group them. Name every entity exactly as \
+         the sources (and the Registry cards, when listed) name it; never invent an entity or a \
+         relation the corpus does not state, and leave out anything you would have to guess at.\n\
+         {tail}",
+        tail = diagram_envelope(true)
+    )
+}
+
+/// The journey-map prompt: stages as columns, each with its touchpoints
+/// and the pain points and emotions under them.
+fn journey_instruction() -> String {
+    format!(
+        "Draw the experience the sources below describe as ONE journey map, written as a single \
+         JSON document for a diagram renderer. The document:\n\
+         {{\"title\": \"<3-6 words>\", \"direction\": \"right\", \"entities\": [...], \
+         \"connections\": [...]}}\n\
+         Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
+         Group):\n\
+         - Group — one stage of the journey, in order; stages become columns: \
+         {{\"tag\":\"Group\",\"id\":\"discover\",\"title\":{{\"text\":\"1. Discover\"}},\"color\":\"blue\"}}.\n\
+         - Shape — a touchpoint: what the person does or meets in that stage, listed FIRST inside \
+         its stage: \
+         {{\"tag\":\"Shape\",\"id\":\"search\",\"shape\":\"rectangle\",\"icon\":\"search\",\"texts\":[{{\"text\":\"Searches for a stand\"}}],\"containerId\":\"discover\"}}. \
+         \"icon\" is optional; \"shape\" is rectangle, document, or circle.\n\
+         - Textbox — a pain point, need, or emotion in that stage, listed AFTER its touchpoints: \
+         {{\"tag\":\"Textbox\",\"id\":\"p1\",\"text\":\"Frustrated: prices hidden\",\"color\":\"#b3261e\",\"containerId\":\"discover\"}}. \
+         Start the text with the feeling or the word Pain, Need, or Goal.\n\
+         - Event — an optional start or end outside any stage: \
+         {{\"tag\":\"Event\",\"id\":\"start\",\"texts\":[{{\"text\":\"Needs a stand\"}}],\"color\":\"green\"}}.\n\
+         Connections (tag Relationship, the default) run from each stage's main touchpoint to the \
+         next stage's, and from a start Event to the first: {{\"from\":\"search\",\"to\":\"compare\"}}, \
+         with a \"label\" only where the sources name the trigger, in 3 words or fewer. Name a \
+         persona in the title (\"First-time buyer: …\") when the sources describe more than one, \
+         and draw the journey of that one persona.\n\
+         Colors are palette tokens only for shapes and groups: white yellow green blue purple red \
+         orange black.\n\
+         Rules: 4-8 stages, 1-3 touchpoints and 1-2 textboxes per stage. Name stages and \
+         touchpoints as the sources name them; never invent a step, feeling, or pain point the \
+         corpus does not describe.\n{tail}",
+        tail = diagram_envelope(true)
     )
 }
 
@@ -979,6 +1180,26 @@ pub fn artifact_spec(kind: &str) -> Option<(&'static str, &'static str)> {
             static INSTRUCTION: std::sync::LazyLock<String> =
                 std::sync::LazyLock::new(architecture_instruction);
             Some(("Architecture Diagram", INSTRUCTION.as_str()))
+        }
+        "process" => {
+            static INSTRUCTION: std::sync::LazyLock<String> =
+                std::sync::LazyLock::new(process_instruction);
+            Some(("Process Map", INSTRUCTION.as_str()))
+        }
+        "data_model" => {
+            static INSTRUCTION: std::sync::LazyLock<String> =
+                std::sync::LazyLock::new(data_model_instruction);
+            Some(("Data Model", INSTRUCTION.as_str()))
+        }
+        "relationship" => {
+            static INSTRUCTION: std::sync::LazyLock<String> =
+                std::sync::LazyLock::new(relationship_instruction);
+            Some(("Relationship Map", INSTRUCTION.as_str()))
+        }
+        "journey" => {
+            static INSTRUCTION: std::sync::LazyLock<String> =
+                std::sync::LazyLock::new(journey_instruction);
+            Some(("Journey Map", INSTRUCTION.as_str()))
         }
         "problems" => Some((
             "Problems",
@@ -1565,6 +1786,32 @@ mod tests {
         // absolute no-ellipsis check would be wrong — assert the truncated
         // form specifically is absent).
         assert!(!full.contains(&format!("{}…", "a".repeat(500))));
+    }
+
+    /// Every diagram prompt names each tag its kind admits (DIAGRAM_TAGS is
+    /// what the frontend parser trusts), and every diagram kind is a real
+    /// artifact kind.
+    #[test]
+    fn diagram_prompts_teach_their_tags() {
+        assert_eq!(DIAGRAM_TAGS.len(), DIAGRAM_KINDS.len());
+        for (kind, entities, connections) in DIAGRAM_TAGS {
+            assert!(is_diagram_kind(kind));
+            assert!(
+                ARTIFACT_KINDS.contains(kind),
+                "{kind} is not an artifact kind"
+            );
+            let (_, prompt) = artifact_spec(kind).expect("diagram kind has a spec");
+            for tag in entities.split(' ').chain(connections.split(' ')) {
+                assert!(
+                    prompt.contains(tag),
+                    "the {kind} prompt never mentions the {tag} tag it admits"
+                );
+            }
+            assert!(prompt.contains("Output ONLY the JSON object"));
+        }
+        for kind in DIAGRAM_KINDS {
+            assert!(DIAGRAM_TAGS.iter().any(|(k, _, _)| k == kind));
+        }
     }
 
     /// ARTIFACT_KINDS and the artifact_spec match are two spellings of one

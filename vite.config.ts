@@ -32,9 +32,16 @@ export default defineConfig(async () => ({
   },
 
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      // postcss (inside @eraserlabs/resolve) names Node built-ins it never
+      // calls in the WebView; empty stand-ins keep the console clean. See
+      // src/lib/nodeShims.ts.
+      {
+        find: /^(path|fs|url|source-map-js)$/,
+        replacement: path.resolve(__dirname, "./src/lib/nodeShims.ts"),
+      },
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

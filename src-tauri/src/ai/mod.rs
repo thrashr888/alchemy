@@ -1253,19 +1253,23 @@ impl Ai {
             .await
     }
 
-    /// Streaming, role-routed (studio generation → the Generate provider).
-    pub async fn chat_role_stream<F>(
+    /// Stream a role's engine with its progress lines (`on_step`): an
+    /// agent CLI narrating its work, a cold Ollama model loading, a first
+    /// attempt that died and is being retried. Other engines stay silent.
+    pub async fn chat_role_stream_steps<F, S>(
         &self,
         role: Role,
         messages: &[ChatTurn],
         on_token: F,
+        on_step: S,
     ) -> Result<ChatOutcome>
     where
         F: FnMut(&str),
+        S: FnMut(crate::inference::Step<'_>),
     {
         self.router
             .chat_engine(role)
-            .chat_stream(messages, on_token)
+            .chat_stream_steps(messages, on_token, on_step)
             .await
     }
 

@@ -1,0 +1,38 @@
+{
+  "kind": "process",
+  "title": "Releasing Alchemy",
+  "direction": "down",
+  "entities": [
+    { "tag": "Pool", "id": "alchemy", "title": { "text": "Alchemy" } },
+    { "tag": "Lane", "id": "dev", "title": { "text": "Developer" }, "color": "blue", "containerId": "alchemy" },
+    { "tag": "Lane", "id": "script", "title": { "text": "release.sh" }, "color": "purple", "containerId": "alchemy" },
+    { "tag": "Lane", "id": "ci", "title": { "text": "GitHub Actions" }, "color": "green", "containerId": "alchemy" },
+    { "tag": "Lane", "id": "apple", "title": { "text": "Apple notary" }, "color": "orange" },
+
+    { "tag": "Event", "id": "start", "texts": [{ "text": "Paul says release" }], "color": "green", "containerId": "dev" },
+    { "tag": "Activity", "id": "notes", "icon": "file-text", "texts": [{ "text": "Write release notes" }], "containerId": "dev" },
+    { "tag": "Activity", "id": "gates", "icon": "check-circle", "texts": [{ "text": "Run fmt, clippy, tests" }], "containerId": "script" },
+    { "tag": "Gateway", "id": "green", "texts": [{ "text": "All green?" }], "containerId": "script" },
+    { "tag": "Activity", "id": "fix", "icon": "code", "texts": [{ "text": "Fix the failure" }], "containerId": "dev" },
+    { "tag": "Activity", "id": "tag", "icon": "git-branch", "texts": [{ "text": "Bump version, push tag" }], "containerId": "script" },
+    { "tag": "Activity", "id": "build", "icon": "package", "texts": [{ "text": "Build and sign the DMG" }], "containerId": "ci" },
+    { "tag": "Activity", "id": "notarize", "icon": "shield", "texts": [{ "text": "Notarize the bundle" }], "containerId": "apple" },
+    { "tag": "Activity", "id": "publish", "icon": "upload", "texts": [{ "text": "Publish the GitHub release" }], "containerId": "ci" },
+    { "tag": "Activity", "id": "brew", "icon": "homebrew", "texts": [{ "text": "Bump the Homebrew formula" }], "containerId": "script" },
+    { "tag": "Event", "id": "end", "texts": [{ "text": "Users update" }], "color": "red", "containerId": "dev" },
+    { "tag": "Textbox", "id": "n1", "text": "Warm clone: ~8 minutes end to end" }
+  ],
+  "connections": [
+    { "from": "start", "to": "notes" },
+    { "from": "notes", "to": "gates" },
+    { "from": "gates", "to": "green" },
+    { "from": "green", "to": "fix", "label": "no" },
+    { "from": "fix", "to": "gates" },
+    { "from": "green", "to": "tag", "label": "yes" },
+    { "from": "tag", "to": "build", "label": "tag push" },
+    { "from": "build", "to": "notarize", "label": "DMG" },
+    { "from": "notarize", "to": "publish", "label": "stapled" },
+    { "from": "publish", "to": "brew" },
+    { "from": "brew", "to": "end" }
+  ]
+}

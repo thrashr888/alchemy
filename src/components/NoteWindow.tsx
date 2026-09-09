@@ -6,7 +6,8 @@ import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
-import { ArchitectureDiagram } from "./ArchitectureDiagram";
+import { DiagramView } from "./DiagramView";
+import { isDiagramKind } from "@/lib/diagramDoc";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { AudioPlayer, DialogueScript } from "./AudioNote";
@@ -33,7 +34,7 @@ export function NoteWindow({ noteId }: { noteId: string }) {
     note?.kind === "slide_deck" ||
     note?.kind === "mind_map" ||
     note?.kind === "uml" ||
-    note?.kind === "architecture";
+    (!!note && isDiagramKind(note.kind));
 
   useEffect(() => {
     if (note) void getCurrentWebviewWindow().setTitle(`${note.title} — Alchemy`);
@@ -80,8 +81,8 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             <MindMap content={note.content} />
           ) : note.kind === "uml" ? (
             <UmlDiagram content={note.content} />
-          ) : note.kind === "architecture" ? (
-            <ArchitectureDiagram content={note.content} />
+          ) : isDiagramKind(note.kind) ? (
+            <DiagramView kind={note.kind} content={note.content} />
           ) : note.kind === "flashcards" ? (
             <Flashcards content={note.content} noteId={note.id} />
           ) : note.kind === "quiz" ? (

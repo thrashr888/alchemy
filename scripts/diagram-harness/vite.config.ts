@@ -14,7 +14,13 @@ const root = path.resolve(__dirname, "../..");
 export default defineConfig({
   root,
   resolve: {
-    alias: { "@": path.resolve(root, "./src") },
+    alias: [
+      { find: "@", replacement: path.resolve(root, "./src") },
+      {
+        find: /^(path|fs|url|source-map-js)$/,
+        replacement: path.resolve(root, "./src/lib/nodeShims.ts"),
+      },
+    ],
   },
   define: {
     "process.env": "{}",

@@ -1,9 +1,10 @@
-import { formatArchitecture, parseArchitecture } from "@/lib/architectureDoc";
+import { formatDiagram, isDiagramKind, parseDiagram } from "@/lib/diagramDoc";
 import { ensureDocumentDiagramFonts } from "@/lib/diagramFonts";
-import { renderArchitecture } from "@/lib/eraserDiagram";
+import { renderDiagram } from "@/lib/eraserDiagram";
 
 // Each sample is a document a generator could have written: topology only,
-// no coordinates. Add a file here to see it rendered.
+// no coordinates, plus a top-level "kind" naming the artifact it belongs to
+// (architecture when absent). Add a file here to see it rendered.
 const SAMPLES = import.meta.glob("./samples/*.json", { query: "?raw", import: "default" });
 
 const main = document.getElementById("samples") as HTMLElement;
@@ -21,7 +22,10 @@ for (const [file, load] of Object.entries(SAMPLES).sort()) {
   main.appendChild(section);
 
   const content = (await load()) as string;
-  const parsed = parseArchitecture(content);
+  const kindOf = (JSON.parse(content) as { kind?: string }).kind ?? "architecture";
+  const kind = isDiagramKind(kindOf) ? kindOf : "architecture";
+  heading.textContent = `${name} · ${kind}`;
+  const parsed = parseDiagram(content, kind);
   if (parsed.error) {
     failures += 1;
     section.insertAdjacentHTML("beforeend", `<p class="error"></p>`);
@@ -31,7 +35,7 @@ for (const [file, load] of Object.entries(SAMPLES).sort()) {
 
   const started = performance.now();
   try {
-    const rendered = await renderArchitecture(parsed.doc);
+    const rendered = await renderDiagram(parsed.doc, kind);
     const ms = Math.round(performance.now() - started);
     heading.insertAdjacentHTML(
       "beforeend",
@@ -67,7 +71,7 @@ for (const [file, load] of Object.entries(SAMPLES).sort()) {
   const summary = document.createElement("summary");
   summary.textContent = "document";
   const pre = document.createElement("pre");
-  pre.textContent = formatArchitecture(parsed.doc);
+  pre.textContent = formatDiagram(parsed.doc);
   details.append(summary, pre);
   section.appendChild(details);
 }

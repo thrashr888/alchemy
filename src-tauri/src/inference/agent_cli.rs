@@ -907,10 +907,28 @@ impl AgentCli {
             .await
         {
             Err(err) if !saw_any && started.elapsed() < QUICK_FAILURE => {
-                crate::note!(
-                    "{} failed before any output ({err:#}); retrying once",
-                    self.kind.binary_name()
+                // The retry must be visible everywhere the first attempt
+                // was: stderr, the diagnostics log, and the caller's status
+                // line — a silent second run is a failure nobody can
+                // explain afterwards.
+                let name = self.kind.binary_name();
+                let reason = format!("{err:#}");
+                crate::note!("{name} failed before any output ({reason}); retrying once");
+                crate::diagnostics::record(
+                    crate::diagnostics::Event::new(
+                        crate::diagnostics::Level::Warn,
+                        "rust",
+                        "agent-cli",
+                    )
+                    .message(format!("{name} failed before any output; retrying once"))
+                    .detail(reason.clone())
+                    .context(serde_json::json!({
+                        "agent": self.kind.id(),
+                        "elapsedMs": started.elapsed().as_millis() as u64,
+                    })),
                 );
+                let line = format!("First attempt failed ({reason}); retrying once…");
+                on_step(super::Step::new(&line));
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 self.chat_stream_once(messages, &mut on_token, &mut on_step, &mut saw_any)
                     .await

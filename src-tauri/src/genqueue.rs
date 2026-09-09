@@ -278,12 +278,19 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
     // The indicator names the job, not just the engine: a queue running for
     // minutes should say what it is making.
     let label = format!("Generating {}", crate::genqueue::job_label(&job));
+    // The engine's progress lines (a cold model load, an agent CLI's first
+    // attempt dying and being retried) become the running note's detail.
+    let steps = {
+        let app = app.clone();
+        let job = job.clone();
+        move |step: crate::inference::Step<'_>| emit_status(&app, &job, "", step.label)
+    };
     let produced = tokio::select! {
         r = tokio::time::timeout(
             RUN_DEADLINE,
             crate::inference::labeled(
                 label,
-                crate::commands::generate_content_for_job(&state, &app, &job, &token),
+                crate::commands::generate_content_for_job(&state, &app, &job, &token, steps),
             ),
         ) => Some(match r {
             Ok(inner) => inner,
@@ -337,14 +344,54 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
                 emit_status(&app, &j, "", "");
             } else if is_engine_down(&raw) {
                 // Parked, not failed: the pending note says so and the
-                // worker's tick re-tries until the engine answers.
+                // worker's tick re-tries until the engine answers. The
+                // reason goes on the note and into the log both — a retry
+                // nobody can see is how a failure hides for twenty minutes.
+                crate::note!(
+                    "genqueue: {} for {} parked, engine down: {raw}",
+                    job_label(&job),
+                    job.notebook_id
+                );
+                crate::diagnostics::record(
+                    crate::diagnostics::Event::new(
+                        crate::diagnostics::Level::Warn,
+                        "rust",
+                        "genqueue",
+                    )
+                    .message(format!("{} parked: engine down", job_label(&job)))
+                    .detail(raw.clone())
+                    .context(serde_json::json!({
+                        "jobId": job.id, "noteId": job.note_id,
+                        "notebookId": job.notebook_id, "kind": job.kind,
+                        "engine": job.engine_key,
+                    })),
+                );
                 queue.set_status(&job.id, "waiting", &raw);
                 let detail = crate::commands::classify_model_error(&raw)
                     .unwrap_or_else(|| "The model engine isn't answering.".into());
                 let mut j = job.clone();
                 j.status = "waiting".into();
-                emit_status(&app, &j, "", &detail);
+                emit_status(&app, &j, "", &format!("Waiting to retry — {detail}"));
             } else {
+                crate::note!(
+                    "genqueue: {} for {} failed: {raw}",
+                    job_label(&job),
+                    job.notebook_id
+                );
+                crate::diagnostics::record(
+                    crate::diagnostics::Event::new(
+                        crate::diagnostics::Level::Error,
+                        "rust",
+                        "genqueue",
+                    )
+                    .message(format!("{} failed", job_label(&job)))
+                    .detail(raw.clone())
+                    .context(serde_json::json!({
+                        "jobId": job.id, "noteId": job.note_id,
+                        "notebookId": job.notebook_id, "kind": job.kind,
+                        "engine": job.engine_key,
+                    })),
+                );
                 let msg = crate::commands::classify_model_error(&raw)
                     .unwrap_or_else(|| format!("Generation failed: {raw}"));
                 let _ = state
