@@ -295,11 +295,20 @@ fn recover_legacy_paths(
             }
         }
     }
+    // A file nobody here can place while rows from before portable identity
+    // still have no file: it might be one of those rows, renamed and
+    // re-identified by another Mac, and importing it as new would double
+    // the row. It used to stop the whole pass; now it is held — not
+    // imported, not touched — and the rest of the notebook syncs, which is
+    // also how those missing files get their deletion records or come back.
     for (kind, rel) in unresolved {
         if missing.iter().any(|(id, entry)| {
             entry.path.split('/').next() == Some(kind) && !assigned.contains_key(id)
         }) {
-            return Err(format!("Cannot identify returning legacy file {rel} while older {kind} are missing. Restore their original paths or original file versions before syncing; no new rows were imported"));
+            super::okf_notice(format!(
+                "{rel} arrived while older {kind} are still missing; holding it until they return or their deletion records arrive"
+            ));
+            candidate.held.insert(rel);
         }
     }
     Ok(!assigned.is_empty())
@@ -599,19 +608,18 @@ mod tests {
 
     #[tokio::test]
     async fn first_upgrade_refuses_unproven_returning_legacy_file_without_mutating_rows_or_files() {
-        let (_lab, state, bundle, at, text) = legacy_fixture("other-machine-row").await;
+        let (_lab, state, bundle, _at, text) = legacy_fixture("other-machine-row").await;
         std::fs::remove_file(bundle.join("notes/original.md")).unwrap();
         let returned = text.replace("First version", "Different unproven version");
         let path = bundle.join("notes/returned.md");
         std::fs::write(&path, &returned).unwrap();
-        let manifest = std::fs::read(&at).unwrap();
         let rows =
             serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap();
-        assert!(reconcile(&state, "shared-notebook")
-            .await
-            .unwrap_err()
-            .contains("Cannot identify returning legacy file"));
-        assert_eq!(std::fs::read(&at).unwrap(), manifest);
+        // Held, not imported and not touched — and not a reason to stop.
+        assert_eq!(
+            reconcile(&state, "shared-notebook").await.unwrap().created,
+            0
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), returned);
         assert_eq!(
             serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap(),
@@ -645,7 +653,7 @@ mod tests {
 
     #[tokio::test]
     async fn first_upgrade_refuses_unknown_modern_identity_while_legacy_rows_are_missing() {
-        let (_lab, state, bundle, at, text) = legacy_fixture("other-machine-row").await;
+        let (_lab, state, bundle, _at, text) = legacy_fixture("other-machine-row").await;
         std::fs::remove_file(bundle.join("notes/original.md")).unwrap();
         let returned = attach_identity(
             &text.replace("First version", "Newer unknown version"),
@@ -654,14 +662,13 @@ mod tests {
         .unwrap();
         let path = bundle.join("notes/returned.md");
         std::fs::write(&path, &returned).unwrap();
-        let manifest = std::fs::read(&at).unwrap();
         let rows =
             serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap();
-        assert!(reconcile(&state, "shared-notebook")
-            .await
-            .unwrap_err()
-            .contains("Cannot identify returning legacy file"));
-        assert_eq!(std::fs::read(&at).unwrap(), manifest);
+        // Held, not imported and not touched — and not a reason to stop.
+        assert_eq!(
+            reconcile(&state, "shared-notebook").await.unwrap().created,
+            0
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), returned);
         assert_eq!(
             serde_json::to_value(state.db.list_notes("shared-notebook").await.unwrap()).unwrap(),
