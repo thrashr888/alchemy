@@ -846,27 +846,32 @@ fn relationship_instruction() -> String {
         "Draw the people, organizations, projects, works, and places in the sources below as \
          ONE relationship map, written as a single JSON document for a diagram renderer. The \
          document:\n\
-         {{\"title\": \"<3-6 words>\", \"direction\": \"down\" | \"right\", \
+         {{\"title\": \"<3-6 words>\", \"direction\": \"right\", \
          \"entities\": [...], \"connections\": [...]}}\n\
          Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
          Group):\n\
          - Group — an era, team, school, family, or domain the members share: \
-         {{\"tag\":\"Group\",\"id\":\"alexandria\",\"title\":{{\"text\":\"Alexandria, 1st-3rd c.\"}},\"color\":\"yellow\"}}.\n\
-         - Icon — an entity drawn as a glyph with a caption: \
+         {{\"tag\":\"Group\",\"id\":\"alexandria\",\"title\":{{\"text\":\"Alexandria, 1st-3rd c.\"}},\"color\":\"yellow\"}}. \
+         Groups are one level deep and sit side by side: a Group never has a containerId, \
+         and its members sit directly inside it.\n\
+         - Icon — a person, drawn as a glyph with a caption: \
          {{\"tag\":\"Icon\",\"id\":\"zosimos\",\"icon\":\"user\",\"texts\":[{{\"text\":\"Zosimos of Panopolis\"}}],\"containerId\":\"alexandria\"}}. \
-         Use user for a person, users for a group of people, building for an organization, \
-         file-text or book-like icons for a work, home or globe for a place, folder for a project.\n\
-         - Shape — an entity as a box when it needs more than a caption: \
-         {{\"tag\":\"Shape\",\"id\":\"emerald\",\"shape\":\"document\",\"texts\":[{{\"text\":\"Emerald Tablet\"}}],\"color\":\"green\"}}. \
-         \"shape\" is rectangle, document (a work), hexagon, circle, or ellipse.\n\
-         - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Dates are disputed\"}}.\n\
+         The icon is user for a person, users for a circle, school, or movement.\n\
+         - Shape — a work, organization, place, or project, drawn as a box: a work is \
+         {{\"tag\":\"Shape\",\"id\":\"emerald\",\"shape\":\"document\",\"texts\":[{{\"text\":\"Emerald Tablet\"}}],\"color\":\"green\"}}; \
+         an organization is \"shape\":\"rectangle\" with \"icon\":\"building\"; a place is \
+         \"shape\":\"rectangle\" with \"icon\":\"globe\"; a project is \"shape\":\"rectangle\" with \
+         \"icon\":\"folder\".\n\
+         - Textbox — a short free note beside the map, never connected to anything: \
+         {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Dates are disputed\"}}. A connection may \
+         not start or end at a Textbox; say it in the note's text instead.\n\
          Connections (tag Relationship, the default) are directed and always labeled with the \
          relation the sources state, in 3 words or fewer: \
          {{\"from\":\"jabir\",\"to\":\"zosimos\",\"label\":\"cited\"}} — founded, wrote, cited, \
          taught, succeeded, acquired, influenced, married, funded, opposed. Add \"lineStyle\": \
          \"dashed\" for a relation the sources call uncertain.\n\
          Colors are palette tokens only: white yellow green blue purple red orange black.\n\
-         Rules: 6-24 entities, grouped where the sources group them. Name every entity exactly as \
+         Rules: 8-20 entities, grouped where the sources group them. Name every entity exactly as \
          the sources (and the Registry cards, when listed) name it; never invent an entity or a \
          relation the corpus does not state, and leave out anything you would have to guess at.\n\
          {tail}",
@@ -1433,6 +1438,75 @@ pub fn build_artifact_messages(instruction: &str, corpus: &str, persona: &str) -
     ]
 }
 
+/// One selected source as a diagram corpus sees it (docs/RFC-diagrams.md):
+/// its heading (title plus URL or file line, as `generate_content` writes
+/// it), the stored gist when the gist sweep has written one, and the full
+/// text to fall back on when it has not.
+pub struct DiagramSourceEntry<'a> {
+    pub heading: &'a str,
+    pub gist: Option<&'a str>,
+    pub content: &'a str,
+}
+
+/// How much of a gist-less source's head stands in for its gist. A gist
+/// is at most 3,000 chars (`gist::GIST_MAX_CHARS`); a lead of this size
+/// says what a document is about at about the same cost.
+pub const DIAGRAM_FALLBACK_HEAD_CHARS: usize = 1_500;
+
+/// The corpus a diagram kind is drawn from: one block per source — its
+/// heading and its gist (or its head, when no gist exists yet) — fitted to
+/// `budget` by trimming evenly. A diagram is a topology built from what
+/// each source is about, so gists carry everything the model needs and the
+/// whole corpus is ONE model call, however many sources the notebook has:
+/// no per-source distillation, which on a 50-source notebook was dozens of
+/// model calls before the diagram call and outran the queue's deadline.
+///
+/// Returns the corpus and how many sources had no gist to draw on.
+pub fn diagram_corpus(sources: &[DiagramSourceEntry<'_>], budget: usize) -> (String, usize) {
+    let mut fallbacks = 0usize;
+    let texts: Vec<String> = sources
+        .iter()
+        .map(|s| match s.gist.map(str::trim).filter(|g| !g.is_empty()) {
+            Some(gist) => gist.to_string(),
+            None => {
+                fallbacks += 1;
+                let head: String = s
+                    .content
+                    .chars()
+                    .take(DIAGRAM_FALLBACK_HEAD_CHARS)
+                    .collect();
+                head.trim().to_string()
+            }
+        })
+        .collect();
+    // Even trim: the same waterfill the full-text path uses — every source
+    // is represented, small entries donate unused room to large ones, and
+    // every entry over its share is cut to the same cap.
+    // Each block's fixed cost: heading, two blank-line breaks, and the
+    // ellipsis a trimmed entry ends with.
+    let headings: usize = sources.iter().map(|s| s.heading.chars().count() + 5).sum();
+    let mut remaining = budget.saturating_sub(headings);
+    let mut order: Vec<usize> = (0..texts.len()).collect();
+    order.sort_by_key(|&i| texts[i].chars().count());
+    let mut alloc = vec![0usize; texts.len()];
+    for (pos, &i) in order.iter().enumerate() {
+        let share = remaining / (order.len() - pos);
+        alloc[i] = texts[i].chars().count().min(share);
+        remaining -= alloc[i];
+    }
+    let mut corpus = String::new();
+    for (i, s) in sources.iter().enumerate() {
+        let text = &texts[i];
+        if text.chars().count() <= alloc[i] {
+            corpus.push_str(&format!("{}\n\n{text}\n\n", s.heading));
+        } else {
+            let clipped: String = text.chars().take(alloc[i]).collect();
+            corpus.push_str(&format!("{}\n\n{}…\n\n", s.heading, clipped.trim_end()));
+        }
+    }
+    (corpus, fallbacks)
+}
+
 #[cfg(test)]
 mod tests {
     /// A named assistant answers as itself — Alphonse out of the box — and
@@ -1830,5 +1904,84 @@ mod tests {
                 "pseudo-kind {k} must not join the registry"
             );
         }
+    }
+
+    /// A diagram corpus is gists, not text: a source with a gist
+    /// contributes the gist and none of its body; a source without one
+    /// contributes its head, capped; and the whole thing fits the budget
+    /// with every source present. Nothing here can distill — the builder
+    /// has no model handle — which is the point.
+    #[test]
+    fn diagram_corpus_uses_gists_and_fits_the_budget() {
+        let body_a = "BODY-A ".repeat(2_000);
+        let body_b = "BODY-B ".repeat(2_000);
+        let body_c = "short lead about the third source";
+        let sources = vec![
+            DiagramSourceEntry {
+                heading: "## Source A\nSource URL: https://a.example",
+                gist: Some("Source A describes the ingest pipeline. Key terms: ingest, chunk"),
+                content: &body_a,
+            },
+            DiagramSourceEntry {
+                heading: "## Source B",
+                gist: None,
+                content: &body_b,
+            },
+            DiagramSourceEntry {
+                heading: "## Source C",
+                gist: Some("   "),
+                content: body_c,
+            },
+        ];
+        let (corpus, fallbacks) = diagram_corpus(&sources, 24_000);
+        assert_eq!(fallbacks, 2, "B has no gist and C's is blank");
+        assert!(corpus.contains("describes the ingest pipeline"));
+        assert!(
+            !corpus.contains("BODY-A"),
+            "a gisted source's body never rides along"
+        );
+        assert!(
+            corpus.contains("BODY-B"),
+            "a gist-less source falls back to its head"
+        );
+        assert!(corpus.contains(body_c));
+        assert!(corpus.contains("Source URL: https://a.example"));
+        // The fallback is a head, not the document.
+        let b_chars = corpus
+            .split("## Source B")
+            .nth(1)
+            .unwrap()
+            .split("## Source C")
+            .next()
+            .unwrap()
+            .chars()
+            .count();
+        assert!(b_chars <= DIAGRAM_FALLBACK_HEAD_CHARS + 8, "{b_chars}");
+
+        // Fifty sources at a 24k budget: every heading present, total inside.
+        let gist = "x".repeat(2_500);
+        let headings: Vec<String> = (0..50).map(|i| format!("## Source {i}")).collect();
+        let many: Vec<DiagramSourceEntry<'_>> = headings
+            .iter()
+            .map(|h| DiagramSourceEntry {
+                heading: h,
+                gist: Some(&gist),
+                content: "",
+            })
+            .collect();
+        let (corpus, fallbacks) = diagram_corpus(&many, 24_000);
+        assert_eq!(fallbacks, 0);
+        assert!(
+            corpus.chars().count() <= 24_000,
+            "{}",
+            corpus.chars().count()
+        );
+        for h in &headings {
+            assert!(corpus.contains(h.as_str()), "{h} dropped");
+        }
+        assert!(
+            corpus.contains('…'),
+            "over-budget gists are trimmed, not dropped"
+        );
     }
 }

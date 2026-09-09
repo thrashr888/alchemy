@@ -41,7 +41,7 @@ interface SceneState {
 function useDiagramScene(
   content: string,
   kind: DiagramKind,
-): SceneState & { doc?: DiagramDoc; source: string } {
+): SceneState & { doc?: DiagramDoc; source: string; parseWarnings: string[] } {
   const parsed = useMemo(() => parseDiagram(content, kind), [content, kind]);
   const source = useMemo(
     () => (parsed.doc ? formatDiagram(parsed.doc) : diagramSource(content)),
@@ -73,7 +73,7 @@ function useDiagramScene(
     };
   }, [parsed, kind]);
 
-  return { ...state, doc: parsed.doc, source };
+  return { ...state, doc: parsed.doc, source, parseWarnings: parsed.warnings ?? [] };
 }
 
 /**
@@ -113,7 +113,7 @@ function DiagramSource({ source }: { source: string }) {
 }
 
 export function DiagramView({ kind, content }: { kind: DiagramKind; content: string }) {
-  const { doc, source, rendered, error } = useDiagramScene(content, kind);
+  const { doc, source, rendered, error, parseWarnings } = useDiagramScene(content, kind);
   const [showSource, setShowSource] = useState(false);
   const [showWarnings, setShowWarnings] = useState(false);
 
@@ -130,7 +130,9 @@ export function DiagramView({ kind, content }: { kind: DiagramKind; content: str
     );
   }
 
-  const warnings = rendered?.warnings ?? [];
+  // What the parser set aside (a relationship map's line into a note)
+  // and what the resolver had to say, in one list.
+  const warnings = [...parseWarnings, ...(rendered?.warnings ?? [])];
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex shrink-0 items-center gap-2">

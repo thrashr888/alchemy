@@ -176,8 +176,10 @@ function placed(doc: DiagramDoc, kind: DiagramKind, sizeOf: (entity: DiagramEnti
   }));
   return placeNodes(nodes, edges, {
     direction: doc.direction,
-    // Journey stages share a top edge; everything else centers on its rank.
-    ...(kind === "journey" ? { align: "start" as const } : {}),
+    // Journey stages share a top edge, and a relationship map's ranks
+    // share one so a chain of people reads as a row across its era;
+    // everything else centers on its widest rank.
+    ...(kind === "journey" || kind === "relationship" ? { align: "start" as const } : {}),
   });
 }
 

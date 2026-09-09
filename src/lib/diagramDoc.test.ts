@@ -166,6 +166,38 @@ describe("parseDiagram", () => {
   });
 });
 
+describe("a relationship map's notes", () => {
+  it("drops a connection into a Textbox with a warning and keeps the rest", () => {
+    const doc = {
+      entities: [
+        { tag: "Icon", id: "zosimos", icon: "user", texts: [{ text: "Zosimos" }] },
+        { tag: "Shape", id: "cheirokmeta", shape: "document", texts: [{ text: "Cheirokmeta" }] },
+        { tag: "Textbox", id: "n1", text: "Dates disputed" },
+      ],
+      connections: [
+        { from: "zosimos", to: "cheirokmeta", label: "wrote" },
+        { from: "cheirokmeta", to: "n1", label: "see" },
+        { from: "n1", to: "zosimos" },
+      ],
+    };
+    const parsed = parseDiagram(JSON.stringify(doc), "relationship");
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.doc?.connections).toEqual([doc.connections[0]]);
+    expect(parsed.warnings).toHaveLength(2);
+    expect(parsed.warnings?.[0]).toMatch(/"cheirokmeta" → "n1" dropped: "n1" is a Textbox/);
+    expect(parsed.warnings?.[1]).toMatch(/"n1" → "zosimos" dropped/);
+    // Other kinds keep their Textbox lines: an architecture note may point
+    // at the component it annotates.
+    const arch = parseDiagram(JSON.stringify({ ...doc, entities: doc.entities }), "architecture");
+    expect(arch.doc?.connections).toHaveLength(3);
+    expect(arch.warnings).toEqual([]);
+  });
+
+  it("defaults a relationship map to run right", () => {
+    expect(parseDiagram('{"entities":[]}', "relationship").doc?.direction).toBe("right");
+  });
+});
+
 describe("prepareForRender", () => {
   it("turns a data model's cardinality labels into crow's feet and leaves the rest", () => {
     const doc = parseDiagram(JSON.stringify(GOOD.data_model), "data_model").doc!;
@@ -241,9 +273,10 @@ describe("the generator's vocabulary", () => {
   });
 
   it("names icons the renderer has when a prompt suggests one by name", () => {
-    // The relationship prompt names icons for people, works, and places.
+    // The relationship prompt names icons for people, organizations,
+    // places, and projects.
     const shipped = new Set(rustLiteral("DIAGRAM_ICONS").split(/\s+/));
-    for (const icon of ["user", "users", "building", "file-text", "home", "globe", "folder"])
+    for (const icon of ["user", "users", "building", "globe", "folder"])
       expect(shipped.has(icon), icon).toBe(true);
   });
 });

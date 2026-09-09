@@ -49,10 +49,11 @@ for (const [file, load] of Object.entries(SAMPLES).sort()) {
     // it off the page, as the app viewer does.
     host.attachShadow({ mode: "open" }).innerHTML = `<style>${rendered.css}</style>${rendered.scene}`;
     section.appendChild(host);
-    if (rendered.warnings.length) {
+    const warnings = [...parsed.warnings, ...rendered.warnings];
+    if (warnings.length) {
       const list = document.createElement("ul");
       list.className = "warnings";
-      for (const w of rendered.warnings) {
+      for (const w of warnings) {
         const li = document.createElement("li");
         li.textContent = w;
         list.appendChild(li);

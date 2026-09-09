@@ -3843,6 +3843,39 @@ impl Db {
         Ok(out)
     }
 
+    /// The stored gist text for each of `source_ids` that has one, in ONE
+    /// projected scan — the diagram kinds build their corpus from these
+    /// (docs/RFC-diagrams.md) instead of reading and distilling every
+    /// source's full text. A source with no gist yet is simply absent.
+    pub async fn gists_for_sources(
+        &self,
+        source_ids: &[String],
+    ) -> Result<HashMap<String, String>> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = source_ids
+            .iter()
+            .map(|id| format!("'{GIST_CHUNK_PREFIX}{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("source_id IN ({ids})");
+        let batches = self
+            .collect_cols(T_CHUNKS, Some(&filter), &["source_id", "text"])
+            .await?;
+        let mut out = HashMap::new();
+        for b in &batches {
+            let sid = str_col(b, "source_id")?;
+            let text = str_col(b, "text")?;
+            for i in 0..b.num_rows() {
+                if let Some(source_id) = sid.value(i).strip_prefix(GIST_CHUNK_PREFIX) {
+                    out.insert(source_id.to_string(), text.value(i).to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Drop one source's gist row (no-op if it has none).
     pub async fn delete_gist_row(&self, source_id: &str) -> Result<()> {
         let pred = format!("source_id = '{GIST_CHUNK_PREFIX}{}'", esc(source_id));

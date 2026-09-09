@@ -4,7 +4,8 @@
   "direction": "right",
   "entities": [
     { "tag": "Group", "id": "hellenistic", "title": { "text": "Hellenistic Egypt, 1st–4th c." }, "color": "yellow" },
-    { "tag": "Icon", "id": "hermes", "icon": "sparkles", "texts": [{ "text": "Hermes Trismegistus" }], "containerId": "hellenistic" },
+    { "tag": "Icon", "id": "hermes", "icon": "user", "texts": [{ "text": "Hermes Trismegistus" }], "containerId": "hellenistic" },
+    { "tag": "Shape", "id": "alexandria", "shape": "rectangle", "icon": "globe", "texts": [{ "text": "Alexandria" }], "containerId": "hellenistic" },
     { "tag": "Shape", "id": "tablet", "shape": "document", "texts": [{ "text": "Emerald Tablet" }], "color": "green", "containerId": "hellenistic" },
     { "tag": "Icon", "id": "maria", "icon": "user", "texts": [{ "text": "Maria the Jewess" }], "containerId": "hellenistic" },
     { "tag": "Icon", "id": "zosimos", "icon": "user", "texts": [{ "text": "Zosimos of Panopolis" }], "containerId": "hellenistic" },
@@ -15,7 +16,7 @@
     { "tag": "Shape", "id": "secretum", "shape": "document", "texts": [{ "text": "Secretum Secretorum" }], "color": "green", "containerId": "islamic" },
 
     { "tag": "Group", "id": "latin", "title": { "text": "Latin Europe, 12th–17th c." }, "color": "purple" },
-    { "tag": "Icon", "id": "toledo", "icon": "building", "texts": [{ "text": "Toledo translators" }], "containerId": "latin" },
+    { "tag": "Shape", "id": "toledo", "shape": "rectangle", "icon": "building", "texts": [{ "text": "Toledo translators" }], "containerId": "latin" },
     { "tag": "Icon", "id": "bacon", "icon": "user", "texts": [{ "text": "Roger Bacon" }], "containerId": "latin" },
     { "tag": "Icon", "id": "paracelsus", "icon": "user", "texts": [{ "text": "Paracelsus" }], "containerId": "latin" },
     { "tag": "Icon", "id": "newton", "icon": "user", "texts": [{ "text": "Isaac Newton" }], "containerId": "latin" },
@@ -23,6 +24,7 @@
   ],
   "connections": [
     { "from": "hermes", "to": "tablet", "label": "attributed", "lineStyle": "dashed" },
+    { "from": "alexandria", "to": "zosimos", "label": "home of" },
     { "from": "maria", "to": "zosimos", "label": "cited by" },
     { "from": "zosimos", "to": "jabir", "label": "influenced" },
     { "from": "tablet", "to": "jabir", "label": "transmitted" },

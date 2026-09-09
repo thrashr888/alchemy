@@ -10801,6 +10801,63 @@ pub async fn convert_note_to_source(
     Ok(source)
 }
 
+/// The full-text corpus for a prose artifact: every source's text,
+/// budgeted fairly across sources (waterfill — every source is
+/// represented, small ones donate unused budget to large ones; a blunt
+/// head-truncation previously dropped later sources entirely), and for
+/// each source over its allocation, the tail it would have lost distilled
+/// against the instruction — one model call per over-budget source.
+/// Diagram kinds never come here: they draw from gists (`rag::diagram_corpus`).
+async fn waterfill_corpus(
+    state: &AppState,
+    instruction: &str,
+    contents: &[(String, String)],
+    budget: usize,
+    is_gateway: bool,
+) -> String {
+    // Waterfill: allocate smallest-first so leftovers flow to bigger sources.
+    let mut order: Vec<usize> = (0..contents.len()).collect();
+    order.sort_by_key(|&i| contents[i].1.chars().count());
+    let mut remaining = budget;
+    let mut alloc = vec![0usize; contents.len()];
+    for (pos, &i) in order.iter().enumerate() {
+        let share = remaining / (order.len() - pos);
+        let want = contents[i].1.chars().count();
+        alloc[i] = want.min(share);
+        remaining -= alloc[i];
+    }
+
+    // The distiller can only absorb so much of an over-budget source's tail.
+    let distill_cap = if is_gateway {
+        crate::agent::READ_CHARS_GATEWAY
+    } else {
+        crate::agent::READ_CHARS_LOCAL
+    };
+    let mut corpus = String::new();
+    for (i, (heading, full)) in contents.iter().enumerate() {
+        let total = full.chars().count();
+        if total <= alloc[i] {
+            corpus.push_str(&format!("{heading}\n\n{full}\n\n"));
+            continue;
+        }
+        // Over budget: keep the head that fits, then distill the part that
+        // would have been dropped against the instruction, so a truncated
+        // source still contributes its relevant passages instead of silently
+        // losing everything past the cut.
+        let clipped: String = full.chars().take(alloc[i]).collect();
+        let tail: String = full.chars().skip(alloc[i]).take(distill_cap).collect();
+        let rescued = {
+            let ai = state.ai.read().await.clone();
+            crate::agent::distill(&ai, instruction, heading, &tail).await
+        };
+        corpus.push_str(&format!(
+            "{heading}\n\n{clipped}\n…[source truncated to fit context; key passages from the \
+             remainder:]\n{rescued}\n\n"
+        ));
+    }
+    corpus
+}
+
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
 /// a notebook's source text. Returns (title, content). When `app` is given,
 /// tokens stream to the UI as `artifact://token` events. `source_ids` limits
@@ -10917,46 +10974,35 @@ async fn generate_content(
         };
         contents.push((heading, full));
     }
-    // Waterfill: allocate smallest-first so leftovers flow to bigger sources.
-    let mut order: Vec<usize> = (0..contents.len()).collect();
-    order.sort_by_key(|&i| contents[i].1.chars().count());
-    let mut remaining = budget;
-    let mut alloc = vec![0usize; contents.len()];
-    for (pos, &i) in order.iter().enumerate() {
-        let share = remaining / (order.len() - pos);
-        let want = contents[i].1.chars().count();
-        alloc[i] = want.min(share);
-        remaining -= alloc[i];
-    }
-
-    // The distiller can only absorb so much of an over-budget source's tail.
-    let distill_cap = if is_gateway {
-        crate::agent::READ_CHARS_GATEWAY
-    } else {
-        crate::agent::READ_CHARS_LOCAL
-    };
-    let mut corpus = String::new();
-    for (i, (heading, full)) in contents.iter().enumerate() {
-        let total = full.chars().count();
-        if total <= alloc[i] {
-            corpus.push_str(&format!("{heading}\n\n{full}\n\n"));
-            continue;
+    let mut corpus = if rag::is_diagram_kind(kind) {
+        // A diagram is a topology built from what each source is about, so
+        // the corpus is each source's stored gist (the gist sweep's
+        // distilled overview) and nothing is distilled here: the waterfill
+        // would have made one model call per over-budget source before the
+        // diagram call — dozens on a 50-source notebook, past the queue's
+        // deadline. One call, however many sources.
+        let gists = state.db.gists_for_sources(&ids).await.unwrap_or_default();
+        let entries: Vec<rag::DiagramSourceEntry<'_>> = sources
+            .iter()
+            .zip(&contents)
+            .map(|(s, (heading, full))| rag::DiagramSourceEntry {
+                heading,
+                gist: gists.get(&s.id).map(String::as_str),
+                content: full,
+            })
+            .collect();
+        let (corpus, fallbacks) = rag::diagram_corpus(&entries, budget);
+        if fallbacks > 0 {
+            crate::note!(
+                "{kind}: {fallbacks} of {} sources have no gist yet; used their first {} chars",
+                sources.len(),
+                rag::DIAGRAM_FALLBACK_HEAD_CHARS
+            );
         }
-        // Over budget: keep the head that fits, then distill the part that
-        // would have been dropped against the instruction, so a truncated
-        // source still contributes its relevant passages instead of silently
-        // losing everything past the cut.
-        let clipped: String = full.chars().take(alloc[i]).collect();
-        let tail: String = full.chars().skip(alloc[i]).take(distill_cap).collect();
-        let rescued = {
-            let ai = state.ai.read().await.clone();
-            crate::agent::distill(&ai, &instruction, heading, &tail).await
-        };
-        corpus.push_str(&format!(
-            "{heading}\n\n{clipped}\n…[source truncated to fit context; key passages from the \
-             remainder:]\n{rescued}\n\n"
-        ));
-    }
+        corpus
+    } else {
+        waterfill_corpus(state, &instruction, &contents, budget, is_gateway).await
+    };
     // The prior run rides outside the source budget with its own cap: it
     // informs the "what changed" framing but must never crowd out sources —
     // a third of the corpus budget, so a 4k-token window (on-device tier)

@@ -117,8 +117,8 @@ export function diagramSource(content: string): string {
 }
 
 export type DiagramParse =
-  | { doc: DiagramDoc; error?: never }
-  | { doc?: never; error: string };
+  | { doc: DiagramDoc; error?: never; warnings: string[] }
+  | { doc?: never; error: string; warnings?: never };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -156,6 +156,8 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
     entities.push(rest as DiagramEntity);
   }
 
+  const warnings: string[] = [];
+  const tagOf = new Map(entities.map((e) => [e.id, e.tag]));
   const connections: DiagramConnection[] = [];
   for (const [i, connection] of rawConnections.entries()) {
     if (!isRecord(connection)) return { error: `connection ${i} is not an object` };
@@ -165,6 +167,18 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
       return {
         error: `connection ${i} has tag ${connection.tag}, which a ${DIAGRAM_KIND_LABEL[kind].toLowerCase()} does not use (its tags: ${allowed.connections.join(", ")})`,
       };
+    // A relationship map's Textbox is a note beside the map, not a member
+    // of it: a line into one is a relation the model had no entity for.
+    // The rest of the map is still right, so the line goes, with a word.
+    if (kind === "relationship") {
+      const note = [connection.from, connection.to].find((id) => tagOf.get(id) === "Textbox");
+      if (note !== undefined) {
+        warnings.push(
+          `connection "${connection.from}" → "${connection.to}" dropped: "${note}" is a Textbox, a note beside the map, not something a relationship map connects`,
+        );
+        continue;
+      }
+    }
     connections.push(connection as DiagramConnection);
   }
 
@@ -179,6 +193,7 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
       entities,
       connections,
     },
+    warnings,
   };
 }
 

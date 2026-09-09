@@ -232,6 +232,42 @@ describe("placeNodes for the diagram kinds", () => {
     expect((flush.boxes.get("stage") as Box).y).toBe((flush.boxes.get("next") as Box).y);
   });
 
+  it("ranks a group's members left to right when the scene runs right", () => {
+    // A relationship map (`align: "start"`, as eraserDiagram.ts passes for
+    // the kind): eras as sibling groups, each era's chain of people reading
+    // left to right on one row inside it, the unconnected stacked in the
+    // first column — never a tall single column of everything.
+    const nodes = [
+      group("hellenistic"),
+      leaf("maria", "hellenistic"),
+      leaf("zosimos", "hellenistic"),
+      leaf("hermes", "hellenistic"),
+      group("islamic"),
+      leaf("jabir", "islamic"),
+      leaf("razi", "islamic"),
+    ];
+    const edges = [
+      { from: "maria", to: "zosimos", labeled: true },
+      { from: "zosimos", to: "jabir", labeled: true },
+      { from: "jabir", to: "razi", labeled: true },
+    ];
+    const placed = placeNodes(nodes, edges, { direction: "right", align: "start" });
+    const box = (id: string) => placed.boxes.get(id) as Box;
+    // Inside an era, the chain runs left to right on one row.
+    expect(box("maria").y).toBe(box("zosimos").y);
+    expect(box("maria").x + box("maria").width).toBeLessThanOrEqual(box("zosimos").x);
+    expect(box("jabir").y).toBe(box("razi").y);
+    expect(box("jabir").x).toBeLessThan(box("razi").x);
+    // A member with no edges shares the first column and stacks below.
+    expect(box("hermes").x).toBe(box("maria").x);
+    expect(box("hermes").y).not.toBe(box("maria").y);
+    // The eras themselves sit side by side, the later one to the right.
+    const [h, i] = [box("hellenistic"), box("islamic")];
+    expect(h.x + h.width).toBeLessThanOrEqual(i.x);
+    expect(overlaps(h, i)).toBe(false);
+    expect(placed.width).toBeGreaterThan(placed.height);
+  });
+
   it("widens a rank gap that a labeled connection crosses", () => {
     const nodes = () => [leaf("a"), leaf("b"), leaf("c")];
     const chain = (labeled: boolean) => [
