@@ -93,6 +93,23 @@ export interface DiagramDoc {
 /** The stock tags that hold other entities. */
 export const CONTAINER_TAGS: ReadonlySet<string> = new Set(["Group", "Lane", "Pool"]);
 
+/** The shapes eraser's stock `Shape` template draws — the resolver's own
+ *  list, which it names when a document asks for anything else. */
+export const STOCK_SHAPES: ReadonlySet<string> = new Set([
+  "rectangle",
+  "parallelogram",
+  "trapezoid",
+  "diamond",
+  "cylinder",
+  "hexagon",
+  "circle",
+  "ellipse",
+  "oval",
+  "triangle",
+  "document",
+  "star",
+]);
+
 /** Each kind's natural main axis when the document names none. */
 const DEFAULT_DIRECTION: Record<DiagramKind, DiagramDirection> = {
   architecture: "down",
@@ -140,6 +157,7 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
   if (!Array.isArray(rawConnections)) return { error: '"connections" must be an array' };
   const allowed = KIND_TAGS[kind];
 
+  const warnings: string[] = [];
   const entities: DiagramEntity[] = [];
   for (const [i, entity] of raw.entities.entries()) {
     if (!isRecord(entity)) return { error: `entity ${i} is not an object` };
@@ -153,10 +171,22 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
       };
     // Placement is ours; a model's coordinates are noise.
     const { x: _x, y: _y, width: _w, height: _h, ...rest } = entity;
+    // A Shape whose `shape` is not one eraser draws would fail the whole
+    // document in the resolver. A model that writes "folder" for a project
+    // meant the icon, so a stray value becomes the icon when the entity
+    // has none and the box falls back to a rectangle, with a word.
+    if (rest.tag === "Shape" && typeof rest.shape === "string" && !STOCK_SHAPES.has(rest.shape)) {
+      const { shape, ...plain } = rest;
+      const asIcon = typeof plain.icon !== "string" || plain.icon === "";
+      warnings.push(
+        `Shape "${rest.id}": "${shape}" is not a shape (${[...STOCK_SHAPES].join(", ")}); drawn as a rectangle${asIcon ? ` with the "${shape}" icon` : ""}`,
+      );
+      entities.push((asIcon ? { ...plain, icon: shape } : plain) as DiagramEntity);
+      continue;
+    }
     entities.push(rest as DiagramEntity);
   }
 
-  const warnings: string[] = [];
   const tagOf = new Map(entities.map((e) => [e.id, e.tag]));
   const connections: DiagramConnection[] = [];
   for (const [i, connection] of rawConnections.entries()) {

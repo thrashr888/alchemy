@@ -193,6 +193,39 @@ describe("a relationship map's notes", () => {
     expect(arch.warnings).toEqual([]);
   });
 
+  it("draws a Shape with an icon name for a shape as a rectangle with that icon", () => {
+    // A live model wrote "shape": "folder" for a project — the prompt's
+    // "rectangle with the folder icon" read as a shape — and the resolver
+    // refused the whole map for it.
+    const doc = {
+      entities: [
+        { tag: "Shape", id: "stone", shape: "folder", texts: [{ text: "The Stone" }] },
+        { tag: "Shape", id: "guild", shape: "blob", icon: "building", texts: [{ text: "Guild" }] },
+        { tag: "Shape", id: "tablet", shape: "document", texts: [{ text: "Tablet" }] },
+      ],
+    };
+    const parsed = parseDiagram(JSON.stringify(doc), "relationship");
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.doc?.entities[0]).toEqual({
+      tag: "Shape",
+      id: "stone",
+      icon: "folder",
+      texts: [{ text: "The Stone" }],
+    });
+    // An entity that already has an icon keeps it; the bad shape just goes.
+    expect(parsed.doc?.entities[1]).toEqual({
+      tag: "Shape",
+      id: "guild",
+      icon: "building",
+      texts: [{ text: "Guild" }],
+    });
+    expect(parsed.doc?.entities[2].shape).toBe("document");
+    expect(parsed.warnings).toHaveLength(2);
+    expect(parsed.warnings?.[0]).toMatch(/"stone": "folder" is not a shape .*rectangle with the "folder" icon/);
+    expect(parsed.warnings?.[1]).toMatch(/"guild": "blob" is not a shape/);
+    expect(parsed.warnings?.[1]).not.toMatch(/with the/);
+  });
+
   it("defaults a relationship map to run right", () => {
     expect(parseDiagram('{"entities":[]}', "relationship").doc?.direction).toBe("right");
   });

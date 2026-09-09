@@ -215,6 +215,69 @@ and six stage names read sideways are not a journey map.
   throws if reached) via a Vite alias; the harness renders every sample
   with a clean console.
 
+## The in-app runs
+
+Two runs through the real queue, real notebooks, real sources. The first
+found the corpus path wrong for this family of artifacts; the second
+measures the fix.
+
+**First run** (Studio on `digitsflow/bonsai-8b` through Ollama, one slot).
+`architecture` valid in 19.5 min; `data_model` valid in 34 min; `journey`
+valid (Curated Supply); `relationship` valid but a tall narrow column —
+`direction: "down"`, a group nested inside a group, a Textbox wired as an
+edge endpoint (The History of Alchemy); `process` FAILED with "generation
+exceeded 20 minutes" in Alchemy Development (50 sources, ~850k chars).
+
+**Why.** `generate_content` built every artifact's corpus the same way:
+waterfill the sources into the engine's corpus budget (24k chars on
+device — ~480 chars per source across 50), and for every source over its
+allocation, distill the overflow tail against the instruction
+(`agent::distill`, uncached, one model call each) before the main prompt
+is built. Right for a summary that should not drop a source's back half;
+wrong for a diagram, which is a topology built from what each source *is
+about*. On a 50-source notebook that is dozens of 8B calls ahead of the
+diagram call, and the queue's 20-minute `RUN_DEADLINE` fires first. The
+other kinds only survived because their notebooks were small.
+
+**The gist decision.** The gist sweep (docs/RFC-infinite-context.md)
+already writes one distilled overview per source. For every kind in
+`DIAGRAM_KINDS`, the corpus is now `rag::diagram_corpus`: each source's
+heading (title, URL or file line) and its stored gist — or the first
+1,500 chars of its text when no gist exists yet — trimmed evenly to the
+same budget the prose kinds get, and the `relationship` Registry block
+after it. The builder is a pure function with no model handle, so it
+cannot distill; a 50-source diagram is ONE model call. Sources without a
+gist are counted and logged as one line. The waterfill-and-distill path
+is the prose kinds' alone now (`waterfill_corpus`).
+
+**Second run**, same notebooks, on this branch.
+
+| kind | notebook | before | after |
+| --- | --- | --- | --- |
+| `process` | Alchemy Development (50 sources) | dozens of model calls, failed at 20 min | one model call: 14 s on the configured Studio provider (GitHub Copilot CLI); 5 min 50 s forced through Ollama (`muse-glimmer:30b-mlx`) via the MCP `generate` provider override |
+| `relationship` | The History of Alchemy | valid, tall narrow column | one model call, 20 s: `direction: "right"`, 19 entities in two sibling groups, every edge labeled, no Textbox endpoint |
+
+45 of the 50 sources had gists; the five without fell back to their head
+(the log line says so). The process map parsed on the first attempt and
+rendered: five lanes, one path from the opening event to the closing one
+(`docs/images/in-app-process.png`). The relationship map's first document
+did not render: the model wrote `"shape": "folder"` for a project, taking
+the prompt's "a project is a rectangle with the folder icon" as a shape.
+The prompt now enumerates the stock shapes again (the rewrite had lost
+that line), and the parser coerces a `shape` outside eraser's list to a
+rectangle — moving it to `icon` when it names one — with a warning the
+viewer shows, so a one-token slip costs a chip, not the map
+(`docs/images/in-app-relationship.png`).
+
+What the relationship rewrite changed, beyond the corpus: the prompt asks
+for `direction: "right"`, groups one level deep as siblings, people as
+`Icon` `user`, works as `Shape` `document`, organizations and places as
+`Shape`s with the `building`/`globe` icon, 8–20 entities, and a Textbox
+that is never an endpoint; `parseDiagram` drops a relationship line into
+a Textbox with a warning; and the layout aligns the kind's ranks flush
+(`align: "start"`, as the journey map does) so a chain reads as a row
+across its era instead of floating mid-column.
+
 ## Risks
 
 - **Bundle.** Three packages plus vendored assets: the lazy diagram chunk

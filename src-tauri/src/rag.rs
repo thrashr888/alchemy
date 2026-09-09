@@ -861,7 +861,8 @@ fn relationship_instruction() -> String {
          {{\"tag\":\"Shape\",\"id\":\"emerald\",\"shape\":\"document\",\"texts\":[{{\"text\":\"Emerald Tablet\"}}],\"color\":\"green\"}}; \
          an organization is \"shape\":\"rectangle\" with \"icon\":\"building\"; a place is \
          \"shape\":\"rectangle\" with \"icon\":\"globe\"; a project is \"shape\":\"rectangle\" with \
-         \"icon\":\"folder\".\n\
+         \"icon\":\"folder\". \"shape\" is only ever rectangle, document, hexagon, circle, or \
+         ellipse; an icon name is never a shape.\n\
          - Textbox — a short free note beside the map, never connected to anything: \
          {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"Dates are disputed\"}}. A connection may \
          not start or end at a Textbox; say it in the note's text instead.\n\
