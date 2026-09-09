@@ -3,6 +3,7 @@ import type { NoteKind } from "@/lib/types";
 import {
   AudioLines,
   BarChart3,
+  Boxes,
   ClipboardList,
   Clock,
   FileCode2,
@@ -82,6 +83,11 @@ const LEARNING = inFamily("learning", [
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
   { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
   { kind: "uml", label: "UML diagram", icon: <Workflow className="h-3.5 w-3.5" /> },
+  {
+    kind: "architecture",
+    label: "Architecture diagram",
+    icon: <Boxes className="h-3.5 w-3.5" />,
+  },
   {
     kind: "slide_deck",
     label: "Slide deck",

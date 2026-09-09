@@ -290,6 +290,7 @@ export type NoteKind =
   | "audio_overview"
   | "mind_map"
   | "uml"
+  | "architecture"
   | "slide_deck"
   | "infographic"
   | "data_table"

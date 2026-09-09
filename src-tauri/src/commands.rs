@@ -12949,6 +12949,7 @@ pub(crate) fn note_kind_from_label(label: &str) -> String {
         "quiz",
         "mind_map",
         "uml",
+        "architecture",
         "data_table",
         "round_table",
         "problems",

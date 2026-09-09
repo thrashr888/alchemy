@@ -6,6 +6,7 @@ import { PrintPortal } from "./printExport";
 import { parseInfographic, PrintInfographic } from "./Infographic";
 import { PrintMindMap } from "./MindMap";
 import { PrintUml } from "./UmlDiagram";
+import { PrintArchitecture } from "./ArchitectureDiagram";
 import { parseDeck, PrintDeck } from "./SlideDeck";
 import { parseCards, PrintCards } from "./Flashcards";
 
@@ -31,11 +32,12 @@ export function PrintExportView({
   // Slide pages print edge-to-edge on 16:9 landscape paper (print_webview).
   const deck =
     note?.kind === "slide_deck" ? parseDeck(note.content, appTheme) : null;
-  // UML sheets are the one kind whose ink isn't there on the first frame:
-  // mermaid is a lazily-imported chunk, and printing before it answers ships
-  // a blank page. The sheet says when it has settled (diagram or error) and
-  // the timeout keeps a wedged render from leaving the window open forever.
-  const asyncSheet = note?.kind === "uml";
+  // Diagram sheets are the kinds whose ink isn't there on the first frame:
+  // mermaid and the eraser engine are lazily-imported chunks, and printing
+  // before they answer ships a blank page. The sheet says when it has
+  // settled (diagram or error) and the timeout keeps a wedged render from
+  // leaving the window open forever.
+  const asyncSheet = note?.kind === "uml" || note?.kind === "architecture";
   const [sheetReady, setSheetReady] = useState(false);
   useEffect(() => {
     if (!asyncSheet) return;
@@ -62,6 +64,10 @@ export function PrintExportView({
   if (note.kind === "uml")
     return (
       <PrintUml content={note.content} onReady={() => setSheetReady(true)} />
+    );
+  if (note.kind === "architecture")
+    return (
+      <PrintArchitecture content={note.content} onReady={() => setSheetReady(true)} />
     );
   if (deck) return <PrintDeck deck={deck} />;
   if (note.kind === "flashcards") {

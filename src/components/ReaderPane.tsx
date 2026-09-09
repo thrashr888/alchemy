@@ -20,6 +20,7 @@ import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
+import { ArchitectureDiagram } from "./ArchitectureDiagram";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { LazyRichEditor } from "./LazyRichEditor";
@@ -977,6 +978,7 @@ export function ReaderPane() {
               "infographic",
               "mind_map",
               "uml",
+              "architecture",
               "quiz",
               "flashcards",
               "audio_overview",
@@ -2957,12 +2959,16 @@ function NoteReader({
   const rebuilding = !!generatingKind && note.kind !== "note";
   // Kinds that size themselves to the pane and bring their own controls.
   const fillsPane =
-    note.kind === "slide_deck" || note.kind === "mind_map" || note.kind === "uml";
+    note.kind === "slide_deck" ||
+    note.kind === "mind_map" ||
+    note.kind === "uml" ||
+    note.kind === "architecture";
   const artifact =
     note.kind === "slide_deck" ||
     note.kind === "infographic" ||
     note.kind === "mind_map" ||
     note.kind === "uml" ||
+    note.kind === "architecture" ||
     note.kind === "quiz" ||
     note.kind === "flashcards" ||
     note.kind === "audio_overview";
@@ -3023,6 +3029,8 @@ function NoteReader({
             <MindMap content={note.content} />
           ) : note.kind === "uml" ? (
             <UmlDiagram content={note.content} />
+          ) : note.kind === "architecture" ? (
+            <ArchitectureDiagram content={note.content} />
           ) : note.kind === "flashcards" ? (
             <Flashcards content={note.content} noteId={note.id} />
           ) : note.kind === "quiz" ? (

@@ -103,10 +103,10 @@ pub async fn export_note_file(
         }
         "png" => {
             let tmp = print_note_pdf(app, &note).await?;
-            // Mind maps and UML diagrams scale to fit one sheet, so
-            // rasterize them wider to keep node labels crisp; posters get
-            // poster width.
-            let width = if note.kind == "mind_map" || note.kind == "uml" {
+            // Mind maps and diagrams scale to fit one sheet, so rasterize
+            // them wider to keep node labels crisp; posters get poster
+            // width.
+            let width = if matches!(note.kind.as_str(), "mind_map" | "uml" | "architecture") {
                 2200
             } else {
                 1600
