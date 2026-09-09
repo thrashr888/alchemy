@@ -129,9 +129,12 @@ fn effective_fetched_at(source: &Source) -> i64 {
 const DUPLICATE_MIN_CHARS: usize = 60;
 
 /// How good a keeper a copy makes: 0 refreshes from here, 1 is whole on
-/// another Mac, 2 is a local file that is gone.
+/// another Mac, 2 is a local file that is gone, 3 has no text at all — an
+/// import that failed is a shared identity, not a keeper.
 fn keeper_rank(s: &Source) -> u8 {
-    if has_file(s) {
+    if s.char_count == 0 || s.status == "error" {
+        3
+    } else if has_file(s) {
         0
     } else if s.remote {
         1
@@ -792,6 +795,26 @@ mod tests {
         // remote one, which is whole on its own Mac and keeps the identity.
         assert_eq!(buckets(&issues), vec![("here", "duplicate")]);
         assert_eq!(issues[0].keeper_id, "away");
+    }
+
+    /// The same URL added twice, the older import having failed: the copy
+    /// with text keeps the identity, and the empty one is the duplicate.
+    #[test]
+    fn an_empty_failed_import_is_never_the_keeper() {
+        let now = 100 * DAY;
+        let mut husk = src("husk", "url");
+        husk.url = "https://example.com/doc".into();
+        husk.status = "error".into();
+        husk.char_count = 0;
+        husk.created_at = now - 2 * DAY;
+        husk.fetched_at = now;
+        let mut whole = src("whole", "url");
+        whole.url = "https://example.com/doc".into();
+        whole.created_at = now - DAY;
+        whole.fetched_at = now;
+        let issues = classify(&[husk, whole], 30, now);
+        assert_eq!(buckets(&issues), vec![("husk", "duplicate")]);
+        assert_eq!(issues[0].keeper_id, "whole");
     }
 
     /// Two Macs each imported the same document: the other's original names a
