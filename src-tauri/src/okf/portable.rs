@@ -304,6 +304,22 @@ fn recover_legacy_paths(
     Ok(!assigned.is_empty())
 }
 
+/// The next `name-N.md` beside `path` that no file occupies and no row
+/// claims — where a row goes when another identity has taken its path.
+fn free_variant(bundle: &Path, manifest: &OkfManifest, path: &str) -> String {
+    let stem = path.strip_suffix(".md").unwrap_or(path);
+    (2..)
+        .map(|n| format!("{stem}-{n}.md"))
+        .find(|candidate| {
+            !bundle.join(candidate).exists()
+                && !manifest
+                    .concepts
+                    .values()
+                    .any(|entry| entry.path == *candidate)
+        })
+        .expect("an unbounded range always yields a free name")
+}
+
 /// Validate the whole set before importing any row. A moved file takes its
 /// existing local row and conflict baseline with it. Simultaneous copies of
 /// one identity are ambiguous, so keep both files and require repair.
@@ -328,7 +344,7 @@ pub(super) fn prepare(
                 .map_err(|err| err.to_string())?
                 .to_string_lossy()
                 .replace('\\', "/");
-            let known = candidate
+            let mut known = candidate
                 .concepts
                 .iter()
                 .find(|(_, entry)| entry.path == rel && !deleted.contains(&entry.portable_id))
@@ -367,14 +383,30 @@ pub(super) fn prepare(
                 }
                 continue;
             }
-            if let Some((_, entry)) = &known {
+            if let Some((id, entry)) = &known {
                 if !entry.portable_id.is_empty() {
                     if explicit.as_ref().is_some_and(|id| *id != entry.portable_id) {
-                        return Err(format!(
-                            "Sync identity changed at {rel}; both versions were left intact"
+                        // Another identity now owns this path: two Macs each
+                        // minted the same page and both slugged it here. The
+                        // file is theirs; this row keeps its identity and its
+                        // text and moves to the next free name, where the
+                        // writer puts it back. Neither version is lost.
+                        let fresh = free_variant(bundle, &candidate, &entry.path);
+                        let moved = candidate.concepts.get_mut(id).unwrap();
+                        moved.path = fresh.clone();
+                        moved.adopted = true;
+                        moved.file_mtime = 0;
+                        moved.file_len = 0;
+                        moved.missing_since = 1;
+                        moved.rewrite_pending = true;
+                        changed = true;
+                        super::okf_notice(format!(
+                            "{rel} now carries another sync identity; this Mac's version moves to {fresh}"
                         ));
+                        known = None;
+                    } else {
+                        portable_id = entry.portable_id.clone();
                     }
-                    portable_id = entry.portable_id.clone();
                 }
             }
             if versioned && explicit.is_none() && doc.nested("alchemy", "id").is_some() {

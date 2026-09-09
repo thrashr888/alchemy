@@ -733,3 +733,36 @@ async fn private_copy_overwrites_its_own_unrecorded_bytes() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.ends_with("Tonight's content\n"), "{text}");
 }
+
+#[tokio::test]
+async fn another_identity_at_our_path_moves_our_row_aside() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let a = lab.replica("a", &bundle).await;
+    seed_notes(&a).await;
+    // The other Mac minted the same page and slugged it to our path with
+    // its own identity.
+    let path = bundle.join("notes/note-0.md");
+    let ours = std::fs::read_to_string(&path).unwrap();
+    let old = portable::explicit_id(&parse_okf_doc(&ours))
+        .unwrap()
+        .unwrap();
+    let theirs = ours
+        .replace(&old, "11111111-1111-4111-8111-111111111111")
+        .replace("Original content 0", "Their version");
+    std::fs::write(&path, &theirs).unwrap();
+    let out = reconcile(&a, "shared-notebook").await.unwrap();
+    assert_eq!(out.created, 1, "{out:?}");
+    assert_eq!(
+        a.db.get_note("note-0").await.unwrap().unwrap().content,
+        "Original content 0"
+    );
+    assert_eq!(a.db.list_notes("shared-notebook").await.unwrap().len(), 6);
+    write_bound(&a, "shared-notebook").await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    let moved = std::fs::read_to_string(bundle.join("notes/note-0-2.md")).unwrap();
+    assert!(
+        moved.contains(&old) && moved.ends_with("Original content 0\n"),
+        "{moved}"
+    );
+}
