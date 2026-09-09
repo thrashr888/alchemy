@@ -78,6 +78,12 @@ export interface LayoutOptions {
    *  widest rank (the default), or flush with its start — columns of a
    *  journey map share a top edge. */
   align?: "center" | "start";
+  /** Where a level's disconnected islands go: side by side across the
+   *  main axis, all starting at rank 0 (the default — unrelated tiers of
+   *  an architecture sit beside each other), or chained along it, each
+   *  island starting at the rank after the last one ends — a relationship
+   *  map's eras read left to right instead of stacking into a column. */
+  islands?: "across" | "along";
 }
 
 export interface Placement {
@@ -161,6 +167,36 @@ function rank(ids: string[], edges: Edge[]): Map<string, number> {
     }
   }
   return ranks;
+}
+
+/**
+ * Shift each connected island's ranks so the islands follow one another
+ * along the main axis, in the order their first member appears.
+ */
+function chainIslands(ids: string[], ranks: Map<string, number>, edges: Edge[]): void {
+  const parent = new Map<string, string>(ids.map((id) => [id, id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    return root;
+  };
+  for (const [from, to] of edges) {
+    if (!parent.has(from) || !parent.has(to)) continue;
+    const a = find(from);
+    const b = find(to);
+    if (a !== b) parent.set(b, a);
+  }
+  const offset = new Map<string, number>();
+  let next = 0;
+  for (const id of ids) {
+    const root = find(id);
+    if (!offset.has(root)) {
+      offset.set(root, next);
+      const depth = Math.max(0, ...ids.filter((m) => find(m) === root).map((m) => ranks.get(m) ?? 0));
+      next += depth + 1;
+    }
+  }
+  for (const id of ids) ranks.set(id, (ranks.get(id) ?? 0) + (offset.get(find(id)) ?? 0));
 }
 
 /** Ranks → ordered layers, each sorted by the mean position of its predecessors. */
@@ -361,6 +397,7 @@ export function placeNodes(
       : sequence
         ? new Map(ids.map((id, i) => [id, i]))
         : rank(ids, lifted);
+    if (!shared && !sequence && options.islands === "along") chainIslands(ids, ranks, lifted);
     const ordered = layers(ids, ranks, lifted);
     const rel = new Map<string, Box>();
     // Along the main axis each rank is one band; across it, the rank's

@@ -178,8 +178,11 @@ function placed(doc: DiagramDoc, kind: DiagramKind, sizeOf: (entity: DiagramEnti
     direction: doc.direction,
     // Journey stages share a top edge, and a relationship map's ranks
     // share one so a chain of people reads as a row across its era;
-    // everything else centers on its widest rank.
+    // everything else centers on its widest rank. A relationship map's
+    // islands — eras the sources never connect — follow one another along
+    // the flow rather than stacking into one tall first column.
     ...(kind === "journey" || kind === "relationship" ? { align: "start" as const } : {}),
+    ...(kind === "relationship" ? { islands: "along" as const } : {}),
   });
 }
 

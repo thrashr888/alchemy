@@ -268,6 +268,50 @@ describe("placeNodes for the diagram kinds", () => {
     expect(placed.width).toBeGreaterThan(placed.height);
   });
 
+  it("chains a level's islands along the flow when asked", () => {
+    // Three eras the sources never connect to each other, plus one loose
+    // person: stacked into one column by default, laid left to right for
+    // a relationship map.
+    const nodes = [
+      group("egypt"),
+      leaf("zosimos", "egypt"),
+      leaf("tablet"),
+      group("islam"),
+      leaf("jabir", "islam"),
+      leaf("razi", "islam"),
+      group("europe"),
+      leaf("bacon", "europe"),
+      leaf("jung"),
+    ];
+    const edges = [
+      { from: "zosimos", to: "tablet" },
+      { from: "jabir", to: "razi" },
+    ];
+    const stacked = placeNodes(nodes, edges, { direction: "right", align: "start" });
+    const chained = placeNodes(nodes, edges, {
+      direction: "right",
+      align: "start",
+      islands: "along",
+    });
+    const at = (p: typeof stacked, id: string) => p.boxes.get(id) as Box;
+    // By default every island starts at rank 0: one tall column.
+    expect(at(stacked, "egypt").x).toBe(at(stacked, "islam").x);
+    expect(at(stacked, "islam").x).toBe(at(stacked, "europe").x);
+    expect(stacked.height).toBeGreaterThan(stacked.width);
+    // Chained: egypt, its tablet, then islam, then europe, then jung, each
+    // to the right of the last, on one row.
+    const order = ["egypt", "tablet", "islam", "europe", "jung"].map((id) => at(chained, id));
+    for (let i = 1; i < order.length; i += 1) {
+      expect(order[i - 1].x + order[i - 1].width).toBeLessThanOrEqual(order[i].x);
+      expect(order[i].y).toBe(order[0].y);
+    }
+    // Inside an era nothing changes: jabir still precedes razi.
+    expect(at(chained, "jabir").x).toBeLessThan(at(chained, "razi").x);
+    expect(chained.width).toBeGreaterThan(chained.height);
+    // Members of an island keep their order relative to each other.
+    expect(at(chained, "zosimos").x).toBeLessThan(at(chained, "tablet").x);
+  });
+
   it("widens a rank gap that a labeled connection crosses", () => {
     const nodes = () => [leaf("a"), leaf("b"), leaf("c")];
     const chain = (labeled: boolean) => [

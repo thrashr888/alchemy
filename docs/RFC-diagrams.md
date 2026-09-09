@@ -278,6 +278,17 @@ a Textbox with a warning; and the layout aligns the kind's ranks flush
 (`align: "start"`, as the journey map does) so a chain reads as a row
 across its era instead of floating mid-column.
 
+The second document exposed the other half of the tall column. A
+relationship corpus is islands — eras the sources never connect to one
+another — and the layered layout starts every island at rank 0, so with
+`direction: "right"` six islands became one first column 1,400px tall
+and three ranks wide. The layout now takes `islands: "along"`
+(relationship only): each connected island starts at the rank after the
+last one ends, in document order, so the eras follow one another along
+the flow. The same 28-entity map is 3,871×423 now, and reads as a
+timeline (`docs/images/in-app-relationship.png`). Architecture keeps the
+default — unrelated tiers belong beside each other.
+
 ## Risks
 
 - **Bundle.** Three packages plus vendored assets: the lazy diagram chunk
@@ -305,5 +316,8 @@ across its era instead of floating mid-column.
 ## Not in this RFC
 
 The fetch-and-cache icon fallback, a dark palette, `Legend` and `Badge`,
-personas as rows on a journey map (one persona per map for now), and
-letting a user edit the document in place with a re-render.
+personas as rows on a journey map (one persona per map for now), letting
+a user edit the document in place with a re-render, and wrapping a
+relationship map's chained islands into rows once the row runs past a
+few screen widths (a six-island map is one long strip today; it pans,
+but a 3:1 sheet would read better and print better).

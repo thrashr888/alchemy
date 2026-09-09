@@ -208,6 +208,10 @@ export function MindMap({ content }: { content: string }) {
   );
 }
 
+/** How far the canvas zooms out. Fit means fit: a six-era relationship
+ *  strip runs four pane widths, and a floor of a quarter cut its last era off. */
+const MIN_SCALE = 0.1;
+
 /** Infinite-canvas panning and zooming (Photoshop-style): drag with a grab
  *  cursor or two-finger scroll to move; pinch (ctrl+wheel on macOS) or the
  *  corner buttons to zoom around the cursor. Shared with the UML and eraser
@@ -229,7 +233,7 @@ export function PanCanvas({
   const fitted = () => {
     const r = viewportRef.current?.getBoundingClientRect();
     if (!fit || !r || !fit.width || !fit.height) return { x: 0, y: 0, scale: 1 };
-    const scale = Math.max(0.25, Math.min(1, r.width / fit.width, r.height / fit.height));
+    const scale = Math.max(MIN_SCALE, Math.min(1, r.width / fit.width, r.height / fit.height));
     return {
       scale,
       x: Math.max(0, (r.width - fit.width * scale) / 2),
@@ -247,7 +251,7 @@ export function PanCanvas({
   /** Zoom by a factor keeping the given viewport point fixed. */
   const zoomAt = (factor: number, cx: number, cy: number) => {
     setView((v) => {
-      const scale = Math.min(3, Math.max(0.25, v.scale * factor));
+      const scale = Math.min(3, Math.max(MIN_SCALE, v.scale * factor));
       const k = scale / v.scale;
       return { scale, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
     });
@@ -265,7 +269,7 @@ export function PanCanvas({
         const rect = el.getBoundingClientRect();
         setView((v) => {
           const factor = Math.exp(-e.deltaY * 0.01);
-          const scale = Math.min(3, Math.max(0.25, v.scale * factor));
+          const scale = Math.min(3, Math.max(MIN_SCALE, v.scale * factor));
           const k = scale / v.scale;
           const cx = e.clientX - rect.left;
           const cy = e.clientY - rect.top;
