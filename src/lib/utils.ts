@@ -109,6 +109,29 @@ export function folderProvider(path: string): string | null {
   return folderCloudProvider(path)?.label ?? null;
 }
 
+/** A folder path the way Finder would name it: the sync provider first
+ *  (“iCloud Drive”, with an app container shown by its app name, the way
+ *  Finder lists it), then the folders under it, joined by ›. Anything
+ *  not under a sync root shows as a ~-relative path. */
+export function folderBreadcrumb(dir: string): string {
+  const join = (parts: string[]) => parts.filter(Boolean).join(" › ");
+  const icloud = dir.match(/\/Library\/Mobile Documents\/([^/]+)(?:\/(.*))?$/);
+  if (icloud) {
+    const [, container, rest = ""] = icloud;
+    const app =
+      container === "com~apple~CloudDocs"
+        ? ""
+        : (container.split("~").pop() ?? "").replace(/^\w/, (c) => c.toUpperCase());
+    return join(["iCloud Drive", app, ...rest.split("/")]);
+  }
+  const cloud = dir.match(/\/Library\/CloudStorage\/[^/]+(?:\/(.*))?$/);
+  const provider = folderProvider(dir);
+  if (cloud && provider) return join([provider, ...(cloud[1] ?? "").split("/")]);
+  const home = dir.match(/^\/(?:Users|home)\/[^/]+\/(Dropbox|Box)(?:\/(.*))?$/);
+  if (home && provider) return join([provider, ...(home[2] ?? "").split("/")]);
+  return dir.replace(/^\/Users\/[^/]+/, "~");
+}
+
 /**
  * Has this note (or report) changed since the user last opened it? Notes from
  * before read tracking existed fall under the baseline and count as read.

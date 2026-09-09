@@ -8,7 +8,7 @@ import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
 import { Button, Input, Modal, Spinner, Switch } from "./ui";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
-import { cn } from "@/lib/utils";
+import { cn, folderBreadcrumb } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
 import {
   AboutTab,
@@ -430,16 +430,20 @@ function NotebooksFolderRow() {
   const pushToast = useStore((s) => s.pushToast);
   if (!aiConfig) return null;
   const dir = aiConfig.notebooksDir;
-  const shown = dir.replace(/^\/Users\/[^/]+/, "~");
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">Notebooks folder</span>
+      {/* A label and a value on one line, the way System Settings shows a
+          location: the label never wraps, the value gives way and carries
+          the full path as its tooltip. The value reads like Finder's
+          breadcrumb (“iCloud Drive › Alchemy › Documents”), not like a
+          Unix path a person has to decode. */}
+      <div className="flex items-baseline gap-3">
+        <span className="shrink-0 text-body text-foreground">Folder</span>
         <span
-          className="min-w-0 truncate text-micro text-subtle-foreground"
-          title={dir}
+          className="ml-auto min-w-0 truncate text-right text-caption text-muted-foreground"
+          title={dir || undefined}
         >
-          {shown || "Not set"}
+          {dir ? folderBreadcrumb(dir) : "Not set"}
         </span>
       </div>
       <span className="text-micro leading-relaxed text-subtle-foreground">
