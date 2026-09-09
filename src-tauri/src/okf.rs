@@ -782,7 +782,7 @@ fn write_bundle_with(
                     manifest.protocol_version == 1
                         && !deleted.contains(&portable_id)
                         && p.missing_since != 0
-                        && now_ms() - p.missing_since >= OKF_MISSING_GRACE_MS
+                        && now_ms() - p.missing_since >= OKF_RESTORE_GRACE_MS
                 });
                 if !restore {
                     if let Some(p) = &prior {
@@ -4647,6 +4647,13 @@ fn outside_actor(doc: &OkfDoc) -> String {
 /// it. Two passes at least this far apart, both finding it absent.
 pub(crate) const OKF_MISSING_GRACE_MS: i64 = 60_000;
 
+/// How long a row's file may be missing without a deletion record before
+/// the writer puts it back. Much longer than the delete grace: a cloud
+/// drive delivers a file's removal and the record that explains it as two
+/// events, sometimes far apart, and restoring in that gap hands the other
+/// Mac back the file it just removed — which it then imports as new.
+pub(crate) const OKF_RESTORE_GRACE_MS: i64 = 30 * 60_000;
+
 /// What a pass should do about the concepts whose files it did not find.
 ///
 /// Pure over the manifest and a presence test, so the whole delete policy is
@@ -5072,7 +5079,7 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         // file back once the grace has passed (§5.3).
         if manifest.protocol_version == 1 && !deleted.contains(&entry.portable_id) {
             okf_notice(format!(
-                "{rel} is missing without a deletion record; keeping the row and restoring the file"
+                "{rel} is missing without a deletion record; keeping the row, and restoring the file if none arrives"
             ));
             continue;
         }
