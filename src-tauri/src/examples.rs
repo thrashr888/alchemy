@@ -842,7 +842,19 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
     if let Ok(v) = std::fs::read_to_string(&marker) {
         if v.trim() == EXAMPLES_VERSION {
-            return false;
+            // Seeded and current. A starter the user deleted stays deleted;
+            // one that is still here but has lost every source — a cleanup
+            // that swept too wide, a sync that took the rows — gets its
+            // built-in sources back, since they are the app's, not the
+            // user's, and an empty starter teaches nothing.
+            let ai = state.ai.read().await.clone();
+            return match refill_empty_starters(&state.db, &ai).await {
+                Ok(n) => n > 0,
+                Err(err) => {
+                    crate::note!("examples: refilling an emptied starter failed ({err:#}); will retry next launch");
+                    false
+                }
+            };
         }
         // Seeded by an older build: add what that build didn't have, without
         // re-offering anything the user deleted. Failure (embedder not up
@@ -908,6 +920,46 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         crate::note!("examples: couldn't write marker: {err}");
     }
     seeded
+}
+
+/// Put the built-in sources back into any starter notebook that still
+/// exists but has none. Returns how many sources landed. Everything is
+/// embedded before anything is written, like first seeding.
+async fn refill_empty_starters(db: &Db, ai: &Ai) -> anyhow::Result<usize> {
+    let notebooks = db.list_notebooks().await?;
+    let mut landed = 0usize;
+    for nb in notebooks.iter().filter(|n| is_starter_title(&n.title)) {
+        if !db.list_sources(&nb.id).await?.is_empty() {
+            continue;
+        }
+        let mut prepared = Vec::new();
+        if nb.title == CURATED_TITLE {
+            for src in CURATED_SOURCES {
+                prepared.push(prepare_curated(ai, src).await?);
+            }
+        } else {
+            let sources = match nb.title.as_str() {
+                INTRO_TITLE => INTRO_SOURCES,
+                EARNINGS_TITLE => EARNINGS_SOURCES,
+                AI_RESEARCH_TITLE => AI_RESEARCH_SOURCES,
+                _ => continue,
+            };
+            for (src_title, url, body) in sources {
+                prepared.push(prepare_source(ai, src_title, url, body).await?);
+            }
+        }
+        let n = prepared.len();
+        let ts = now();
+        for p in prepared {
+            insert_prepared(db, &nb.id, ts, p).await?;
+        }
+        crate::note!(
+            "examples: refilled the emptied starter \u{201c}{}\u{201d} with {n} sources",
+            nb.title
+        );
+        landed += n;
+    }
+    Ok(landed)
 }
 
 /// Insert papers this build knows and the seeded notebook lacks (matched by
