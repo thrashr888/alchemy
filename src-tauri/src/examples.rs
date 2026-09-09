@@ -23,6 +23,14 @@ pub(crate) const INTRO_TITLE: &str = "Introduction to Alchemy";
 pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporations";
 pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 pub(crate) const CURATED_TITLE: &str = "Curated Supply: Well-Designed Objects";
+pub(crate) const ALCHEMY_HISTORY_TITLE: &str = "The History of Alchemy";
+
+/// Lucide icon for the alchemy-history notebook. The title-keyword auto-pick
+/// (`auto_notebook_icon`) would file "History" under a landmark; a flask is
+/// the better emblem for the real alchemy. Must be a name the frontend's
+/// `NOTEBOOK_ICONS` map knows — the test below checks it against the
+/// auto-pick table, which carries the same constraint.
+const ALCHEMY_HISTORY_ICON: &str = "flask-conical";
 
 /// Every notebook this file seeds, by the one thing that survives seeding.
 ///
@@ -39,6 +47,7 @@ pub(crate) const STARTER_TITLES: &[&str] = &[
     EARNINGS_TITLE,
     AI_RESEARCH_TITLE,
     CURATED_TITLE,
+    ALCHEMY_HISTORY_TITLE,
 ];
 
 /// Is this notebook one the app seeded rather than one the user made?
@@ -510,6 +519,64 @@ const AI_RESEARCH_SOURCES: &[ExampleSource] = &[
     ),
 ];
 
+/// The history of alchemy — the real one, not this app — as a reading
+/// corpus: ten essays in roughly chronological order, Hellenistic Egypt
+/// through the split from chemistry, with the Chinese and Indian traditions
+/// and a glossary at the end. Bodies are our own prose; each `url` is the
+/// matching Wikipedia article, so a citation opens onto something readable.
+const ALCHEMY_HISTORY_SOURCES: &[ExampleSource] = &[
+    (
+        "Origins in Hellenistic Egypt",
+        "https://en.wikipedia.org/wiki/Zosimos_of_Panopolis",
+        include_str!("../examples/alchemy-history/origins.md"),
+    ),
+    (
+        "Alchemy in the Islamic World",
+        "https://en.wikipedia.org/wiki/Alchemy_and_chemistry_in_the_medieval_Islamic_world",
+        include_str!("../examples/alchemy-history/islamic.md"),
+    ),
+    (
+        "Medieval Latin Alchemy",
+        "https://en.wikipedia.org/wiki/Pseudo-Geber",
+        include_str!("../examples/alchemy-history/medieval.md"),
+    ),
+    (
+        "Paracelsus and Chemical Medicine",
+        "https://en.wikipedia.org/wiki/Paracelsus",
+        include_str!("../examples/alchemy-history/paracelsus.md"),
+    ),
+    (
+        "The Philosopher's Stone",
+        "https://en.wikipedia.org/wiki/Philosopher%27s_stone",
+        include_str!("../examples/alchemy-history/philosophers-stone.md"),
+    ),
+    (
+        "The Laboratory: Furnaces, Stills, and Vessels",
+        "https://en.wikipedia.org/wiki/Alembic",
+        include_str!("../examples/alchemy-history/apparatus.md"),
+    ),
+    (
+        "Boyle, Newton, and the Birth of Chemistry",
+        "https://en.wikipedia.org/wiki/Isaac_Newton%27s_occult_studies",
+        include_str!("../examples/alchemy-history/newton-boyle.md"),
+    ),
+    (
+        "Symbols, Emblems, and Jung",
+        "https://en.wikipedia.org/wiki/Psychology_and_Alchemy",
+        include_str!("../examples/alchemy-history/symbolism-and-jung.md"),
+    ),
+    (
+        "Alchemy in China and India",
+        "https://en.wikipedia.org/wiki/Chinese_alchemy",
+        include_str!("../examples/alchemy-history/china-and-india.md"),
+    ),
+    (
+        "Glossary of Alchemy",
+        "https://en.wikipedia.org/wiki/Alchemy",
+        include_str!("../examples/alchemy-history/glossary.md"),
+    ),
+];
+
 /// Objects from curated.supply — a design-goods catalog — as URL sources:
 /// the demo corpus for the Gallery (photos, not first lines) and for
 /// shopping-style questions ("what's the cheapest espresso machine?").
@@ -834,9 +901,9 @@ const CURATED_SOURCES: &[CuratedSource] = &[
 /// notebooks after the marker exists is final.
 /// Bump when the example content grows, so installs seeded by an older build
 /// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
-/// version; the original release wrote "1", the papers top-up "2", and the
-/// curated-objects notebook "3".
-const EXAMPLES_VERSION: &str = "3";
+/// version; the original release wrote "1", the papers top-up "2", the
+/// curated-objects notebook "3", and the alchemy-history notebook "4".
+const EXAMPLES_VERSION: &str = "4";
 
 pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
@@ -856,6 +923,9 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
                 }
             };
         }
+        // Every marker so far has held a small integer; anything else reads
+        // as the original release.
+        let seeded_at: u32 = v.trim().parse().unwrap_or(1);
         // Seeded by an older build: add what that build didn't have, without
         // re-offering anything the user deleted. Failure (embedder not up
         // yet) leaves the marker at the old version so the next launch
@@ -868,13 +938,35 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
                 return false;
             }
         };
-        // A whole notebook this build adds (v3): offered once, like the
-        // originals — skipped by title if it already exists.
-        match seed_curated(&state.db, &ai).await {
-            Ok(created) => added |= created,
-            Err(err) => {
-                crate::note!("examples: seeding \u{201c}{CURATED_TITLE}\u{201d} failed ({err:#}); will retry next launch");
-                return added;
+        // Whole notebooks a later build adds are offered once, like the
+        // originals — skipped by title if they already exist — and only to
+        // installs seeded before the version that introduced them. A v3
+        // install that deleted the curated notebook must not get it back
+        // when v4 arrives.
+        if seeded_at < 3 {
+            match seed_curated(&state.db, &ai).await {
+                Ok(created) => added |= created,
+                Err(err) => {
+                    crate::note!("examples: seeding \u{201c}{CURATED_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+                    return added;
+                }
+            }
+        }
+        if seeded_at < 4 {
+            match seed_notebook(
+                &state.db,
+                &ai,
+                ALCHEMY_HISTORY_TITLE,
+                ALCHEMY_HISTORY_ICON,
+                ALCHEMY_HISTORY_SOURCES,
+            )
+            .await
+            {
+                Ok(created) => added |= created,
+                Err(err) => {
+                    crate::note!("examples: seeding \u{201c}{ALCHEMY_HISTORY_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+                    return added;
+                }
             }
         }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
@@ -888,12 +980,17 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     // embedder, not a forced fallback.
     let ai = state.ai.read().await.clone();
     let mut seeded = false;
-    for (title, sources) in [
-        (INTRO_TITLE, INTRO_SOURCES),
-        (EARNINGS_TITLE, EARNINGS_SOURCES),
-        (AI_RESEARCH_TITLE, AI_RESEARCH_SOURCES),
+    for (title, icon, sources) in [
+        (INTRO_TITLE, "", INTRO_SOURCES),
+        (EARNINGS_TITLE, "", EARNINGS_SOURCES),
+        (AI_RESEARCH_TITLE, "", AI_RESEARCH_SOURCES),
+        (
+            ALCHEMY_HISTORY_TITLE,
+            ALCHEMY_HISTORY_ICON,
+            ALCHEMY_HISTORY_SOURCES,
+        ),
     ] {
-        match seed_notebook(&state.db, &ai, title, sources).await {
+        match seed_notebook(&state.db, &ai, title, icon, sources).await {
             Ok(created) => seeded |= created,
             Err(err) => {
                 // Quiet abort (usually: no embed model reachable yet) —
@@ -942,6 +1039,7 @@ async fn refill_empty_starters(db: &Db, ai: &Ai) -> anyhow::Result<usize> {
                 INTRO_TITLE => INTRO_SOURCES,
                 EARNINGS_TITLE => EARNINGS_SOURCES,
                 AI_RESEARCH_TITLE => AI_RESEARCH_SOURCES,
+                ALCHEMY_HISTORY_TITLE => ALCHEMY_HISTORY_SOURCES,
                 _ => continue,
             };
             for (src_title, url, body) in sources {
@@ -1169,10 +1267,12 @@ async fn insert_prepared(db: &Db, notebook_id: &str, ts: i64, p: Prepared) -> an
         .await
 }
 
+/// `icon` is a lucide name the frontend knows, or "" for the default book.
 async fn seed_notebook(
     db: &Db,
     ai: &Ai,
     title: &str,
+    icon: &str,
     sources: &[ExampleSource],
 ) -> anyhow::Result<bool> {
     let notebooks = db.list_notebooks().await?;
@@ -1184,7 +1284,7 @@ async fn seed_notebook(
     for (src_title, url, body) in sources {
         prepared.push(prepare_source(ai, src_title, url, body).await?);
     }
-    insert_notebook(db, title, notebooks.len(), prepared).await?;
+    insert_notebook(db, title, icon, notebooks.len(), prepared).await?;
     Ok(true)
 }
 
@@ -1198,7 +1298,7 @@ async fn seed_curated(db: &Db, ai: &Ai) -> anyhow::Result<bool> {
     for src in CURATED_SOURCES {
         prepared.push(prepare_curated(ai, src).await?);
     }
-    insert_notebook(db, CURATED_TITLE, notebooks.len(), prepared).await?;
+    insert_notebook(db, CURATED_TITLE, "", notebooks.len(), prepared).await?;
     Ok(true)
 }
 
@@ -1207,6 +1307,7 @@ async fn seed_curated(db: &Db, ai: &Ai) -> anyhow::Result<bool> {
 async fn insert_notebook(
     db: &Db,
     title: &str,
+    icon: &str,
     existing: usize,
     prepared: Vec<Prepared>,
 ) -> anyhow::Result<()> {
@@ -1218,7 +1319,7 @@ async fn insert_notebook(
         created_at: ts,
         updated_at: ts,
         color: color.to_string(),
-        icon: String::new(),
+        icon: icon.to_string(),
         status: String::new(),
         growth_web: false,
         source_count: 0,
@@ -1306,6 +1407,29 @@ mod tests {
             );
         }
 
+        // The alchemy-history essays: Wikipedia urls (a citation should open
+        // onto something readable), a one-line summary before the first
+        // heading, a few headings, and essay length — the spec is 500–900
+        // words each.
+        assert_eq!(ALCHEMY_HISTORY_SOURCES.len(), 10);
+        for (title, url, body) in ALCHEMY_HISTORY_SOURCES {
+            assert!(!title.trim().is_empty());
+            assert!(titles.insert(*title), "duplicate title {title}");
+            assert!(
+                url.starts_with("https://en.wikipedia.org/wiki/"),
+                "{title}: url should be a Wikipedia article, got {url}"
+            );
+            let n = words(body);
+            assert!((500..=900).contains(&n), "{title}: {n} words");
+            let first = body.lines().next().unwrap_or("");
+            assert!(
+                !first.trim().is_empty() && !first.starts_with('#'),
+                "{title} should open with a one-line summary, not a heading"
+            );
+            let headings = body.lines().filter(|l| l.starts_with("## ")).count();
+            assert!(headings >= 3, "{title}: only {headings} headings");
+        }
+
         for (title, url, body) in EARNINGS_SOURCES {
             let n = words(body);
             assert!((120..=360).contains(&n), "{title}: {n} words");
@@ -1324,6 +1448,35 @@ mod tests {
                 "{title} body missing the latest-reports line"
             );
         }
+    }
+
+    /// Every seeded notebook is a starter, exactly once, and the one icon we
+    /// pin by hand is a name the frontend knows (the auto-pick table shares
+    /// that constraint, so it doubles as the check).
+    #[test]
+    fn starter_titles_cover_every_seeded_notebook() {
+        let mut seen = std::collections::HashSet::new();
+        for title in STARTER_TITLES {
+            assert!(seen.insert(*title), "duplicate starter title {title}");
+            assert!(is_starter_title(title));
+        }
+        for title in [
+            INTRO_TITLE,
+            EARNINGS_TITLE,
+            AI_RESEARCH_TITLE,
+            CURATED_TITLE,
+            ALCHEMY_HISTORY_TITLE,
+        ] {
+            assert!(
+                is_starter_title(title),
+                "{title} missing from STARTER_TITLES"
+            );
+        }
+        assert!(!is_starter_title("My Notes"));
+        assert_eq!(
+            crate::commands::auto_notebook_icon("chemistry lab"),
+            ALCHEMY_HISTORY_ICON
+        );
     }
 
     /// Retry-idempotence: a notebook whose title already exists is skipped
@@ -1352,12 +1505,32 @@ mod tests {
         // The Ai is never invoked on the skip path, so a bare default is fine
         // (an embed attempt against it would error, which the assert catches).
         let ai = Ai::new(AiConfig::default(), AiRuntime::default());
-        let created = seed_notebook(&db, &ai, INTRO_TITLE, INTRO_SOURCES)
+        let created = seed_notebook(&db, &ai, INTRO_TITLE, "", INTRO_SOURCES)
             .await
             .expect("skip path never errors");
         assert!(!created);
         let notebooks = db.list_notebooks().await.expect("list");
         assert_eq!(notebooks.len(), 1, "no duplicate notebook created");
+
+        // Same contract for the notebook the v4 top-up offers: an existing
+        // title is left alone, and the Ai is never touched.
+        let nb = Notebook {
+            id: new_id(),
+            title: ALCHEMY_HISTORY_TITLE.to_string(),
+            ..nb
+        };
+        db.create_notebook(&nb).await.expect("create notebook");
+        let created = seed_notebook(
+            &db,
+            &ai,
+            ALCHEMY_HISTORY_TITLE,
+            ALCHEMY_HISTORY_ICON,
+            ALCHEMY_HISTORY_SOURCES,
+        )
+        .await
+        .expect("skip path never errors");
+        assert!(!created);
+        assert_eq!(db.list_notebooks().await.expect("list").len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1378,7 +1551,7 @@ mod tests {
 
         // A v1 install: the notebook exists holding only the first paper.
         let first = &AI_RESEARCH_SOURCES[0];
-        seed_notebook(&db, &ai, AI_RESEARCH_TITLE, std::slice::from_ref(first))
+        seed_notebook(&db, &ai, AI_RESEARCH_TITLE, "", std::slice::from_ref(first))
             .await
             .expect("seed one-paper notebook");
 

@@ -813,15 +813,30 @@ async fn run_pass(app: &AppHandle) {
                                     );
                                 }
                             }
+                            // A run that slept past its hour says so.
+                            // Arriving at lunchtime with no explanation
+                            // reads like the schedule is broken; naming
+                            // the delay is what keeps "late, not lost"
+                            // true from the user's side too.
+                            let late = lateness(due_at, started_at);
+                            // The in-app announcement is not gated: the
+                            // desktop notification stays quiet while
+                            // Alchemy is frontmost, and that is exactly
+                            // when a toast is the only way the user learns
+                            // a routine ran at all.
+                            let _ = app.emit(
+                                "report://ready",
+                                serde_json::json!({
+                                    "notebookId": note.notebook_id,
+                                    "noteId": note.id,
+                                    "name": schedule.name,
+                                    "kind": schedule.kind,
+                                    "late": late,
+                                }),
+                            );
                             // At send time, not pass time: a report can run
                             // for minutes, and focus may have changed.
                             if notifications_wanted(&app).await {
-                                // A run that slept past its hour says so.
-                                // Arriving at lunchtime with no explanation
-                                // reads like the schedule is broken; naming
-                                // the delay is what keeps "late, not lost"
-                                // true from the user's side too.
-                                let late = lateness(due_at, started_at);
                                 let (title, body) = match (schedule.kind.as_str(), &late) {
                                     ("brief", Some(late)) => (
                                         "Your brief is ready",
@@ -862,6 +877,15 @@ async fn run_pass(app: &AppHandle) {
                                     "report {} failed: {err} \u{2014} next try in {wait_min} min",
                                     schedule.name
                                 ),
+                            );
+                            let _ = app.emit(
+                                "report://failed",
+                                serde_json::json!({
+                                    "notebookId": schedule.notebook_id,
+                                    "name": schedule.name,
+                                    "waitMin": wait_min,
+                                    "error": commands::friendly_error(&format!("{err:#}")),
+                                }),
                             );
                             let receipt = schedule_receipt(
                                 &state,

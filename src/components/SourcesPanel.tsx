@@ -521,6 +521,13 @@ export function SourcesPanel() {
 
   const rowIdsRef = useRef(rowIds);
   rowIdsRef.current = rowIds;
+  // Publish the visible order so the reader can step through sources the
+  // way this list shows them (two-finger swipe), not in storage order.
+  const rowIdsKey = rowIds.join("\n");
+  useEffect(() => {
+    useStore.setState({ visibleSourceIds: rowIdsKey ? rowIdsKey.split("\n") : [] });
+    return () => useStore.setState({ visibleSourceIds: [] });
+  }, [rowIdsKey]);
 
   const listRef = useRef<HTMLDivElement>(null);
   // Windowed rendering (Pillar 1): only the visible slice of rows mounts —

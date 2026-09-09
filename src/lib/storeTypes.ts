@@ -349,6 +349,10 @@ export interface AppState {
    *  own doc-level history on top of this. */
   nav: { stack: NavEntry[]; index: number };
   folderScan: { done: number; total: number; title: string } | null;
+  /** Source ids in the order the Sources panel shows them (its sort,
+   *  filters, and collapsed folders applied). Empty while the panel is
+   *  not mounted — readers fall back to the raw `sources` order then. */
+  visibleSourceIds: string[];
   /** Temp ids of folders inserted optimistically while their children embed —
    *  the Sources panel shows these rows with a loading affordance until
    *  `addSourceFolder` resolves and the real list replaces them. */

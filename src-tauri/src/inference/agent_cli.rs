@@ -138,22 +138,27 @@ impl AgentKind {
     ///
     /// The event-protocol CLIs do — a session/thread banner lands within
     /// seconds — so silence past [`STARTUP_TIMEOUT`] means a wedged handshake.
-    /// The plain-text one-shot CLIs (bob, gemini, copilot, hermes) print
-    /// NOTHING until the answer itself begins: their pre-answer silence covers
-    /// MCP discovery, extension loading, and the whole model call, and is
+    /// The plain-text one-shot CLIs (bob, gemini, hermes) print NOTHING
+    /// until the answer itself begins: their pre-answer silence covers MCP
+    /// discovery, extension loading, and the whole model call, and is
     /// indistinguishable from thinking. Holding them to the startup deadline
     /// killed healthy slow runs and then blamed whatever boot warning happened
     /// to be last on stderr — Paul's two "bob produced no output 120s" reports,
     /// captioned with an unrelated gpg-agent path and a stray `}`.
+    ///
+    /// copilot moved columns when it went JSON (`--output-format json`,
+    /// CLI 1.0.83): its `session.*` events land within two seconds of spawn,
+    /// well before the model runs.
     pub fn banners_at_startup(&self) -> bool {
         match self {
             AgentKind::Claude
             | AgentKind::Codex
             | AgentKind::Cursor
             | AgentKind::Opencode
+            | AgentKind::Copilot
             | AgentKind::Prime
             | AgentKind::Pi => true,
-            AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes => false,
+            AgentKind::Gemini | AgentKind::Bob | AgentKind::Hermes => false,
         }
     }
 
@@ -175,14 +180,15 @@ impl AgentKind {
             AgentKind::Pi | AgentKind::Prime => {
                 &["minimal", "low", "medium", "high", "xhigh", "max"]
             }
+            // `--effort <level>`: none, minimal, low, medium, high, xhigh,
+            // max (CLI 1.0.83 --help). "none" is left out for the same
+            // reason as pi's "off". Only honoured alongside a named model —
+            // `auto` rejects it (see `set_model`).
+            AgentKind::Copilot => &["minimal", "low", "medium", "high", "xhigh", "max"],
             // `--variant <level>`, documented as provider-specific with
             // "high, max, minimal" named: offer only those three.
             AgentKind::Opencode => &["minimal", "high", "max"],
-            AgentKind::Gemini
-            | AgentKind::Cursor
-            | AgentKind::Copilot
-            | AgentKind::Hermes
-            | AgentKind::Bob => &[],
+            AgentKind::Gemini | AgentKind::Cursor | AgentKind::Hermes | AgentKind::Bob => &[],
         }
     }
 
@@ -512,6 +518,87 @@ fn fold_system(system: &str, prompt: &str) -> String {
     } else {
         format!("{system}\n\n---\n\n{prompt}")
     }
+}
+
+/// copilot's argv, short of the model/effort flags `set_model` appends.
+///
+/// Every flag here is cost control, and the bill was measured live (CLI
+/// 1.0.83, a one-line prompt): with its defaults the CLI loads EVERY MCP
+/// server in `~/.copilot/mcp-config.json` plus its built-in github server —
+/// 105 tools, ~42k tool-definition tokens, 43k prompt tokens before the
+/// question. Alchemy's calls are chat answers over excerpts it already
+/// retrieved, so tools are pure overhead; worse, one of those servers is
+/// Alchemy's own, and a copilot that calls back into the process waiting on
+/// it is a deadlock. There is no "disable all MCP" flag, so the configured
+/// names are read and refused one by one; disabling them brought the same
+/// prompt to 17 (built-in) tools and 15k prompt tokens.
+///
+/// No model configured: pass `auto` rather than nothing. The CLI's own saved
+/// model goes stale when GitHub retires it — non-interactively it then burns
+/// five retries and ~100s before failing with model_not_supported (Paul's
+/// live report, twice). `auto` is copilot's documented ask-the-service alias
+/// ("use 'auto' to let Copilot pick automatically"), so it can never name a
+/// retired model.
+fn copilot_args(prompt: &str, model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-p",
+        prompt,
+        "-s",
+        "--output-format",
+        "json",
+        "--stream",
+        "on",
+        "--no-custom-instructions",
+        "--no-auto-update",
+        "--disable-builtin-mcps",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    for name in mcp_servers {
+        args.push("--disable-mcp-server".to_string());
+        args.push(name.clone());
+    }
+    if model.is_none() {
+        args.push("--model".to_string());
+        args.push("auto".to_string());
+    }
+    args
+}
+
+/// The MCP servers copilot will auto-load: the keys of `mcpServers` in its
+/// config. Anything unreadable or oddly shaped yields none — the built-ins
+/// still get disabled, and a run with extra tools beats no run.
+fn copilot_mcp_server_names(config_json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(config_json) else {
+        return Vec::new();
+    };
+    let Some(servers) = v["mcpServers"].as_object() else {
+        return Vec::new();
+    };
+    servers.keys().cloned().collect()
+}
+
+fn copilot_configured_mcp_servers() -> Vec<String> {
+    let Ok(home) = std::env::var("HOME") else {
+        return Vec::new();
+    };
+    std::fs::read_to_string(format!("{home}/.copilot/mcp-config.json"))
+        .map(|text| copilot_mcp_server_names(&text))
+        .unwrap_or_default()
+}
+
+/// The sentence inside a copilot `error` event, whichever field carries it.
+fn copilot_error_message(v: &serde_json::Value) -> String {
+    let d = &v["data"];
+    d["message"]
+        .as_str()
+        .or_else(|| d["error"]["message"].as_str())
+        .or_else(|| d["error"].as_str())
+        .or_else(|| v["message"].as_str())
+        .or_else(|| v["error"].as_str())
+        .unwrap_or("copilot reported an error")
+        .to_string()
 }
 
 /// What a CLI will use when we pass no `--model`, read from its own config so
@@ -872,15 +959,24 @@ impl AgentCli {
             let Some(e) = &effort else { return };
             match kind {
                 AgentKind::Claude => cmd.args(["--effort", e]),
+                // Verified live (1.0.83): `--model auto` refuses `--effort`
+                // ("Model \"auto\" does not support reasoning effort
+                // configuration") and the run dies on its argv. Effort
+                // therefore rides only with a named model; at Default the
+                // level is dropped, and said so, rather than failing every
+                // chat.
+                AgentKind::Copilot if model.is_some() => cmd.args(["--effort", e]),
+                AgentKind::Copilot => {
+                    crate::note!(
+                        "copilot: --effort {e} needs a named model; ignored under --model auto"
+                    );
+                    cmd
+                }
                 // A codex config override is TOML: the value needs its quotes.
                 AgentKind::Codex => cmd.args(["-c", &format!("model_reasoning_effort={e:?}")]),
                 AgentKind::Pi | AgentKind::Prime => cmd.args(["--thinking", e]),
                 AgentKind::Opencode => cmd.args(["--variant", e]),
-                AgentKind::Gemini
-                | AgentKind::Cursor
-                | AgentKind::Copilot
-                | AgentKind::Hermes
-                | AgentKind::Bob => cmd,
+                AgentKind::Gemini | AgentKind::Cursor | AgentKind::Hermes | AgentKind::Bob => cmd,
             };
         };
         match self.kind {
@@ -951,24 +1047,18 @@ impl AgentCli {
                 cmd.arg(&full);
             }
             AgentKind::Copilot => {
-                // Verified live (CLI 1.0.80): `copilot -p <prompt>` answers on
-                // stdout. Plain-text output parse.
+                // Verified live (CLI 1.0.83): JSONL on stdout, one event per
+                // line — see the parse arm. Prompt is positional under `-p`.
                 let full = fold_system(&system, &prompt);
                 if full.len() > 150_000 {
                     return Err(anyhow!("context too large for copilot's argv-based prompt"));
                 }
-                cmd.args(["-p", &full]);
+                cmd.args(copilot_args(
+                    &full,
+                    self.model.as_deref(),
+                    &copilot_configured_mcp_servers(),
+                ));
                 set_model(&mut cmd);
-                // No model configured: pass `auto` rather than nothing. The
-                // CLI's own saved model goes stale when GitHub retires it —
-                // non-interactively it then burns five retries and ~100s
-                // before failing with model_not_supported (Paul's live
-                // report, twice). `auto` is copilot's documented ask-the-
-                // service alias ("use 'auto' to let Copilot pick
-                // automatically"), so it can never name a retired model.
-                if self.model.is_none() {
-                    cmd.args(["--model", "auto"]);
-                }
             }
             AgentKind::Hermes => {
                 // Verified live: `hermes -z <prompt>` prints the reply as
@@ -1147,6 +1237,11 @@ impl AgentCli {
             let mut errored: Option<String> = None;
             let mut cost_usd: Option<f64> = None;
             let mut in_thinking = false;
+            // copilot: message ids whose text already streamed as deltas, so
+            // the full `assistant.message` that follows is not appended twice.
+            let mut copilot_streamed: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut copilot_last_msg = String::new();
             // Staged deadlines, not one flat cap: a silent START is a wedged
             // handshake and fails fast; once streaming, the run gets real
             // room, bounded by a mid-run silence cap and a total ceiling.
@@ -1266,12 +1361,85 @@ impl AgentCli {
                             _ => {}
                         }
                     }
-                    AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes => {
+                    AgentKind::Gemini | AgentKind::Bob | AgentKind::Hermes => {
                         // JSON on stdout from a plain-text CLI is unexpected;
                         // stringify it into the transcript rather than drop.
                         let t = v.to_string();
                         text.push_str(&t);
                         on_token(&t);
+                    }
+                    AgentKind::Copilot => {
+                        // copilot --output-format json --stream on (verified
+                        // live, CLI 1.0.83): assistant.message_delta streams
+                        // the reply; assistant.message then repeats it whole,
+                        // and is authoritative only when its deltas never
+                        // came. tool events and toolRequests narrate; the
+                        // session.*/model.* chatter (including a multi-KB
+                        // usage_checkpoint) is ignored.
+                        let ty = v["type"].as_str().unwrap_or("");
+                        let d = &v["data"];
+                        let id = d["messageId"].as_str().unwrap_or("").to_string();
+                        // A second message in one run (a tool turn, then the
+                        // answer) gets a paragraph break rather than gluing
+                        // onto the last one.
+                        let new_message = id != copilot_last_msg;
+                        match ty {
+                            "assistant.message_delta" => {
+                                if let Some(delta) = d["deltaContent"].as_str() {
+                                    if new_message {
+                                        if !text.is_empty() {
+                                            text.push_str("\n\n");
+                                            on_token("\n\n");
+                                        }
+                                        copilot_last_msg = id.clone();
+                                    }
+                                    copilot_streamed.insert(id);
+                                    text.push_str(delta);
+                                    on_token(delta);
+                                }
+                            }
+                            "assistant.message" => {
+                                if !copilot_streamed.contains(&id) {
+                                    if let Some(t) = d["content"].as_str().filter(|t| !t.is_empty())
+                                    {
+                                        if new_message {
+                                            if !text.is_empty() {
+                                                text.push_str("\n\n");
+                                                on_token("\n\n");
+                                            }
+                                            copilot_last_msg = id;
+                                        }
+                                        text.push_str(t);
+                                        on_token(t);
+                                    }
+                                }
+                                if let Some(reqs) = d["toolRequests"].as_array() {
+                                    for r in reqs {
+                                        let name = r["name"]
+                                            .as_str()
+                                            .or_else(|| r["toolName"].as_str())
+                                            .unwrap_or("a tool");
+                                        emit_step(tool_step_label(name), false);
+                                    }
+                                }
+                            }
+                            t if t.starts_with("tool.") => {
+                                let name = d["toolName"]
+                                    .as_str()
+                                    .or_else(|| d["name"].as_str())
+                                    .or_else(|| d["tool"].as_str())
+                                    .unwrap_or("a tool");
+                                emit_step(tool_step_label(name), false);
+                            }
+                            "error" => errored = Some(copilot_error_message(&v)),
+                            "result" => {
+                                let code = v["exitCode"].as_i64().unwrap_or(0);
+                                if code != 0 && errored.is_none() {
+                                    errored = Some(format!("copilot exited with code {code}"));
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     AgentKind::Claude | AgentKind::Cursor => match v["type"].as_str() {
                         // Per-token deltas from --include-partial-messages;
@@ -1692,6 +1860,217 @@ mod tests {
         assert!(!is_copilot_footer("Error: something real"));
     }
 
+    /// Every MCP server copilot would auto-load is refused by name, the
+    /// built-ins by flag, and a blank model still asks for `auto`.
+    #[test]
+    fn copilot_argv_refuses_every_configured_mcp_server() {
+        let servers = vec!["alchemy".to_string(), "open-knowledge".to_string()];
+        let args = copilot_args("hi", None, &servers);
+        assert_eq!(&args[..2], &["-p", "hi"]);
+        for flag in [
+            "-s",
+            "--no-custom-instructions",
+            "--no-auto-update",
+            "--disable-builtin-mcps",
+        ] {
+            assert!(args.iter().any(|a| a == flag), "{flag} missing: {args:?}");
+        }
+        let joined = args.join(" ");
+        assert!(joined.contains("--output-format json"), "{joined}");
+        assert!(joined.contains("--stream on"), "{joined}");
+        assert!(joined.contains("--disable-mcp-server alchemy"), "{joined}");
+        assert!(
+            joined.contains("--disable-mcp-server open-knowledge"),
+            "{joined}"
+        );
+        assert!(joined.ends_with("--model auto"), "{joined}");
+
+        // A configured model is set_model's job; no `auto` then.
+        let named = copilot_args("hi", Some("gpt-5.6-luna"), &[]);
+        assert!(!named.iter().any(|a| a == "--model"), "{named:?}");
+        assert!(!named.iter().any(|a| a == "--disable-mcp-server"));
+        assert!(named.iter().any(|a| a == "--disable-builtin-mcps"));
+    }
+
+    /// The real config shape (keys of `mcpServers`), and every way it can be
+    /// absent — the built-ins still get disabled, so this must never fail.
+    #[test]
+    fn copilot_mcp_config_names_are_the_mcp_servers_keys() {
+        let real = r#"{"mcpServers":{"alchemy":{"type":"http","url":"http://127.0.0.1:41414/mcp"},"open-knowledge":{"command":"/bin/sh","args":["-l"]}}}"#;
+        let mut names = copilot_mcp_server_names(real);
+        names.sort();
+        assert_eq!(names, vec!["alchemy", "open-knowledge"]);
+        assert!(copilot_mcp_server_names("").is_empty());
+        assert!(copilot_mcp_server_names("not json {").is_empty());
+        assert!(copilot_mcp_server_names(r#"{"mcpServers":[]}"#).is_empty());
+        assert!(copilot_mcp_server_names("{}").is_empty());
+    }
+
+    /// Effort reaches copilot as `--effort`, on the same ladder the CLI's
+    /// --help lists; "none" is not offered.
+    #[test]
+    fn copilot_takes_effort_on_its_own_ladder() {
+        assert_eq!(
+            AgentCli::configured(AgentKind::Copilot, "", "xhigh").effort,
+            Some("xhigh".to_string())
+        );
+        assert!(AgentCli::configured(AgentKind::Copilot, "", "none")
+            .effort
+            .is_none());
+    }
+
+    /// A fake copilot that answers with its own argv, as one JSON message.
+    fn argv_echoing_copilot() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nbl-fakecli-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mk fake cli dir");
+        let path = dir.join("cli.sh");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nprintf '{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"m\",\"content\":\"%s\"}}\n' \"$*\"\n",
+        )
+        .expect("write fake cli");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// Through the real spawn: the argv copilot receives carries the JSON,
+    /// no-MCP, model and effort flags, in the order the CLI needs them.
+    #[tokio::test]
+    async fn copilot_is_spawned_with_json_no_mcp_and_effort_flags() {
+        let cli = AgentCli {
+            kind: AgentKind::Copilot,
+            model: Some("gpt-5.6-luna".to_string()),
+            effort: Some("low".to_string()),
+            binary: Some(argv_echoing_copilot()),
+        };
+        let argv = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .expect("fake copilot")
+            .text;
+        assert!(
+            argv.starts_with("-p hi -s --output-format json --stream on"),
+            "{argv}"
+        );
+        assert!(argv.contains("--disable-builtin-mcps"), "{argv}");
+        assert!(argv.contains("--model gpt-5.6-luna"), "{argv}");
+        assert!(!argv.contains("--model auto"), "{argv}");
+        assert!(argv.contains("--effort low"), "{argv}");
+        // The CLI's own footer/stats never came through: -s is on.
+        assert!(!argv.contains("AI Credits"));
+    }
+
+    /// Verified live: `--model auto` rejects `--effort` and the run dies on
+    /// its argv. At Default the level must be dropped, and `auto` still asked
+    /// for — a chat at default effort beats no chat.
+    #[tokio::test]
+    async fn copilot_effort_is_dropped_under_model_auto() {
+        let cli = AgentCli {
+            kind: AgentKind::Copilot,
+            model: None,
+            effort: Some("low".to_string()),
+            binary: Some(argv_echoing_copilot()),
+        };
+        let argv = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .expect("fake copilot")
+            .text;
+        assert!(argv.contains("--model auto"), "{argv}");
+        assert!(!argv.contains("--effort"), "{argv}");
+    }
+
+    /// The live shape (CLI 1.0.83): deltas stream the reply, then
+    /// `assistant.message` repeats it whole — which must not double the
+    /// answer — amid session noise and a result line.
+    #[tokio::test]
+    async fn copilot_deltas_stream_once_and_the_full_message_is_not_appended_again() {
+        let stdout = r#"{"type":"session.auto_mode_resolved","data":{"chosenModel":"gpt-5.6-luna"}}
+{"type":"session.mcp_servers_loaded","data":{"servers":[]},"ephemeral":true}
+{"type":"assistant.turn_start","data":{"turnId":"0"}}
+{"type":"assistant.message_start","data":{"messageId":"m1","phase":"final_answer"},"ephemeral":true}
+{"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"hello "},"ephemeral":true}
+{"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"from copilot"},"ephemeral":true}
+{"type":"assistant.message","data":{"messageId":"m1","model":"gpt-5.6-luna","content":"hello from copilot","toolRequests":[]}}
+{"type":"assistant.turn_end","data":{"turnId":"0"}}
+{"type":"session.usage_checkpoint","data":{"totalNanoAiu":1,"promptCacheBreakState":[{"models":{"gpt-5.6-luna":{"prompt_tokens":15132,"tool_count":17}}}]}}
+{"type":"result","exitCode":0,"usage":{"premiumRequests":1}}"#;
+        let bin = fake_cli(stdout, "", 0);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let mut streamed = String::new();
+        let out = cli
+            .chat_stream(&[ChatTurn::user("hi")], |t| streamed.push_str(t))
+            .await
+            .expect("copilot json run");
+        assert_eq!(out.text, "hello from copilot");
+        assert_eq!(streamed, "hello from copilot");
+    }
+
+    /// No deltas (a `--stream off` build, or a CLI that skipped them): the
+    /// full message is the answer. A second message in the same run gets a
+    /// paragraph break, and a tool request becomes a step, not text.
+    #[tokio::test]
+    async fn copilot_message_without_deltas_is_the_answer() {
+        let stdout = r#"{"type":"assistant.message","data":{"messageId":"m1","content":"Let me check.","toolRequests":[{"name":"mcp__alchemy__search","toolCallId":"c1"}]}}
+{"type":"tool.execution_start","data":{"toolName":"mcp__alchemy__search"}}
+{"type":"assistant.message","data":{"messageId":"m2","content":"Found it.","toolRequests":[]}}
+{"type":"result","exitCode":0}"#;
+        let bin = fake_cli(stdout, "", 0);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let mut steps: Vec<String> = Vec::new();
+        let out = cli
+            .chat_stream_steps(
+                &[ChatTurn::user("hi")],
+                |_| {},
+                |s| steps.push(s.label.to_string()),
+            )
+            .await
+            .expect("copilot json run");
+        assert_eq!(out.text, "Let me check.\n\nFound it.");
+        assert!(
+            steps.iter().any(|s| s == "Using search"),
+            "tool request not narrated: {steps:?}"
+        );
+    }
+
+    /// An error event with no answer is the failure, quoted; a non-zero
+    /// result with nothing else said still fails rather than reading as
+    /// "no output".
+    #[tokio::test]
+    async fn copilot_error_events_surface_as_failures() {
+        let stdout = r#"{"type":"error","data":{"message":"You have exceeded your premium request quota"}}
+{"type":"result","exitCode":1}"#;
+        let bin = fake_cli(stdout, "", 1);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("error");
+        assert!(
+            format!("{err:#}").contains("exceeded your premium request quota"),
+            "{err:#}"
+        );
+
+        let bin = fake_cli(r#"{"type":"result","exitCode":2}"#, "", 2);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("error");
+        assert!(format!("{err:#}").contains("exited with code 2"), "{err:#}");
+
+        // An error event AFTER a streamed answer does not discard it.
+        let stdout = r#"{"type":"assistant.message_delta","data":{"messageId":"m","deltaContent":"4"}}
+{"type":"error","data":{"message":"late warning"}}
+{"type":"result","exitCode":0}"#;
+        let bin = fake_cli(stdout, "", 0);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, bin);
+        assert_eq!(cli.chat(&[ChatTurn::user("hi")]).await.unwrap().text, "4");
+    }
+
     /// The countdown says what it is waiting on and how long is left, in a
     /// shape that reads as a wait rather than a warning.
     #[test]
@@ -1706,14 +2085,12 @@ mod tests {
     /// The startup deadline is a wedge detector, and it only detects anything
     /// for a CLI that announces itself before the model runs. Verified against
     /// each CLI's real behaviour: bob's first stdout line is its own
-    /// `<thinking>` block, i.e. the answer already starting.
+    /// `<thinking>` block, i.e. the answer already starting; copilot in JSON
+    /// mode prints `session.*` events within two seconds of spawn.
     #[test]
     fn only_bannering_clis_get_the_startup_deadline() {
         for kind in AgentKind::ALL {
-            let expected = !matches!(
-                kind,
-                AgentKind::Gemini | AgentKind::Bob | AgentKind::Copilot | AgentKind::Hermes
-            );
+            let expected = !matches!(kind, AgentKind::Gemini | AgentKind::Bob | AgentKind::Hermes);
             assert_eq!(
                 kind.banners_at_startup(),
                 expected,
@@ -1896,8 +2273,8 @@ mod live_smokes {
         }
     }
 
-    /// The full copilot path — `-p` prompt, `--model auto` default, footer
-    /// on stderr never in the answer.
+    /// The full copilot path — `-p` prompt, JSON events, every MCP server
+    /// refused, `--model auto` default, stats never in the answer.
     ///   cargo test agent_cli_copilot_smoke -- --ignored --nocapture
     #[tokio::test]
     #[ignore]

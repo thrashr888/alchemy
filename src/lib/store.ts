@@ -534,6 +534,7 @@ export const useStore = create<AppState>((set, get) => {
     kokoroStatus: null,
     kokoroBusy: false,
     reader: { open: false, history: [], index: -1 },
+    visibleSourceIds: [],
     // Home is always the floor of the app-level history; restores and
     // navigations stack on top of it via the location subscriber below.
     nav: {
@@ -1030,6 +1031,43 @@ export const useStore = create<AppState>((set, get) => {
         if (get().currentId !== note.notebookId) return;
         set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
       });
+      // A routine (scheduled report or brief) that just ran says so in the
+      // app, whatever the desktop notification decided. The toast is the
+      // way to the note; a run that slept past its hour names the delay.
+      void listen<{
+        notebookId: string;
+        noteId: string;
+        name: string;
+        kind: string;
+        late: string | null;
+      }>("report://ready", (e) => {
+        const p = e.payload;
+        const what = p.kind === "brief" ? "Your brief" : `“${p.name}”`;
+        const when = p.late ? ` (${p.late})` : "";
+        get().pushToast(
+          "success",
+          `${what} is ready${when} — click to open`,
+          () =>
+            void get()
+              .selectNotebook(p.notebookId)
+              .then(() =>
+                get().openInReader({ type: "note", id: p.noteId }),
+              ),
+        );
+      });
+      void listen<{
+        notebookId: string;
+        name: string;
+        waitMin: number;
+        error: string;
+      }>("report://failed", (e) => {
+        const p = e.payload;
+        // Background work: visible, never audible.
+        get().pushToast(
+          "error",
+          `“${p.name}” didn’t run: ${p.error} — next try in ${p.waitMin} min`,
+        );
+      });
       // First Audio Overview downloads the Kokoro voice model (~93 MB); reuse
       // the embedder's download overlay with its own title. "done" clears it.
       void listen<{ label: string; done: number; total: number }>(
@@ -1366,6 +1404,7 @@ export const useStore = create<AppState>((set, get) => {
         chatConfig,
         summary: localStorage.getItem(`summary:${id}`) ?? "",
         reader: { open: false, history: [], index: -1 },
+        visibleSourceIds: [],
         // Every collection above was just emptied. Until the fetch lands,
         // an empty Sources list means "still loading", not "no sources" —
         // one flag, because they all arrive in the same Promise.all.
@@ -2766,12 +2805,22 @@ export const useStore = create<AppState>((set, get) => {
       set((state) => ({ reader: { ...state.reader, open: false } })),
 
     readerStep: (dir) => {
-      const { reader, sources, notes } = get();
+      const { reader, sources, notes, visibleSourceIds } = get();
       const current = reader.history[reader.index];
       if (!current) return;
-      // Rail order: sources (excluding folder placeholders) then notes.
+      // Rail order: sources as the Sources panel shows them (its sort and
+      // filters), falling back to storage order while the panel is closed,
+      // then notes. Folder placeholders have nothing to read.
+      const byId = new Map(sources.map((s) => [s.id, s]));
+      const ordered =
+        visibleSourceIds.length > 0
+          ? visibleSourceIds.flatMap((id) => {
+              const s = byId.get(id);
+              return s ? [s] : [];
+            })
+          : sources;
       const docs: { type: "source" | "note"; id: string }[] = [
-        ...sources
+        ...ordered
           .filter((s) => s.status !== "placeholder")
           .map((s) => ({ type: "source" as const, id: s.id })),
         ...notes.map((n) => ({ type: "note" as const, id: n.id })),

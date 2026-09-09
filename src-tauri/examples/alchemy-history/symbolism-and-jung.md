@@ -1,0 +1,27 @@
+Alchemical writing is dense with symbols, from planetary signs for the metals to emblem books of kings, dragons, and hermaphrodites; historians read those images as coded laboratory instructions, while Carl Jung read them as a map of the psyche.
+
+## Metals and planets
+
+The oldest and most stable symbolism links the seven known metals to the seven classical planets: gold to the Sun, silver to the Moon, mercury to Mercury, copper to Venus, iron to Mars, tin to Jupiter, and lead to Saturn. The pairing is already present in Greek texts and it carried a theory with it: metals were formed under planetary influence and shared the planets' characters. The planetary glyphs served as chemical notation for a thousand years, and when eighteenth-century chemists needed symbols for new substances they extended the same set before letters replaced it.
+
+Around the metals grew a second vocabulary of substances and operations. The ouroboros, a serpent eating its tail, appears in a Greek manuscript attributed to Cleopatra the Alchemist with the Greek words for "one is the all" inside it. The green lion is usually vitriol or another solvent that devours metals; the red king and white queen are sulfur and mercury, or gold and silver, whose marriage produces the stone; the raven is the blackening, the peacock's tail the play of colors, the phoenix the finished work. The rebis, a two-headed figure that is both male and female, stands for the union of opposites at the end of the process.
+
+## Cover names
+
+Historians of chemistry use the German term Decknamen, cover names, for this vocabulary, and since the 1990s the working assumption in the field, associated with William Newman and Lawrence Principe, has been that most of it can be decoded. When an author writes that the dragon must be slain by the sword and its blood collected, he may be describing the dissolution of a metal in acid. Principe has followed emblematic recipes in the laboratory and reproduced several of their results, including the growth of the "philosophers' tree," a branching crystalline deposit from gold and mercury. On this reading the symbols were a deliberate cipher, protecting a trade secret while allowing initiates to communicate, and the mystical framing was, for many authors, a way of talking about matter.
+
+## The emblem books
+
+The sixteenth and seventeenth centuries produced alchemy's most famous images. The Splendor Solis, a German manuscript of the 1530s, presents the work in twenty-two painted plates. The Rosarium philosophorum, printed at Frankfurt in 1550, tells the story in twenty woodcuts of a king and queen who marry, die together, and rise as a single crowned figure. Michael Maier's Atalanta fugiens of 1617 gives fifty engravings, each with an epigram, a discourse, and a three-part musical fugue, so that the book was meant to be seen, read, and heard. The Mutus Liber, the "silent book" of 1677, drops the text entirely and shows a couple performing the work in pictures alone. The Chymical Wedding of Christian Rosenkreutz, published in 1616 and written by the Lutheran pastor Johann Valentin Andreae, cast the whole process as a seven-day allegorical romance and became a founding document of Rosicrucianism.
+
+## The nineteenth century reads it inward
+
+As chemistry stopped taking alchemy seriously as science, some readers began to take it seriously as something else. Mary Anne Atwood's Suggestive Inquiry into the Hermetic Mystery of 1850 argued that alchemy had always been about the transformation of the soul and that the chemistry was a disguise. Ethan Allen Hitchcock, an American general, reached the same conclusion independently in 1857. The Viennese psychoanalyst Herbert Silberer, in 1914, applied Freudian analysis to an alchemical allegory and proposed that its images expressed unconscious processes. This spiritual reading owed much to the occult revival of the period and little to the manuscripts.
+
+## Jung
+
+Carl Jung came to alchemy in 1928, when the sinologist Richard Wilhelm sent him a translation of a Chinese text on inner alchemy, The Secret of the Golden Flower. Jung recognized in it patterns he had seen in his patients' dreams, began collecting European alchemical books, and spent the rest of his life on them. Psychology and Alchemy, published in 1944 from lectures given in 1935 and 1936, compares the dream series of one patient with the sequence of alchemical images. The Psychology of the Transference, in 1946, reads the Rosarium woodcuts as a picture of the analytic relationship. Mysterium Coniunctionis, finished in 1955 and 1956, was his last major work.
+
+Jung's argument was that the alchemists, not knowing what was happening in their vessels, projected the contents of the unconscious onto matter. The blackening, the union of king and queen, and the birth of the stone were stages of individuation, the process by which a person integrates the parts of the psyche into a whole he called the Self. The alchemists' insistence that the work required the right disposition in the worker was, for Jung, the clue that they had half-known this all along.
+
+The reading has been influential far beyond psychology, and historians have been hard on it. It ignores the recipes, treats the most obscure texts as the most revealing, and tells a reader more about Jung than about the alchemists. Both readings are now in circulation, and a reader meeting the emblems for the first time should know which one a given book is offering.
