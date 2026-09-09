@@ -4451,6 +4451,21 @@ pub fn disk_wins(file_mtime: i64, entity_updated_at: i64) -> bool {
     file_mtime >= entity_updated_at
 }
 
+/// One write pass per binding after the device stamp changed shape (§5.8):
+/// a Mac only re-stamps a file when it writes it, and a notebook nobody has
+/// touched since the update would otherwise carry the old stamps until
+/// someone edits something. The pass is cheap — the writer skips every
+/// file whose projection is unchanged — and the marker keeps it to once.
+fn restamp_once(notebook_id: &str, manifest_at: &Path) {
+    let marker = manifest_at.with_extension("stamped-v2");
+    if marker.exists() {
+        return;
+    }
+    if std::fs::write(&marker, b"").is_ok() {
+        schedule_write(notebook_id);
+    }
+}
+
 /// Say once, per notebook, which files a pass is holding — and say it again
 /// only when the set changes, since the sweep runs every minute and the
 /// same line every minute is not a log, it is noise.
@@ -4746,6 +4761,7 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         save_manifest_checked(&manifest_at, &manifest)?;
     }
     note_held(notebook_id, &bundle, &manifest.held);
+    restamp_once(notebook_id, &manifest_at);
     let deleted_count = portable_deletions::apply_deleted(
         state,
         notebook_id,
