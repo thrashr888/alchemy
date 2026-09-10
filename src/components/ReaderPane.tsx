@@ -2839,7 +2839,7 @@ function MarkdownPreview({ text }: { text: string }) {
   return (
     <>
       {meta.length > 0 && (
-        <dl className="mb-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 border-b border-border pb-3 text-caption">
+        <dl className="mb-4 grid grid-cols-[minmax(9rem,max-content)_minmax(0,1fr)] gap-x-6 gap-y-1 border-b border-border pb-3 text-caption">
           {meta.map(([k, v], i) => (
             <Fragment key={`${k}-${i}`}>
               <dt className="text-subtle-foreground">{k}</dt>

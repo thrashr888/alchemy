@@ -307,10 +307,11 @@ export const scrollMemory = {
   },
 };
 
-/** Split a leading YAML frontmatter block off a markdown document. Keys are
- *  read as flat `key: value` lines (a nested block's indented lines ride
- *  along as continuation text), which is what a preview needs: the
- *  properties as a quiet list and the body rendered underneath. */
+/** Split a leading YAML frontmatter block off a markdown document. Nested
+ *  maps flatten to dotted paths (`alchemy.device`) and sequences join with
+ *  commas, which is what a preview needs: every property on one readable
+ *  row, and the body rendered underneath. Not a YAML parser — enough for
+ *  the frontmatter people and Alchemy actually write. */
 export function splitFrontmatter(text: string): {
   meta: [string, string][];
   body: string;
@@ -318,19 +319,35 @@ export function splitFrontmatter(text: string): {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (!m) return { meta: [], body: text };
   const meta: [string, string][] = [];
+  const unquote = (v: string) =>
+    v.replace(/^"(.*)"$/s, "$1").replace(/^'(.*)'$/s, "$1").replace(/\\"/g, '"');
+  const stack: { indent: number; key: string }[] = [];
+  const pathOf = () => stack.map((s) => s.key).join(".");
   for (const raw of m[1].split(/\r?\n/)) {
-    if (!raw.trim()) continue;
-    if (/^\s/.test(raw) && meta.length > 0) {
-      const last = meta[meta.length - 1];
-      last[1] = last[1] ? `${last[1]} ${raw.trim()}` : raw.trim();
+    if (!raw.trim() || raw.trim().startsWith("#")) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const line = raw.trim();
+    const item = /^-\s*(.*)$/.exec(line);
+    if (item) {
+      // A sequence entry belongs to the nearest parent above its indent.
+      while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+      const key = pathOf() || "-";
+      const value = unquote(item[1]);
+      const existing = meta.find(([k]) => k === key);
+      if (existing) existing[1] = existing[1] ? `${existing[1]}, ${value}` : value;
+      else meta.push([key, value]);
       continue;
     }
-    const i = raw.indexOf(":");
-    if (i === -1) {
-      meta.push([raw.trim(), ""]);
+    const kv = /^([^:]+?):\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const [, key, value] = kv;
+    if (value === "") {
+      stack.push({ indent, key: key.trim() });
       continue;
     }
-    meta.push([raw.slice(0, i).trim(), raw.slice(i + 1).trim().replace(/^"(.*)"$/, "$1")]);
+    const full = [...stack.map((s) => s.key), key.trim()].join(".");
+    meta.push([full, unquote(value)]);
   }
   return { meta, body: text.slice(m[0].length) };
 }
