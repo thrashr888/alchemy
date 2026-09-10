@@ -352,6 +352,11 @@ pub fn start(app: AppHandle) {
             // §5.3). The writer merges on the way out now, but a 228 KB row
             // of three hundred blocks is still what chat and search read.
             crate::okf::heal_stacked_frontmatter(&state).await;
+            // Put every bundle's own bookkeeping under its ceiling, once: an
+            // 11 MB log.md carrying whole documents, 718 conflict copies,
+            // an `index 2.md` (docs/RFC-okf-live.md §5.6). The per-pass
+            // rules keep it there from then on.
+            crate::okf::heal_bundle_bloat(&state).await;
             // And the tidying that is not a one-off repair: folders claiming
             // the same notebook, and the empty directories iCloud leaves
             // behind when it makes a folder before delivering its files.

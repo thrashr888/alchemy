@@ -38,6 +38,8 @@ mod deletion_recovery_tests;
 mod discovery;
 #[cfg(test)]
 mod frontmatter_tests;
+mod hygiene;
+pub(crate) use hygiene::heal_bundle_bloat;
 mod missing_rows;
 mod portable;
 mod portable_deletions;
@@ -497,6 +499,11 @@ fn okf_frontmatter(
 /// that must not lose. Each install writes under `## <day> — <account>`, so
 /// the two sides append to different blocks and a cloud tool has an easy
 /// merge instead of a clash.
+///
+/// **And the file has a ceiling.** A repeat of the last entry — the same
+/// words, the next minute — becomes a count on that line, and only the
+/// newest `hygiene::LOG_CAP` entries stay (`hygiene::log_with_entry`). One
+/// bundle's log reached 11 MB before either rule existed.
 pub(crate) fn okf_log_append(bundle: &std::path::Path, entry: &str) -> Result<(), String> {
     let path = bundle.join("log.md");
     let now = chrono::Utc::now();
@@ -504,20 +511,7 @@ pub(crate) fn okf_log_append(bundle: &std::path::Path, entry: &str) -> Result<()
     let at = now.format("%H:%M:%SZ").to_string();
 
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut out = if existing.trim().is_empty() {
-        String::from("# Log\n")
-    } else {
-        existing
-    };
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    // This writer's newest day is always its last block, so a bullet appended
-    // at the end lands under the right heading.
-    if !out.contains(&format!("\n{heading}\n")) {
-        out.push_str(&format!("\n{heading}\n\n"));
-    }
-    out.push_str(&format!("- {at} {entry} ({})\n", okf_writer()));
+    let out = hygiene::log_with_entry(&existing, &heading, &at, entry, &okf_writer());
     std::fs::write(&path, out).map_err(|err| format!("Failed to write {path:?}: {err}"))
 }
 
@@ -1666,14 +1660,18 @@ pub(crate) fn okf_title_from_frontmatter(extracted: &mut ingest::Extracted) -> b
 
 /// Bundle listings, not concepts (spec §3.1): `index.md` is a table of
 /// contents and `log.md` is the bundle's history. Neither ingests, and
-/// neither counts toward what the folder holds.
+/// neither counts toward what the folder holds. A numbered twin of either
+/// (`index 2.md`, the cloud's answer to two writers) is a listing too, not
+/// a concept — `hygiene` sets it aside before a pass would read it.
 pub(crate) fn is_okf_reserved(path: &str) -> bool {
-    matches!(
-        std::path::Path::new(path)
-            .file_name()
-            .and_then(|n| n.to_str()),
-        Some("index.md") | Some("log.md")
-    )
+    let Some(name) = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+    else {
+        return false;
+    };
+    let name = hygiene::twin_canonical(name).unwrap_or_else(|| name.to_string());
+    matches!(name.as_str(), "index.md" | "log.md")
 }
 
 /// Is this path one of the bundle's concept documents?
@@ -4135,6 +4133,10 @@ pub struct OkfManifest {
     imports: HashMap<String, recovery::PendingImport>,
     #[serde(default)]
     tombstones: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Epoch ms of the last look at `conflicts/` (`hygiene`); a pass looks
+    /// again an hour later, not every minute.
+    #[serde(default)]
+    conflicts_pruned_at: i64,
     /// Entity id → the file written for it.
     #[serde(default)]
     pub concepts: HashMap<String, OkfManifestEntry>,
@@ -5172,6 +5174,10 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         );
     }
     let mut manifest = load_manifest_checked(&manifest_at)?;
+    // Before anything reads the folder: a `<uuid> 2.json` the cloud left in
+    // `sync/deletions/` would stop this pass cold as an invalid record, and
+    // an `index 2.md` is noise (docs/RFC-okf-live.md §5.6).
+    hygiene::tidy_bundle(&data_dir, &binding.id, &bundle);
     write_recovery::recover_writes(state, notebook_id, &bundle, &mut manifest, &manifest_at)
         .await?;
     if portable::migrate_pending(&bundle, &mut manifest)? {
@@ -5540,6 +5546,9 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     if !losers.is_empty() {
         schedule_write(notebook_id);
     }
+    // And the copies under `conflicts/` whose text is back in the notebook
+    // are cleared once they have waited out their grace (hourly, §5.6).
+    hygiene::prune_conflicts_if_due(state, &bundle, &mut manifest, &manifest_at).await;
     if out.changed() {
         crate::commands::notify_changed("sources", Some(notebook_id));
     }

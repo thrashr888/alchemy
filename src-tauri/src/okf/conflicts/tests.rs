@@ -77,9 +77,10 @@ async fn newer_remote_note_preserves_divergent_local_body_once_across_restart() 
         .contains("Remote winning body."));
     assert_eq!(copies(&bundle).len(), 1);
     assert!(copies(&bundle)[0].contains("Local unpublished body."));
-    assert!(std::fs::read_to_string(bundle.join("log.md"))
-        .unwrap()
-        .contains("Local unpublished body."));
+    // The log names the copy and carries none of the text (§5.4).
+    let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
+    assert!(log.contains("Kept the losing local version of notes/example.md in conflicts/"));
+    assert!(!log.contains("Local unpublished body."));
     drop(state);
     let state = lab.replica("a", &bundle).await;
     assert!(!reconcile(&state, "shared-notebook")
@@ -203,7 +204,9 @@ async fn failed_log_stops_remote_loser_rewrite_and_retry_is_idempotent() {
     );
     assert_eq!(copies(&bundle).len(), 1);
     let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
-    assert_eq!(log.matches("<!-- alchemy-conflict:").count(), 1);
+    assert_eq!(log.matches("in conflicts/").count(), 1);
+    // The log names the copy; it never carries the text (§5.4).
+    assert!(!log.contains("Older remote body."));
     let before_retry = log;
     reconcile(&state, "shared-notebook").await.unwrap();
     assert_eq!(

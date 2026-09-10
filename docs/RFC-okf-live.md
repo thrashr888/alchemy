@@ -357,9 +357,14 @@ clears origin, as today.
 
 Both sides changed since the last sync means the file's mtime is newer
 than the entity's `updated_at`, or older. The newer one wins; the older
-text goes into `log.md` under the entry that recorded the overwrite, so
-nothing is lost silently. That is the whole policy. Merge tooling is a
-non-goal until someone actually hits this.
+text is preserved under `conflicts/` and `log.md` gets one line naming
+the copy, so nothing is lost silently. That is the whole policy. Merge
+tooling is a non-goal until someone actually hits this.
+
+(The text itself used to go into `log.md`. It does not any more: a log
+that carried every losing document whole reached 11 MB in one notebook.
+The copy under `conflicts/` is the durable record, and the log points at
+it — see "Tracking overhead stays bounded" under §5.6.)
 
 ### 5.5 Surfaces
 
@@ -707,12 +712,69 @@ generation queue and a Tauri handle, none of which a unit test can stand up
 and none of which this behaviour depends on. The `Db` is not the obstacle;
 `AppState` is.
 
-**Conflict copies need no code.** `<name> (conflicted copy).md` and
-`<name> 2.md` pass the allowlist, carry no manifest entry, and so classify as
-`Create` — ordinary new concepts, which is the "keep both" outcome. Both
-copies keep the frontmatter `title:`, so they read as two notes with one
-name and the writer's slug dedup keeps both files. Tested rather than
-special-cased.
+**Conflict copies need no code — for concepts.** `<name> (conflicted
+copy).md` and `<name> 2.md` under `sources/` or `notes/` pass the allowlist,
+carry no manifest entry, and so classify as `Create` — ordinary new
+concepts, which is the "keep both" outcome. Both copies keep the frontmatter
+`title:`, so they read as two notes with one name and the writer's slug
+dedup keeps both files. Tested rather than special-cased. A `<name> 2.md`
+twin of a file Alchemy writes whole is a different matter; see the next
+heading.
+
+**Tracking overhead stays bounded.** A bundle is the user's portable
+notebook, and the bookkeeping Alchemy keeps in it exists for their sake, so
+every piece of it has a ceiling. What one notebook looked like on
+2026-09-10 without them: an 11.4 MB `log.md` (289,048 lines), 718 files
+under `conflicts/`, and an `index 2.md` beside `index.md` — 98 MB across 28
+bundles. The rules, all in `okf/hygiene.rs`:
+
+- **The log never carries a document.** A conflict entry is one line —
+  `Kept the losing local version of notes/x.md in conflicts/<hash>.md.` —
+  where it used to be the whole losing text under a marker (0.58) or a
+  fenced block of every overruled file (0.56). The copy under `conflicts/`
+  is the durable record; the log points at it. 699 of those entries were
+  the 11 MB.
+- **A repeat becomes a count.** A pass whose entry reads exactly like the
+  last one under this writer's heading updates that line —
+  `- 20:31:20Z 2 written … ×61, last 21:31:33Z` — rather than adding a
+  line a minute. A writer stuck in a loop is one line a day, not a
+  firehose, and the loop is still visible. Only when this writer's heading
+  is the last block: a line under the other Mac's heading is never
+  counted onto.
+- **The log keeps its newest 500 entries** (`LOG_CAP`), the oldest rolling
+  off whole, and a day heading with nothing left under it goes with them.
+  Five hundred is a season of ordinary use and a day of a runaway writer.
+  Lines that are neither an entry nor a heading — a note somebody left —
+  are not ours to bound and stay. A pass that changed nothing still writes
+  nothing.
+- **A conflict copy is cleared once its text is back in the notebook.**
+  Per path, newest first: a copy whose body (every frontmatter block
+  peeled) matches the concept file on disk, the row in the store, or a
+  newer copy being kept is *redundant*, and goes after a grace of seven
+  days — or at once when more than three redundant copies are already
+  waiting for that path. A copy whose text is nowhere else is the only
+  record of somebody's words and is never removed by this pass; the log
+  names it. Looked at hourly on the reconcile pass (the manifest remembers
+  when), and on launch. Each clear is one log line with the count.
+- **A `<name> 2.md` twin of a file Alchemy owns is noise.** iCloud writes
+  one when two Macs race over `index.md`, `log.md`, a listing, or a record
+  under `sync/` — and a `<uuid> 2.json` in `sync/deletions/` stopped the
+  whole pass as an invalid record. Every pass, before it reads the folder:
+  the newer of the pair keeps the canonical name and the other is set aside
+  under `<app-data>/okf/set-aside/<binding>/` — a rename, never a delete —
+  and the log says so. A twin with no original just takes the name. A twin
+  of a concept file is somebody's document: left alone (both are notes, as
+  above) and named in the log once so the person can look them over.
+- **The heal** (`heal_bundle_bloat`, on launch after the frontmatter heal,
+  once per store under the versioned marker `okf-bloat-healed`) runs the
+  three over every bound bundle. For the log it collapses every inlined
+  entry of either old shape to its one line — first writing the text under
+  `conflicts/` if no copy is there *and* the notebook does not already hold
+  that text on disk or in the row, so the log's copy is never the last one
+  to go — then applies the cap. Dry-run on the real logs: 11.4 MB → 48 KB,
+  6.5 MB → 17 KB, 421 KB → 36 KB, nothing left over. The conflict prune
+  then clears what is redundant and past grace, and lists what it kept as
+  unique. What it did goes through `okf_notice` with every count.
 
 ### 5.7 Notebooks on disk by default, in iCloud when it is there
 
@@ -1292,6 +1354,16 @@ asks for it rather than as a default that doubles every synced folder.
   into the Notebooks folder becomes a bound notebook exactly once; a
   bundle carrying a known `alchemy.id` rebinds instead of duplicating; a
   stub is treated as absent by the writer (§5.7).
+- Bounded bookkeeping (§5.6): a repeated entry coalesces to a count and
+  never onto another writer's line; the cap rolls the oldest entries and
+  their emptied headings off; both old inlined-conflict shapes collapse to
+  one line each with a document's own headings and rules intact; a text
+  with no copy under `conflicts/` is written there unless the notebook
+  holds it; redundant copies clear after the grace or past three per path
+  and a unique copy never does; owned twins resolve newer-wins into the
+  set-aside folder, a twin of a deletion record no longer stops the pass,
+  and a concept twin is left and named once; the launch heal does all of
+  it to a bundle carrying the 0.56 and 0.58 state and stamps once.
 
 ## 9. Phasing
 

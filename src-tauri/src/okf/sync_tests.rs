@@ -512,9 +512,17 @@ async fn older_remote_edit_is_preserved_in_log_and_overruled_once() {
     .unwrap();
     assert_eq!(write_bound(&a, "shared-notebook").await.unwrap().written, 1);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), local);
-    assert!(std::fs::read_to_string(bundle.join("log.md"))
+    // The losing text is under conflicts/; the log names the copy and
+    // carries none of the text (§5.4).
+    let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
+    assert!(log.contains("Kept the losing remote version of notes/note-0.md in conflicts/"));
+    assert!(!log.contains("Older conflicting version"));
+    let copies: Vec<String> = std::fs::read_dir(bundle.join("conflicts"))
         .unwrap()
-        .contains("Older conflicting version"));
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert!(copies[0].contains("Older conflicting version"));
     assert!(!reconcile(&a, "shared-notebook").await.unwrap().changed());
     assert_eq!(write_bound(&a, "shared-notebook").await.unwrap().written, 0);
 }

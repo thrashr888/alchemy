@@ -91,14 +91,16 @@ impl Context<'_> {
         save()
             .map_err(|err| format!("Could not preserve sync conflict {}: {err}", path.display()))?;
 
-        // Preserve the existing log policy too, but never truncate an unreadable
-        // log or advance reconciliation past a failed write. The immutable copy
-        // above remains the durable record if cloud clients race over log.md.
+        // The log names the copy (§5.4) — one line, never the text: the
+        // copy above is the durable record, and a log that carried every
+        // losing document whole reached 11 MB in one notebook. Never
+        // truncate an unreadable log or advance reconciliation past a
+        // failed write.
         let log = self.bundle.join("log.md");
-        let marker = format!("<!-- alchemy-conflict:{identity} -->");
-        let mut existing = match std::fs::read_to_string(&log) {
+        let link = format!("conflicts/{identity}.md");
+        let existing = match std::fs::read_to_string(&log) {
             Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => "# Log\n".into(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(err) => {
                 return Err(format!(
                     "Could not read conflict log {}: {err}",
@@ -106,13 +108,17 @@ impl Context<'_> {
                 ))
             }
         };
-        if existing.contains(&marker) {
+        if existing.contains(&link) {
             return Ok(());
         }
-        existing.push_str(&format!(
-            "\n{marker}\n\n## Recovered {side} version of {}\n\n[Preserved copy](conflicts/{identity}.md)\n\n{text}\n",
-            self.rel,
-        ));
+        let now = chrono::Utc::now();
+        let existing = super::hygiene::log_with_entry(
+            &existing,
+            &format!("## {} \u{2014} {}", now.format("%Y-%m-%d"), okf_account()),
+            &now.format("%H:%M:%SZ").to_string(),
+            &format!("Kept the losing {side} version of {} in {link}.", self.rel),
+            &okf_writer(),
+        );
         let save_log = || -> std::io::Result<()> {
             let mut staged = tempfile::NamedTempFile::new_in(self.bundle)?;
             staged.write_all(existing.as_bytes())?;
