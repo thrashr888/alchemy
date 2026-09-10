@@ -38,6 +38,15 @@ interface SceneState {
   error: string | null;
 }
 
+/** The first sentence of an error, capped so a CSP report or a stack trace
+ *  reads as one line; the rest stays behind the disclosure. */
+function errorHeadline(error: string): string {
+  const first = error.split(/\n/)[0].trim();
+  const sentence = first.split(/(?<=[.!?])\s/)[0] || first;
+  const max = 160;
+  return sentence.length > max ? `${sentence.slice(0, max - 1).trimEnd()}…` : sentence;
+}
+
 function useDiagramScene(
   content: string,
   kind: DiagramKind,
@@ -118,11 +127,25 @@ export function DiagramView({ kind, content }: { kind: DiagramKind; content: str
   const [showWarnings, setShowWarnings] = useState(false);
 
   if (error !== null) {
+    // One readable line up top; the whole message (a CSP report can run to
+    // a screenful of hashes) sits behind a disclosure, selectable and
+    // scrolling, so it can be copied into a bug report without a screenshot.
+    const headline = errorHeadline(error);
     return (
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <p className="shrink-0 whitespace-pre-line text-caption text-destructive">
-          This diagram doesn’t render: {error}
-        </p>
+        <div className="shrink-0 text-caption">
+          <p className="text-destructive">This diagram doesn’t render: {headline}</p>
+          {headline !== error && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-subtle-foreground hover:text-foreground">
+                Full error
+              </summary>
+              <pre className="selectable mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-2/60 p-2 text-micro text-muted-foreground">
+                {error}
+              </pre>
+            </details>
+          )}
+        </div>
         <div className="min-h-0 flex-1 overflow-auto">
           <DiagramSource source={source} />
         </div>
