@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import path from "node:path";
+import { ajvShimAlias } from "../diagram-csp-alias";
 
 // The architecture-diagram harness (docs/RFC-diagrams.md): the real engine
 // — placement, resolve, the eraser render frame — against hand-written
@@ -20,6 +21,7 @@ export default defineConfig({
         find: /^(path|fs|url|source-map-js)$/,
         replacement: path.resolve(root, "./src/lib/nodeShims.ts"),
       },
+      ajvShimAlias(root),
     ],
   },
   define: {

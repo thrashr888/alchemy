@@ -16,7 +16,7 @@
  * diagram should pay for.
  */
 import type { EraserBrowserApi, ElementMeasure } from "@eraserlabs/render/browser";
-import type { Issue, Resolver } from "@eraserlabs/resolve";
+import type { Issue, ResolveResult, Resolver } from "@eraserlabs/resolve";
 import {
   CONTAINER_TAGS,
   prepareForRender,
@@ -191,6 +191,65 @@ function describe(issue: Issue): string {
   return `${where}: ${issue.message}${issue.suggestion ? ` (${issue.suggestion})` : ""}`;
 }
 
+/** The resolver's verdict on a document placed on estimated sizes. */
+export interface ResolvedDiagram {
+  /** The document as the renderer wants it (`prepareForRender`). */
+  doc: DiagramDoc;
+  /** What the render frame takes: resolved elements plus inlined icons. */
+  payload: {
+    entities: NonNullable<ResolveResult["entities"]>;
+    connections: NonNullable<ResolveResult["connections"]>;
+    icons: NonNullable<ResolveResult["icons"]>;
+  };
+  /** Resolver warnings: unknown icons, dropped props, sanitized content. */
+  warnings: string[];
+}
+
+/**
+ * Pass 1 of a render, and all of it that runs without a DOM: the document
+ * as the renderer wants it, our placement on estimated sizes (so the
+ * resolver has the coordinates its schemas require), and the resolver's
+ * validation, sanitizing, and icon inlining. Throws with the resolver's
+ * errors when the document is not a diagram eraser can draw. Exported so
+ * the tests can run the real resolver in node — see diagramCsp.test.ts.
+ */
+export async function resolveDiagram(source: DiagramDoc, kind: DiagramKind): Promise<ResolvedDiagram> {
+  const resolver = await getResolver();
+  const doc = prepareForRender(source, kind);
+  const first = placed(doc, kind, estimateSize);
+  const authored = {
+    ...(doc.title ? { title: doc.title } : {}),
+    entities: doc.entities.map((entity) => {
+      const box = first.boxes.get(entity.id);
+      // Containers are sized around their members; Shapes, Activities,
+      // and Textboxes get the estimate as an authored minimum, or eraser
+      // wraps their text at 100px. Icons, events, and tables size
+      // themselves.
+      const sized = CONTAINER_TAGS.has(entity.tag) || SIZED_TAGS.has(entity.tag);
+      return {
+        ...entity,
+        x: box?.x ?? 0,
+        y: box?.y ?? 0,
+        ...(sized && box ? { width: box.width, height: box.height } : {}),
+      };
+    }),
+    connections: doc.connections,
+  };
+  const resolved = await resolver.resolve(authored);
+  if (!resolved.ok || !resolved.entities || !resolved.connections) {
+    throw new Error(resolved.errors.map(describe).join("\n"));
+  }
+  return {
+    doc,
+    payload: {
+      entities: resolved.entities,
+      connections: resolved.connections,
+      icons: resolved.icons ?? {},
+    },
+    warnings: resolved.warnings.map(describe),
+  };
+}
+
 /**
  * Render a document to a scene. Throws with the resolver's errors when the
  * document is not a diagram eraser can draw; the caller shows the JSON and
@@ -198,40 +257,8 @@ function describe(issue: Issue): string {
  */
 export function renderDiagram(source: DiagramDoc, kind: DiagramKind): Promise<RenderedDiagram> {
   return queued(async () => {
-    const resolver = await getResolver();
     const frame = await getFrame();
-    const doc = prepareForRender(source, kind);
-
-    // Pass 1: estimated sizes, so the resolver has the coordinates its
-    // schemas require and the renderer has something to measure.
-    const first = placed(doc, kind, estimateSize);
-    const authored = {
-      ...(doc.title ? { title: doc.title } : {}),
-      entities: doc.entities.map((entity) => {
-        const box = first.boxes.get(entity.id);
-        // Containers are sized around their members; Shapes, Activities,
-        // and Textboxes get the estimate as an authored minimum, or eraser
-        // wraps their text at 100px. Icons, events, and tables size
-        // themselves.
-        const sized = CONTAINER_TAGS.has(entity.tag) || SIZED_TAGS.has(entity.tag);
-        return {
-          ...entity,
-          x: box?.x ?? 0,
-          y: box?.y ?? 0,
-          ...(sized && box ? { width: box.width, height: box.height } : {}),
-        };
-      }),
-      connections: doc.connections,
-    };
-    const resolved = await resolver.resolve(authored);
-    if (!resolved.ok || !resolved.entities || !resolved.connections) {
-      throw new Error(resolved.errors.map(describe).join("\n"));
-    }
-    const payload = {
-      entities: resolved.entities,
-      connections: resolved.connections,
-      icons: resolved.icons ?? {},
-    };
+    const { doc, payload, warnings } = await resolveDiagram(source, kind);
     const measured = await frame.api.run(payload);
 
     // Pass 2: the boxes the browser actually produced. A container's own
@@ -287,7 +314,7 @@ export function renderDiagram(source: DiagramDoc, kind: DiagramKind): Promise<Re
       css: `${css}#eraser-scene{color:#242424}`,
       width: Math.ceil(parseFloat(element?.style.width ?? "") || second.width),
       height: Math.ceil(parseFloat(element?.style.height ?? "") || second.height),
-      warnings: resolved.warnings.map(describe),
+      warnings,
     };
   });
 }

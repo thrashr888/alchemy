@@ -341,8 +341,58 @@ asks for 20 at most. Regenerate for a smaller one."). Nothing is
 truncated: the document is the model's, and which twenty to keep is the
 person's call.
 
+## Content Security Policy
+
+v0.59.0 shipped with diagrams that never rendered. Every kind failed in
+the signed build with `Refused to evaluate a string as JavaScript because
+'unsafe-eval' … is not an allowed source of script`, and dev builds never
+saw it: Vite's page carries no CSP, the release one is `script-src
+'self'` (`src-tauri/tauri.conf.json`), and it stays that way — a WebView
+that can evaluate strings is a WebView an injected note can run code in.
+
+The evaluator was Ajv. `@eraserlabs/resolve` validates each element
+against its tag's JSON schema, and Ajv turns a schema into a validator
+by generating JavaScript and calling `new Function` on it — once per tag
+at resolver warm-up (`schema/compile.js`), and once at module load for
+the MDP meta-schema that checks the tag schemas themselves
+(`schema/definition.js`). Nothing else in the app's graph imports ajv.
+
+The fix compiles ahead of time. `scripts/diagram-validators.mjs` builds
+the same two Ajv instances with the same options, compiles the same
+schemas (the stock library as `prepareLibrary` shapes it, the tag
+schemas with the resolver's `isContainer` addition, and the meta-schema)
+and writes the generated functions to `src/lib/diagramValidators.gen.js`
+(committed; `pnpm run diagram:validators` regenerates it after an
+`@eraserlabs/*` or ajv bump). Ajv's `standalone` output is CommonJS and
+reaches for two runtime helpers; the module wraps each blob in its own
+scope with those inlined, so it depends on nothing. Vite then aliases the
+bare `ajv` specifier (`scripts/diagram-csp-alias.ts`, used by the app,
+the harness, and vitest) to `src/lib/diagramValidators.ts`: the subset of
+Ajv's surface the resolver touches — `addKeyword`, `getKeyword`,
+`compile` — with `compile` looking the schema up by a fingerprint of its
+JSON. An unknown schema throws at warm-up naming the regenerate command
+rather than compiling anything. The resolver's own logic (schema-definition
+check, policy tables, error formatting) is untouched; only the code
+generator is gone. The custom keywords (`x-schema-kind`, `x-content`,
+`x-ref`, …) are metadata — declared with `schemaType` and `metaSchema`
+only, no `validate` or `code` — so the generated functions carry them
+without help.
+
+Two checks keep it that way. `src/lib/diagramCsp.test.ts` stubs
+`Function`, `eval`, and string-form timers to throw, then runs the real
+resolver over every harness sample through `resolveDiagram`, the entry
+the app uses (everything up to the render frame, which needs a DOM), and
+asserts the generated module evaluates nothing and covers every stock
+tag. `pnpm run diagram:check-csp` greps the built `dist/assets` chunks
+for Ajv's compiler and any `new Function` or `eval`, for the next
+dependency that brings one along.
+
 ## Risks
 
+- **Runtime evaluation.** Any dependency that compiles code at runtime
+  works in `pnpm tauri dev` and dies in the signed bundle, as Ajv did
+  (above). Run `pnpm build && pnpm run diagram:check-csp` before a
+  release; the test suite covers the resolver path on every run.
 - **Bundle.** Three packages plus vendored assets: the lazy diagram chunk
   (resolve + library + render + icons) is loaded on first render only; the
   fonts are 492 KB of assets fetched on first use. `@eraserlabs/diagrams`

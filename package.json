@@ -22,6 +22,8 @@
     "test:cli": "node --test cli/alchemy.test.mjs",
     "cli": "node ./cli/alchemy.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
+    "diagram:validators": "node scripts/diagram-validators.mjs",
+    "diagram:check-csp": "node scripts/diagram-check-csp.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "postinstall": "scripts/fetch-pdfium.sh && scripts/build-fm-sidecar.sh"

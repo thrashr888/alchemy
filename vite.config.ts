@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
+import { ajvShimAlias } from "./scripts/diagram-csp-alias";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -41,6 +42,10 @@ export default defineConfig(async () => ({
         find: /^(path|fs|url|source-map-js)$/,
         replacement: path.resolve(__dirname, "./src/lib/nodeShims.ts"),
       },
+      // The resolver's schema validators are compiled ahead of time: the
+      // release CSP forbids Ajv's `new Function`. Covers both entries —
+      // the app and the diagram frame share this graph.
+      ajvShimAlias(__dirname),
     ],
   },
 
