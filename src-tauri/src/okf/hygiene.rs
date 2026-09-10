@@ -27,8 +27,10 @@ pub(crate) const CONFLICTS_PER_PATH: usize = 3;
 const PRUNE_EVERY_MS: i64 = 60 * 60 * 1000;
 
 /// What the launch pass understands how to repair. The number is raised
-/// when there is something new to put right.
-const BLOAT_HEAL_VERSION: &str = "1";
+/// when there is something new to put right: 1 collapsed the marker and
+/// bulleted-fence shapes; 2 also collapses a fenced dump whose bullet has
+/// already rolled off.
+const BLOAT_HEAL_VERSION: &str = "2";
 
 // ---- log.md -----------------------------------------------------------------
 
@@ -229,20 +231,25 @@ pub(crate) struct InlinedConflict {
 /// caller can put back any copy that is missing before the text is gone
 /// from the log.
 ///
-/// Two shapes. A 0.58 entry runs from its `<!-- alchemy-conflict:… -->`
+/// Three shapes. A 0.58 entry runs from its `<!-- alchemy-conflict:… -->`
 /// marker to the next marker or the next per-writer day heading. The
 /// document text in between has headings of its own — `## Facts`,
 /// `## Documents` — which is why the end is not "the next heading". Before
-/// that (0.56) an overruled disk edit went in as `Kept the app's newer
-/// version of N file(s); the disk text follows.` and a fenced block of
-/// `path`, text, `---`, `path`, text, closed by the fence with the writer
-/// after it; each file in the block becomes one entry, preserved as the
-/// remote side, since there was no `conflicts/` to hold it then.
+/// that (0.55–0.57, the read-back in 99a9a90) an overruled disk edit went
+/// in as `Kept the app's newer version of N file(s); the disk text
+/// follows.` and a fenced block of `path`, text, `---`, `path`, text,
+/// closed by the fence with the writer after it; each file in the block
+/// becomes one entry, preserved as the remote side, since there was no
+/// `conflicts/` to hold it then. The third shape is that block with its
+/// bullet gone — the cap rolled the bullet off as an ordinary entry while
+/// the block it introduced stayed, since it is not an entry — so a bare
+/// fence whose first line is a bundle path is a dump too, and each file in
+/// it becomes an `Old copy of <path>` line.
 pub(crate) fn collapse_inlined_conflicts(text: &str) -> (String, Vec<InlinedConflict>) {
     const MARKER: &str = "<!-- alchemy-conflict:";
     const OLD_HEAD: &str = "Kept the app's newer version of ";
     const OLD_TAIL: &str = "; the disk text follows.";
-    if !text.contains(MARKER) && !text.contains(OLD_TAIL) {
+    if !text.contains(MARKER) && !text.contains(OLD_TAIL) && !text.contains("\n```\n") {
         return (text.to_string(), Vec::new());
     }
     let lines: Vec<&str> = text.lines().collect();
@@ -256,15 +263,11 @@ pub(crate) fn collapse_inlined_conflicts(text: &str) -> (String, Vec<InlinedConf
         if let Some(old) =
             parse_entry(line).filter(|e| e.text.starts_with(OLD_HEAD) && e.text.ends_with(OLD_TAIL))
         {
-            let close = lines[i + 1..]
-                .iter()
-                .position(|l| l.starts_with("``` (") && l.ends_with(')'))
-                .map(|p| i + 1 + p);
             let open = lines
                 .get(i + 1..=i + 2)
                 .and_then(|w| w.iter().position(|l| *l == "```"))
                 .map(|p| i + 1 + p);
-            if let (Some(open), Some(close)) = (open, close) {
+            if let Some((open, close)) = open.and_then(|o| Some((o, dump_close(&lines, o)?))) {
                 let writer = lines[close]
                     .trim_start_matches("``` (")
                     .trim_end_matches(')');
@@ -272,18 +275,24 @@ pub(crate) fn collapse_inlined_conflicts(text: &str) -> (String, Vec<InlinedConf
                     .trim_end_matches(" file(s)")
                     .to_string();
                 for (rel, body) in split_old_losers(&lines[open + 1..close].join("\n")) {
-                    let id = okf_hash(&serde_json::json!([rel, "remote", body]).to_string());
-                    found.push(InlinedConflict {
-                        id,
-                        side: "remote".into(),
-                        rel,
-                        text: body,
-                    });
+                    found.push(old_loser(rel, body));
                 }
                 out.push(format!(
                     "- {} {OLD_HEAD}{count} file(s); the disk text is under conflicts/. ({writer})",
                     old.first
                 ));
+                i = close + 1;
+                continue;
+            }
+        }
+        // The same block with no bullet in front of it.
+        if line == "```" && opens_dump(&lines, i) {
+            if let Some(close) = dump_close(&lines, i) {
+                for (rel, body) in split_old_losers(&lines[i + 1..close].join("\n")) {
+                    let entry = old_loser(rel, body);
+                    out.push(dump_line_put(&entry));
+                    found.push(entry);
+                }
                 i = close + 1;
                 continue;
             }
@@ -344,15 +353,27 @@ pub(crate) fn collapse_inlined_conflicts(text: &str) -> (String, Vec<InlinedConf
 /// The files in a 0.56 fenced block: `path`, blank, text, joined by a
 /// blank-`---`-blank rule. A document's own rule splits the same way, so a
 /// piece that does not open with a concept path is the tail of the piece
-/// before it.
+/// before it — and a document that *ends* with a rule leaves a piece that
+/// opens with `---` and then the next path, which is that document's last
+/// line and a new file.
 pub(crate) fn split_old_losers(block: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for piece in block.split("\n\n---\n\n") {
-        let first = piece.lines().next().unwrap_or_default().trim();
-        let is_path = (first.starts_with("sources/") || first.starts_with("notes/"))
-            && first.ends_with(".md")
-            && !first.contains(' ');
-        match (is_path, out.last_mut()) {
+        let first_line = |p: &str| p.lines().next().unwrap_or_default().trim().to_string();
+        let mut first = first_line(piece);
+        let mut piece = piece;
+        if first == "---" {
+            let rest = piece[3..].trim_start_matches('\n');
+            if is_bundle_path(&first_line(rest)) {
+                if let Some((_, body)) = out.last_mut() {
+                    body.push_str("\n\n---");
+                }
+                first = first_line(rest);
+                piece = rest;
+            }
+        }
+        let first = first.as_str();
+        match (is_bundle_path(first), out.last_mut()) {
             (true, _) => {
                 let body = piece[first.len()..].trim_matches('\n').to_string();
                 out.push((first.to_string(), body));
@@ -368,6 +389,87 @@ pub(crate) fn split_old_losers(block: &str) -> Vec<(String, String)> {
         *body = body.trim_matches('\n').to_string();
     }
     out
+}
+
+/// A concept path as the dumps name one: `sources/<slug>.md`,
+/// `notes/<slug>.md`, or the root listing.
+fn is_bundle_path(s: &str) -> bool {
+    s == "index.md"
+        || ((s.starts_with("sources/") || s.starts_with("notes/"))
+            && s.ends_with(".md")
+            && !s.contains(' '))
+}
+
+/// Is the bare fence at `open` the start of a dump — its first line a
+/// bundle path?
+fn opens_dump(lines: &[&str], open: usize) -> bool {
+    lines[open + 1..]
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| is_bundle_path(l.trim()))
+}
+
+/// Where the dump opened at `open` closes. The writer put its name after
+/// the closing fence — `\`\`\` (alchemy/0.57.0)` — which no document
+/// carries, so that line is the close. A dumped Markdown source has fences
+/// of its own, so a bare fence closes the dump only when what follows it
+/// (after blank lines) is the end of the file, another dump, a dated
+/// entry, or a writer day heading — none of which a document contains.
+fn dump_close(lines: &[&str], open: usize) -> Option<usize> {
+    let mut k = open + 1;
+    while k < lines.len() {
+        let l = lines[k];
+        if l.starts_with("``` (") && l.ends_with(')') {
+            return Some(k);
+        }
+        if l == "```" {
+            let next = lines[k + 1..]
+                .iter()
+                .position(|n| !n.trim().is_empty())
+                .map(|p| k + 1 + p);
+            let ends = match next {
+                None => true,
+                Some(n) => {
+                    is_day_heading(lines[n])
+                        || parse_entry(lines[n]).is_some()
+                        || (lines[n] == "```" && opens_dump(lines, n))
+                }
+            };
+            if ends {
+                return Some(k);
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// One file out of a dump, preserved as the remote side with the id the
+/// conflict writer would have minted for the same text.
+fn old_loser(rel: String, text: String) -> InlinedConflict {
+    let id = okf_hash(&serde_json::json!([rel, "remote", text]).to_string());
+    InlinedConflict {
+        id,
+        side: "remote".into(),
+        rel,
+        text,
+    }
+}
+
+/// The line a bulletless dump collapses to, before the notebook has been
+/// asked whether it already holds the text.
+fn dump_line_put(entry: &InlinedConflict) -> String {
+    format!(
+        "- Old copy of {} ({} chars) put under conflicts/{}.md",
+        entry.rel,
+        entry.text.chars().count(),
+        entry.id
+    )
+}
+
+/// The same line once the notebook turned out to hold the text already.
+fn dump_line_known(entry: &InlinedConflict) -> String {
+    format!("- Old copy of {} already in the notebook", entry.rel)
 }
 
 /// The bytes of a conflict copy, as `conflicts::Context::preserve` writes
@@ -424,7 +526,7 @@ pub(crate) async fn trim_log(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(LogTrim::default()),
         Err(err) => return Err(format!("Could not read {}: {err}", path.display())),
     };
-    let (collapsed, inlined) = collapse_inlined_conflicts(&existing);
+    let (mut collapsed, inlined) = collapse_inlined_conflicts(&existing);
     let mut done = LogTrim {
         collapsed: inlined.len(),
         ..Default::default()
@@ -440,6 +542,9 @@ pub(crate) async fn trim_log(
         let key = text_key(&entry.text);
         if key == empty || known.get(&entry.rel).is_some_and(|k| k.contains(&key)) {
             done.copies_dropped += 1;
+            // A bulletless dump's line names the copy it would have put
+            // under conflicts/; say instead that there was no need.
+            collapsed = collapsed.replace(&dump_line_put(entry), &dump_line_known(entry));
             continue;
         }
         std::fs::create_dir_all(bundle.join("conflicts")).map_err(|err| err.to_string())?;

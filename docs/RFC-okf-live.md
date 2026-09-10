@@ -768,11 +768,16 @@ bundles. The rules, all in `okf/hygiene.rs`:
 - **The heal** (`heal_bundle_bloat`, on launch after the frontmatter heal,
   once per store under the versioned marker `okf-bloat-healed`) runs the
   three over every bound bundle. For the log it collapses every inlined
-  entry of either old shape to its one line — first writing the text under
+  entry of the old shapes to its one line — first writing the text under
   `conflicts/` if no copy is there *and* the notebook does not already hold
   that text on disk or in the row, so the log's copy is never the last one
   to go — then applies the cap. Dry-run on the real logs: 11.4 MB → 48 KB,
-  6.5 MB → 17 KB, 421 KB → 36 KB, nothing left over. The conflict prune
+  6.5 MB → 17 KB, 421 KB → 36 KB, nothing left over. Version 2 of the
+  marker adds the 0.55–0.57 dump whose bullet the cap had already rolled
+  off — a bare fence opening on a bundle path, closed by the writer's
+  `\`\`\` (alchemy/0.57.0)` — and names each file in it as `Old copy of
+  <path> (N chars) put under conflicts/<id>.md`, or `already in the
+  notebook` when it is; the one such log went 1.04 MB → 49 KB. The conflict prune
   then clears what is redundant and past grace, and lists what it kept as
   unique. What it did goes through `okf_notice` with every count.
 

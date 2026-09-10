@@ -250,6 +250,146 @@ async fn trim_log_puts_a_missing_copy_back_before_its_text_leaves_the_log() {
     );
 }
 
+/// The 0.55–0.57 dump with its bullet rolled off: two blocks under one
+/// heading, the first closed by the writer, the second by a bare fence
+/// at the end of the day. `sources/guide.md` is Markdown with fences of
+/// its own — one bare pair followed by prose — and ends with a rule of
+/// its own right before the separator.
+fn bulletless_dump_log() -> String {
+    "# Log\n\n## 2026-09-04 \u{2014} me\n\n```\nsources/gallery-tsx.md\n\nimport { x } from \"y\";\n\nexport const g = 1;\n\n---\n\nsources/guide.md\n\n# Guide\n\n## Seams\n\n```bash\nbrew install foo\n```\n\n```\nsources/<slug>.md   # resource: references/foo.pdf\n```\n\n**Named by the file.** More prose.\n\n- a bullet in the document\n\n---\n\n---\n\nnotes/plan.md\n\nAn older plan.\n``` (alchemy/0.57.0)\n\n```\nindex.md\n\n# Listing\n```\n\n## 2026-09-09 \u{2014} me\n\n- 11:00:00Z 1 written — 5 sources, 2 notes. (alchemy/0.58.2)\n".to_string()
+}
+
+const GUIDE_TEXT: &str = "# Guide\n\n## Seams\n\n```bash\nbrew install foo\n```\n\n```\nsources/<slug>.md   # resource: references/foo.pdf\n```\n\n**Named by the file.** More prose.\n\n- a bullet in the document\n\n---";
+
+fn dump_id(rel: &str, text: &str) -> String {
+    okf_hash(&serde_json::json!([rel, "remote", text]).to_string())
+}
+
+#[test]
+fn a_dump_with_no_bullet_collapses_per_file_through_its_own_fences_and_rules() {
+    let (collapsed, found) = collapse_inlined_conflicts(&bulletless_dump_log());
+    let gallery = "import { x } from \"y\";\n\nexport const g = 1;";
+    assert_eq!(
+        entries(&collapsed),
+        vec![
+            format!(
+                "- Old copy of sources/gallery-tsx.md ({} chars) put under conflicts/{}.md",
+                gallery.chars().count(),
+                dump_id("sources/gallery-tsx.md", gallery)
+            ),
+            format!(
+                "- Old copy of sources/guide.md ({} chars) put under conflicts/{}.md",
+                GUIDE_TEXT.chars().count(),
+                dump_id("sources/guide.md", GUIDE_TEXT)
+            ),
+            format!(
+                "- Old copy of notes/plan.md (14 chars) put under conflicts/{}.md",
+                dump_id("notes/plan.md", "An older plan.")
+            ),
+            format!(
+                "- Old copy of index.md (9 chars) put under conflicts/{}.md",
+                dump_id("index.md", "# Listing")
+            ),
+            "- 11:00:00Z 1 written — 5 sources, 2 notes. (alchemy/0.58.2)".to_string(),
+        ]
+    );
+    assert!(!collapsed.contains("```"), "every fence went: {collapsed}");
+    assert!(
+        !collapsed.contains("## Seams"),
+        "the document's headings went"
+    );
+    assert!(collapsed.contains("## 2026-09-04 \u{2014} me\n\n- Old copy"));
+    assert!(collapsed.contains("## 2026-09-09 \u{2014} me"));
+    let texts: Vec<(&str, &str, &str)> = found
+        .iter()
+        .map(|e| (e.rel.as_str(), e.side.as_str(), e.text.as_str()))
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            ("sources/gallery-tsx.md", "remote", gallery),
+            ("sources/guide.md", "remote", GUIDE_TEXT),
+            ("notes/plan.md", "remote", "An older plan."),
+            ("index.md", "remote", "# Listing"),
+        ]
+    );
+    // Once collapsed there is nothing left to recognise.
+    assert_eq!(
+        collapse_inlined_conflicts(&collapsed),
+        (collapsed.clone(), vec![])
+    );
+    // A bare fence that opens on something other than a path is somebody's
+    // note, not a dump, and stays.
+    let note = "# Log\n\n## 2026-09-04 \u{2014} me\n\n```\nnot a path\n```\n\n- 11:00:00Z x (y)\n";
+    assert_eq!(collapse_inlined_conflicts(note), (note.to_string(), vec![]));
+}
+
+#[tokio::test]
+async fn trim_log_keeps_a_dumps_only_copies_and_names_the_ones_the_notebook_has() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("bundle");
+    let state = lab.replica("a", &bundle).await;
+    std::fs::write(bundle.join("log.md"), bulletless_dump_log()).unwrap();
+    // The guide on disk still says what the dump says (under frontmatter);
+    // the listing too. The gallery source moved on, and the plan is gone.
+    std::fs::create_dir_all(bundle.join("sources")).unwrap();
+    std::fs::write(
+        bundle.join("sources/guide.md"),
+        format!("---\ntitle: Guide\n---\n\n{GUIDE_TEXT}\n"),
+    )
+    .unwrap();
+    std::fs::write(bundle.join("index.md"), "# Listing\n").unwrap();
+    std::fs::write(
+        bundle.join("sources/gallery-tsx.md"),
+        "import { x } from \"y\";\n\nexport const g = 2;\n",
+    )
+    .unwrap();
+    let manifest = OkfManifest::default();
+    let done = trim_log(&state, &bundle, &manifest).await.unwrap();
+    assert_eq!(done.collapsed, 4);
+    assert_eq!(done.copies_restored, 2);
+    assert_eq!(done.copies_dropped, 2);
+    assert_eq!(done.entries_dropped, 0);
+    assert!(done.chars_removed > 0);
+    let gallery = "import { x } from \"y\";\n\nexport const g = 1;";
+    let gallery_id = dump_id("sources/gallery-tsx.md", gallery);
+    let plan_id = dump_id("notes/plan.md", "An older plan.");
+    assert_eq!(
+        std::fs::read_to_string(bundle.join(format!("conflicts/{gallery_id}.md"))).unwrap(),
+        conflict_copy_text("sources/gallery-tsx.md", "remote", gallery)
+    );
+    assert_eq!(
+        std::fs::read_to_string(bundle.join(format!("conflicts/{plan_id}.md"))).unwrap(),
+        conflict_copy_text("notes/plan.md", "remote", "An older plan.")
+    );
+    assert_eq!(
+        std::fs::read_dir(bundle.join("conflicts")).unwrap().count(),
+        2
+    );
+    let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
+    assert_eq!(
+        entries(&log),
+        vec![
+            format!(
+                "- Old copy of sources/gallery-tsx.md ({} chars) put under conflicts/{gallery_id}.md",
+                gallery.chars().count()
+            ),
+            "- Old copy of sources/guide.md already in the notebook".to_string(),
+            format!("- Old copy of notes/plan.md (14 chars) put under conflicts/{plan_id}.md"),
+            "- Old copy of index.md already in the notebook".to_string(),
+            "- 11:00:00Z 1 written — 5 sources, 2 notes. (alchemy/0.58.2)".to_string(),
+        ],
+        "{log}"
+    );
+    assert!(!log.contains("```"));
+    // Already in shape: nothing to do, nothing rewritten.
+    assert_eq!(
+        trim_log(&state, &bundle, &manifest).await.unwrap(),
+        LogTrim::default()
+    );
+    assert_eq!(std::fs::read_to_string(bundle.join("log.md")).unwrap(), log);
+}
+
 // ---- conflicts/ -------------------------------------------------------------
 
 fn copy(rel: &str, text: &str, mtime: i64) -> ConflictCopy {
