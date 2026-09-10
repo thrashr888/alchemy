@@ -357,6 +357,11 @@ pub fn start(app: AppHandle) {
             // an `index 2.md` (docs/RFC-okf-live.md §5.6). The per-pass
             // rules keep it there from then on.
             crate::okf::heal_bundle_bloat(&state).await;
+            // Re-key the sync claims the folder doubling left naming rows
+            // the notebook no longer has onto the rows that hold the same
+            // documents, once, so the exports held since then resume
+            // (docs/RFC-okf-live.md §5.3, "Missing rows, as built").
+            crate::okf::heal_orphaned_claims(&state).await;
             // And the tidying that is not a one-off repair: folders claiming
             // the same notebook, and the empty directories iCloud leaves
             // behind when it makes a folder before delivering its files.

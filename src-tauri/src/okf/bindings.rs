@@ -256,6 +256,21 @@ pub(super) fn detached_binding(
         .filter(|binding| same_folder(&binding.path) == same_folder(folder)))
 }
 
+/// The binding ids a detached notebook could resume under. A record kept
+/// for them is still read, and must not be set aside as unread.
+pub(super) fn detached_ids(data_dir: &Path) -> Result<Vec<String>, String> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| report("Binding transaction lock is poisoned"))?;
+    let _file = process_lock(data_dir)?;
+    Ok(detached_unlocked(data_dir)?
+        .notebooks
+        .into_values()
+        .flatten()
+        .map(|binding| binding.id)
+        .collect())
+}
+
 /// Recheck explicit detach intent under the same process lock that publishes
 /// automatic bindings, so an earlier discovery scan cannot undo an unbind.
 pub(super) fn update_discovered<R>(

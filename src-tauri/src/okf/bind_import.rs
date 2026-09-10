@@ -111,6 +111,36 @@ fn sessions(data_dir: &Path, notebook_id: &str) -> Result<Vec<(PathBuf, Session)
         .collect()
 }
 
+/// Every binding id a pending import session names, across notebooks. A
+/// session's record exists before its binding is published, so the id is
+/// read even while no binding carries it.
+pub(super) fn session_binding_ids(data_dir: &Path) -> Result<Vec<String>, String> {
+    let root = data_dir.join("okf-bind-import");
+    let notebooks = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("Could not inspect pending binding imports: {err}")),
+    };
+    let mut ids = Vec::new();
+    for notebook in notebooks {
+        let dir = notebook.map_err(|err| err.to_string())?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let records = std::fs::read_dir(&dir)
+            .map_err(|err| format!("Could not inspect pending binding imports: {err}"))?;
+        for record in records {
+            let path = record.map_err(|err| err.to_string())?.path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                if let Some(session) = read(&path)? {
+                    ids.push(session.binding_id);
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
 pub(super) fn blocks_existing_write(
     data_dir: &Path,
     notebook_id: &str,

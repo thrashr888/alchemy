@@ -28,6 +28,10 @@ use crate::ingest;
 use crate::models::{Note, Notebook, Source};
 use crate::rag;
 
+mod adopt_claims;
+#[cfg(test)]
+mod adopt_claims_tests;
+pub(crate) use adopt_claims::heal_orphaned_claims;
 mod bind_import;
 #[cfg(test)]
 mod binding_callsite_tests;
@@ -1545,25 +1549,16 @@ pub(crate) async fn export_all(
     let notebooks = e(state.db.list_notebooks().await)?;
     let mut concepts = 0usize;
     let mut kept: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut used: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for nb in &notebooks {
-        // Two notebooks may share a title; the slug must not collide, and it
-        // must be stable across nights, so it is claimed in list order.
-        let base = okf_slug(&nb.title);
-        let count = used.entry(base.clone()).or_insert(0);
-        *count += 1;
-        let slug = if *count == 1 {
-            base
-        } else {
-            format!("{base}-{count}")
-        };
+    // Two notebooks may share a title; the slug must not collide, and it
+    // must be stable across nights (`adopt_claims::nightly_slugs`).
+    for (nb, slug) in adopt_claims::nightly_slugs(&notebooks) {
         let dir = dest.join(&slug);
         let (notebook, sources, notes) = gather_bundle_for(state, &nb.id, &dir).await?;
         // The nightly copy keeps its own manifest — beside the bindings, not
         // in the bundle — so tonight can drop the concepts last night wrote
         // for a source that has since gone.
         let manifest = manifest_path(&app_data_dir(state), &format!("nightly-{slug}"));
-        missing_rows::preflight(state, &sources, &notes, &dir, &manifest)?;
+        missing_rows::preflight(state, &nb.id, &sources, &notes, &dir, &manifest).await?;
         let written = write_bundle_private(&notebook, &sources, &notes, &dir, Some(&manifest))?;
         concepts += written.sources + written.notes;
         kept.insert(slug);
@@ -4703,7 +4698,7 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
     let bundle = PathBuf::from(&binding.path);
     let manifest = manifest_path(&data_dir, &binding.id);
     let (notebook, sources, notes) = gather_bundle_for(state, notebook_id, &bundle).await?;
-    missing_rows::preflight(state, &sources, &notes, &bundle, &manifest)?;
+    missing_rows::preflight(state, notebook_id, &sources, &notes, &bundle, &manifest).await?;
     let written = write_bundle(&notebook, &sources, &notes, &bundle, Some(&manifest))?;
     touch_last_write_checked(&data_dir, notebook_id, &binding.id, now_ms())?;
     Ok(written)

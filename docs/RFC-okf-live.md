@@ -469,6 +469,46 @@ up. Four things the RFC did not settle, decided in the writing:
   running write. The hash is still the real echo suppressor; this only
   avoids the window where the manifest and the files disagree.
 
+### Missing rows, as built
+
+A manifest claim whose row is gone from the store, with no deletion
+receipt, no portable tombstone and no `sync/deletions/` record, is not
+proof the user deleted anything: legacy code and interrupted store
+operations have removed rows without a receipt, and the file may be the
+only surviving copy. Since 0.58 the writer and the nightly copy check
+every claim before touching a file (`missing_rows::preflight`) and hold
+the whole notebook — the file and its claim preserved — until the row is
+back.
+
+**Orphaned claims are adopted.** The 2026-09-03 folder doubling and the
+consolidation after it left claims naming rows that had been re-keyed, not
+lost: the same documents sat in the same notebook under other ids, and the
+hold kept every export of "458 Spider Purchase" for a week over rows
+nobody was missing. So before the hold, a stale claim is offered to the
+live row of the same kind in the same notebook that has no claim of its
+own and whose title the writer would place at that very path (`keeps_slug`
+— the slug or a `-N` of it). The claim is re-keyed to that row and the
+next write puts the row's identity and text over the file. When the file's
+body is not the row's — exact or the same words with different whitespace
+— the file's version is kept under `conflicts/` first, as `remote`, the
+way any losing version is (§5.4); the row wins, since the file was a
+snapshot of the row's own document. Two things do not earn a copy: a claim
+whose id is still a live row in *another* notebook (its text is not the
+last copy of anything, so the claim simply moves), and a claim with no
+counterpart here whose row lives elsewhere (left to the writer, which
+retires the file the way it retires any concept that left). A claim with
+neither still holds the export. The pass runs ahead of every write and
+every nightly copy, and once at launch over every record a live lineage
+reads (`heal_orphaned_claims`, marker `okf-claims-adopted`), which also
+moves the records no binding or nightly copy reads any more — one per
+lineage of the doubling — under `okf/orphaned/`, never deleting them.
+
+The nightly copy's own defect is fixed beside it: its record was keyed by
+a title slug claimed in *table* order, and a notebook's row moves to the
+end of the table whenever it is rewritten, so three notebooks with one
+title swapped folders night to night and each folder's record ended up
+claiming another notebook's rows. Slugs are claimed in creation order now.
+
 ### Frontmatter is merged: one block, latest wins
 
 A concept file carries exactly one frontmatter block, and it is the union

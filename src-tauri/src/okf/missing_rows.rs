@@ -1,59 +1,29 @@
 //! A missing database row is not proof that the user deleted its export.
 use super::*;
-use std::collections::HashSet;
 
 /// Check the exact snapshot the writer will project, before it mutates any
 /// files. Legacy code or an interrupted database operation can remove a row
 /// without a deletion receipt; its Markdown may be the only surviving copy.
-pub(super) fn preflight(
+///
+/// A claim whose row is gone is first offered to the live row that holds
+/// the same document (`adopt_claims`); what this refuses is a claim with no
+/// counterpart anywhere.
+pub(super) async fn preflight(
     state: &AppState,
+    notebook_id: &str,
     sources: &[OkfConcept],
     notes: &[OkfConcept],
     bundle: &Path,
     manifest_at: &Path,
 ) -> Result<(), String> {
-    let manifest = load_manifest_checked(manifest_at)?;
-    let live: HashSet<_> = sources.iter().chain(notes).map(|row| &row.id).collect();
-    let live_paths: HashSet<_> = manifest
-        .concepts
-        .iter()
-        .filter(|(id, _)| live.contains(id))
-        .map(|(_, entry)| &entry.path)
-        .collect();
-    let mut deleted = None;
-    for (id, entry) in &manifest.concepts {
-        // The writer discards obsolete aliases of a still-owned path without
-        // deleting that path. They do not authorize a portable tombstone.
-        if live.contains(id) || live_paths.contains(&entry.path) {
-            continue;
-        }
-        let kind = if entry.path.starts_with("notes/") {
-            "note"
-        } else if entry.path.starts_with("sources/") {
-            "source"
-        } else {
-            return Err("Invalid concept path in notebook sync record".into());
-        };
-        if e(state.db.was_deleted(kind, id))?
-            || manifest.deleted_entities.contains(&entry.portable_id)
-        {
-            continue;
-        }
-        if deleted.is_none() {
-            deleted = Some(portable_deletions::read_deleted(bundle)?);
-        }
-        if deleted
-            .as_ref()
-            .is_some_and(|ids| ids.contains(&entry.portable_id))
-        {
-            continue;
-        }
-        return Err(format!(
-            "{} is missing from the database without a recorded deletion. Its file and sync claim were preserved; restore the missing item before syncing this notebook",
-            entry.path
-        ));
+    let (_, adoption) =
+        adopt_claims::adopt(state, notebook_id, sources, notes, bundle, manifest_at).await?;
+    match adoption.orphaned.first() {
+        Some(path) => Err(format!(
+            "{path} is missing from the database without a recorded deletion. Its file and sync claim were preserved; restore the missing item before syncing this notebook"
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
