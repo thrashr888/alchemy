@@ -399,6 +399,7 @@ fn copy(rel: &str, text: &str, mtime: i64) -> ConflictCopy {
             okf_hash(&format!("{rel}{text}{mtime}"))
         )),
         rel: rel.into(),
+        side: "local".into(),
         text_key: text_key(text),
         mtime,
     }
@@ -409,6 +410,7 @@ fn a_conflict_copy_header_parses_and_its_key_ignores_every_frontmatter_block() {
     let text = "# Recovered sync conflict\n\nOriginal document: `sources/a.md`\n\nPreserved version: remote\n\n---\ntitle: A\nalchemy:\n  id: x\n---\n---\ntitle: A\n---\n\nThe words.\n";
     let parsed = parse_conflict_copy(Path::new("c.md"), text, 5).unwrap();
     assert_eq!(parsed.rel, "sources/a.md");
+    assert_eq!(parsed.side, "remote");
     assert_eq!(parsed.mtime, 5);
     assert_eq!(parsed.text_key, text_key("The words."));
     assert_eq!(
@@ -430,15 +432,15 @@ fn pruning_clears_redundant_copies_after_the_grace_and_never_the_only_copy() {
         copy("notes/a.md", live, now - 8 * day),
         // Redundant and recent: waits out the grace.
         copy("notes/a.md", live, now - day),
-        // Unique: stays, however old.
-        copy("notes/a.md", "Words that are nowhere else.", now - 30 * day),
+        // Unique: stays, however far past the grace (short of expiry).
+        copy("notes/a.md", "Words that are nowhere else.", now - 20 * day),
         // The same unique words in an older copy: redundant against the
         // newer kept one, and old enough to go.
-        copy("notes/a.md", "Words that are nowhere else.", now - 40 * day),
+        copy("notes/a.md", "Words that are nowhere else.", now - 28 * day),
         // A path the notebook knows nothing about: unique by definition.
-        copy("sources/gone.md", "Only here.", now - 90 * day),
+        copy("sources/gone.md", "Only here.", now - 25 * day),
         // Empty is never somebody's text.
-        copy("sources/gone.md", "---\ntitle: x\n---\n\n", now - 90 * day),
+        copy("sources/gone.md", "---\ntitle: x\n---\n\n", now - 25 * day),
     ];
     let plan = prune_plan(&copies, &known, now);
     assert_eq!(
@@ -450,6 +452,76 @@ fn pruning_clears_redundant_copies_after_the_grace_and_never_the_only_copy() {
         ]
     );
     assert_eq!(plan.unique, vec![copies[2].clone(), copies[4].clone()]);
+    assert!(plan.expired.is_empty());
+}
+
+#[test]
+fn a_conflict_copy_expires_at_thirty_days_by_mtime_whatever_its_text() {
+    let day = 24 * 60 * 60 * 1000;
+    let now = 100 * day;
+    let live = "The current text.";
+    let mut known: HashMap<String, HashSet<String>> = HashMap::new();
+    known.insert("notes/a.md".into(), HashSet::from([text_key(live)]));
+    let copies = vec![
+        // The only copy of its words, 29 days old: stays.
+        copy("notes/a.md", "Lost words, still fresh.", now - 29 * day),
+        // The only copy of its words, 31 days old: expires.
+        copy("notes/a.md", "Lost words, a month on.", now - 31 * day),
+        // Exactly thirty days: expires.
+        copy(
+            "sources/gone.md",
+            "Only here.",
+            now - CONFLICT_MAX_AGE_DAYS * day,
+        ),
+        // Redundant and past the grace: the seven-day rule, as before.
+        copy("notes/a.md", live, now - 8 * day),
+        // Redundant and past thirty days: expired, not merely cleared.
+        copy("notes/a.md", live, now - 40 * day),
+    ];
+    let plan = prune_plan(&copies, &known, now);
+    assert_eq!(plan.unique, vec![copies[0].clone()]);
+    assert_eq!(plan.remove, vec![copies[3].path.clone()]);
+    assert_eq!(
+        plan.expired,
+        vec![copies[1].clone(), copies[4].clone(), copies[2].clone()]
+    );
+}
+
+#[test]
+fn expiries_are_one_log_line_naming_what_each_was_a_version_of() {
+    let day = 24 * 60 * 60 * 1000;
+    let now = 100 * day;
+    let one = ConflictCopy {
+        path: PathBuf::from("conflicts/abcd.md"),
+        rel: "notes/plan.md".into(),
+        side: "remote".into(),
+        text_key: text_key("x"),
+        mtime: now - 31 * day - 1000,
+    };
+    assert_eq!(
+        expired_entry(std::slice::from_ref(&one), now),
+        "Expired conflicts/abcd.md (an older remote version of notes/plan.md, 31 days old)"
+    );
+    let many: Vec<ConflictCopy> = (0..12)
+        .map(|i| ConflictCopy {
+            path: PathBuf::from(format!("conflicts/{i}.md")),
+            rel: "sources/a.md".into(),
+            side: "local".into(),
+            text_key: text_key("y"),
+            mtime: now - (30 + i) * day,
+        })
+        .collect();
+    let line = expired_entry(&many, now);
+    assert!(
+        line.starts_with("Expired 12 conflict copies 30 days or older: conflicts/0.md (an older local version of sources/a.md, 30 days old), conflicts/1.md"),
+        "{line}"
+    );
+    assert!(
+        line.ends_with(
+            "conflicts/9.md (an older local version of sources/a.md, 39 days old), and 2 more"
+        ),
+        "{line}"
+    );
 }
 
 #[test]
@@ -514,6 +586,67 @@ async fn pruning_reads_the_row_and_the_file_as_the_texts_the_notebook_holds() {
     assert!(bundle.join("conflicts/unique.md").exists());
     let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
     assert!(log.contains("Cleared 1 conflict copy whose text is back in the notebook."));
+}
+
+#[tokio::test]
+async fn the_hourly_prune_expires_month_old_copies_and_logs_each_by_its_path() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("bundle");
+    let state = lab.replica("a", &bundle).await;
+    write_bound(&state, "shared-notebook").await.unwrap();
+    let day = 24 * 60 * 60 * 1000;
+    std::fs::create_dir_all(bundle.join("conflicts")).unwrap();
+    for (name, text, age) in [
+        // The only copy of its text, 31 days old: expires.
+        ("old.md", "Words nobody else has.", 31 * day + 1000),
+        // The only copy of its text, 29 days old: stays.
+        ("fresh.md", "Other words nobody else has.", 29 * day),
+    ] {
+        let path = bundle.join("conflicts").join(name);
+        std::fs::write(&path, conflict_copy_text("notes/example.md", "local", text)).unwrap();
+        set_mtime(&path, now_ms() - age);
+    }
+    let manifest_at = manifest_path(&app_data_dir(&state), "a");
+    let manifest = load_manifest(&manifest_at);
+    let done = prune_conflicts(&state, &bundle, &manifest).await;
+    assert_eq!((done.removed, done.expired, done.unique.len()), (0, 1, 1));
+    assert!(!bundle.join("conflicts/old.md").exists());
+    assert!(bundle.join("conflicts/fresh.md").exists());
+    let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
+    let line = entries(&log)
+        .into_iter()
+        .find(|l| l.contains("Expired"))
+        .unwrap_or_else(|| panic!("no expiry line: {log}"));
+    assert!(
+        line.contains(
+            "Z Expired conflicts/old.md (an older local version of notes/example.md, 31 days old)"
+        ),
+        "{line}"
+    );
+    // Several in one pass coalesce to one line with the count.
+    for i in 0..3 {
+        let path = bundle.join("conflicts").join(format!("batch{i}.md"));
+        std::fs::write(
+            &path,
+            conflict_copy_text("sources/gone.md", "remote", &format!("Text {i}.")),
+        )
+        .unwrap();
+        set_mtime(&path, now_ms() - (32 + i) * day);
+    }
+    let done = prune_conflicts(&state, &bundle, &manifest).await;
+    assert_eq!((done.removed, done.expired, done.unique.len()), (0, 3, 1));
+    let log = std::fs::read_to_string(bundle.join("log.md")).unwrap();
+    assert!(
+        log.contains("Expired 3 conflict copies 30 days or older: conflicts/batch0.md (an older remote version of sources/gone.md, 32 days old), conflicts/batch1.md"),
+        "{log}"
+    );
+    assert_eq!(
+        entries(&log)
+            .iter()
+            .filter(|l| l.contains("Expired"))
+            .count(),
+        2
+    );
 }
 
 // ---- `<name> 2.md` ----------------------------------------------------------

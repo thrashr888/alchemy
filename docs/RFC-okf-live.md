@@ -753,9 +753,20 @@ bundles. The rules, all in `okf/hygiene.rs`:
   newer copy being kept is *redundant*, and goes after a grace of seven
   days — or at once when more than three redundant copies are already
   waiting for that path. A copy whose text is nowhere else is the only
-  record of somebody's words and is never removed by this pass; the log
+  record of somebody's words and is not cleared by that rule; the log
   names it. Looked at hourly on the reconcile pass (the manifest remembers
   when), and on launch. Each clear is one log line with the count.
+- **Every conflict copy expires at thirty days** (`CONFLICT_MAX_AGE_DAYS`),
+  sole copy or not. A month of the file sitting under `conflicts/` — in
+  Finder, in the listings, named in the log — was the user's chance to
+  look, and that is the record; there is no set-aside copy and no second
+  tier. The age is the file's mtime, since the copy carries no clock of its
+  own. Same hourly pass, same manifest stamp as the rule above. One log
+  line per pass names what went and what each was a version of —
+  `Expired conflicts/<hash>.md (an older local version of notes/x.md, 31
+  days old)` — and several in one pass coalesce to a count with the first
+  ten named. The redundant rule is unchanged; a copy past thirty days
+  expires under this one whichever it is.
 - **A `<name> 2.md` twin of a file Alchemy owns is noise.** iCloud writes
   one when two Macs race over `index.md`, `log.md`, a listing, or a record
   under `sync/` — and a `<uuid> 2.json` in `sync/deletions/` stopped the
@@ -1365,7 +1376,9 @@ asks for it rather than as a default that doubles every synced folder.
   one line each with a document's own headings and rules intact; a text
   with no copy under `conflicts/` is written there unless the notebook
   holds it; redundant copies clear after the grace or past three per path
-  and a unique copy never does; owned twins resolve newer-wins into the
+  and a unique copy does not, until any copy expires at thirty days by its
+  mtime with one line naming what it was a version of, coalesced to a
+  count for several; owned twins resolve newer-wins into the
   set-aside folder, a twin of a deletion record no longer stops the pass,
   and a concept twin is left and named once; the launch heal does all of
   it to a bundle carrying the 0.56 and 0.58 state and stamps once.

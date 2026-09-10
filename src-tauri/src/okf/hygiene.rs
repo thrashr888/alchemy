@@ -5,7 +5,8 @@
 //! listings exist for their sake, so every one of them has a ceiling here:
 //! the log keeps a bounded number of entries and never carries a document
 //! body; a conflict copy whose text is back in the notebook is cleared
-//! after a grace period; and the `<name> 2.md` twins a cloud race leaves
+//! after a grace period, and any conflict copy goes after thirty days; and
+//! the `<name> 2.md` twins a cloud race leaves
 //! behind are resolved for the files Alchemy owns outright. One 11 MB
 //! `log.md`, 718 conflict copies and an `index 2.md` in a single notebook
 //! is what this is sized against.
@@ -22,6 +23,15 @@ pub(crate) const CONFLICT_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// How many redundant copies per path may wait out the grace period.
 pub(crate) const CONFLICTS_PER_PATH: usize = 3;
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How long any conflict copy stays at all, redundant or the only copy of
+/// its text. Thirty days of the file sitting under `conflicts/`, in Finder
+/// and in every listing, is the record; after that it goes. The copy
+/// carries no clock of its own, so the age is the file's mtime.
+pub(crate) const CONFLICT_MAX_AGE_DAYS: i64 = 30;
+const CONFLICT_MAX_AGE_MS: i64 = CONFLICT_MAX_AGE_DAYS * DAY_MS;
 
 /// How often a pass looks at `conflicts/` on its own.
 const PRUNE_EVERY_MS: i64 = 60 * 60 * 1000;
@@ -576,6 +586,8 @@ pub(crate) struct ConflictCopy {
     pub path: PathBuf,
     /// The concept file it was a version of, bundle-relative.
     pub rel: String,
+    /// Which side lost: `local` or `remote`, as the header says.
+    pub side: String,
     /// Hash of the body with every frontmatter block peeled — what "the
     /// same text" means here, since a copy from the 0.58 loop carries a
     /// stack of blocks over the same words.
@@ -604,11 +616,13 @@ pub(crate) fn parse_conflict_copy(path: &Path, text: &str, mtime: i64) -> Option
         return None;
     }
     let mut rel = None;
+    let mut side = String::new();
     let mut body_from = 0;
     for (i, line) in text.lines().enumerate().skip(1) {
         if let Some(r) = line.strip_prefix("Original document: ") {
             rel = Some(r.trim_matches('`').to_string());
-        } else if line.starts_with("Preserved version: ") {
+        } else if let Some(s) = line.strip_prefix("Preserved version: ") {
+            side = s.trim().to_string();
             body_from = text
                 .lines()
                 .take(i + 1)
@@ -621,6 +635,7 @@ pub(crate) fn parse_conflict_copy(path: &Path, text: &str, mtime: i64) -> Option
     Some(ConflictCopy {
         path: path.to_path_buf(),
         rel: rel?,
+        side,
         text_key: text_key(&text[body_from..]),
         mtime,
     })
@@ -656,11 +671,13 @@ pub(crate) fn conflict_copies(bundle: &Path) -> Vec<ConflictCopy> {
     out
 }
 
-/// What pruning decided: the copies to remove, and the ones that hold text
-/// found nowhere else, which stay.
+/// What pruning decided: the redundant copies to remove, the ones past
+/// `CONFLICT_MAX_AGE_DAYS` that go whatever their text, and the ones that
+/// hold text found nowhere else, which stay.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct PrunePlan {
     pub remove: Vec<PathBuf>,
+    pub expired: Vec<ConflictCopy>,
     pub unique: Vec<ConflictCopy>,
 }
 
@@ -672,7 +689,10 @@ pub(crate) struct PrunePlan {
 /// kept, is *redundant*; it goes once it is older than the grace period,
 /// or at once when more than `CONFLICTS_PER_PATH` redundant copies are
 /// already waiting for that path. A copy whose text is nowhere else is the
-/// only record of somebody's words and is never removed by this pass.
+/// only record of somebody's words and stays — until it is
+/// `CONFLICT_MAX_AGE_DAYS` old by its mtime, when it *expires* along with
+/// everything else that old: a month in the folder was the user's chance
+/// to look, and the log names what each one was a version of.
 pub(crate) fn prune_plan(
     copies: &[ConflictCopy],
     known: &HashMap<String, HashSet<String>>,
@@ -690,6 +710,10 @@ pub(crate) fn prune_plan(
         seen.insert(empty.clone());
         let mut waiting = 0usize;
         for copy in group {
+            if now.saturating_sub(copy.mtime) >= CONFLICT_MAX_AGE_MS {
+                plan.expired.push(copy.clone());
+                continue;
+            }
             if !seen.contains(&copy.text_key) {
                 seen.insert(copy.text_key.clone());
                 plan.unique.push(copy.clone());
@@ -709,9 +733,49 @@ pub(crate) fn prune_plan(
 /// What one prune did.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Pruned {
+    /// Redundant copies cleared.
     pub removed: usize,
+    /// Copies past `CONFLICT_MAX_AGE_DAYS`, cleared whatever their text.
+    pub expired: usize,
     pub unique: Vec<ConflictCopy>,
     pub failed: usize,
+}
+
+/// How an expired copy is named in the log: the file, what it was a
+/// version of, and how old it was.
+fn expired_name(copy: &ConflictCopy, now: i64) -> String {
+    format!(
+        "conflicts/{} (an older {} version of {}, {} days old)",
+        copy.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+        copy.side,
+        copy.rel,
+        now.saturating_sub(copy.mtime) / DAY_MS
+    )
+}
+
+/// The one log line for a pass's expiries: the file itself when one went,
+/// a count and the first few when several did.
+pub(crate) fn expired_entry(expired: &[ConflictCopy], now: i64) -> String {
+    let mut names: Vec<String> = expired
+        .iter()
+        .take(10)
+        .map(|c| expired_name(c, now))
+        .collect();
+    if expired.len() > names.len() {
+        names.push(format!("and {} more", expired.len() - names.len()));
+    }
+    if expired.len() == 1 {
+        format!("Expired {}", names[0])
+    } else {
+        format!(
+            "Expired {} conflict copies {CONFLICT_MAX_AGE_DAYS} days or older: {}",
+            expired.len(),
+            names.join(", ")
+        )
+    }
 }
 
 /// The texts the notebook holds for every path that has a conflict copy:
@@ -776,22 +840,37 @@ pub(crate) async fn prune_conflicts(
     }
     let rels: Vec<&str> = copies.iter().map(|c| c.rel.as_str()).collect();
     let known = known_texts(state, bundle, manifest, &rels).await;
-    let plan = prune_plan(&copies, &known, now_ms());
+    let now = now_ms();
+    let plan = prune_plan(&copies, &known, now);
     let mut done = Pruned {
         unique: plan.unique,
         ..Default::default()
     };
-    for path in &plan.remove {
-        match std::fs::remove_file(path) {
-            Ok(()) => done.removed += 1,
-            Err(err) => {
-                done.failed += 1;
-                crate::note!(
-                    "okf: couldn't clear conflict copy {}: {err}",
-                    path.display()
-                );
-            }
+    let mut clear = |path: &Path| match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(err) => {
+            done.failed += 1;
+            crate::note!(
+                "okf: couldn't clear conflict copy {}: {err}",
+                path.display()
+            );
+            false
         }
+    };
+    for path in &plan.remove {
+        if clear(path) {
+            done.removed += 1;
+        }
+    }
+    let expired: Vec<ConflictCopy> = plan
+        .expired
+        .iter()
+        .filter(|copy| clear(&copy.path))
+        .cloned()
+        .collect();
+    done.expired = expired.len();
+    if !expired.is_empty() {
+        let _ = okf_log_append(bundle, &expired_entry(&expired, now));
     }
     if done.removed > 0 {
         let _ = okf_log_append(
@@ -819,10 +898,11 @@ pub(crate) async fn prune_conflicts_if_due(
         return;
     }
     let done = prune_conflicts(state, bundle, manifest).await;
-    if done.removed > 0 {
+    if done.removed + done.expired > 0 {
         crate::note!(
-            "okf: cleared {} conflict copies under {}",
+            "okf: cleared {} redundant and {} expired conflict copies under {}",
             done.removed,
+            done.expired,
             bundle.display()
         );
     }
@@ -1064,6 +1144,7 @@ pub(crate) struct BloatHeal {
     pub bundles: usize,
     pub log: LogTrim,
     pub conflicts_removed: usize,
+    pub conflicts_expired: usize,
     pub conflicts_unique: usize,
     pub twins_resolved: usize,
     pub failed: usize,
@@ -1083,10 +1164,11 @@ pub(crate) async fn heal_bundle_bloat(state: &AppState) {
     if done.log.collapsed > 0
         || done.log.entries_dropped > 0
         || done.conflicts_removed > 0
+        || done.conflicts_expired > 0
         || done.twins_resolved > 0
     {
         okf_notice(format!(
-            "trimmed the bookkeeping in {} notebook folder{}: {} log entries collapsed ({} characters off, {} rolled off past the cap, {} texts put back under conflicts/, {} already in the notebook), {} conflict copies cleared, {} kept as the only copy of their text, {} cloud twins set aside",
+            "trimmed the bookkeeping in {} notebook folder{}: {} log entries collapsed ({} characters off, {} rolled off past the cap, {} texts put back under conflicts/, {} already in the notebook), {} conflict copies cleared, {} expired past {} days, {} kept as the only copy of their text, {} cloud twins set aside",
             done.bundles,
             if done.bundles == 1 { "" } else { "s" },
             done.log.collapsed,
@@ -1095,6 +1177,8 @@ pub(crate) async fn heal_bundle_bloat(state: &AppState) {
             done.log.copies_restored,
             done.log.copies_dropped,
             done.conflicts_removed,
+            done.conflicts_expired,
+            CONFLICT_MAX_AGE_DAYS,
             done.conflicts_unique,
             done.twins_resolved,
         ));
@@ -1150,6 +1234,7 @@ pub(crate) async fn heal_bundle_bloat_checked(state: &AppState) -> BloatHeal {
         }
         let pruned = prune_conflicts(state, &bundle, &manifest).await;
         done.conflicts_removed += pruned.removed;
+        done.conflicts_expired += pruned.expired;
         done.conflicts_unique += pruned.unique.len();
         done.failed += pruned.failed;
         if !pruned.unique.is_empty() {

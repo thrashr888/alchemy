@@ -454,8 +454,8 @@ and the folder is the sync. There is no server.
   the bundle into its own local database; edits made in either app, in the
   folder by hand, or by an agent flow the other way on the next pass. Rows are
   matched by sync identity, not path, so renames and moves survive. A change
-  on both sides lands in `conflicts/`, never over the other copy, and nothing
-  is deleted without a deletion record.
+  on both sides lands in `conflicts/`, never over the other copy and kept for
+  30 days, and nothing is deleted without a deletion record.
 
 Details, decisions, and the recovery rules: [docs/RFC-okf-live.md](docs/RFC-okf-live.md).
 
