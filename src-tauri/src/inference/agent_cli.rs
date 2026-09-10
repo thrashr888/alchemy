@@ -1946,16 +1946,19 @@ mod tests {
         let path = dir.path().join("bob");
         std::fs::write(
             &path,
-            "#!/bin/sh\nset -eu\n[ \"$#\" -eq 2 ]\n[ \"$1\" = --model ]\n[ \"$2\" = test-model ]\nawk 'BEGIN { printf \"<thinking>\"; for (i=0;i<20000;i++) printf \"starting \"; print \"</thinking>\"; for (i=0;i<20000;i++) print \"startup diagnostic\" > \"/dev/stderr\" }'\ncat > \"$0.input\"\ncat \"$0.input\"\n",
+            "#!/bin/sh\nset -eu\nif [ \"$#\" -ne 0 ]; then\n[ \"$#\" -eq 2 ]\n[ \"$1\" = --model ]\n[ \"$2\" = test-model ]\nfi\nawk 'BEGIN { printf \"<thinking>\"; for (i=0;i<20000;i++) printf \"starting \"; print \"</thinking>\"; for (i=0;i<20000;i++) print \"startup diagnostic\" > \"/dev/stderr\" }'\ncat > \"$0.input\"\ncat \"$0.input\"\n",
         )
         .expect("write fake bob");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let mut cli = AgentCli::with_binary_for_test(AgentKind::Bob, path);
-        cli.model = Some("test-model".into());
-        for content in [
-            "A short brief".to_string(),
-            "Notebook 日本語 🦀\n".repeat(12_000),
+        for (content, model) in [
+            ("A short brief".to_string(), None),
+            (
+                "Notebook 日本語 🦀\n".repeat(12_000),
+                Some("test-model".into()),
+            ),
         ] {
+            cli.model = model;
             let messages = [
                 ChatTurn::system("Keep the notebook names."),
                 ChatTurn::user(content),
