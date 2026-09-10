@@ -136,11 +136,23 @@ ranks its steps together and shares one set of columns, so a step's column
 is its place in the whole process (the "global step alignment across
 nested lanes" the first cut left out). A pool holding lanes stacks them as
 rows in document order — a level with lanes in it never ranks them side by
-side because no edge happened to order them. The prompt asks for 2–6
+side because no edge happened to order them. The prompt asks for 2–5
 lanes, 6–20 steps, one start event and at least one end, gateways with one
 labeled edge per outcome. An `Event`'s caption is wider than its 56px disc
 and centered under it; pass 2 shifts the body inside its box by the ink's
 left overhang so the caption never runs over a lane's title band.
+
+Lanes are the actors. The first live map drew one lane per step —
+"issue", "OWNERS", "An OWNER", "release issue", "announcement email" —
+a staircase with one Activity on each tread, because the prompt said how
+to spell a Lane before it said what one is. It now opens with the
+definition (a lane is who acts: a person, role, team, or system; a step
+is what that actor does, a short verb phrase, in the lane of whoever does
+it), a worked split of one sentence into two lanes and three steps, and
+the tell: a lane holding a single step means the lanes are wrong. The
+parser watches for the same tell — when more than half of a process map's
+lanes hold at most one step it adds a warning ("lanes look like steps"),
+a chip beside the title, not a rejection.
 
 ![Process map](images/diagrams-process.png)
 
@@ -283,11 +295,51 @@ relationship corpus is islands — eras the sources never connect to one
 another — and the layered layout starts every island at rank 0, so with
 `direction: "right"` six islands became one first column 1,400px tall
 and three ranks wide. The layout now takes `islands: "along"`
-(relationship only): each connected island starts at the rank after the
-last one ends, in document order, so the eras follow one another along
-the flow. The same 28-entity map is 3,871×423 now, and reads as a
-timeline (`docs/images/in-app-relationship.png`). Architecture keeps the
-default — unrelated tiers belong beside each other.
+(relationship only): each connected island is laid out on its own and the
+islands follow one another along the flow, in document order, so the eras
+read as a timeline. Architecture keeps the default — unrelated tiers
+belong beside each other.
+
+A chain of six eras is one strip: the same 28-entity map came out
+3,871×423, a 9:1 sheet that fits the pane at 18%. Past a point a strip
+wraps into rows. The rule is the sheet's shape, not the row's: the row
+width that puts the whole sheet near 2.5:1 is √(2.5 × tallest island ×
+strip length) — longer than the strip when the strip already fits, so a
+short chain stays one row — capped at 2,400px, and never narrower than
+the longest island, since an island cannot be split and a note dropped
+alone under a 2,300px island is no improvement. The strip is cut into
+that many rows in document order, each row taking islands until it holds
+its share (`rowsFor`, `diagramLayout.ts`; unit tested). The literal
+"row no wider than 2.5× the tallest island" would have put one ~600px
+era per 1,057px row and rebuilt the column the chain exists to avoid.
+The harness sample stays one row (its three eras are connected, one
+island); the in-app map wraps into two.
+
+**Pale captions.** In the app every Activity, Event, and Gateway caption
+rendered in a light gray, much fainter than the harness. Not a palette
+token — the live document colored no Activity — and not the lane tint.
+eraser writes a caption's color as `var(--er-ink, #242424)` with
+`--er-ink` inlined from the text run's own `color`; a run with none leaves
+the property empty, `var()` substitutes nothing, and `color` falls back
+to inherit, which in the harness is the page's black and in the app is
+the dark theme's light-on-dark foreground reaching through the shadow
+root. Lane titles set `#242424` outright, which is why only they stayed
+dark. The scene root now sets the ink (`#eraser-scene{color:#242424}`,
+appended to the scene's stylesheet in `eraserDiagram.ts`), so captions
+are black on the white card wherever the scene lands — viewer, print
+sheet, harness — and a run that names a color still gets it. Checked by
+forcing the harness page's foreground to a pale gray and reading each
+caption's computed color: `rgb(36, 36, 36)` throughout.
+
+**Too many pieces.** Models overshoot the ranges the prompts ask for.
+The parser knows each kind's cap (`KIND_CAP`: the top of each prompt's
+Rules range, held in lockstep by a test that reads `rag.rs`) and counts
+the kind's pieces — components, steps, tables, entities, touchpoints;
+never the containers or notes that frame them. Past the cap by half again
+it adds a warning naming the count ("31 entities; a relationship map
+asks for 20 at most. Regenerate for a smaller one."). Nothing is
+truncated: the document is the model's, and which twenty to keep is the
+person's call.
 
 ## Risks
 
@@ -317,7 +369,6 @@ default — unrelated tiers belong beside each other.
 
 The fetch-and-cache icon fallback, a dark palette, `Legend` and `Badge`,
 personas as rows on a journey map (one persona per map for now), letting
-a user edit the document in place with a re-render, and wrapping a
-relationship map's chained islands into rows once the row runs past a
-few screen widths (a six-island map is one long strip today; it pans,
-but a 3:1 sheet would read better and print better).
+a user edit the document in place with a re-render, and balancing wrapped rows by content rather than by document order (a
+row fills until it holds its share of the strip, so a long last island
+can leave the final row short).

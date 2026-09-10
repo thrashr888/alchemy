@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import rag from "../../src-tauri/src/rag.rs?raw";
 import {
+  CAP_SLACK,
   DIAGRAM_KINDS,
+  KIND_CAP,
   KIND_TAGS,
   diagramSource,
   parseDiagram,
@@ -231,6 +233,88 @@ describe("a relationship map's notes", () => {
   });
 });
 
+describe("what the parser warns about", () => {
+  /** A step-per-lane process map, the shape the first live run drew. */
+  const staircase = (lanes: number, stepsInFirst = 1) => {
+    const entities: unknown[] = [];
+    for (let i = 0; i < lanes; i += 1) {
+      entities.push({ tag: "Lane", id: `l${i}`, title: { text: `Lane ${i}` } });
+      const steps = i === 0 ? stepsInFirst : 1;
+      for (let j = 0; j < steps; j += 1)
+        entities.push({ tag: "Activity", id: `s${i}-${j}`, texts: [{ text: "Do" }], containerId: `l${i}` });
+    }
+    entities.push({ tag: "Textbox", id: "n", text: "note" });
+    return JSON.stringify({ entities });
+  };
+
+  it("says when a process map's lanes look like steps, and only then", () => {
+    const stairs = parseDiagram(staircase(5), "process");
+    expect(stairs.error).toBeUndefined();
+    expect(stairs.warnings).toEqual([
+      expect.stringMatching(/^lanes look like steps: 5 of 5 lanes hold one step/),
+    ]);
+    // A lane that does several things, with the others each doing one,
+    // is still mostly a staircase; two of three busy lanes is not.
+    expect(parseDiagram(staircase(3, 4), "process").warnings).toHaveLength(1);
+    const busy = {
+      entities: [
+        { tag: "Lane", id: "a", title: { text: "A" } },
+        { tag: "Lane", id: "b", title: { text: "B" } },
+        { tag: "Lane", id: "c", title: { text: "C" } },
+        ...["a", "a", "b", "b", "c"].map((lane, i) => ({
+          tag: "Activity",
+          id: `s${i}`,
+          texts: [{ text: "Do" }],
+          containerId: lane,
+        })),
+      ],
+    };
+    expect(parseDiagram(JSON.stringify(busy), "process").warnings).toEqual([]);
+    // One lane is not a staircase, and the harness sample is not one.
+    expect(parseDiagram(staircase(1), "process").warnings).toEqual([]);
+    expect(parseDiagram(JSON.stringify(GOOD.process), "process").warnings).toEqual([]);
+  });
+
+  describe.each(DIAGRAM_KINDS)("%s past its cap", (kind) => {
+    const piece = (i: number): unknown => {
+      switch (kind) {
+        case "data_model":
+          return { tag: "DatabaseTable", id: `t${i}`, label: `t${i}`, fields: [] };
+        case "process":
+          return { tag: "Activity", id: `s${i}`, texts: [{ text: "Do" }] };
+        case "relationship":
+          return { tag: "Icon", id: `p${i}`, icon: "user", texts: [{ text: "P" }] };
+        default:
+          return { tag: "Shape", id: `c${i}`, texts: [{ text: "C" }] };
+      }
+    };
+    const withPieces = (n: number) => {
+      // Containers and notes never count toward the cap.
+      const entities = [
+        { tag: kind === "process" ? "Lane" : "Group", id: "g", title: { text: "G" } },
+        { tag: "Textbox", id: "n", text: "note" },
+        ...Array.from({ length: n }, (_, i) => piece(i)),
+      ];
+      return parseDiagram(JSON.stringify({ entities }), kind);
+    };
+    const { max, noun } = KIND_CAP[kind];
+
+    it("keeps the document and names the count", () => {
+      const over = Math.floor(max * CAP_SLACK) + 1;
+      const parsed = withPieces(over);
+      expect(parsed.error).toBeUndefined();
+      expect(parsed.doc?.entities).toHaveLength(over + 2);
+      const cap = parsed.warnings?.find((w) => w.includes("Regenerate"));
+      expect(cap).toMatch(new RegExp(`^${over} ${noun}; a .* asks for ${max} at most`));
+    });
+
+    it("lets a document a little over the cap through without a word", () => {
+      expect(withPieces(Math.floor(max * CAP_SLACK)).warnings?.some((w) => w.includes("Regenerate"))).toBe(false);
+      expect(withPieces(max).warnings?.some((w) => w.includes("Regenerate"))).toBe(false);
+    });
+  });
+});
+
 describe("prepareForRender", () => {
   it("turns a data model's cardinality labels into crow's feet and leaves the rest", () => {
     const doc = parseDiagram(JSON.stringify(GOOD.data_model), "data_model").doc!;
@@ -291,6 +375,29 @@ describe("the generator's vocabulary", () => {
         [...KIND_TAGS[kind].connections].sort(),
       );
     }
+  });
+
+  it("caps where each prompt's Rules line does", () => {
+    // Each prompt opens its Rules with the range it asks for ("6-16
+    // entities", "6-20 steps", "3-14 tables", "8-20 entities", "4-8
+    // stages … 1-3 touchpoints"); the parser's cap is the top of that
+    // range. A journey's cap is stages × touchpoints per stage.
+    const rules = (kind: string) => {
+      const fn = new RegExp(`fn ${kind}_instruction\\(\\) -> String \\{([\\s\\S]*?)\\n\\}`).exec(rag);
+      expect(fn, `rag.rs declares ${kind}_instruction`).toBeTruthy();
+      const m = /Rules: ([^\n]*)/.exec(fn![1]);
+      expect(m, `${kind} prompt has a Rules line`).toBeTruthy();
+      return m![1];
+    };
+    const top = (range: string) => Number(/\d+-(\d+)/.exec(range)?.[1]);
+    expect(top(rules("architecture"))).toBe(KIND_CAP.architecture.max);
+    expect(Number(/(\d+)-(\d+) steps/.exec(rules("process"))?.[2])).toBe(KIND_CAP.process.max);
+    expect(top(rules("data_model"))).toBe(KIND_CAP.data_model.max);
+    expect(top(rules("relationship"))).toBe(KIND_CAP.relationship.max);
+    const journey = rules("journey");
+    const stages = Number(/(\d+)-(\d+) stages/.exec(journey)?.[2]);
+    const perStage = Number(/(\d+)-(\d+) touchpoints/.exec(journey)?.[2]);
+    expect(stages * perStage).toBe(KIND_CAP.journey.max);
   });
 
   it("matches the icons the app ships", () => {

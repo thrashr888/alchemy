@@ -276,7 +276,15 @@ export function renderDiagram(source: DiagramDoc, kind: DiagramKind): Promise<Re
     const element = frame.document.getElementById("eraser-scene");
     return {
       scene,
-      css,
+      // eraser paints for paper and expects the page's ink: a caption's
+      // color is `var(--er-ink, #242424)` with `--er-ink` inlined from the
+      // text run's own color, and a run with none leaves the property
+      // empty, so `var()` substitutes nothing and the caption inherits
+      // whatever surrounds the scene — the app's light-on-dark foreground,
+      // in every dark theme. The scene root sets the ink itself, so a
+      // caption is black on the white card wherever the scene lands and a
+      // run that names a color still gets it.
+      css: `${css}#eraser-scene{color:#242424}`,
       width: Math.ceil(parseFloat(element?.style.width ?? "") || second.width),
       height: Math.ceil(parseFloat(element?.style.height ?? "") || second.height),
       warnings: resolved.warnings.map(describe),

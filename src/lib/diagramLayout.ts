@@ -81,9 +81,36 @@ export interface LayoutOptions {
   /** Where a level's disconnected islands go: side by side across the
    *  main axis, all starting at rank 0 (the default — unrelated tiers of
    *  an architecture sit beside each other), or chained along it, each
-   *  island starting at the rank after the last one ends — a relationship
-   *  map's eras read left to right instead of stacking into a column. */
+   *  island after the last one, in document order — a relationship map's
+   *  eras read left to right instead of stacking into a column. A chain
+   *  that runs long wraps into rows (see `rowsFor`). */
   islands?: "across" | "along";
+}
+
+/**
+ * How a chain of islands wraps. One row is right until it is much wider
+ * than it is tall; past that the strip wraps so the whole sheet sits near
+ * ROW_ASPECT (width to height) — never one island per row, which would be
+ * the column the chain exists to avoid — and no row runs past ROW_MAX.
+ * A strip that already fits the aspect stays one row.
+ */
+export const ROW_ASPECT = 2.5;
+export const ROW_MAX = 2400;
+
+/**
+ * The number of rows a chain of `total` (islands plus gaps) along the
+ * main axis and `tallest` across it should wrap into. The row width that
+ * gives the sheet ROW_ASPECT is sqrt(ROW_ASPECT × tallest × total) — it
+ * exceeds `total` when the strip already fits, so a short chain stays on
+ * one row — capped at ROW_MAX for a chain of tall islands, and never
+ * narrower than the `longest` island: an island cannot be split, so a
+ * strip that is mostly one island stays a strip rather than dropping a
+ * scrap onto a second row.
+ */
+export function rowsFor(total: number, tallest: number, longest = 0): number {
+  if (total <= 0 || tallest <= 0) return 1;
+  const width = Math.max(longest, Math.min(ROW_MAX, Math.sqrt(ROW_ASPECT * tallest * total)));
+  return Math.max(1, Math.round(total / width));
 }
 
 export interface Placement {
@@ -170,10 +197,10 @@ function rank(ids: string[], edges: Edge[]): Map<string, number> {
 }
 
 /**
- * Shift each connected island's ranks so the islands follow one another
- * along the main axis, in the order their first member appears.
+ * A level's connected islands, each in the order its members appear, the
+ * islands in the order their first member appears.
  */
-function chainIslands(ids: string[], ranks: Map<string, number>, edges: Edge[]): void {
+function islandsOf(ids: string[], edges: Edge[]): string[][] {
   const parent = new Map<string, string>(ids.map((id) => [id, id]));
   const find = (id: string): string => {
     let root = id;
@@ -186,17 +213,13 @@ function chainIslands(ids: string[], ranks: Map<string, number>, edges: Edge[]):
     const b = find(to);
     if (a !== b) parent.set(b, a);
   }
-  const offset = new Map<string, number>();
-  let next = 0;
+  const byRoot = new Map<string, string[]>();
   for (const id of ids) {
     const root = find(id);
-    if (!offset.has(root)) {
-      offset.set(root, next);
-      const depth = Math.max(0, ...ids.filter((m) => find(m) === root).map((m) => ranks.get(m) ?? 0));
-      next += depth + 1;
-    }
+    if (!byRoot.has(root)) byRoot.set(root, []);
+    byRoot.get(root)?.push(id);
   }
-  for (const id of ids) ranks.set(id, (ranks.get(id) ?? 0) + (offset.get(find(id)) ?? 0));
+  return [...byRoot.values()];
 }
 
 /** Ranks → ordered layers, each sorted by the mean position of its predecessors. */
@@ -392,44 +415,105 @@ export function placeNodes(
     // Swimlanes stack, one band each, in the order the document lists
     // them — never side by side because no edge happened to rank them.
     const sequence = byId.get(top ?? "")?.sequence || members.some((m) => m.lane);
-    const ranks = shared
-      ? new Map(ids.map((id) => [id, shared.ranks.get(id) ?? 0]))
-      : sequence
-        ? new Map(ids.map((id, i) => [id, i]))
-        : rank(ids, lifted);
-    if (!shared && !sequence && options.islands === "along") chainIslands(ids, ranks, lifted);
-    const ordered = layers(ids, ranks, lifted);
-    const rel = new Map<string, Box>();
-    // Along the main axis each rank is one band; across it, the rank's
-    // members sit side by side, centered on the widest rank.
-    const bandAcross = ordered.map(
-      (layer) => layer.reduce((sum, id) => sum + across(id), 0) + gap * Math.max(0, layer.length - 1),
-    );
-    const maxAcross = Math.max(0, ...bandAcross);
-    const bandAlong = ordered.map((layer) => Math.max(0, ...layer.map(along)));
-    const { offsets, length } = shared
-      ? shared
-      : offsetsOf(bandAlong, labeledBoundaries(ranks, lifted));
-    ordered.forEach((layer, i) => {
-      if (!layer.length) return;
-      const mainCursor = offsets[i] ?? 0;
-      let crossCursor = align === "start" ? 0 : (maxAcross - bandAcross[i]) / 2;
-      for (const id of layer) {
-        const { width, height } = size.get(id) ?? { width: 0, height: 0 };
-        rel.set(id, {
-          x: Math.round(down ? crossCursor : mainCursor),
-          y: Math.round(down ? mainCursor : crossCursor),
-          width,
-          height,
-        });
-        crossCursor += across(id) + gap;
-      }
-    });
-    const level: Level = {
-      rel,
-      width: down ? maxAcross : length,
-      height: down ? length : maxAcross,
+
+    /** Rank a set of members and set each in a band along the main axis;
+     *  across it, a rank's members sit side by side, centered on the
+     *  widest rank (or flush with its start). Boxes are relative to the
+     *  arrangement's own origin. */
+    const arrange = (subset: string[], edgesWithin: Edge[]): Level => {
+      const ranks = shared
+        ? new Map(subset.map((id) => [id, shared.ranks.get(id) ?? 0]))
+        : sequence
+          ? new Map(subset.map((id, i) => [id, i]))
+          : rank(subset, edgesWithin);
+      const ordered = layers(subset, ranks, edgesWithin);
+      const rel = new Map<string, Box>();
+      const bandAcross = ordered.map(
+        (layer) =>
+          layer.reduce((sum, id) => sum + across(id), 0) + gap * Math.max(0, layer.length - 1),
+      );
+      const maxAcross = Math.max(0, ...bandAcross);
+      const bandAlong = ordered.map((layer) => Math.max(0, ...layer.map(along)));
+      const { offsets, length } = shared
+        ? shared
+        : offsetsOf(bandAlong, labeledBoundaries(ranks, edgesWithin));
+      ordered.forEach((layer, i) => {
+        if (!layer.length) return;
+        const mainCursor = offsets[i] ?? 0;
+        let crossCursor = align === "start" ? 0 : (maxAcross - bandAcross[i]) / 2;
+        for (const id of layer) {
+          const { width, height } = size.get(id) ?? { width: 0, height: 0 };
+          rel.set(id, {
+            x: Math.round(down ? crossCursor : mainCursor),
+            y: Math.round(down ? mainCursor : crossCursor),
+            width,
+            height,
+          });
+          crossCursor += across(id) + gap;
+        }
+      });
+      return { rel, width: down ? maxAcross : length, height: down ? length : maxAcross };
     };
+
+    let level: Level;
+    const islands =
+      !shared && !sequence && options.islands === "along" ? islandsOf(ids, lifted) : [ids];
+    if (islands.length <= 1) {
+      level = arrange(ids, lifted);
+    } else {
+      // Each island is arranged on its own, then the islands follow one
+      // another along the main axis in document order, wrapping into rows
+      // once the chain is far wider than tall (`rowsFor`). Rows fill in
+      // order; a row takes islands until it holds its share of the chain.
+      const arranged = islands.map((island) => {
+        const within = new Set(island);
+        return arrange(
+          island,
+          lifted.filter(([from, to]) => within.has(from) && within.has(to)),
+        );
+      });
+      const mainOf = (l: Level) => (down ? l.height : l.width);
+      const crossOf = (l: Level) => (down ? l.width : l.height);
+      const total =
+        arranged.reduce((sum, l) => sum + mainOf(l), 0) + gap * (arranged.length - 1);
+      const rows = rowsFor(
+        total,
+        Math.max(0, ...arranged.map(crossOf)),
+        Math.max(0, ...arranged.map(mainOf)),
+      );
+      const share = total / rows;
+      const rel = new Map<string, Box>();
+      let row = 0;
+      let mainCursor = 0;
+      let crossCursor = 0;
+      let rowCross = 0;
+      let mainExtent = 0;
+      for (const island of arranged) {
+        if (row < rows - 1 && mainCursor >= share) {
+          // The row holds its share: start the next one.
+          row += 1;
+          crossCursor += rowCross + gap;
+          mainCursor = 0;
+          rowCross = 0;
+        }
+        for (const [id, box] of island.rel) {
+          rel.set(id, {
+            ...box,
+            x: box.x + (down ? crossCursor : mainCursor),
+            y: box.y + (down ? mainCursor : crossCursor),
+          });
+        }
+        mainCursor += mainOf(island) + gap;
+        rowCross = Math.max(rowCross, crossOf(island));
+        mainExtent = Math.max(mainExtent, mainCursor - gap);
+      }
+      const crossExtent = crossCursor + rowCross;
+      level = {
+        rel,
+        width: down ? crossExtent : mainExtent,
+        height: down ? mainExtent : crossExtent,
+      };
+    }
     levels.set(top, level);
     return level;
   };

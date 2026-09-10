@@ -764,40 +764,52 @@ fn architecture_instruction() -> String {
     )
 }
 
-/// The process-map prompt: BPMN swimlanes. Lanes are the actors, steps
-/// flow left to right through them, and the layout keeps one global step
-/// order across every lane.
+/// The process-map prompt: BPMN swimlanes. Lanes are the actors — the
+/// people, roles, or systems that do the work — steps sit in the lane of
+/// whoever does them, and the layout keeps one global step order across
+/// every lane. The first live run drew one lane per step ("issue",
+/// "release issue", "announcement email"); the prompt now says what a
+/// lane is before it says how to spell one, with a worked split.
 fn process_instruction() -> String {
     format!(
         "Draw the process the sources below describe as ONE swimlane process map, written as a \
          single JSON document for a diagram renderer. The document:\n\
          {{\"title\": \"<3-6 words>\", \"direction\": \"down\", \"entities\": [...], \
          \"connections\": [...]}}\n\
+         A lane is WHO acts: a person, role, team, or system. A step is WHAT that actor does, \
+         written as a short verb phrase and placed in the lane of whoever does it. Lanes are \
+         never steps, stages, or artifacts. For \"An OWNER approves the issue, then CI builds \
+         and publishes the tag\" the lanes are OWNER and CI; the steps are \"Approve the \
+         issue\" in OWNER, then \"Build the tag\" and \"Publish the tag\" in CI. A lane holding \
+         a single step means the lanes are wrong: fold it into the actor who does that work.\n\
          Entity forms (every entity has a unique short \"id\"; \"containerId\" puts it inside a \
          Lane or Pool):\n\
-         - Lane — one swimlane per actor, team, system, or stage: \
+         - Lane — one swimlane per actor: \
          {{\"tag\":\"Lane\",\"id\":\"support\",\"title\":{{\"text\":\"Support\"}},\"color\":\"blue\"}}. \
          Pool — an optional outer band holding the lanes of one organization: \
          {{\"tag\":\"Pool\",\"id\":\"acme\",\"title\":{{\"text\":\"Acme\"}}}}, with each Lane's \
          \"containerId\" set to it.\n\
-         - Activity — one step of work, in a lane: \
+         - Activity — one step of work, a verb phrase of 2-5 words, in its actor's lane: \
          {{\"tag\":\"Activity\",\"id\":\"triage\",\"icon\":\"search\",\"texts\":[{{\"text\":\"Triage the ticket\"}}],\"containerId\":\"support\"}}. \
          \"icon\" is optional.\n\
-         - Event — where the process starts or ends, in a lane: \
+         - Event — where the process opens and where it closes, in a lane, captioned in 2-4 \
+         words: \
          {{\"tag\":\"Event\",\"id\":\"start\",\"texts\":[{{\"text\":\"Ticket opened\"}}],\"color\":\"green\",\"containerId\":\"customer\"}}; \
          give end events \"color\":\"red\".\n\
-         - Gateway — a decision, in a lane: \
+         - Gateway — a decision, captioned with the question it asks, in the lane of whoever \
+         decides: \
          {{\"tag\":\"Gateway\",\"id\":\"known\",\"texts\":[{{\"text\":\"Known issue?\"}}],\"containerId\":\"support\"}}, \
-         with one outgoing connection per outcome, labeled (\"yes\", \"no\", \"approved\"…).\n\
+         with one outgoing connection per outcome, each labeled with that outcome (\"yes\", \
+         \"no\", \"approved\"…).\n\
          - Textbox — a short free note: {{\"tag\":\"Textbox\",\"id\":\"n1\",\"text\":\"SLA: 4 hours\"}}.\n\
          Connections (tag Relationship, the default) carry the flow from each step to the next: \
          {{\"from\":\"triage\",\"to\":\"known\"}}, with a \"label\" only where it says which \
          outcome or what is handed over, in 3 words or fewer.\n\
          Colors are palette tokens only: white yellow green blue purple red orange black.\n\
-         Rules: 2-6 lanes, 6-20 steps, exactly one start Event and at least one end Event. Name \
-         actors and steps exactly as the sources name them, in the order the sources give; never \
-         invent a step the corpus does not describe. Every step except the end events has an \
-         outgoing connection; every step except the start has an incoming one.\n{tail}",
+         Rules: 2-5 lanes, 6-20 steps, exactly one start Event and at least one end Event. Name \
+         actors and steps as the sources name them, in the order the sources give; never invent \
+         a step the corpus does not describe. Every step except the end events has an outgoing \
+         connection; every step except the start has an incoming one.\n{tail}",
         tail = diagram_envelope(true)
     )
 }
@@ -1887,6 +1899,12 @@ mod tests {
         for kind in DIAGRAM_KINDS {
             assert!(DIAGRAM_TAGS.iter().any(|(k, _, _)| k == kind));
         }
+        // The process prompt says what a lane is before how to spell one,
+        // with a worked split — the first live run drew one lane per step.
+        let (_, process) = artifact_spec("process").expect("process spec");
+        assert!(process.contains("A lane is WHO acts"));
+        assert!(process.contains("the lanes are OWNER and CI"));
+        assert!(process.contains("A lane holding a single step means the lanes are wrong"));
     }
 
     /// ARTIFACT_KINDS and the artifact_spec match are two spellings of one

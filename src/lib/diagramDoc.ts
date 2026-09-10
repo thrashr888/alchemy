@@ -66,6 +66,24 @@ export const KIND_TAGS: Record<DiagramKind, { entities: readonly string[]; conne
   },
 };
 
+/**
+ * How many of a kind's main pieces its prompt asks for at most — the
+ * top of each "Rules:" range in rag.rs — and what to call them. Containers
+ * and notes are not counted: an era or a lane frames the map, it is not
+ * the map. A document past the cap by half again gets a warning naming
+ * the count; it still renders, and the person can regenerate.
+ */
+export const KIND_CAP: Record<DiagramKind, { max: number; noun: string }> = {
+  architecture: { max: 16, noun: "components" },
+  process: { max: 20, noun: "steps" },
+  data_model: { max: 14, noun: "tables" },
+  relationship: { max: 20, noun: "entities" },
+  journey: { max: 24, noun: "touchpoints" }, // 8 stages × 3
+};
+
+/** Past this much over the cap, the parser says so. */
+export const CAP_SLACK = 1.5;
+
 export interface DiagramEntity {
   tag: string;
   id: string;
@@ -212,6 +230,8 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
     connections.push(connection as DiagramConnection);
   }
 
+  warnings.push(...sizeWarnings(entities, kind));
+
   const direction =
     raw.direction === "right" || raw.direction === "down"
       ? raw.direction
@@ -225,6 +245,42 @@ export function parseDiagram(content: string, kind: DiagramKind): DiagramParse {
     },
     warnings,
   };
+}
+
+/**
+ * What the parser has to say about a document's shape: too many pieces,
+ * or a process map whose lanes are steps in disguise. Warnings, not
+ * rejections — the document renders, and the words say what to regenerate.
+ */
+function sizeWarnings(entities: DiagramEntity[], kind: DiagramKind): string[] {
+  const warnings: string[] = [];
+  const pieces = entities.filter((e) => !CONTAINER_TAGS.has(e.tag) && e.tag !== "Textbox");
+  const { max, noun } = KIND_CAP[kind];
+  if (pieces.length > max * CAP_SLACK) {
+    warnings.push(
+      `${pieces.length} ${noun}; a ${DIAGRAM_KIND_LABEL[kind].toLowerCase()} asks for ${max} at most. Regenerate for a smaller one.`,
+    );
+  }
+  // A process map's lanes are the people, roles, or systems that act. A
+  // model that writes one lane per step — "issue", "release issue",
+  // "announcement email" — draws a staircase, and the tell is that most
+  // lanes hold a single step.
+  if (kind === "process") {
+    const lanes = entities.filter((e) => e.tag === "Lane");
+    const stepsIn = new Map<string, number>(lanes.map((l) => [l.id, 0]));
+    for (const e of entities) {
+      if (CONTAINER_TAGS.has(e.tag) || e.tag === "Textbox") continue;
+      const lane = e.containerId;
+      if (typeof lane === "string" && stepsIn.has(lane)) stepsIn.set(lane, (stepsIn.get(lane) ?? 0) + 1);
+    }
+    const single = [...stepsIn.values()].filter((n) => n <= 1).length;
+    if (lanes.length >= 2 && single * 2 > lanes.length) {
+      warnings.push(
+        `lanes look like steps: ${single} of ${lanes.length} lanes hold one step. Lanes are the people, roles, or systems that act; regenerate for lanes that each do several things.`,
+      );
+    }
+  }
+  return warnings;
 }
 
 /** The document as the note stores it: stable key order, readable indent. */

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { estimateSize, placeNodes, type Box, type LayoutNode } from "./diagramLayout";
+import {
+  ROW_ASPECT,
+  ROW_MAX,
+  estimateSize,
+  placeNodes,
+  rowsFor,
+  type Box,
+  type LayoutNode,
+} from "./diagramLayout";
 
 const leaf = (id: string, containerId?: string): LayoutNode => ({
   id,
@@ -268,10 +276,11 @@ describe("placeNodes for the diagram kinds", () => {
     expect(placed.width).toBeGreaterThan(placed.height);
   });
 
-  it("chains a level's islands along the flow when asked", () => {
+  it("chains a level's islands along the flow when asked, wrapping a long chain", () => {
     // Three eras the sources never connect to each other, plus one loose
     // person: stacked into one column by default, laid left to right for
-    // a relationship map.
+    // a relationship map — and, since the chain runs 1088 wide by 146
+    // tall, wrapped into two rows rather than left as a strip.
     const nodes = [
       group("egypt"),
       leaf("zosimos", "egypt"),
@@ -298,18 +307,53 @@ describe("placeNodes for the diagram kinds", () => {
     expect(at(stacked, "egypt").x).toBe(at(stacked, "islam").x);
     expect(at(stacked, "islam").x).toBe(at(stacked, "europe").x);
     expect(stacked.height).toBeGreaterThan(stacked.width);
-    // Chained: egypt, its tablet, then islam, then europe, then jung, each
-    // to the right of the last, on one row.
-    const order = ["egypt", "tablet", "islam", "europe", "jung"].map((id) => at(chained, id));
-    for (let i = 1; i < order.length; i += 1) {
-      expect(order[i - 1].x + order[i - 1].width).toBeLessThanOrEqual(order[i].x);
-      expect(order[i].y).toBe(order[0].y);
+    // Chained: egypt, its tablet, then islam across the first row, each
+    // to the right of the last; europe and jung on a second row below,
+    // starting back at the left. Document order is row order.
+    const first = ["egypt", "tablet", "islam"].map((id) => at(chained, id));
+    const second = ["europe", "jung"].map((id) => at(chained, id));
+    for (const row of [first, second]) {
+      for (let i = 1; i < row.length; i += 1) {
+        expect(row[i - 1].x + row[i - 1].width).toBeLessThanOrEqual(row[i].x);
+        expect(row[i].y).toBe(row[0].y);
+      }
     }
-    // Inside an era nothing changes: jabir still precedes razi.
+    expect(second[0].x).toBe(first[0].x);
+    const bottomOfFirst = Math.max(...first.map((b) => b.y + b.height));
+    expect(second[0].y).toBeGreaterThanOrEqual(bottomOfFirst);
+    // Inside an era nothing changes: jabir still precedes razi, and the
+    // zosimos → tablet edge still reads left to right.
     expect(at(chained, "jabir").x).toBeLessThan(at(chained, "razi").x);
-    expect(chained.width).toBeGreaterThan(chained.height);
-    // Members of an island keep their order relative to each other.
     expect(at(chained, "zosimos").x).toBeLessThan(at(chained, "tablet").x);
+    // Two rows of a 7:1 strip make a sheet near 2:1, not a column.
+    expect(chained.width / chained.height).toBeGreaterThan(1.5);
+    expect(chained.width / chained.height).toBeLessThan(ROW_ASPECT);
+    // Nothing overlaps unless one holds the other.
+    for (const p of chained.boxes.values())
+      for (const q of chained.boxes.values())
+        if (p !== q && !inside(p, q) && !inside(q, p)) expect(overlaps(p, q)).toBe(false);
+  });
+
+  it("keeps a short chain of islands on one row", () => {
+    // Two eras side by side are 2:1 already; wrapping would stack them.
+    const nodes = [group("egypt"), leaf("zosimos", "egypt"), group("islam"), leaf("jabir", "islam")];
+    const placed = placeNodes(nodes, [], { direction: "right", align: "start", islands: "along" });
+    const [egypt, islam] = ["egypt", "islam"].map((id) => placed.boxes.get(id) as Box);
+    expect(egypt.y).toBe(islam.y);
+    expect(egypt.x + egypt.width).toBeLessThanOrEqual(islam.x);
+  });
+
+  it("never wraps to one island per row", () => {
+    // Six wide eras: the literal "row no wider than 2.5 × the tallest"
+    // rule would put one per row and rebuild the column. The sheet rule
+    // keeps several to a row.
+    const wide = (id: string): LayoutNode => ({ ...leaf(id), width: 600, height: 300 });
+    const nodes = ["a", "b", "c", "d", "e", "f"].map(wide);
+    const placed = placeNodes(nodes, [], { direction: "right", align: "start", islands: "along" });
+    const ys = new Set([...placed.boxes.values()].map((b) => b.y));
+    expect(ys.size).toBe(2);
+    expect(placed.width).toBeLessThanOrEqual(ROW_MAX + 48);
+    expect(placed.width).toBeGreaterThan(placed.height);
   });
 
   it("widens a rank gap that a labeled connection crosses", () => {
@@ -373,5 +417,31 @@ describe("estimateSize for the BPMN and table tags", () => {
     const activity = estimateSize({ tag: "Activity", icon: "search", texts: [{ text: "Triage" }] });
     expect(activity.width).toBeGreaterThanOrEqual(120);
     expect(activity.height).toBe(56);
+  });
+});
+
+describe("rowsFor", () => {
+  it("leaves a strip that fits the sheet aspect on one row", () => {
+    expect(rowsFor(1000, 400)).toBe(1); // 2.5:1 exactly
+    expect(rowsFor(600, 400)).toBe(1);
+    expect(rowsFor(0, 400)).toBe(1);
+  });
+
+  it("wraps a long strip into the rows that bring the sheet near the aspect", () => {
+    // The in-app relationship map: 3871 × 423 → two rows of ~1900.
+    expect(rowsFor(3871, 423)).toBe(2);
+    // A 10,000-wide strip of 300-tall islands: sqrt(2.5 × 300 × 10000) ≈ 2739
+    // exceeds ROW_MAX, so the cap decides.
+    expect(rowsFor(10_000, 300)).toBe(Math.round(10_000 / ROW_MAX));
+    // Tall islands cap at ROW_MAX too.
+    expect(rowsFor(4800, 2000)).toBe(2);
+  });
+
+  it("never makes a row narrower than the longest island", () => {
+    // The harness sample: three connected eras (one 2300-wide island)
+    // and a note. Wrapping cannot split the island, so the note stays
+    // beside it instead of alone on a second row.
+    expect(rowsFor(2645, 308, 2300)).toBe(1);
+    expect(rowsFor(3871, 423, 700)).toBe(2);
   });
 });
