@@ -1553,6 +1553,21 @@ pub(crate) async fn store_new_source(
     .await
 }
 
+/// A file read out of a bound bundle — a resync of a source whose path is
+/// its own concept file, a drag out of a bundle, a bundle child — arrives
+/// with the frontmatter Alchemy wrote it with. Alchemy's keys are the
+/// writer's to compose on the way out; stored as text they would be
+/// stacked on again at the next write, and the description would quote the
+/// last block. So a block of ours is merged down to the document's own keys
+/// (`okf::read_back_text`), which stay at the head of the text. A block
+/// that is not ours is the author's and is left exactly as it came.
+fn with_frontmatter_merged(mut extracted: ingest::Extracted) -> ingest::Extracted {
+    if let Some(text) = crate::okf::read_back_text(&extracted.text) {
+        extracted.text = text;
+    }
+    extracted
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn store_new_source_with_id(
     state: &AppState,
@@ -1565,6 +1580,7 @@ async fn store_new_source_with_id(
     source_id: String,
     tags: String,
 ) -> anyhow::Result<Source> {
+    let extracted = with_frontmatter_merged(extracted);
     let (status, error) = classify(&extracted.source_type, &extracted.url, &extracted.text);
     // Repository-tier code children store their content but skip embedding —
     // the ripgrep leg reaches them at query time (RFC-git-sources §4). They
@@ -2928,6 +2944,7 @@ async fn reingest_inner(
     quiet: bool,
     compare_existing: bool,
 ) -> anyhow::Result<Source> {
+    let extracted = with_frontmatter_merged(extracted);
     // Classify against the stored URL: text edits arrive via extract_pasted
     // with an empty extracted.url, which would drop the Google-doc exemption.
     let (status, error) = classify(&existing.source_type, &existing.url, &extracted.text);
@@ -13387,7 +13404,22 @@ pub(crate) async fn import_bundle(
         // in Finder work here too. A missing reference falls back to the
         // concept body, which is what a bundle without originals has always
         // been.
-        let reference = okf_reference_path(&root, &url);
+        //
+        // A `resource:` that names a concept file — this one, after a pass
+        // wrote `sources/x.md` as its own origin — is not an original: read
+        // "rich" it would make the row's file the file the writer
+        // overwrites, and every resync would read the last pass's
+        // frontmatter back in as text. The body is the capture, and the row
+        // gets no file path.
+        let reference = okf_reference_path(&root, &url)
+            .filter(|path| !crate::okf::is_okf_concept(&root, &path.to_string_lossy()));
+        let url = if reference.is_none()
+            && crate::okf::is_okf_concept(&root, &root.join(&url).to_string_lossy())
+        {
+            String::new()
+        } else {
+            url
+        };
         let extracted = match &reference {
             Some(path) => match extract_any_file(state, &path.to_string_lossy()).await {
                 Ok(mut rich) => {
@@ -13411,7 +13443,9 @@ pub(crate) async fn import_bundle(
             title,
             source_type,
             url,
-            text: parsed.body,
+            // The document's own keys ride at the head of the text
+            // (RFC-okf-live §5.3); Alchemy's went into the columns above.
+            text: parsed.document_text(),
         });
         let _ = app.emit(
             "import://progress",

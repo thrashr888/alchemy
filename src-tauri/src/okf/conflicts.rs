@@ -35,10 +35,13 @@ impl Context<'_> {
     fn preserve_local(&self, local: &OkfConcept) -> Result<(), String> {
         // An absent baseline cannot prove that overwriting is safe. Preserve
         // the existing text conservatively when recovering a legacy claim.
+        // The copy is a concept file like any other: one block, the
+        // document's own keys merged in, over the body (§5.3).
+        let (heads, body) = peel_frontmatter(&local.content);
+        let local = local.clone_with_extra(document_keys_of_stack(&heads));
         let text = format!(
-            "{}{}\n",
-            okf_frontmatter(local, &okf_description(&local.content), &HashMap::new()),
-            local.content,
+            "{}{body}\n",
+            okf_frontmatter(&local, &okf_description(body), &HashMap::new()),
         );
         self.preserve("local", &text)
     }

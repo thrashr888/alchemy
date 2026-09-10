@@ -36,6 +36,8 @@ mod conflicts;
 #[cfg(test)]
 mod deletion_recovery_tests;
 mod discovery;
+#[cfg(test)]
+mod frontmatter_tests;
 mod missing_rows;
 mod portable;
 mod portable_deletions;
@@ -226,6 +228,10 @@ pub(crate) struct OkfConcept {
     pub tags: Vec<String>,
     /// `generated.at`: `created_at` for sources, `updated_at` for notes.
     pub generated_at: i64,
+    /// When the row was last edited, as the conflict rule reads it (§5.4):
+    /// `updated_at` for notes, `max(fetched_at, created_at)` for sources.
+    /// Decides whose document keys win a merge; not itself in the file.
+    pub edited_at: i64,
     /// `generated.by` — who made this version. A person on this Mac
     /// (`human:<account>`) or the app on its own (`alchemy/<version>`), per
     /// §5.6. Empty falls back to the app.
@@ -281,6 +287,7 @@ impl OkfConcept {
             resource: String::new(),
             tags: Vec::new(),
             generated_at: 0,
+            edited_at: 0,
             generated_by: String::new(),
             status: String::new(),
             derived_from: Vec::new(),
@@ -410,8 +417,20 @@ fn okf_frontmatter(
     if !concept.resource.is_empty() {
         fm.push_str(&format!("resource: {}\n", yaml_str(&concept.resource)));
     }
-    if !concept.tags.is_empty() {
-        fm.push_str(&format!("tags: [{}]\n", concept.tags.join(", ")));
+    // `tags` is shared: Alchemy's type label first, then the document's own.
+    let mut tags = concept.tags.clone();
+    if let Some(serde_yaml_ng::Value::Sequence(own)) = concept
+        .extra
+        .get(serde_yaml_ng::Value::String("tags".into()))
+    {
+        for tag in own.iter().filter_map(|v| v.as_str()) {
+            if !tags.iter().any(|have| have == tag) {
+                tags.push(tag.to_string());
+            }
+        }
+    }
+    if !tags.is_empty() {
+        fm.push_str(&format!("tags: [{}]\n", tags.join(", ")));
     }
     if !concept.status.is_empty() {
         fm.push_str(&format!("status: {}\n", concept.status));
@@ -446,9 +465,15 @@ fn okf_frontmatter(
         alchemy.push(("parent".into(), parent.slug.clone()));
     }
     fm.push_str(&okf_alchemy_block(&alchemy));
-    // Keys from an outside edit, re-emitted as they came in.
-    if !concept.extra.is_empty() {
-        if let Ok(text) = serde_yaml_ng::to_string(&concept.extra) {
+    // The document's own keys, as they came in; its tags went above.
+    let document: serde_yaml_ng::Mapping = concept
+        .extra
+        .iter()
+        .filter(|(k, _)| k.as_str() != Some("tags"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if !document.is_empty() {
+        if let Ok(text) = serde_yaml_ng::to_string(&document) {
             fm.push_str(&text);
             if !fm.ends_with('\n') {
                 fm.push('\n');
@@ -675,17 +700,36 @@ fn write_bundle_with(
             let Some(place) = placements.get(&concept.id) else {
                 continue;
             };
-            let description = okf_description(&concept.content);
+            // One block per file (§5.3). A source's text is peeled to its
+            // body, and the document's own keys — the block at the head of
+            // the row's content, and the bundle file as last read (the
+            // manifest's `extra`) — are merged, the newer record winning
+            // per key, then composed with Alchemy's into the one block.
+            // Never a second block over one already there, never a
+            // description cut from frontmatter. A note's body is verbatim.
+            let (heads, body) = if concept.type_label == "Source" {
+                peel_frontmatter(&concept.content)
+            } else {
+                (Vec::new(), concept.content.as_str())
+            };
+            let description = okf_description(body);
             let local_hash = local_concept_hash(concept);
-            // Unknown keys from an earlier outside edit ride back out on
-            // every write, not just the one that read them.
-            let mut concept = concept.clone_with_extra(
-                manifest
-                    .concepts
-                    .get(&concept.id)
-                    .map(|m| m.extra.clone())
-                    .unwrap_or_default(),
-            );
+            let entry = manifest.concepts.get(&concept.id);
+            let file_keys = entry.map(|m| m.extra.clone()).unwrap_or_default();
+            let row_keys = document_keys_of_stack(&heads);
+            // The clock the conflict rule reads (§5.4): the row's edit time
+            // against the file's, as last read or written. A tie goes to
+            // disk there, so it does here.
+            let row_newer = match entry {
+                Some(m) => concept.edited_at > m.file_mtime,
+                None => true,
+            };
+            let merged = if row_newer {
+                merge_document_keys(&file_keys, &row_keys)
+            } else {
+                merge_document_keys(&row_keys, &file_keys)
+            };
+            let mut concept = concept.clone_with_extra(merged);
             let mut portable_id = manifest
                 .concepts
                 .get(&concept.id)
@@ -740,10 +784,12 @@ fn write_bundle_with(
                     .alchemy
                     .push(("origin".into(), concept.origin_uri.clone()));
             }
+            // One trailing newline, not one more per pass: a body that came
+            // back from disk already ends with the one the last write added.
             let mut text = format!(
-                "{}{}\n",
+                "{}{body}{}",
                 okf_frontmatter(&concept, &description, &placements),
-                concept.content
+                if body.ends_with('\n') { "" } else { "\n" }
             );
             if let Some(entry) = manifest.concepts.get(&concept.id) {
                 if !entry.portable_written
@@ -1287,6 +1333,9 @@ pub(crate) fn source_concept(
         reference: Some(plan_reference(s, bundle, cap_bytes)),
         tags: vec![s.source_type.clone()],
         generated_at: s.created_at,
+        // A source has no `updated_at`; when its text last came in is the
+        // same question (§5.4).
+        edited_at: s.fetched_at.max(s.created_at),
         generated_by: okf_source_actor(s, edits),
         // What the spec has no field for. `source_type` is the real type
         // (the top-level `tags:` is the spec-facing one); `tags` is the
@@ -1418,6 +1467,7 @@ fn note_concept(note: &Note, edits: &OkfEdits) -> OkfConcept {
         }
         .to_string(),
         generated_at: note.updated_at,
+        edited_at: note.updated_at,
         generated_by: okf_note_actor(note, edits),
         status: okf_note_status(note),
         derived_from: Vec::new(),
@@ -1886,9 +1936,10 @@ pub async fn okf_lifecycle(
 }
 
 /// The frontmatter keys Alchemy writes itself (see `okf_frontmatter`).
-/// Everything else in a concept file came from somewhere else and is the
-/// bound notebook's to carry back out untouched — the spec's round-trip rule.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Everything else in a concept file is the document's own — an author's,
+/// Obsidian's — and rides with the document: as the leading block of the
+/// row's content, and merged into the one block the writer composes.
+/// `tags` is shared (see `document_keys`).
 const OKF_OWN_KEYS: &[&str] = &[
     "type",
     "title",
@@ -1962,17 +2013,21 @@ impl OkfDoc {
             .map(|d| d.timestamp_millis())
     }
 
-    /// The keys Alchemy did not write. The bound notebook's manifest carries
-    /// these back out on the next write (docs/RFC-okf-live.md §5.1), which is
-    /// the only consumer — phase 0 reads them so the round trip is testable
-    /// before there is anywhere to keep them.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The document's own keys — the ones Alchemy did not write, and the
+    /// `tags` that are not its type label. The bound notebook's manifest
+    /// carries these back out on the next write (docs/RFC-okf-live.md §5.1),
+    /// and a source's read-back keeps them at the head of its content.
     pub fn extra(&self) -> serde_yaml_ng::Mapping {
-        self.front
-            .iter()
-            .filter(|(k, _)| !k.as_str().is_some_and(|k| OKF_OWN_KEYS.contains(&k)))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        document_keys(&self.front)
+    }
+
+    /// The document as a source's text: its own keys as the leading block,
+    /// then the body. This is what a read-back stores (§5.3) — Alchemy's
+    /// keys refresh the row's columns and never enter its content, so the
+    /// next write composes them fresh rather than stacking a block on one
+    /// already there.
+    pub fn document_text(&self) -> String {
+        format!("{}{}", render_document_block(&self.extra()), self.body)
     }
 }
 
@@ -1982,28 +2037,19 @@ impl OkfDoc {
 /// subset, so they parse unchanged; a file whose YAML does not parse falls
 /// back to the quoted-scalar reader rather than losing its title.
 pub(crate) fn parse_okf_doc(text: &str) -> OkfDoc {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return OkfDoc {
+    match split_leading_block(text) {
+        Some((head, body)) => OkfDoc {
+            // Hand-edited frontmatter that is not valid YAML still has
+            // readable `key: value` lines; `parse_head` takes those rather
+            // than dropping the document's title on the floor.
+            front: parse_head(head),
+            body: body.to_string(),
+        },
+        None => OkfDoc {
             front: serde_yaml_ng::Mapping::new(),
             body: text.to_string(),
-        };
-    };
-    let Some(end) = rest.find("\n---") else {
-        return OkfDoc {
-            front: serde_yaml_ng::Mapping::new(),
-            body: text.to_string(),
-        };
-    };
-    let head = &rest[..end];
-    let body = rest[end + 4..].trim_start_matches('\n').to_string();
-    let front = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(head) {
-        Ok(serde_yaml_ng::Value::Mapping(map)) => map,
-        // Hand-edited frontmatter that is not valid YAML still has readable
-        // `key: value` lines; take those rather than dropping the document's
-        // title on the floor.
-        _ => parse_okf_scalars(head),
-    };
-    OkfDoc { front, body }
+        },
+    }
 }
 
 /// The v0.1 reader, kept as the fallback: `key: "quoted"` or bare values,
@@ -2027,6 +2073,251 @@ fn parse_okf_scalars(head: &str) -> serde_yaml_ng::Mapping {
         }
     }
     map
+}
+
+// ---- One frontmatter block, merged (docs/RFC-okf-live.md §5.3) -------------
+//
+// A concept file carries exactly one frontmatter block: the document's own
+// keys (an author's, Obsidian's — anything Alchemy does not write) merged
+// with Alchemy's. Alchemy's keys are composed from the row on every write
+// and never stored in a row's `content`; the document's keys live in the
+// content as its leading block, so they show in the reader and survive a
+// round trip. Per key, the latest record wins.
+
+/// The children of Alchemy's nested maps (`generated`, `alchemy`). A concept
+/// file read through the ordinary file path had every line trimmed
+/// (`ingest::normalize` before 0.59), which lifts these to the top level,
+/// where by name alone they would pass for an author's keys.
+const OKF_OWN_NESTED_KEYS: &[&str] = &[
+    "by",
+    "at",
+    "id",
+    "source_type",
+    "author",
+    "image_url",
+    "parent",
+    "device",
+    "sync_id",
+    "sha256",
+    "origin",
+    "kind",
+    "color",
+    "icon",
+];
+
+/// One leading frontmatter block: its head and the text after it. `None`
+/// when the text does not begin with one. The closing fence is a line of
+/// its own (`\n----` and `\n--- x` are body), and the head has to read as
+/// frontmatter — a horizontal rule at the top of a document followed by a
+/// paragraph is not a block just because a second rule comes later.
+fn split_leading_block(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("---\n")?;
+    let mut from = 0;
+    while let Some(at) = rest[from..].find("\n---") {
+        let end = from + at;
+        let after = &rest[end + 4..];
+        if after.is_empty() || after.starts_with('\n') {
+            let head = &rest[..end];
+            return reads_as_frontmatter(head).then(|| (head, after.trim_start_matches('\n')));
+        }
+        from = end + 1;
+    }
+    None
+}
+
+/// Every non-blank line is a `key:` line, a continuation (indented), a
+/// sequence item, or a comment. Prose is none of those.
+fn reads_as_frontmatter(head: &str) -> bool {
+    let mut lines = head.lines().filter(|l| !l.trim().is_empty()).peekable();
+    lines.peek().is_some()
+        && lines.all(|line| {
+            line.starts_with([' ', '\t'])
+                || line.starts_with("- ")
+                || line.starts_with('#')
+                || line.split_once(':').is_some_and(|(k, v)| {
+                    !k.is_empty() && !k.contains(' ') && (v.is_empty() || v.starts_with(' '))
+                })
+        })
+}
+
+/// Is this frontmatter head one Alchemy wrote? The `alchemy:` map is the
+/// tell — no other producer emits it, and every block this app writes does.
+fn is_own_frontmatter(head: &str) -> bool {
+    head.lines().any(|line| line == "alchemy:")
+}
+
+/// The frontmatter blocks stacked at the head of a text, outermost first,
+/// and the body after the last of them. One block is the normal case; more
+/// is the 0.58 read-back loop, which put a fresh block over the last one on
+/// every pass. A document with no block is `(vec![], text)`.
+pub(crate) fn peel_frontmatter(text: &str) -> (Vec<&str>, &str) {
+    let mut heads = Vec::new();
+    let mut body = text;
+    while let Some((head, rest)) = split_leading_block(body) {
+        heads.push(head);
+        body = rest;
+    }
+    (heads, body)
+}
+
+/// A frontmatter head as a mapping: real YAML, or the quoted-scalar reader
+/// when it does not parse (a hand edit, or a block flattened by a trimming
+/// read).
+fn parse_head(head: &str) -> serde_yaml_ng::Mapping {
+    match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(head) {
+        Ok(serde_yaml_ng::Value::Mapping(map)) => map,
+        _ => parse_okf_scalars(head),
+    }
+}
+
+/// A block of ours whose nested maps have lost their indentation: the
+/// `alchemy:` key is there, but nothing parses under it.
+fn is_flattened(front: &serde_yaml_ng::Mapping) -> bool {
+    match front.get(serde_yaml_ng::Value::String("alchemy".into())) {
+        Some(serde_yaml_ng::Value::Mapping(_)) | None => false,
+        Some(serde_yaml_ng::Value::String(s)) => s.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// The type label Alchemy itself puts in a block's `tags:` — a source's
+/// type. `tags` is shared: the rest of the list is the document's. A v0.1
+/// block of ours (`type:` and `timestamp:`, no `alchemy:` map yet) named
+/// the type only there, as the first tag, the way the importer still reads
+/// it.
+const V01_SOURCE_TYPES: &[&str] = &["pdf", "text", "markdown", "html", "url", "image", "mac"];
+
+fn own_tag_labels(front: &serde_yaml_ng::Mapping) -> Vec<String> {
+    let get = |k: &str| front.get(serde_yaml_ng::Value::String(k.into()));
+    let nested = get("alchemy")
+        .and_then(|a| a.get("source_type"))
+        .and_then(|v| v.as_str().map(str::to_string));
+    let flat = get("source_type").and_then(|v| v.as_str().map(str::to_string));
+    let v01 = || {
+        (get("alchemy").is_none() && get("type").is_some() && get("timestamp").is_some())
+            .then(|| {
+                get("tags")
+                    .and_then(|t| t.as_sequence())
+                    .and_then(|t| t.first())
+                    .and_then(|t| t.as_str())
+                    .filter(|t| V01_SOURCE_TYPES.contains(t))
+                    .map(str::to_string)
+            })
+            .flatten()
+    };
+    nested.or(flat).or_else(v01).into_iter().collect()
+}
+
+/// The keys of one frontmatter mapping that belong to the document rather
+/// than to Alchemy. Alchemy's top-level keys come off; so do the children
+/// of its nested maps when the block has been flattened, since they are
+/// then indistinguishable from top-level keys by name alone. `tags` is
+/// shared: whatever is left after Alchemy's own type label is the
+/// document's, kept under `tags` after its other keys — except in a
+/// flattened block, where `alchemy.tags` (the user's labels) has landed on
+/// the same name and the list can no longer be trusted.
+pub(crate) fn document_keys(front: &serde_yaml_ng::Mapping) -> serde_yaml_ng::Mapping {
+    let flattened = is_flattened(front);
+    let own_labels = own_tag_labels(front);
+    let mut out = serde_yaml_ng::Mapping::new();
+    let mut tags = None;
+    for (k, v) in front {
+        let Some(key) = k.as_str() else { continue };
+        if key == "tags" {
+            if flattened {
+                continue;
+            }
+            let rest: Vec<serde_yaml_ng::Value> = match v {
+                serde_yaml_ng::Value::Sequence(items) => items.clone(),
+                serde_yaml_ng::Value::String(s) => s
+                    .split(',')
+                    .map(|t| serde_yaml_ng::Value::String(t.trim().to_string()))
+                    .collect(),
+                _ => Vec::new(),
+            }
+            .into_iter()
+            .filter(|t| {
+                !t.as_str()
+                    .is_some_and(|t| t.is_empty() || own_labels.iter().any(|o| o == t))
+            })
+            .collect();
+            if !rest.is_empty() {
+                tags = Some(serde_yaml_ng::Value::Sequence(rest));
+            }
+            continue;
+        }
+        if OKF_OWN_KEYS.contains(&key) || (flattened && OKF_OWN_NESTED_KEYS.contains(&key)) {
+            continue;
+        }
+        out.insert(k.clone(), v.clone());
+    }
+    if let Some(tags) = tags {
+        out.insert(serde_yaml_ng::Value::String("tags".into()), tags);
+    }
+    out
+}
+
+/// The document's keys across a stack of blocks, the newest block winning
+/// per key. Blocks are outermost first, and the outermost is the newest:
+/// every pass of the loop put its block on top.
+fn document_keys_of_stack(heads: &[&str]) -> serde_yaml_ng::Mapping {
+    let mut out = serde_yaml_ng::Mapping::new();
+    for head in heads.iter().rev() {
+        for (k, v) in document_keys(&parse_head(head)) {
+            out.insert(k, v);
+        }
+    }
+    out
+}
+
+/// A document's keys as the leading block of its text — `---`, the keys
+/// as YAML, `---`, a blank line. Nothing when there are no keys.
+pub(crate) fn render_document_block(keys: &serde_yaml_ng::Mapping) -> String {
+    if keys.is_empty() {
+        return String::new();
+    }
+    match serde_yaml_ng::to_string(keys) {
+        Ok(yaml) => format!(
+            "---\n{yaml}{}---\n\n",
+            if yaml.ends_with('\n') { "" } else { "\n" }
+        ),
+        Err(_) => String::new(),
+    }
+}
+
+/// A source's text with its frontmatter merged down to the document's own
+/// keys: every leading block peeled, Alchemy's keys dropped (they are
+/// composed from the row at write time), the document's keys re-emitted
+/// as one block over the body. Blocks that are not ours are left exactly
+/// as they were: an author's frontmatter is part of their document, and
+/// `None` says so.
+///
+/// This is the read-back rule for text that arrives through the ordinary
+/// file path — a Refresh of a source whose path is its own concept file, a
+/// file dragged out of a bundle, a bundle child (§4) — where the whole
+/// file, frontmatter and all, would otherwise become the row's content and
+/// the next write would put a second block on it.
+pub(crate) fn read_back_text(text: &str) -> Option<String> {
+    let (heads, body) = peel_frontmatter(text);
+    if !heads.iter().any(|h| is_own_frontmatter(h)) {
+        return None;
+    }
+    Some(format!(
+        "{}{body}",
+        render_document_block(&document_keys_of_stack(&heads))
+    ))
+}
+
+/// Merge the document's keys from two records, the newer winning per key.
+fn merge_document_keys(
+    older: &serde_yaml_ng::Mapping,
+    newer: &serde_yaml_ng::Mapping,
+) -> serde_yaml_ng::Mapping {
+    let mut out = older.clone();
+    for (k, v) in newer {
+        out.insert(k.clone(), v.clone());
+    }
+    out
 }
 
 // ---- The Notebooks folder (docs/RFC-okf-live.md §5.7) -----------------------
@@ -2838,6 +3129,135 @@ fn okf_notice(message: String) {
         crate::diagnostics::Event::new(crate::diagnostics::Level::Warn, "rust", "okf")
             .message(message),
     );
+}
+
+// ---- Stacked frontmatter (the 0.58 read-back loop) -------------------------
+
+/// Bumped when the pass below has to run again on a store it already ran on.
+const FRONTMATTER_HEAL_VERSION: &str = "2";
+
+/// What the stacked-frontmatter heal did, for the log and the tests.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct FrontmatterHeal {
+    pub sources: usize,
+    pub chars_removed: usize,
+    /// Document keys — an author's, not ours — carried out of the stack
+    /// into the one block that replaces it.
+    pub keys_preserved: usize,
+    /// Rows that could not be rewritten this launch; the pass runs again.
+    pub failed: usize,
+}
+
+/// Merge the stacked frontmatter on every source row that carries it down
+/// to one block, once.
+///
+/// Before 0.59 a source whose file was its own concept file — `resource:
+/// sources/x.md`, the row's path the file the writer overwrites — was read
+/// back whole on every resync, frontmatter and all, and the next write
+/// composed a fresh block on top of the last one, quoting it as the
+/// description. Three hundred passes later one 15 KB document was a 228 KB
+/// row that began with three hundred blocks, and its chunks were mostly
+/// YAML. The writer and the read-back both merge now; this pass puts the
+/// rows that already had the stack right. Nothing is deleted: the body
+/// after the last block is kept byte for byte, the document's own keys
+/// are collected across the stack (the newest block winning per key) and
+/// re-emitted as its one leading block, the text is re-chunked, and the
+/// bound bundle is rewritten with a single merged block.
+pub(crate) async fn heal_stacked_frontmatter(state: &AppState) {
+    let data_dir = app_data_dir(state);
+    let stamp = data_dir.join("okf-frontmatter-healed");
+    if std::fs::read_to_string(&stamp).is_ok_and(|v| v.trim() == FRONTMATTER_HEAL_VERSION) {
+        return;
+    }
+    match heal_stacked_frontmatter_checked(state).await {
+        Ok(done) => {
+            if done.sources > 0 {
+                okf_notice(format!(
+                    "merged stacked sync frontmatter on {} source{} down to one block ({} characters off, {} document key{} kept); the text underneath is unchanged and was re-indexed",
+                    done.sources,
+                    if done.sources == 1 { "" } else { "s" },
+                    done.chars_removed,
+                    done.keys_preserved,
+                    if done.keys_preserved == 1 { "" } else { "s" },
+                ));
+            }
+            // A row that failed is retried next launch; stamping now would
+            // leave it as it is for good.
+            if done.failed == 0 {
+                if let Err(err) = std::fs::write(&stamp, FRONTMATTER_HEAL_VERSION) {
+                    crate::note!("okf: couldn't stamp the frontmatter heal: {err}");
+                }
+            }
+        }
+        Err(error) => crate::diagnostics::error("okf-frontmatter", error),
+    }
+}
+
+pub(crate) async fn heal_stacked_frontmatter_checked(
+    state: &AppState,
+) -> Result<FrontmatterHeal, String> {
+    let sources = e(state.db.all_sources().await)?;
+    let mut done = FrontmatterHeal::default();
+    let mut notebooks: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for source in sources {
+        // Two or more blocks with at least one of ours among them is the
+        // loop. One block — an author's, or one of ours that a file dragged
+        // out of a bundle carried in — is a document, and the writer merges
+        // it on the way out.
+        let (heads, body) = peel_frontmatter(&source.content);
+        if heads.len() < 2 || !heads.iter().any(|h| is_own_frontmatter(h)) {
+            continue;
+        }
+        let keys = document_keys_of_stack(&heads);
+        let text = format!("{}{body}", render_document_block(&keys));
+        if text == source.content {
+            continue;
+        }
+        let blocks = heads.len();
+        let removed = source
+            .content
+            .chars()
+            .count()
+            .saturating_sub(text.chars().count());
+        let extracted = ingest::Extracted {
+            feeds: Vec::new(),
+            image_url: source.image_url.clone(),
+            author: source.author.clone(),
+            title: source.title.clone(),
+            source_type: source.source_type.clone(),
+            // Empty keeps the row's own origin, whatever it is.
+            url: String::new(),
+            text,
+        };
+        // The old chunks were cut from the stack, so the text is re-chunked
+        // and re-embedded, the way any changed source is.
+        match crate::commands::reingest(state, &source, extracted, None, true).await {
+            Ok(_) => {
+                crate::note!(
+                    "okf: merged {blocks} stacked frontmatter blocks on \"{}\" down to one ({removed} chars off, {} document keys kept)",
+                    source.title,
+                    keys.len()
+                );
+                done.sources += 1;
+                done.chars_removed += removed;
+                done.keys_preserved += keys.len();
+                notebooks.insert(source.notebook_id.clone());
+            }
+            Err(err) => {
+                crate::note!(
+                    "okf: couldn't merge the stacked frontmatter on \"{}\": {err:#}",
+                    source.title
+                );
+                done.failed += 1;
+            }
+        }
+    }
+    // The bound bundle's file still holds the stack; the next write puts a
+    // single merged block over the body.
+    for notebook in notebooks {
+        schedule_write(&notebook);
+    }
+    Ok(done)
 }
 
 /// What this Mac already knows, as the found-bundle rule needs it. Read fresh
@@ -5275,7 +5695,18 @@ async fn take_in_source(
     // ordinary file path so pages stay pages, and point the source at the
     // reference so Refresh and Show in Finder work. A reference the bundle
     // does not actually hold falls back to the concept body.
-    let reference = crate::commands::okf_reference_path(bundle, &resource);
+    //
+    // A `resource:` that names a concept file — this one, after a pass
+    // wrote `sources/x.md` as its own origin — is not an original. Reading
+    // it "rich" would make the row's file the file the writer overwrites
+    // every pass, and each pass would read the last pass's frontmatter back
+    // in as text. The body is the capture; the row gets no file path.
+    let mut resource = resource;
+    let reference = crate::commands::okf_reference_path(bundle, &resource)
+        .filter(|path| !is_okf_concept(bundle, &path.to_string_lossy()));
+    if reference.is_none() && is_okf_concept(bundle, &bundle.join(&resource).to_string_lossy()) {
+        resource = String::new();
+    }
     let rich = match &reference {
         Some(file) => crate::commands::extract_any_file(state, &file.to_string_lossy())
             .await
@@ -5286,6 +5717,9 @@ async fn take_in_source(
             }),
         None => None,
     };
+    // The document's own keys stay with the document, as its leading block;
+    // Alchemy's are read into the row's columns and go no further (§5.3).
+    let text = doc.document_text();
     let extracted = rich.unwrap_or(ingest::Extracted {
         feeds: Vec::new(),
         image_url: doc.nested("alchemy", "image_url").unwrap_or_default(),
@@ -5296,7 +5730,7 @@ async fn take_in_source(
             .unwrap_or_else(|| "markdown".into()),
         // The resource is provenance, and a web one stays refreshable.
         url: resource,
-        text: doc.body.clone(),
+        text: text.clone(),
     });
     // Distinct file identities remain distinct even when their text matches.
     let reserved_id = reserved_id.ok_or("Missing reserved import identity")?;
@@ -5316,13 +5750,7 @@ async fn take_in_source(
             landed.origin_device = device;
             crate::note!("okf: took in source \"{title}\" from disk");
             let edits = load_okf_edits(&app_data_dir(state), notebook_id);
-            let local_hash = local_concept_hash(&source_concept(
-                &landed,
-                doc.body.clone(),
-                bundle,
-                0,
-                &edits,
-            ));
+            let local_hash = local_concept_hash(&source_concept(&landed, text, bundle, 0, &edits));
             Ok(Some(Taken {
                 id: landed.id,
                 local_hash,
@@ -5410,7 +5838,9 @@ async fn update_source_from_disk(
     let edits = load_okf_edits(&app_data_dir(state), &source.notebook_id);
     let local = source_concept(&source, source.content.clone(), conflict.bundle, 0, &edits);
     let incoming_title = doc.str("title").unwrap_or_else(|| source.title.clone());
-    conflict.preserve_local_if_diverged(&local, &incoming_title, &doc.body)?;
+    // The document's own keys ride at the head of the content (§5.3).
+    let text = doc.document_text();
+    conflict.preserve_local_if_diverged(&local, &incoming_title, &text)?;
     let extracted = ingest::Extracted {
         feeds: Vec::new(),
         image_url: source.image_url.clone(),
@@ -5418,7 +5848,7 @@ async fn update_source_from_disk(
         title: doc.str("title").unwrap_or_else(|| source.title.clone()),
         source_type: source.source_type.clone(),
         url: source.url.clone(),
-        text: doc.body.clone(),
+        text: text.clone(),
     };
     let title = extracted.title.clone();
     let updated =
@@ -5430,7 +5860,7 @@ async fn update_source_from_disk(
     let edits = load_okf_edits(&app_data_dir(state), &source.notebook_id);
     let local_hash = local_concept_hash(&source_concept(
         &updated,
-        doc.body.clone(),
+        text,
         path.parent().unwrap_or(path),
         0,
         &edits,

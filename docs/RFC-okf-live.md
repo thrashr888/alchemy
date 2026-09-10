@@ -464,6 +464,70 @@ up. Four things the RFC did not settle, decided in the writing:
   running write. The hash is still the real echo suppressor; this only
   avoids the window where the manifest and the files disagree.
 
+### Frontmatter is merged: one block, latest wins
+
+A concept file carries exactly one frontmatter block, and it is the union
+of the document's own keys and Alchemy's.
+
+- **Alchemy's keys** are `type`, `title`, `description`, `resource`,
+  `status`, `generated`, `sources`, `alchemy`, `timestamp`
+  (`okf::OKF_OWN_KEYS`). They are composed from the row on every write and
+  never stored in a row's `content`. **`tags` is shared:** the file's
+  top-level `tags:` is Alchemy's type label first, then the document's own
+  tags (an Obsidian note's `tags: [gear]` survives as `tags: [markdown,
+  gear]`); on read-back the document gets back whatever is left after the
+  type label. Everything else — `author`, `aliases`, `verified`, anything an
+  author or another tool put there — is the document's.
+- **On write** (`write_bundle_with`), a source's content is peeled to its
+  body (`peel_frontmatter`), and the document's keys are merged from two
+  records: the block at the head of the row's content and the bundle file
+  as last read (the manifest entry's `extra`). Per key the newer record
+  wins, on the clock §5.4 already reads — the row's `edited_at`
+  (`max(fetched_at, created_at)` for a source, `updated_at` for a note)
+  against the manifest's `file_mtime`; a tie goes to disk there and so
+  does it here. The merged keys ride out in the one block; the
+  description is cut from the body, never from frontmatter text. A note's
+  body is written verbatim — the merge is a source's, whose file may be an
+  author's document.
+- **On read-back** (`take_in_source`, `update_source_from_disk`, the
+  bundle importer), Alchemy's keys refresh the row's columns as before
+  and the document's keys are re-emitted as the content's leading block
+  (`OkfDoc::document_text`), so they show in the reader and go back out
+  unchanged. Text that arrives through the ordinary file reader instead —
+  a Refresh of a source whose path is its own concept file, a file dragged
+  out of a bundle, a bundle child — is merged the same way on ingest
+  (`okf::read_back_text`): a block of ours comes down to the document's
+  keys, a block that is not ours is left exactly as it came.
+  `ingest::normalize` now keeps a leading block's indentation, since
+  trimming `  by: x` to `by: x` turned our nested maps into top-level keys
+  no reader could tell from an author's.
+
+**Why.** Before 0.59 a source whose `resource:` named its own concept file
+(`sources/architecture.md`, after a pass had written the bundle path as
+the row's origin) was taken in "rich": `take_in_source` resolved the
+reference to the concept file itself and read it whole through
+`extract_any_file`, so the row's path became the file the writer
+overwrites, and every resync after that (`refresh_source_impl`) read the
+last pass's frontmatter back in as text — flattened by `normalize` — and
+the next write put a fresh block on top, quoting the last one as the
+description. One 15 KB document reached 312 blocks and 228 KB. A
+`resource:` that names a concept file is no longer treated as an original
+(the body is the capture; the row gets no file path), and the writer never
+stacks.
+
+**The heal** (`heal_stacked_frontmatter`, on launch after `heal_bindings`,
+once per store under the versioned marker `okf-frontmatter-healed`) finds
+every source row whose content begins with two or more blocks with at
+least one of ours among them, keeps the body after the last block byte for
+byte, collects the document's keys across the stack with the newest
+(outermost) block winning per key, re-emits them as the one leading block
+(none if there were none), re-chunks and re-embeds the row, and schedules
+the bound bundle's write so the file gets a single merged block. It logs
+rows healed, characters removed, and document keys kept, and deletes
+nothing. One block is not the loop — an author's block is theirs, and a
+single block of ours is a file dragged out of a bundle, which the writer
+merges on the way out.
+
 ### 5.6 Shared folders: iCloud, Dropbox, two Macs
 
 A bound bundle in iCloud Drive (or Dropbox, Google Drive, a git remote
