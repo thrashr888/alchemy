@@ -429,6 +429,36 @@ reloads canonical messages, sources, notes, and report schedules.
 
 ![Chat tracing flow — frontend store, Tauri invoke, backend progress events, streamed tokens, completion, and scoped cancellation](docs/architecture-tracing-flow.png)
 
+## How notebooks sync
+
+Every notebook is a folder of markdown (the
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)),
+and the folder is the sync. There is no server.
+
+- **Where.** Settings → Notebooks → Folder. The default is the app's iCloud
+  container, which Finder shows as **iCloud Drive › Alchemy** (on disk:
+  `~/Library/Mobile Documents/iCloud~com~thrashr888~alchemy/Documents`), or
+  `~/Documents/Alchemy` when iCloud Drive is off. Point it at a Dropbox or
+  Google Drive folder and that folder is the sync instead.
+- **What.** One folder per notebook: `index.md`, `sources/` with one concept
+  file per source (its extracted text under a single frontmatter block that
+  names the source, its origin, and its sync identity), `notes/`,
+  `references/` for copied originals such as PDFs, `sync/` for per-Mac
+  stamps, `log.md` as a short history, and `conflicts/`.
+- **Originals are never written to.** A PDF in Downloads, a markdown file in
+  a repo, an Apple Note: Alchemy reads them and writes nothing back. Only the
+  bundle files get Alchemy's frontmatter, and a file has exactly one block —
+  the document's own keys merged with Alchemy's, the newer record winning per
+  key.
+- **Between Macs.** Open the same folder on another Mac and its Alchemy reads
+  the bundle into its own local database; edits made in either app, in the
+  folder by hand, or by an agent flow the other way on the next pass. Rows are
+  matched by sync identity, not path, so renames and moves survive. A change
+  on both sides lands in `conflicts/`, never over the other copy, and nothing
+  is deleted without a deletion record.
+
+Details, decisions, and the recovery rules: [docs/RFC-okf-live.md](docs/RFC-okf-live.md).
+
 ## Install (Apple Silicon)
 
 With [Homebrew](https://brew.sh):
