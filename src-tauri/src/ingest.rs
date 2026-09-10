@@ -1803,6 +1803,21 @@ fn tidy_markdown(md: &str) -> String {
 fn normalize(text: &str) -> String {
     // Collapse runs of whitespace while preserving paragraph breaks.
     let mut out = String::with_capacity(text.len());
+    // A leading frontmatter block keeps its indentation: YAML nests by it,
+    // and trimming `  by: x` to `by: x` turns one nested map into a row of
+    // top-level keys nobody can tell from an author's. The block is copied
+    // through with only trailing whitespace dropped; the body below it is
+    // normalized as before.
+    let text = match frontmatter_end(text) {
+        Some(end) => {
+            for line in text[..end].lines() {
+                out.push_str(line.trim_end());
+                out.push('\n');
+            }
+            &text[end..]
+        }
+        None => text,
+    };
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -1815,6 +1830,23 @@ fn normalize(text: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+/// Where a leading `---` frontmatter block ends — the byte after its closing
+/// fence line — or `None` when the text does not start with one. The fence
+/// is a line of its own; `----` and `--- x` are body.
+fn frontmatter_end(text: &str) -> Option<usize> {
+    let rest = text.strip_prefix("---\n")?;
+    let mut from = 0;
+    while let Some(at) = rest[from..].find("\n---") {
+        let end = from + at + 4;
+        let after = &rest[end..];
+        if after.is_empty() || after.starts_with('\n') {
+            return Some(4 + end + usize::from(!after.is_empty()));
+        }
+        from = from + at + 1;
+    }
+    None
 }
 
 fn strip_html(html: &str) -> String {
@@ -3091,6 +3123,24 @@ mod tests {
         // tag, keeping the document readable.
         let text = strip_html("<div hidden>orphan <p>tail</p>");
         assert!(text.contains("tail"));
+    }
+
+    #[test]
+    fn normalize_keeps_frontmatter_indentation() {
+        let doc = "---\ntitle: \"A\"   \ngenerated:\n  by: \"alchemy/1\"\nalchemy:\n  id: \"x\"\n---\n\n  # Heading  \n\n\n\nbody   text\n";
+        assert_eq!(
+            super::normalize(doc),
+            "---\ntitle: \"A\"\ngenerated:\n  by: \"alchemy/1\"\nalchemy:\n  id: \"x\"\n---\n\n# Heading\n\nbody   text"
+        );
+        // A rule at the top of a document is not a fence, and a fence that
+        // is not a line of its own does not close a block.
+        assert_eq!(super::normalize("---\n\n  a  \n"), "---\n\na");
+        assert_eq!(
+            super::normalize("---\n  k: v\n----\n  a\n"),
+            "---\nk: v\n----\na"
+        );
+        assert_eq!(super::frontmatter_end("---\nk: v\n---"), Some(12));
+        assert_eq!(super::frontmatter_end("---\nk: v\n---\nbody"), Some(13));
     }
 
     #[test]

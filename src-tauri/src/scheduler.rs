@@ -347,6 +347,11 @@ pub fn start(app: AppHandle) {
                 Err(err) => crate::note!("notebooks: dedupe failed: {err:#}"),
             }
             crate::okf::heal_bindings(&state).await;
+            // Merge the stacked frontmatter the 0.58 read-back loop left on
+            // source rows down to one block, once (docs/RFC-okf-live.md
+            // §5.3). The writer merges on the way out now, but a 228 KB row
+            // of three hundred blocks is still what chat and search read.
+            crate::okf::heal_stacked_frontmatter(&state).await;
             // And the tidying that is not a one-off repair: folders claiming
             // the same notebook, and the empty directories iCloud leaves
             // behind when it makes a folder before delivering its files.
