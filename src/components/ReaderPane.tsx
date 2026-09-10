@@ -9,6 +9,7 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { listenForReaderSwipes } from "@/lib/readerSwipe";
 import { describe } from "@/lib/errors";
 import type { Citation, Note, Source, Template } from "@/lib/types";
 import { AmbientRail } from "./AmbientRail";
@@ -650,52 +651,14 @@ export function ReaderPane() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Two-finger swipe steps through the rail like j/k: a trackpad's
-  // horizontal scroll arrives as wheel deltaX, and the reader's text never
-  // scrolls sideways, so a decisive sideways gesture is unambiguous. One
-  // step per gesture. Re-arming is the subtle part: after the fingers lift,
-  // macOS keeps sending momentum events with a decaying delta for a second
-  // or more, so "no events for a beat" alone left a second swipe swallowed
-  // inside the first one's tail (a vertical swipe cancels momentum, which
-  // is why left-up-left worked and left-left didn't). A fresh push is the
-  // other tell: momentum only ever shrinks, so a delta that jumps well
-  // above the previous one is a new gesture and arms the step again.
+  // Keep gesture ownership across item changes and their momentum tails.
+  // Canvases, scrollable content, and editors handle their own wheel input.
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    let travel = 0;
-    let fired = false;
-    let lastAbs = 0;
-    let quiet = 0;
-    const onWheel = (e: WheelEvent) => {
-      // Pinch-zoom and modifier scrolls belong to whoever owns them.
-      if (e.ctrlKey || e.metaKey) return;
-      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-      const abs = Math.abs(e.deltaX);
-      window.clearTimeout(quiet);
-      quiet = window.setTimeout(() => {
-        travel = 0;
-        fired = false;
-        lastAbs = 0;
-      }, 150);
-      if (fired && abs >= 6 && abs > lastAbs * 2) {
-        // Momentum decays; this grew. New fingers.
-        travel = 0;
-        fired = false;
-      }
-      lastAbs = abs;
-      if (fired) return;
-      travel += e.deltaX;
-      if (Math.abs(travel) < 90) return;
-      fired = true;
-      // Swiping left (content pulled leftward, deltaX > 0) moves forward.
-      useStore.getState().readerStep(travel > 0 ? 1 : -1);
-    };
-    el.addEventListener("wheel", onWheel, { passive: true });
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      window.clearTimeout(quiet);
-    };
+    return listenForReaderSwipes(el, (direction) =>
+      useStore.getState().readerStep(direction),
+    );
   }, []);
 
   // Mirrors the Sources panel "Edit text" gate: extracted text the user may
