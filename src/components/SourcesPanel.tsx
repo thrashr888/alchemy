@@ -1366,8 +1366,10 @@ export function SourcesPanel() {
                       </div>
                     </div>
                     {/* Selection stays at the far right (NotebookLM-style), always
-                    visible. */}
-                    <div className="relative z-20 mt-0.5">
+                    visible. The box is taller than a text line; boxing it to
+                    the line's height keeps the row 36px and the title on the
+                    row's optical center instead of 4px above it. */}
+                    <div className="relative z-20 flex h-5 items-center">
                       {importing ? null : isFolder ? (
                         <SelectBox
                           checked={kids.length > 0 && kidsOn === kids.length}

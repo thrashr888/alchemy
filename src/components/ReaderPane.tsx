@@ -40,6 +40,7 @@ import {
   isWebUrl,
   scrollMemory,
   shortcutBlocked,
+  splitFrontmatter,
 } from "@/lib/utils";
 import {
   AppWindow,
@@ -2830,6 +2831,28 @@ function SelAction({
  *  form behind the toolbar's Edit pencil. */
 /** Raw-text editor for a source's extracted text, behind the toolbar
  *  pencil. Saving re-chunks and re-embeds through the ingest queue. */
+/** The rendered side of the editor: a document's frontmatter as a quiet
+ *  property list (not a wall of YAML), then the markdown as the reader
+ *  draws it. */
+function MarkdownPreview({ text }: { text: string }) {
+  const { meta, body } = splitFrontmatter(text);
+  return (
+    <>
+      {meta.length > 0 && (
+        <dl className="mb-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 border-b border-border pb-3 text-caption">
+          {meta.map(([k, v], i) => (
+            <Fragment key={`${k}-${i}`}>
+              <dt className="text-subtle-foreground">{k}</dt>
+              <dd className="min-w-0 break-words text-muted-foreground">{v}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      <Markdown>{body}</Markdown>
+    </>
+  );
+}
+
 /** Edit / Preview, the pair every markdown editor grows: two quiet
  *  buttons, the active one pressed, no tabs chrome. */
 function EditPreviewToggle({
@@ -2953,7 +2976,7 @@ function SourceEditor({
       <EditPreviewToggle preview={preview} onChange={setPreview} />
       {preview ? (
         <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border px-4 py-3">
-          <Markdown>{text}</Markdown>
+          <MarkdownPreview text={text} />
         </div>
       ) : (
         <Textarea
@@ -3051,7 +3074,7 @@ function NoteReader({
         <EditPreviewToggle preview={preview} onChange={setPreview} />
         {preview ? (
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-md border border-border px-4 py-3">
-            <Markdown>{body}</Markdown>
+            <MarkdownPreview text={body} />
           </div>
         ) : (
           <div className="min-h-0 min-w-0 flex-1">
@@ -3239,7 +3262,7 @@ function InlineNote({ note }: { note: Note }) {
           )}
         >
           <div className="mx-auto w-full max-w-[760px] px-14 py-4">
-            <Markdown>{counts}</Markdown>
+            <MarkdownPreview text={counts} />
           </div>
         </div>
       )}

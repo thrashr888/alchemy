@@ -306,3 +306,31 @@ export const scrollMemory = {
     persistScrollMemory();
   },
 };
+
+/** Split a leading YAML frontmatter block off a markdown document. Keys are
+ *  read as flat `key: value` lines (a nested block's indented lines ride
+ *  along as continuation text), which is what a preview needs: the
+ *  properties as a quiet list and the body rendered underneath. */
+export function splitFrontmatter(text: string): {
+  meta: [string, string][];
+  body: string;
+} {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!m) return { meta: [], body: text };
+  const meta: [string, string][] = [];
+  for (const raw of m[1].split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    if (/^\s/.test(raw) && meta.length > 0) {
+      const last = meta[meta.length - 1];
+      last[1] = last[1] ? `${last[1]} ${raw.trim()}` : raw.trim();
+      continue;
+    }
+    const i = raw.indexOf(":");
+    if (i === -1) {
+      meta.push([raw.trim(), ""]);
+      continue;
+    }
+    meta.push([raw.slice(0, i).trim(), raw.slice(i + 1).trim().replace(/^"(.*)"$/, "$1")]);
+  }
+  return { meta, body: text.slice(m[0].length) };
+}

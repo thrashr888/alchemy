@@ -156,7 +156,10 @@ function WikiNotes({
               onClick={() => onOpen(n)}
               className="group w-full rounded-md border border-border bg-surface-2/40 px-3 py-2 text-left transition-colors hover:border-border-strong"
             >
-              <span className="block truncate text-caption font-medium text-foreground">
+              <span
+                className="block truncate text-caption font-medium text-foreground"
+                title={n.title.replace(/^Entity: /, "")}
+              >
                 {n.title.replace(/^Entity: /, "")}
               </span>
               <span className="text-micro text-subtle-foreground">
@@ -206,7 +209,10 @@ function ArchivedNotes({
               onClick={() => onOpen(n)}
               className="group w-full rounded-md border border-border bg-surface-2/40 px-3 py-2 text-left opacity-50 transition-opacity hover:opacity-80"
             >
-              <span className="block truncate text-caption font-medium text-foreground">
+              <span
+                className="block truncate text-caption font-medium text-foreground"
+                title={n.title}
+              >
                 {n.title}
               </span>
               <span className="text-micro text-subtle-foreground">
@@ -1056,8 +1062,10 @@ function GenTile({
       disabled={disabled}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      title={title}
       aria-label={category ? `${label} — ${category}` : label}
+      // The tile clips long names with an ellipsis, so the tooltip always
+      // leads with the whole name; a caller's own hint follows it.
+      title={[label, title].filter(Boolean).join(" — ")}
       className={cn(
         "flex items-center gap-2 rounded-md border px-2.5 py-2 text-caption text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
         tint.tile,
