@@ -1089,20 +1089,11 @@ impl AgentCli {
                 set_model(&mut cmd);
             }
             AgentKind::Bob => {
-                // The prompt goes in positionally — bobshell's own --help now
-                // marks `-p` deprecated ("Use the positional prompt instead.
-                // This flag will be removed in a future version"), and the
-                // positional form is one-shot by default. Argv-based either
-                // way, so guard oversized stuffed contexts against ARG_MAX.
-                let full = fold_system(&system, &prompt);
-                if full.len() > 150_000 {
-                    return Err(anyhow!(
-                        "context too large for bob's argv-based prompt — \
-                         trim source selection or use another provider"
-                    ));
-                }
+                // Bob accepts piped input in one-shot mode (also documented
+                // by --help). Keep the full prompt on stdin: the Morning
+                // Brief can exceed argv's limit without exceeding the model's
+                // window. No deprecated -p flag or positional prompt needed.
                 set_model(&mut cmd);
-                cmd.arg(&full);
             }
             AgentKind::Prime | AgentKind::Pi => {
                 // pi / prime-agent --mode json: the same structured JSONL
@@ -1125,9 +1116,10 @@ impl AgentCli {
         }
         let stdin_payload = match self.kind {
             AgentKind::Claude => Some(prompt.clone()),
-            AgentKind::Cursor | AgentKind::Gemini => Some(fold_system(&system, &prompt)),
+            AgentKind::Cursor | AgentKind::Gemini | AgentKind::Bob => {
+                Some(fold_system(&system, &prompt))
+            }
             AgentKind::Codex
-            | AgentKind::Bob
             | AgentKind::Opencode
             | AgentKind::Copilot
             | AgentKind::Hermes
@@ -1146,14 +1138,17 @@ impl AgentCli {
         let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn {}", self.kind.binary_name()))?;
-        if let Some(payload) = stdin_payload {
-            let mut si = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow!("no agent stdin"))?;
-            si.write_all(payload.as_bytes()).await?;
-            drop(si);
-        }
+        let stdin = child.stdin.take();
+        // Write while draining output, under the same run deadline. A CLI
+        // can print startup messages before reading a large piped prompt;
+        // awaiting write_all here would let both pipes fill and deadlock.
+        let write_prompt = async move {
+            if let Some(payload) = stdin_payload {
+                let mut si = stdin.ok_or_else(|| anyhow!("no agent stdin"))?;
+                si.write_all(payload.as_bytes()).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        };
         let stdout = child
             .stdout
             .take()
@@ -1604,7 +1599,11 @@ impl AgentCli {
             }
         };
 
-        let outcome = tokio::time::timeout(RUN_BACKSTOP, run).await;
+        let outcome = tokio::time::timeout(RUN_BACKSTOP, async {
+            let (_, outcome) = tokio::try_join!(write_prompt, run)?;
+            Ok::<_, anyhow::Error>(outcome)
+        })
+        .await;
         let _ = child.start_kill();
         match outcome {
             Err(_) => Err(anyhow!(
@@ -1937,6 +1936,43 @@ mod tests {
             .is_none());
     }
 
+    /// A large, Unicode brief must arrive intact over stdin, with model
+    /// configuration still on argv. Fill both output pipes before reading:
+    /// startup output must drain while Alchemy writes the large prompt.
+    #[tokio::test]
+    async fn bob_pipes_large_prompts_without_trimming_or_prompt_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\nset -eu\n[ \"$#\" -eq 2 ]\n[ \"$1\" = --model ]\n[ \"$2\" = test-model ]\nawk 'BEGIN { printf \"<thinking>\"; for (i=0;i<20000;i++) printf \"starting \"; print \"</thinking>\"; for (i=0;i<20000;i++) print \"startup diagnostic\" > \"/dev/stderr\" }'\ncat > \"$0.input\"\ncat \"$0.input\"\n",
+        )
+        .expect("write fake bob");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let mut cli = AgentCli::with_binary_for_test(AgentKind::Bob, path);
+        cli.model = Some("test-model".into());
+        for content in [
+            "A short brief".to_string(),
+            "Notebook 日本語 🦀\n".repeat(12_000),
+        ] {
+            let messages = [
+                ChatTurn::system("Keep the notebook names."),
+                ChatTurn::user(content),
+            ];
+            let expected = fold_system(&messages[0].content, &messages[1].content);
+            let outcome = tokio::time::timeout(Duration::from_secs(30), cli.chat(&messages))
+                .await
+                .expect("stdin must close and the child must finish")
+                .expect("fake bob succeeds");
+            assert_eq!(outcome.text.trim(), expected.trim());
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("bob.input")).unwrap(),
+                expected
+            );
+        }
+    }
+
     /// A fake copilot that answers with its own argv, as one JSON message.
     fn argv_echoing_copilot() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("nbl-fakecli-{}", uuid::Uuid::new_v4()));
@@ -2251,7 +2287,7 @@ mod tests {
 mod live_smokes {
     use super::*;
 
-    /// The positional-prompt shape (bobshell deprecated `-p`) against the real
+    /// The piped-prompt shape (bobshell deprecated `-p`) against the real
     /// CLI, plus the no-banner deadline: bob prints nothing until its answer.
     ///   cargo test agent_cli_bob_smoke -- --ignored --nocapture
     #[tokio::test]
