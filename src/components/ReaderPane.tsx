@@ -2830,6 +2830,41 @@ function SelAction({
  *  form behind the toolbar's Edit pencil. */
 /** Raw-text editor for a source's extracted text, behind the toolbar
  *  pencil. Saving re-chunks and re-embeds through the ingest queue. */
+/** Edit / Preview, the pair every markdown editor grows: two quiet
+ *  buttons, the active one pressed, no tabs chrome. */
+function EditPreviewToggle({
+  preview,
+  onChange,
+}: {
+  preview: boolean;
+  onChange: (preview: boolean) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-1" role="group" aria-label="Editor view">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-pressed={!preview}
+        className={cn(!preview && "bg-surface-2 text-foreground")}
+        onClick={() => onChange(false)}
+      >
+        Edit
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-pressed={preview}
+        className={cn(preview && "bg-surface-2 text-foreground")}
+        onClick={() => onChange(true)}
+      >
+        Preview
+      </Button>
+    </div>
+  );
+}
+
 function SourceEditor({
   source,
   onDone,
@@ -2845,6 +2880,10 @@ function SourceEditor({
   const [note, setNote] = useState(source.note);
   const [text, setText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Markdown is what the extractor writes and what the reader renders;
+  // seeing it rendered before saving is the difference between a fix and
+  // a guess about one.
+  const [preview, setPreview] = useState(false);
 
   // List payloads omit content; fetch the full text to prefill the editor.
   useEffect(() => {
@@ -2911,12 +2950,19 @@ function SourceEditor({
           onChange={(event) => setNote(event.target.value)}
         />
       </div>
-      <Textarea
-        aria-label="Source text"
-        className="min-h-0 flex-1 resize-none font-mono text-caption leading-relaxed"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-      />
+      <EditPreviewToggle preview={preview} onChange={setPreview} />
+      {preview ? (
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border px-4 py-3">
+          <Markdown>{text}</Markdown>
+        </div>
+      ) : (
+        <Textarea
+          aria-label="Source text"
+          className="min-h-0 flex-1 resize-none font-mono text-caption leading-relaxed"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      )}
       <div className="flex shrink-0 items-center justify-end gap-2">
         <span className="mr-auto text-caption text-subtle-foreground">
           Saving re-indexes this source.
@@ -2947,6 +2993,9 @@ function NoteReader({
   const artifactStreamText = useStore((s) => s.artifactStreamText);
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.content);
+  // The rich editor is close to the rendered note but not the note: tables,
+  // diagrams, and citation chips only appear in the reader's renderer.
+  const [preview, setPreview] = useState(false);
 
   // Entering artifact raw-edit snapshots the note; cancel discards.
   useEffect(() => {
@@ -2999,9 +3048,16 @@ function NoteReader({
           value={title}
           onChange={(event) => setTitle(event.target.value)}
         />
-        <div className="min-h-0 min-w-0 flex-1">
-          <LazyRichEditor fill value={body} onChange={setBody} />
-        </div>
+        <EditPreviewToggle preview={preview} onChange={setPreview} />
+        {preview ? (
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-md border border-border px-4 py-3">
+            <Markdown>{body}</Markdown>
+          </div>
+        ) : (
+          <div className="min-h-0 min-w-0 flex-1">
+            <LazyRichEditor fill value={body} onChange={setBody} />
+          </div>
+        )}
         <div className="flex shrink-0 justify-end gap-2">
           <Button type="button" variant="ghost" onClick={() => onEditingChange(false)}>
             Cancel
@@ -3085,6 +3141,9 @@ function InlineNote({ note }: { note: Note }) {
   const prevBody = useRef(note.content);
   const [activePara, setActivePara] = useState("");
   const [counts, setCounts] = useState(note.content);
+  // Preview keeps the editor mounted underneath (autosave, undo, the rails'
+  // scroller) and lays the reader's own rendering over it.
+  const [preview, setPreview] = useState(false);
   // Latest values for the debounced save + unmount flush. `saved` is the
   // last-persisted snapshot: nothing writes unless content really moved.
   const pending = useRef({ title: note.title, body: note.content, dirty: false });
@@ -3167,12 +3226,25 @@ function InlineNote({ note }: { note: Note }) {
           }}
           className="w-full bg-transparent text-page font-semibold leading-snug text-foreground outline-none placeholder:text-subtle-foreground"
         />
-        <div className="mt-4">
+        <div className="mt-4 flex items-start justify-between gap-3">
           <DocProperties note={note} />
+          <EditPreviewToggle preview={preview} onChange={setPreview} />
         </div>
       </div>
+      {preview && (
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto",
+            chatReadingClass(reading),
+          )}
+        >
+          <div className="mx-auto w-full max-w-[760px] px-14 py-4">
+            <Markdown>{counts}</Markdown>
+          </div>
+        </div>
+      )}
       <div
-        className={cn("min-h-0 flex-1", chatReadingClass(reading))}
+        className={cn("min-h-0 flex-1", chatReadingClass(reading), preview && "hidden")}
         // Plain click follows a link (in-corpus links jump in the reader);
         // ⌘/⌥-click places the cursor inside the link text for editing.
         onClickCapture={(e) => {

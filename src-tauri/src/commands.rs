@@ -3209,6 +3209,14 @@ pub async fn source_image_candidates(
     Ok(ingest::page_images(&html, &src.url))
 }
 
+/// What a link is before it is added — the Grow pane's hover preview of a
+/// proposed URL: title, one-line description, lead image, site. Plain
+/// data, never an error: a page that can't be read previews as its host.
+#[tauri::command]
+pub async fn peek_url(url: String) -> Result<ingest::UrlPeek, String> {
+    Ok(ingest::fetch_url_peek(url.trim()).await)
+}
+
 /// Hand-pick a URL source's gallery lead image ("-" = show none, "" = back
 /// to unknown so the backfill may auto-pick again). Shared by the Tauri
 /// command and the MCP tool. Clears the cached og bytes so the next

@@ -2030,17 +2030,45 @@ pub async fn fetch_image_bytes(url: &str) -> Option<Vec<u8>> {
     fetch_bytes(url, 8 * 1024 * 1024).await
 }
 
+/// The browser-shaped client every lightweight page fetch here shares
+/// (backfills, peeks): same user agent, caller's timeout. Redirects stay on
+/// http(s) — a `Location:` into another scheme ends the fetch instead of
+/// following it anywhere.
+fn page_client(timeout_secs: u64) -> Option<reqwest::Client> {
+    page_client_as(
+        timeout_secs,
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+    )
+}
+
+/// What a link preview calls itself. A browser's user agent with no
+/// cookies is what some sites (Google's developer docs, for one) answer
+/// with a sign-in redirect loop; a named preview agent gets the page and
+/// its meta tags the way every other link-unfurler does.
+const PEEK_USER_AGENT: &str =
+    "Mozilla/5.0 (compatible; AlchemyPeek/1.0; +https://thrashr888.github.io/alchemy)";
+
+fn page_client_as(timeout_secs: u64, user_agent: &str) -> Option<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(user_agent)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let web = matches!(attempt.url().scheme(), "http" | "https");
+            if web && attempt.previous().len() < 10 {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+        .ok()
+}
+
 /// One GET, capped. Shared by the image and PDF thumbnail backfills — a PDF
 /// wants a far larger ceiling than an og:image, so the cap is the caller's.
 pub async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
-    let client = reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        )
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .ok()?;
+    let client = page_client(15)?;
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -2056,16 +2084,180 @@ pub async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
 /// for URL sources ingested before `image_url` existed. Lightweight on
 /// purpose: one GET, meta-tag parse, no readability, no embedding.
 pub async fn fetch_lead_image(url: &str) -> Option<String> {
-    let client = reqwest::Client::builder()
-        .user_agent(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        )
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .ok()?;
+    let client = page_client(15)?;
     let body = client.get(url).send().await.ok()?.text().await.ok()?;
     og_image(&body, url)
+}
+
+/// What a link is before it is added: the Grow pane's hover preview
+/// (docs/RFC-living-notebook Pillar 2). Every field is "" when unknown —
+/// a preview is a courtesy, never an error.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlPeek {
+    pub title: String,
+    pub description: String,
+    pub image_url: String,
+    /// `og:site_name` when the page names itself, else the host.
+    pub site: String,
+}
+
+/// A peek's byte budget: `<head>` is what carries the answer, and a page
+/// that hasn't said its name in the first half-megabyte isn't going to.
+const PEEK_MAX_BYTES: usize = 512 * 1024;
+
+/// Fetch a page and read its calling card — title, description, lead
+/// image, site — for a hover preview. One GET with a short timeout and a
+/// hard byte cap (the body is read in chunks and cut, not rejected, past
+/// the cap); anything but an http(s) URL, a failed fetch, or a non-text
+/// body comes back as the empty peek with only the host filled in.
+pub async fn fetch_url_peek(url: &str) -> UrlPeek {
+    let mut peek = UrlPeek {
+        site: host_of(url),
+        ..UrlPeek::default()
+    };
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return peek;
+    }
+    let Some(client) = page_client_as(6, PEEK_USER_AGENT) else {
+        return peek;
+    };
+    let Ok(mut resp) = client.get(url).send().await else {
+        return peek;
+    };
+    if !resp.status().is_success() {
+        return peek;
+    }
+    // Only markup carries meta tags; a PDF or image link previews as its
+    // host alone rather than being read for a title it can't have.
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !(content_type.is_empty()
+        || content_type.contains("html")
+        || content_type.contains("xml")
+        || content_type.contains("text/"))
+    {
+        return peek;
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Ok(Some(chunk)) = resp.chunk().await {
+        body.extend_from_slice(&chunk);
+        if body.len() >= PEEK_MAX_BYTES {
+            body.truncate(PEEK_MAX_BYTES);
+            break;
+        }
+    }
+    let html = String::from_utf8_lossy(&body);
+    let parsed = url_peek(&html, url);
+    // The parse keeps a page's own site name; the host is still the
+    // fallback when it never said one.
+    if !parsed.site.is_empty() {
+        peek.site = parsed.site;
+    }
+    peek.title = parsed.title;
+    peek.description = parsed.description;
+    peek.image_url = parsed.image_url;
+    peek
+}
+
+/// The host a URL points at, for the peek's site line ("" when unparseable).
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| h.trim_start_matches("www.").to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// Read a page's calling card out of raw HTML: `og:title` then `<title>`;
+/// `og:description`, `<meta name=description>`, then `twitter:description`;
+/// the lead image via [`og_image`] (resolved against `base_url`);
+/// `og:site_name` else the host. Whitespace collapsed, description
+/// clipped to a hover card's worth. Never fetches anything.
+pub fn url_peek(html: &str, base_url: &str) -> UrlPeek {
+    const DESCRIPTION_MAX: usize = 220;
+    let tidy = |s: String| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = meta_content(html, &["og:title", "twitter:title"])
+        .or_else(|| extract_title(html))
+        .map(tidy)
+        .unwrap_or_default();
+    let mut description = meta_content(
+        html,
+        &["og:description", "description", "twitter:description"],
+    )
+    .map(tidy)
+    .unwrap_or_default();
+    if description.chars().count() > DESCRIPTION_MAX {
+        let cut = description
+            .char_indices()
+            .nth(DESCRIPTION_MAX)
+            .map(|(i, _)| i)
+            .unwrap_or(description.len());
+        let head = description[..cut].trim_end();
+        // Break at a word so the ellipsis doesn't split one.
+        let head = head.rfind(' ').map(|at| &head[..at]).unwrap_or(head);
+        description = format!("{head}…");
+    }
+    let site = meta_content(html, &["og:site_name"])
+        .map(tidy)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| host_of(base_url));
+    UrlPeek {
+        title,
+        description,
+        image_url: og_image(html, base_url).unwrap_or_default(),
+        site,
+    }
+}
+
+/// The non-blank `content` of a `<meta>` whose `property` or `name` is one
+/// of `keys` — `keys` is a preference order, so `og:description` beats a
+/// plain `description` wherever each sits in the head. One scan, same
+/// bounds as [`og_image`].
+fn meta_content(html: &str, keys: &[&str]) -> Option<String> {
+    let mut found: Vec<Option<String>> = vec![None; keys.len()];
+    let cap = html
+        .char_indices()
+        .nth(300_000)
+        .map(|(i, _)| i)
+        .unwrap_or(html.len());
+    let hay = &html[..cap];
+    let lower = hay.to_lowercase();
+    if lower.len() != hay.len() {
+        return None; // see og_image: shared byte indices need same-length lowering
+    }
+    let mut pos = 0;
+    while let Some(off) = lower[pos..].find("<meta") {
+        let start = pos + off;
+        let Some(end) = lower[start..].find('>').map(|e| start + e + 1) else {
+            break;
+        };
+        pos = end;
+        let tag = &hay[start..end];
+        let key = meta_attr(tag, "property")
+            .or_else(|| meta_attr(tag, "name"))
+            .map(|k| k.to_lowercase());
+        let Some(rank) = key.and_then(|k| keys.iter().position(|w| *w == k)) else {
+            continue;
+        };
+        if rank == 0 && found[0].is_some() {
+            continue; // the best key already answered
+        }
+        let content = meta_attr(tag, "content").map(|c| decode_entities(c.trim()));
+        if let Some(c) = content.filter(|c| !c.is_empty()) {
+            if rank == 0 {
+                return Some(c);
+            }
+            found[rank].get_or_insert(c);
+        }
+    }
+    found.into_iter().flatten().next()
 }
 
 /// Every plausible lead-image candidate on a page, for the reader's manual
@@ -2244,6 +2436,68 @@ fn meta_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_peek_reads_og_tags_first() {
+        let html = r#"<html><head>
+            <title>Fallback &amp; ignored</title>
+            <meta property="og:title" content="Rust 2027 &quot;Edition&quot;">
+            <meta name="description" content="The plain one">
+            <meta property="og:description" content="  The   open graph
+                one  ">
+            <meta property="og:site_name" content="The Blog">
+            <meta property="og:image" content="/img/lead.png">
+        </head><body></body></html>"#;
+        let peek = url_peek(html, "https://www.ex.com/posts/1");
+        assert_eq!(peek.title, "Rust 2027 \"Edition\"");
+        assert_eq!(peek.description, "The open graph one");
+        assert_eq!(peek.site, "The Blog");
+        // Relative og:image resolves against the page URL.
+        assert_eq!(peek.image_url, "https://www.ex.com/img/lead.png");
+    }
+
+    #[test]
+    fn url_peek_falls_back_to_title_tag_and_meta_description() {
+        let html = r#"<html><head>
+            <meta charset="utf-8">
+            <title> Plain   page </title>
+            <meta name="Description" content="Only a meta description">
+        </head><body><meta property="og:description" content=""></body></html>"#;
+        let peek = url_peek(html, "https://www.ex.com/a/b");
+        assert_eq!(peek.title, "Plain page");
+        assert_eq!(peek.description, "Only a meta description");
+        // No og:site_name: the host stands in, www. dropped.
+        assert_eq!(peek.site, "ex.com");
+        assert_eq!(peek.image_url, "");
+    }
+
+    #[test]
+    fn url_peek_missing_tags_is_empty_not_error() {
+        let peek = url_peek(
+            "<html><body><p>nothing</p></body></html>",
+            "https://ex.com/x",
+        );
+        assert_eq!(
+            peek,
+            UrlPeek {
+                title: String::new(),
+                description: String::new(),
+                image_url: String::new(),
+                site: "ex.com".into(),
+            }
+        );
+        // Not even a parseable URL: every field empty, still no panic.
+        assert_eq!(url_peek("", "not a url"), UrlPeek::default());
+    }
+
+    #[test]
+    fn url_peek_clips_long_descriptions_at_a_word() {
+        let long = "word ".repeat(100);
+        let html = format!(r#"<meta name="description" content="{long}">"#);
+        let peek = url_peek(&html, "https://ex.com/");
+        assert!(peek.description.ends_with("word…"), "{}", peek.description);
+        assert!(peek.description.chars().count() <= 221);
+    }
 
     #[test]
     fn og_image_finds_property_and_name_variants() {

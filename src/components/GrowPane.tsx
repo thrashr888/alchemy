@@ -13,7 +13,17 @@ import {
 } from "@/lib/growth";
 import type { GrowthProposal, TagMergeProposal } from "@/lib/types";
 import type { GrowSections } from "@/lib/storeTypes";
-import { Button, EmptyState, Spinner, Switch, useConfirm } from "./ui";
+import {
+  Button,
+  EmptyState,
+  Spinner,
+  Switch,
+  useConfirm,
+  useHoverCard,
+  type HoverCardData,
+} from "./ui";
+import { createUrlPeeker, peekIsEmpty } from "@/lib/urlPeek";
+import type { UrlPeek } from "@/lib/types";
 import { Favicon } from "./SourcesPanel";
 import {
   AlertCircle,
@@ -34,6 +44,35 @@ import {
  *  this Mac, links its own sources keep citing — plus the opt-in open-web
  *  tier through Firecrawl's keyless search. Every Add is an explicit act;
  *  nothing fetches on its own. */
+/** Link previews for the proposal rows, cached for the session: a URL is
+ *  fetched the first time the pointer rests on it, never again. Module
+ *  level so a closed-and-reopened pane still remembers. */
+const peeker = createUrlPeeker(api.peekUrl);
+
+/** The proposal's own line, before (or without) a preview. */
+const proposalHost = (p: GrowthProposal) =>
+  p.url.replace(/^https?:\/\//, "").split("/")[0];
+
+/** The hover card for a proposed link: what is known from the notebook
+ *  (anchor, host, how often it is cited) at once, the page's own title
+ *  and description once the peek lands. Stacked so a description can
+ *  wrap; the backend already clips it to a few lines' worth. */
+function proposalCard(p: GrowthProposal, peek?: UrlPeek): HoverCardData {
+  const host = proposalHost(p);
+  const title = peek?.title || p.anchor || host;
+  const meta: HoverCardData["meta"] = [];
+  if (peek?.description) meta.push({ label: peek.description });
+  else if (peek && peekIsEmpty(peek)) meta.push({ label: "No preview" });
+  else if (!peek) meta.push({ label: "Loading preview…" });
+  const site = peek?.site && peek.site !== host ? `${peek.site} · ${host}` : host;
+  meta.push({ label: site });
+  if (p.mentions > 0)
+    meta.push({
+      label: `Seen ${p.mentions}×${p.sourceCount > 1 ? ` in ${p.sourceCount} sources` : ""}`,
+    });
+  return { title, layout: "stacked", meta };
+}
+
 export function GrowPane() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
@@ -50,6 +89,12 @@ export function GrowPane() {
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
   const notes = useStore((s) => s.notes);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const {
+    show: showPeek,
+    hide: hidePeek,
+    update: updatePeek,
+    card: peekCard,
+  } = useHoverCard("right");
   const [retrying, setRetrying] = useState<string | null>(null);
   const [retryingAll, setRetryingAll] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -483,6 +528,24 @@ export function GrowPane() {
     <div
       key={p.url}
       className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
+      // Web rows float a preview of the page beside the list; a peek that
+      // lands after the pointer has moved on is dropped, not painted.
+      onMouseEnter={
+        p.kind === "local"
+          ? undefined
+          : (e) => {
+              showPeek(e, proposalCard(p, peeker.cached(p.url)));
+              peeker.watch(p.url, (peek) => updatePeek(proposalCard(p, peek)));
+            }
+      }
+      onMouseLeave={
+        p.kind === "local"
+          ? undefined
+          : () => {
+              peeker.unwatch(p.url);
+              hidePeek();
+            }
+      }
     >
       {p.kind === "local" ? (
         <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -498,7 +561,7 @@ export function GrowPane() {
             <>{p.url}</>
           ) : (
             <>
-              {p.url.replace(/^https?:\/\//, "").split("/")[0]}
+              {proposalHost(p)}
               {p.mentions > 0 && (
                 <>
                   {" "}
@@ -1181,6 +1244,7 @@ export function GrowPane() {
         </div>
       </div>
       {confirmDialog}
+      {peekCard}
     </div>
   );
 }

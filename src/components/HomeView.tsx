@@ -907,9 +907,18 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             books icon here only competed with the Notebooks tab beside it
             (and with the go-home button in the notebook header, which wears
             the same Library glyph). One icon, one meaning. */}
-        <span className="text-section font-semibold tracking-tight">
+        {/* The wordmark is also the way back to the notebook list from
+            Chat or Registry, the way a site's logo is its home link. */}
+        <button
+          type="button"
+          className="rounded-md text-section font-semibold tracking-tight text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          onClick={() =>
+            useStore.setState({ homeSection: "notebooks", openCardId: null })
+          }
+          title="Your notebooks"
+        >
           Alchemy
-        </span>
+        </button>
         <div className="mx-2">
           <HomeSectionTabs />
         </div>

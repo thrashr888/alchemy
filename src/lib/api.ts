@@ -12,6 +12,7 @@ import type {
   FeedCandidate,
   GrowthProposal,
   GrowthWebSearch,
+  UrlPeek,
   RetireProposal,
   TagMergeProposal,
   ReleaseNote,
@@ -262,6 +263,10 @@ export const api = {
     run(ai<Source>("set_source_note", { sourceId, note })),
   /** Candidate lead images scraped live from a URL source's page, for the
    *  reader's manual picker. */
+  /** A proposed link's calling card for the Grow hover preview. Probe-shaped:
+   *  the backend caps the fetch at 6 s and resolves to empty strings rather
+   *  than failing, so one attempt is the whole story. */
+  peekUrl: (url: string) => run(probe<UrlPeek>("peek_url", { url })),
   sourceImageCandidates: (sourceId: string) =>
     run(slow<string[]>("source_image_candidates", { sourceId })),
   /** Hand-pick a URL source's gallery card image ("-" = none, "" = let the

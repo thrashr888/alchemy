@@ -279,6 +279,12 @@ export function SourcesPanel() {
   const { setTagEdit } = actions;
 
   const { show: showCard, hide: hideCard, card: hoverCard } = useHoverCard("right");
+  // The source the reader is showing right now: its row reads bolder, so
+  // the list answers "where am I" the way a sidebar does in Mail or Notes.
+  const openSourceId = useStore((s) => {
+    const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
+    return doc?.type === "source" ? doc.id : null;
+  });
   const sourceCard = sourceHoverData;
 
   // The size strip's own hover card (alchemy-release-2j9): sources by type.
@@ -1112,6 +1118,7 @@ export function SourcesPanel() {
                 const kids = isFolder ? (childrenOf.get(s.id) ?? []) : [];
                 const kidsOn = kids.filter((k) => isSelected(k.id)).length;
                 const isPicked = pickedIds.has(s.id);
+                const isOpen = openSourceId === s.id;
                 return (
                   <div
                     key={vi.key}
@@ -1136,8 +1143,12 @@ export function SourcesPanel() {
                       // Selection is a quiet tinted wash (DESIGN §2 — color
                       // only when it means something; never a left border).
                       isPicked && "bg-primary/10 hover:bg-primary/15",
+                      // Open in the reader: a quiet surface wash under a
+                      // bolder title (below), distinct from the selection tint.
+                      isOpen && !isPicked && "bg-surface-2",
                       readable && "cursor-pointer",
                     )}
+                    aria-current={isOpen ? "true" : undefined}
                     style={
                       depth > 0
                         ? {
@@ -1228,6 +1239,7 @@ export function SourcesPanel() {
                             s.status === "placeholder"
                               ? "text-muted-foreground"
                               : "text-foreground",
+                            isOpen && "font-semibold",
                           )}
                           title={visibleTitle(s.title) || s.url || "Untitled"}
                         >

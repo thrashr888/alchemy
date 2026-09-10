@@ -367,6 +367,17 @@ export interface GrowthProposal {
   score: number;
 }
 
+/** What a proposed link is before it is added (the Grow pane's hover
+ *  preview). Every field is "" when unknown — a preview that can't load is
+ *  not an error. */
+export interface UrlPeek {
+  title: string;
+  description: string;
+  imageUrl: string;
+  /** og:site_name when the page names itself, else the host. */
+  site: string;
+}
+
 /** One retirement candidate (RFC-living-notebook Pillar 3): old enough to
  *  have had its chance, never once cited. Proposal only. */
 export interface RetireProposal {

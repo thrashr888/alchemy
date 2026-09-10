@@ -517,6 +517,7 @@ pub fn run() {
             commands::set_source_note,
             commands::set_source_image,
             commands::source_image_candidates,
+            commands::peek_url,
             commands::refresh_source_url,
             commands::refresh_sources,
             commands::get_source_content,

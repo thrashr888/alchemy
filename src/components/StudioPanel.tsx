@@ -252,6 +252,12 @@ export function StudioPanel() {
   const noteReadsBaseline = useStore((s) => s.noteReadsBaseline);
   const markNotesRead = useStore((s) => s.markNotesRead);
   const readerOpen = useStore((s) => s.reader.open);
+  // The note the reader is showing: bolder title, quiet wash (see the
+  // Sources panel for the same treatment).
+  const openNoteId = useStore((s) => {
+    const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
+    return doc?.type === "note" ? doc.id : null;
+  });
   const picked = useStore((s) => s.picked);
   const pickOne = useStore((s) => s.pickOne);
   const pickToggle = useStore((s) => s.pickToggle);
@@ -735,7 +741,11 @@ export function StudioPanel() {
                     n.status === "stale" && "opacity-60",
                     pickedNoteIds.has(n.id) &&
                       "bg-primary/10 hover:bg-primary/15",
+                    openNoteId === n.id &&
+                      !pickedNoteIds.has(n.id) &&
+                      "bg-surface-2",
                   )}
+                  aria-current={openNoteId === n.id ? "true" : undefined}
                 >
                   <CardAction
                     label={`Open note ${n.title}`}
@@ -768,7 +778,12 @@ export function StudioPanel() {
                         kindIcon(n.kind)
                       )}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-body font-medium text-foreground">
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-body font-medium text-foreground",
+                        openNoteId === n.id && "font-semibold",
+                      )}
+                    >
                       {n.title}
                     </span>
                     {noteUnread(n, noteReads, noteReadsBaseline) && (

@@ -148,6 +148,10 @@ export function useHoverCard(side: "left" | "right") {
   // mouseleave, so the card would otherwise stay up describing a source
   // that no longer exists until the pointer found another row.
   const anchor = React.useRef<Element | null>(null);
+  // What the card should say for the anchored row — kept outside state so
+  // an `update` that arrives during the reveal delay (a lazily fetched
+  // preview landing before the beat is up) is what the reveal paints.
+  const latest = React.useRef<HoverCardData | null>(null);
 
   // `Element`, not `HTMLElement`: the graph's rows are SVG <g> nodes, and
   // all this needs is getBoundingClientRect.
@@ -157,6 +161,7 @@ export function useHoverCard(side: "left" | "right") {
   ) => {
     const el = e.currentTarget;
     anchor.current = el;
+    latest.current = data;
     window.clearTimeout(timer.current);
     const reveal = () => {
       if (!el.isConnected) return;
@@ -165,7 +170,7 @@ export function useHoverCard(side: "left" | "right") {
       setState({
         top: r.top,
         left: side === "right" ? r.right + 10 : r.left - 10,
-        data,
+        data: latest.current ?? data,
       });
     };
     if (warm.current) reveal();
@@ -179,9 +184,12 @@ export function useHoverCard(side: "left" | "right") {
     }, 120);
   };
   /** Swap the card's contents in place while it is up (a live list whose
-   *  rows change under a resting pointer). No-op when nothing is showing. */
-  const update = (data: HoverCardData) =>
+   *  rows change under a resting pointer), or while it is still waiting
+   *  out the reveal delay. No-op when nothing is showing or pending. */
+  const update = (data: HoverCardData) => {
+    latest.current = data;
     setState((s) => (s ? { ...s, data } : s));
+  };
   React.useEffect(() => () => window.clearTimeout(timer.current), []);
 
   // The host list re-renders when its rows change; if the row under the
@@ -222,7 +230,20 @@ export function useHoverCard(side: "left" | "right") {
           )}
           style={{
             top: Math.max(8, Math.min(state.top, window.innerHeight - 200)),
-            left: state.left,
+            // A right-side card beside a wide row (the Grow pane's centered
+            // column) would otherwise open past the window edge.
+            left:
+              side === "right"
+                ? Math.max(
+                    8,
+                    Math.min(
+                      state.left,
+                      window.innerWidth -
+                        (state.data.layout === "stacked" ? 320 : 256) -
+                        8,
+                    ),
+                  )
+                : state.left,
           }}
         >
           <div className="flex items-baseline gap-2">
