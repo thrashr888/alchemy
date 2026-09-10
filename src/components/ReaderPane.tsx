@@ -2207,6 +2207,12 @@ function SourceReader({
   // Memoized on content: the regex sniff and the word count both walk the
   // whole document, and this component re-renders per find keystroke and
   // selection change.
+  // The rendered view lifts a leading frontmatter block into a property
+  // list; the plain and code views show the file verbatim, as they should.
+  const frontmatter = useMemo(
+    () => splitFrontmatter(content ?? ""),
+    [content],
+  );
   const contentLooksMarkdown = useMemo(
     () => !!content && looksLikeMarkdown(content),
     [content],
@@ -2737,7 +2743,8 @@ function SourceReader({
             <CodeView path={source.title} code={content} lineNums />
           ) : richMode ? (
             <div className="selectable">
-              <Markdown wikilinks>{content}</Markdown>
+              <FrontmatterList meta={frontmatter.meta} />
+              <Markdown wikilinks>{frontmatter.body}</Markdown>
             </div>
           ) : (
             <p className="reader-plain whitespace-pre-wrap text-body leading-relaxed text-foreground/90 selectable">
@@ -2838,18 +2845,26 @@ function MarkdownPreview({ text }: { text: string }) {
   const { meta, body } = splitFrontmatter(text);
   return (
     <>
-      {meta.length > 0 && (
-        <dl className="mb-4 grid grid-cols-[minmax(9rem,max-content)_minmax(0,1fr)] gap-x-6 gap-y-1 border-b border-border pb-3 text-caption">
-          {meta.map(([k, v], i) => (
-            <Fragment key={`${k}-${i}`}>
-              <dt className="text-subtle-foreground">{k}</dt>
-              <dd className="min-w-0 break-words text-muted-foreground">{v}</dd>
-            </Fragment>
-          ))}
-        </dl>
-      )}
+      <FrontmatterList meta={meta} />
       <Markdown>{body}</Markdown>
     </>
+  );
+}
+
+/** A document's frontmatter as a property list — the reader's own header
+ *  already says type, path, and size, so this is only what the file itself
+ *  declared. Nothing when there is none. */
+function FrontmatterList({ meta }: { meta: [string, string][] }) {
+  if (meta.length === 0) return null;
+  return (
+    <dl className="mb-4 grid grid-cols-[minmax(9rem,max-content)_minmax(0,1fr)] gap-x-6 gap-y-1 border-b border-border pb-3 text-caption">
+      {meta.map(([k, v], i) => (
+        <Fragment key={`${k}-${i}`}>
+          <dt className="text-subtle-foreground">{k}</dt>
+          <dd className="min-w-0 break-words text-muted-foreground">{v}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 
