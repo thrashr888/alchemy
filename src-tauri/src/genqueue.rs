@@ -25,7 +25,17 @@ pub const QUEUE_FILE: &str = "generation-queue.json";
 const PRUNE_MS: i64 = 86_400_000;
 
 /// Hard deadline over one run — "generating" must be a bounded state.
-const RUN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+fn run_deadline(kind: &str) -> std::time::Duration {
+    // Visual summaries make one model call, without a prose distillation
+    // pass or audio synthesis. Even a provider that ignores output limits
+    // cannot occupy the generation slot indefinitely.
+    let minutes = if crate::rag::uses_diagram_corpus(kind) {
+        10
+    } else {
+        20
+    };
+    std::time::Duration::from_secs(minutes * 60)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -285,9 +295,10 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
         let job = job.clone();
         move |step: crate::inference::Step<'_>| emit_status(&app, &job, "", step.label)
     };
+    let deadline = run_deadline(&job.kind);
     let produced = tokio::select! {
         r = tokio::time::timeout(
-            RUN_DEADLINE,
+            deadline,
             crate::inference::labeled(
                 label,
                 crate::commands::generate_content_for_job(&state, &app, &job, &token, steps),
@@ -297,7 +308,7 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
             Err(_) => Err(anyhow::anyhow!(
                 "generation exceeded {} minutes — the model provider may be \
                  overloaded; try again or switch providers",
-                RUN_DEADLINE.as_secs() / 60
+                deadline.as_secs() / 60
             )),
         }),
         _ = token.cancelled() => None,
@@ -426,6 +437,23 @@ fn placeholder_stripped(job: &GenJob) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_summaries_have_a_shorter_total_deadline() {
+        for kind in [
+            "uml",
+            "mind_map",
+            "architecture",
+            "process",
+            "relationship",
+            "data_model",
+            "journey",
+        ] {
+            assert_eq!(run_deadline(kind).as_secs(), 600);
+        }
+        assert_eq!(run_deadline("audio_overview").as_secs(), 1200);
+        assert_eq!(run_deadline("report").as_secs(), 1200);
+    }
 
     fn job(id: &str, status: &str) -> GenJob {
         GenJob {

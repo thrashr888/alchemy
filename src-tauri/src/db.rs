@@ -999,6 +999,63 @@ impl Db {
         Ok(out)
     }
 
+    /// Bounded Unicode heads for gist-less diagram sources. Project the
+    /// substring in the database and consume batches as they arrive, rather
+    /// than collecting the full corpus and then making truncated copies.
+    pub async fn source_content_heads(
+        &self,
+        source_ids: &[String],
+        max_chars: usize,
+    ) -> Result<HashMap<String, String>> {
+        let mut out = HashMap::new();
+        if source_ids.is_empty() || max_chars == 0 {
+            return Ok(out);
+        }
+        let _slot = self.scan_slots.acquire().await?;
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(out);
+        }
+        let ids = source_ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let table = self.conn.open_table(T_SOURCES).execute().await?;
+        let head = format!("left(content, {max_chars})");
+        let mut batches = table
+            .query()
+            .only_if(format!("id IN ({ids})"))
+            .select(lancedb::query::Select::dynamic(&[
+                ("id", "id"),
+                ("content", &head),
+            ]))
+            .execute()
+            .await?;
+        while let Some(batch) = batches.try_next().await? {
+            let ids = str_col(&batch, "id")?;
+            let content = batch
+                .column_by_name("content")
+                .context("missing source head")?;
+            for i in 0..batch.num_rows() {
+                // DataFusion string functions return Utf8View; older table
+                // projections may still return Utf8. Both expose borrowed
+                // text, so only the bounded head is copied into the result.
+                let head = if let Some(strings) = content
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                {
+                    strings.value(i)
+                } else if let Some(strings) = content.as_any().downcast_ref::<StringArray>() {
+                    strings.value(i)
+                } else {
+                    anyhow::bail!("invalid source head column");
+                };
+                out.insert(ids.value(i).to_string(), head.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     /// `source_contents` plus each source's title, for surfaces that need to
     /// tell the body apart from its own heading (gallery snippets).
     pub async fn source_titled_contents(
@@ -5508,6 +5565,58 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[tokio::test]
+    async fn diagram_source_heads_are_bounded_unicode_and_do_not_change_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        assert!(db
+            .source_content_heads(&["missing".into()], 3)
+            .await
+            .unwrap()
+            .is_empty());
+        let source = Source {
+            id: "source'quoted".into(),
+            notebook_id: "nb".into(),
+            title: "Added after the cached scan".into(),
+            source_type: "text".into(),
+            content: "α🙂漢x".repeat(250_000),
+            char_count: 1_000_000,
+            status: "ready".into(),
+            origin_device: String::new(),
+            remote: false,
+            url: String::new(),
+            chunk_count: 0,
+            created_at: 1,
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        };
+        db.insert_source(&source, &[], &[]).await.expect("insert");
+        let ids = vec![source.id.clone(), "missing".into()];
+        let heads = db
+            .source_content_heads(&ids, 3)
+            .await
+            .expect("project heads");
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[&source.id], "α🙂漢");
+        assert!(db.source_content_heads(&ids, 0).await.unwrap().is_empty());
+        assert!(db.source_content_heads(&[], 3).await.unwrap().is_empty());
+        let stored = db
+            .source_contents(std::slice::from_ref(&source.id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored[&source.id], source.content,
+            "projection never truncates stored data"
+        );
+    }
 
     #[tokio::test]
     async fn shared_content_coalesces_concurrent_misses_and_refreshes_after_write() {

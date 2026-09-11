@@ -59,7 +59,7 @@ function useDiagramScene(
   const [state, setState] = useState<SceneState>({ rendered: null, error: null });
 
   useEffect(() => {
-    let stale = false;
+    const abort = new AbortController();
     if (!parsed.doc) {
       setState({ rendered: null, error: parsed.error });
       return;
@@ -67,18 +67,18 @@ function useDiagramScene(
     const doc = parsed.doc;
     setState({ rendered: null, error: null });
     void import("@/lib/eraserDiagram")
-      .then((m) => m.renderDiagram(doc, kind))
+      .then((m) => m.renderDiagram(doc, kind, abort.signal))
       .then(
         (rendered) => {
-          if (!stale) setState({ rendered, error: null });
+          if (!abort.signal.aborted) setState({ rendered, error: null });
         },
         (e: unknown) => {
-          if (!stale)
+          if (!abort.signal.aborted)
             setState({ rendered: null, error: e instanceof Error ? e.message : String(e) });
         },
       );
     return () => {
-      stale = true;
+      abort.abort();
     };
   }, [parsed, kind]);
 

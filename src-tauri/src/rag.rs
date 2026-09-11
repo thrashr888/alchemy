@@ -666,6 +666,12 @@ pub fn is_diagram_kind(kind: &str) -> bool {
     DIAGRAM_KINDS.contains(&kind)
 }
 
+/// All visual summaries use stored gists and bounded source heads. UML and
+/// mind maps have different output formats, but must not run prose distillation.
+pub fn uses_diagram_corpus(kind: &str) -> bool {
+    is_diagram_kind(kind) || matches!(kind, "uml" | "mind_map")
+}
+
 /// The stock eraser tags each diagram kind's prompt teaches — entity tags,
 /// then connection tags. `src/lib/diagramDoc.ts` admits exactly these per
 /// kind and a frontend test holds the two in lockstep; a Rust test checks
@@ -1930,6 +1936,32 @@ mod tests {
     /// contributes its head, capped; and the whole thing fits the budget
     /// with every source present. Nothing here can distill — the builder
     /// has no model handle — which is the point.
+    #[test]
+    fn all_visual_summaries_skip_prose_distillation() {
+        for kind in DIAGRAM_KINDS.iter().copied().chain(["uml", "mind_map"]) {
+            assert!(
+                uses_diagram_corpus(kind),
+                "{kind} must use bounded diagram context"
+            );
+        }
+        for kind in [
+            "summary",
+            "report",
+            "audio_overview",
+            "template:custom",
+            "custom",
+        ] {
+            assert!(
+                !uses_diagram_corpus(kind),
+                "{kind} still needs prose context"
+            );
+        }
+        assert!(
+            !is_diagram_kind("uml"),
+            "Mermaid is not the Eraser JSON contract"
+        );
+    }
+
     #[test]
     fn diagram_corpus_uses_gists_and_fits_the_budget() {
         let body_a = "BODY-A ".repeat(2_000);
