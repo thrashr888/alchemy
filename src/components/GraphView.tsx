@@ -1,3 +1,4 @@
+import { BoundedCache } from "@/lib/boundedCache";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -34,16 +35,19 @@ import { Crosshair, Minus, Plus, Share2, X } from "lucide-react";
  *  redoing it from scratch on every visit is what made the pane feel like it
  *  was thinking. Keyed by notebook + document set, so it survives navigation
  *  but never serves a stale picture. Same lifetime and reasoning as the
- *  gallery's thumbMemory. */
-const graphCache = new Map<string, NotebookGraph>();
-const layoutCache = new Map<string, ReturnType<typeof layout>>();
+ *  gallery's thumbMemory. Entry and weight caps prevent notebook, filter,
+ *  and resize variants from accumulating for the entire session. */
+const graphCache = new BoundedCache<NotebookGraph>(4, 4 * 1024 * 1024, (key, graph) =>
+  2 * (key.length + JSON.stringify(graph).length));
+const layoutCache = new BoundedCache<ReturnType<typeof layout>>(16, 2 * 1024 * 1024, (key, nodes) =>
+  2 * key.length + nodes.reduce((bytes, n) => bytes + 96 + 2 * n.id.length, 0));
 
 /** Pan and zoom per notebook, so stepping out to a document and coming back
  *  returns you to where you were looking rather than to the top of the world.
  *  Same app-run lifetime and the same reasoning as the gallery's
  *  scrollMemory. Re-center is always one click away if a remembered view
  *  turns out to be somewhere you no longer want to be. */
-const viewMemory = new Map<string, { x: number; y: number; k: number }>();
+const viewMemory = new BoundedCache<{ x: number; y: number; k: number }>(128, 64 * 1024, (key) => 64 + 2 * key.length);
 
 /** Set when a document is opened BY CLICKING IT IN THE GRAPH, remembering
  *  the graph state at that moment.
@@ -374,7 +378,6 @@ export function GraphView() {
         meta: [
           { label: note.kind.replace(/_/g, " ") },
           { label: "Links", value: `${links}` },
-          { label: "Size", value: `${note.content.length} chars` },
         ],
       };
     }

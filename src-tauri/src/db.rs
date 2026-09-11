@@ -22,8 +22,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
 use crate::models::{
-    Citation, LedgerEntry, Message, MetaThread, MetaTurn, Note, NoteUsage, Notebook, RegistryCard,
-    ReportSchedule, RunReceipt, Source, SourceEvent,
+    Citation, LedgerEntry, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
+    RegistryCard, ReportSchedule, RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -994,6 +994,63 @@ impl Db {
             let content = str_col(b, "content")?;
             for i in 0..b.num_rows() {
                 out.insert(id.value(i).to_string(), content.value(i).to_string());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Bounded Unicode heads for gist-less diagram sources. Project the
+    /// substring in the database and consume batches as they arrive, rather
+    /// than collecting the full corpus and then making truncated copies.
+    pub async fn source_content_heads(
+        &self,
+        source_ids: &[String],
+        max_chars: usize,
+    ) -> Result<HashMap<String, String>> {
+        let mut out = HashMap::new();
+        if source_ids.is_empty() || max_chars == 0 {
+            return Ok(out);
+        }
+        let _slot = self.scan_slots.acquire().await?;
+        if !self.table_exists(T_SOURCES).await? {
+            return Ok(out);
+        }
+        let ids = source_ids
+            .iter()
+            .map(|id| format!("'{}'", esc(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let table = self.conn.open_table(T_SOURCES).execute().await?;
+        let head = format!("left(content, {max_chars})");
+        let mut batches = table
+            .query()
+            .only_if(format!("id IN ({ids})"))
+            .select(lancedb::query::Select::dynamic(&[
+                ("id", "id"),
+                ("content", &head),
+            ]))
+            .execute()
+            .await?;
+        while let Some(batch) = batches.try_next().await? {
+            let ids = str_col(&batch, "id")?;
+            let content = batch
+                .column_by_name("content")
+                .context("missing source head")?;
+            for i in 0..batch.num_rows() {
+                // DataFusion string functions return Utf8View; older table
+                // projections may still return Utf8. Both expose borrowed
+                // text, so only the bounded head is copied into the result.
+                let head = if let Some(strings) = content
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                {
+                    strings.value(i)
+                } else if let Some(strings) = content.as_any().downcast_ref::<StringArray>() {
+                    strings.value(i)
+                } else {
+                    anyhow::bail!("invalid source head column");
+                };
+                out.insert(ids.value(i).to_string(), head.to_string());
             }
         }
         Ok(out)
@@ -2336,6 +2393,16 @@ impl Db {
         Ok(())
     }
 
+    /// A thumbnail needs media paths, not the article/transcript body.
+    pub async fn get_source_summary(&self, source_id: &str) -> Result<Option<Source>> {
+        let filter = format!("id = '{}'", esc(source_id));
+        Ok(self
+            .query_sources(Some(&filter), false)
+            .await?
+            .into_iter()
+            .next())
+    }
+
     /// Fetch a single source with its full content (None if not found).
     pub async fn get_source(&self, source_id: &str) -> Result<Option<Source>> {
         let filter = format!("id = '{}'", esc(source_id));
@@ -2880,6 +2947,51 @@ impl Db {
     }
 
     // ---- Notes -----------------------------------------------------------
+
+    pub async fn list_note_summaries(&self, notebook_id: &str) -> Result<Vec<NoteSummary>> {
+        let filter = format!("notebook_id = '{}'", esc(notebook_id));
+        let batches = self
+            .collect_cols(
+                T_NOTES,
+                Some(&filter),
+                &[
+                    "id",
+                    "notebook_id",
+                    "title",
+                    "kind",
+                    "origin",
+                    "status",
+                    "created_at",
+                    "updated_at",
+                ],
+            )
+            .await?;
+        let mut notes = Vec::new();
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let kind = str_col(b, "kind")?;
+            let origin = str_col(b, "origin")?;
+            let status = str_col(b, "status")?;
+            let created = i64_col(b, "created_at")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                notes.push(NoteSummary {
+                    id: id.value(i).to_string(),
+                    notebook_id: nb.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    origin: origin.value(i).to_string(),
+                    status: status.value(i).to_string(),
+                    created_at: created.value(i),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        Ok(notes)
+    }
 
     pub async fn list_notes(&self, notebook_id: &str) -> Result<Vec<Note>> {
         let filter = format!("notebook_id = '{}'", esc(notebook_id));
@@ -5564,6 +5676,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn diagram_source_heads_are_bounded_unicode_and_do_not_change_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        assert!(db
+            .source_content_heads(&["missing".into()], 3)
+            .await
+            .unwrap()
+            .is_empty());
+        let source = Source {
+            id: "source'quoted".into(),
+            notebook_id: "nb".into(),
+            title: "Added after the cached scan".into(),
+            source_type: "text".into(),
+            content: "α🙂漢x".repeat(250_000),
+            char_count: 1_000_000,
+            status: "ready".into(),
+            origin_device: String::new(),
+            remote: false,
+            url: String::new(),
+            chunk_count: 0,
+            created_at: 1,
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: String::new(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        };
+        db.insert_source(&source, &[], &[]).await.expect("insert");
+        let summary = db.get_source_summary(&source.id).await.unwrap().unwrap();
+        assert!(summary.content.is_empty());
+        assert_eq!(summary.char_count, source.char_count);
+        assert_eq!(summary.url, source.url);
+        assert!(db.get_source_summary("missing").await.unwrap().is_none());
+        let ids = vec![source.id.clone(), "missing".into()];
+        let heads = db
+            .source_content_heads(&ids, 3)
+            .await
+            .expect("project heads");
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[&source.id], "α🙂漢");
+        assert!(db.source_content_heads(&ids, 0).await.unwrap().is_empty());
+        assert!(db.source_content_heads(&[], 3).await.unwrap().is_empty());
+        let stored = db
+            .source_contents(std::slice::from_ref(&source.id))
+            .await
+            .unwrap();
+        assert_eq!(
+            stored[&source.id], source.content,
+            "projection never truncates stored data"
+        );
+    }
+
+    #[tokio::test]
     async fn shared_content_coalesces_concurrent_misses_and_refreshes_after_write() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Db::open(dir.path()).await.expect("open db");
@@ -5611,6 +5780,48 @@ mod tests {
             .await
             .expect("other notebook");
         assert!(other.is_empty(), "cache cannot cross notebook boundaries");
+    }
+
+    #[tokio::test]
+    async fn note_summaries_exclude_large_bodies_but_full_reads_preserve_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path()).await.unwrap();
+        let body = "Full report 全文🙂\n".repeat(32_000);
+        let prompt = "Keep these instructions. ".repeat(2_000);
+        for i in 0..12 {
+            db.add_note(&Note {
+                id: format!("note-{i}"),
+                notebook_id: "nb".into(),
+                title: format!("Report {i}"),
+                kind: "report".into(),
+                content: body.clone(),
+                prompt: prompt.clone(),
+                origin: "auto".into(),
+                status: "stale".into(),
+                created_at: i,
+                updated_at: i,
+            })
+            .await
+            .unwrap();
+        }
+        let summaries = db.list_note_summaries("nb").await.unwrap();
+        assert_eq!(summaries.len(), 12);
+        assert_eq!(summaries[0].id, "note-11");
+        assert_eq!(summaries[0].status, "stale");
+        let small = serde_json::to_vec(&summaries).unwrap();
+        let full = db.list_notes("nb").await.unwrap();
+        let large = serde_json::to_vec(&full).unwrap();
+        assert!(small.len() < 4096);
+        assert!(large.len() > 8_000_000);
+        let note = db.get_note("note-11").await.unwrap().unwrap();
+        assert_eq!(note.content, body);
+        assert_eq!(note.prompt, prompt);
+        assert!(db.list_note_summaries("other").await.unwrap().is_empty());
+        eprintln!(
+            "12-note collection JSON bytes: {} -> {}",
+            large.len(),
+            small.len()
+        );
     }
 
     #[tokio::test]

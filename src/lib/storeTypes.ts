@@ -11,7 +11,7 @@ import type {
   MetaTurn,
   ModelHealth,
   ModelStat,
-  Note,
+  NoteSummary,
   NoteKind,
   Notebook,
   OkfBinding,
@@ -205,7 +205,7 @@ export interface AppState {
   messages: Message[];
   messagesHasMore: boolean;
   messagesLoadingOlder: boolean;
-  notes: Note[];
+  notes: NoteSummary[];
   reportSchedules: ReportSchedule[];
   templates: Template[];
   /** Re-list custom templates (after an in-app save/delete). */
@@ -565,7 +565,7 @@ export interface AppState {
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
   generateFromTemplate: (template: Template) => Promise<void>;
-  rebuildNote: (note: Note) => Promise<void>;
+  rebuildNote: (note: NoteSummary) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;

@@ -1,3 +1,4 @@
+import { useNoteBody } from "@/lib/useNoteBody";
 import { useEffect } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useStore } from "@/lib/store";
@@ -24,10 +25,11 @@ import { StickyNote } from "lucide-react";
 export function NoteWindow({ noteId }: { noteId: string }) {
   const currentId = useStore((s) => s.currentId);
   const notes = useStore((s) => s.notes);
-  const note = notes.find((n) => n.id === noteId);
+  const summary = notes.find((n) => n.id === noteId);
+  const { note, error, loading: bodyLoading } = useNoteBody(summary);
   // The store clears notes on selectNotebook, so "loaded but missing" is only
   // trustworthy once the notebook is current and the notes list settled.
-  const loading = !note && (!currentId || notes.length === 0);
+  const loading = bodyLoading || (!summary && (!currentId || notes.length === 0));
   // Canvas artifacts size themselves to the window instead of scrolling in a
   // reading column.
   const fillsWindow =
@@ -75,7 +77,7 @@ export function NoteWindow({ noteId }: { noteId: string }) {
             </div>
           ) : !note ? (
             <div role="status" className="text-body text-muted-foreground">
-              This note no longer exists — it may have been deleted.
+              {error ?? "This note no longer exists — it may have been deleted."}
             </div>
           ) : note.kind === "mind_map" ? (
             <MindMap content={note.content} />

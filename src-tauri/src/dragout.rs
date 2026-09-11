@@ -162,6 +162,13 @@ pub async fn stage_note_for_drag(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no note with id {note_id}"))?;
+    // Only prose summaries use "auto". Decide from the actual stored body
+    // here, so ad-hoc tables still drag out as workbooks.
+    let format = if format == "auto" {
+        crate::export::prose_export_format(&note.content).to_string()
+    } else {
+        format
+    };
     let ext = crate::export::export_ext(&format).map_err(|e| e.to_string())?;
     // Cached per note revision, under a directory keyed by id and edit
     // stamp so the visible filename stays the note's own title. A poster or

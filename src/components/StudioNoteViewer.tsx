@@ -1,3 +1,4 @@
+import { useNoteBody } from "@/lib/useNoteBody";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -51,9 +52,10 @@ export function StudioNoteViewer({
   const discussNoteInChat = useStore((state) => state.discussNoteInChat);
   const generatingKind = useStore((state) => state.generatingKind);
   const artifactStreamText = useStore((state) => state.artifactStreamText);
-  const live = useStore((state) =>
+  const summary = useStore((state) =>
     note ? (state.notes.find((candidate) => candidate.id === note.id) ?? note) : null,
   );
+  const { note: live, error, loading } = useNoteBody(summary);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -93,6 +95,7 @@ export function StudioNoteViewer({
         )
       }
     >
+      {(loading || error) && <div role="status">{error ?? "Loading note…"}</div>}
       {live &&
         (editing ? (
           <form

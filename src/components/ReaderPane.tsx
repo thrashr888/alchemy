@@ -1,6 +1,6 @@
+import { useNoteBody } from "@/lib/useNoteBody";
 import {
   Fragment,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -22,6 +22,7 @@ import { Markdown } from "./Markdown";
 import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
 import { DiagramView } from "./DiagramView";
+import { PdfPageView } from "./PdfPageView";
 import { DIAGRAM_KINDS, isDiagramKind } from "@/lib/diagramDoc";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
@@ -622,10 +623,11 @@ export function ReaderPane() {
     current?.type === "source"
       ? (sources.find((s) => s.id === current.id) ?? null)
       : null;
-  const note =
+  const noteMeta =
     current?.type === "note"
       ? (notes.find((n) => n.id === current.id) ?? null)
       : null;
+  const { note, error: noteError, loading: noteLoading } = useNoteBody(noteMeta);
   const templates = useStore((s) => s.templates);
   const template =
     current?.type === "template"
@@ -1028,6 +1030,8 @@ export function ReaderPane() {
             pageView={pageMode}
           />
         )
+      ) : noteLoading || (noteError && !note) ? (
+        <div role="status" className="p-6 text-body text-muted-foreground">{noteError ?? "Loading note…"}</div>
       ) : note ? (
         <NoteReader
           key={note.id}
@@ -1331,142 +1335,6 @@ function ImageView({ sourceId, title }: { sourceId: string; title: string }) {
  *  the arxiv links v0.32.0 taught Alchemy to import. */
 function isPdfFile(source: Source): boolean {
   return source.sourceType === "pdf" && !!source.url;
-}
-
-/** The PDF as pages, rendered by PDFium (RFC-document-surface phase 5).
- *  Pages rasterize on demand as they scroll into view — a 300-page document
- *  costs only the pages actually looked at — and each one holds its slot with
- *  a US-Letter-ratio placeholder so the scrollbar doesn't jump while they
- *  arrive. This view is deliberately not searchable; the text toggle is where
- *  find, citations, and select-to-ask live. */
-function PdfPageView({
-  sourceId,
-  title,
-}: {
-  sourceId: string;
-  title: string;
-}) {
-  /** Resolved local path. A file source is already local; a URL source is
-   *  downloaded into the cache on first open (commands::pdf_local_path). */
-  const [path, setPath] = useState("");
-  const [count, setCount] = useState(0);
-  const [failed, setFailed] = useState(false);
-  const [pages, setPages] = useState<Record<number, string>>({});
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // One width for every page, measured once per resize: pages in a PDF share
-  // a page size almost always, and re-rendering each on its own measurement
-  // would thrash PDFium for no visible gain.
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    let stale = false;
-    setPath("");
-    setCount(0);
-    setFailed(false);
-    setPages({});
-    api
-      .pdfLocalPath(sourceId)
-      .then((p) => !stale && setPath(p))
-      .catch(() => !stale && setFailed(true));
-    return () => {
-      stale = true;
-    };
-  }, [sourceId]);
-
-  useEffect(() => {
-    if (!path) return;
-    let stale = false;
-    api
-      .pdfPageCount(path)
-      .then((n) => {
-        if (stale) return;
-        setCount(n);
-        if (n === 0) setFailed(true);
-      })
-      .catch(() => !stale && setFailed(true));
-    return () => {
-      stale = true;
-    };
-  }, [path]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const measure = () =>
-      setWidth(Math.round(Math.min(el.clientWidth - 48, 1100)));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [count]);
-
-  // Fetch a page's bitmap the first time its placeholder intersects the
-  // viewport. Rendered pages are keyed by page number and never evicted —
-  // scrolling back up is instant, and a PNG per page is small next to the
-  // document already in memory.
-  const observe = useCallback(
-    (node: HTMLDivElement | null, page: number) => {
-      if (!node || !width || pages[page]) return;
-      const io = new IntersectionObserver(
-        (entries) => {
-          if (!entries.some((e) => e.isIntersecting)) return;
-          io.disconnect();
-          api
-            .pdfPageImage(path, page, width)
-            .then((url) => setPages((prev) => ({ ...prev, [page]: url })))
-            .catch(() => {
-              /* one unreadable page shouldn't blank the whole document */
-            });
-        },
-        { rootMargin: "600px" },
-      );
-      io.observe(node);
-    },
-    [path, width, pages],
-  );
-
-  if (failed) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-        <span className="text-body text-muted-foreground">
-          The pages could not be rendered — the file may have moved.
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-6">
-      <div className="mx-auto flex flex-col items-center gap-6">
-        {Array.from({ length: count }, (_, i) => i + 1).map((page) => (
-          <div
-            key={page}
-            ref={(node) => observe(node, page)}
-            className="w-full"
-            style={{ maxWidth: width || undefined }}
-          >
-            {pages[page] ? (
-              <img
-                src={pages[page]}
-                alt={`${title} — page ${page}`}
-                className="w-full rounded-md border border-border shadow-sm"
-              />
-            ) : (
-              <div
-                className="flex w-full items-center justify-center rounded-md border border-border bg-surface-2/40"
-                style={{ aspectRatio: "8.5 / 11" }}
-              >
-                <Spinner className="h-4 w-4" />
-              </div>
-            )}
-            <div className="pt-1.5 text-center text-micro text-subtle-foreground">
-              {page} / {count}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 /** Full-text source reading: faithful markdown when the content is markdown-
