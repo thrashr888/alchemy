@@ -308,6 +308,9 @@ export type NoteKind =
   | "report"
   | "template";
 
+/** Collection rows never carry bodies or generation prompts. */
+export type NoteSummary = Omit<Note, "content" | "prompt">;
+
 export interface Note {
   id: string;
   notebookId: string;

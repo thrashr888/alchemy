@@ -16,7 +16,7 @@ import {
   Pencil,
   Zap,
 } from "lucide-react";
-import type { EventKind, Note, ReportSchedule } from "@/lib/types";
+import type { EventKind, NoteSummary, ReportSchedule } from "@/lib/types";
 import { ARTIFACTS } from "./studioArtifacts";
 
 /** The event kinds a standing question can filter on (docs/RFC-events.md
@@ -90,7 +90,7 @@ export function Reports() {
 
   // Each schedule keeps one living note (collapse_report_notes) titled after
   // itself — that note IS the latest result.
-  const latestNote = (r: ReportSchedule): Note | undefined =>
+  const latestNote = (r: ReportSchedule): NoteSummary | undefined =>
     notes.find(
       (n) =>
         n.kind === "report" &&

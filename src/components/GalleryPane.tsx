@@ -945,7 +945,7 @@ function GalleryCard({
 
   // While the cache fills (or when the download failed), fall back to the
   // remote og URL so first paint isn't gated on the round-trip.
-  const visual = !imgFailed ? thumb || leadImage || null : null;
+  const visual = !imgFailed ? thumb || null : null;
   const host = web ? urlHost(s.url) : null;
   // The icon already says what it is — the caption carries provenance
   // (domain or author) and freshness, never a redundant type label.

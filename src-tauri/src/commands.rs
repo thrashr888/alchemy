@@ -3049,6 +3049,7 @@ async fn reingest_inner(
     }
     if existing.source_type == "url" && updated.image_url != existing.image_url {
         let _ = std::fs::remove_file(og_cache_path(state, &existing.id));
+        let _ = std::fs::remove_file(legacy_og_cache_path(state, &existing.id));
     }
     state
         .db
@@ -3257,6 +3258,7 @@ pub(crate) async fn set_source_image_impl(
     }
     state.db.set_source_image(source_id, image_url).await?;
     let _ = std::fs::remove_file(og_cache_path(state, source_id));
+    let _ = std::fs::remove_file(legacy_og_cache_path(state, source_id));
     Ok(Source {
         image_url: image_url.to_string(),
         content: String::new(),
@@ -3646,6 +3648,7 @@ fn cleanup_source_files(state: &AppState, source_id: &str) {
     }
     let _ = std::fs::remove_file(thumb_path(state, source_id));
     let _ = std::fs::remove_file(og_cache_path(state, source_id));
+    let _ = std::fs::remove_file(legacy_og_cache_path(state, source_id));
 }
 
 /// Bulk-delete a selection (docs/RFC-multi-select.md): two Lance predicate
@@ -3732,6 +3735,12 @@ fn thumb_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
 fn og_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
     app_data_dir(state)
         .join("thumbs")
+        .join(format!("{source_id}.og-v1.png"))
+}
+
+fn legacy_og_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
+    app_data_dir(state)
+        .join("thumbs")
         .join(format!("{source_id}.img"))
 }
 
@@ -3749,8 +3758,8 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
 }
 
 /// Data-URI thumbnail for a source's gallery card: PDFs render their first
-/// page (cached on disk, rendered once ever); images return the original
-/// file. Empty string when the source has no visual — the card falls back
+/// page (cached on disk); web images are resized to at most 480px before
+/// crossing IPC. Empty string when the source has no visual — the card falls back
 /// to typography. Base64 over IPC sidesteps the asset:// WKWebView decode
 /// caveat (see ImageView in ReaderPane.tsx).
 #[tauri::command]
@@ -3759,8 +3768,12 @@ pub async fn source_thumbnail(
     source_id: String,
 ) -> Result<String, String> {
     use base64::Engine;
+    let _slot = crate::thumbnails::SLOTS
+        .acquire()
+        .await
+        .map_err(|err| err.to_string())?;
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let Some(src) = e(state.db.get_source(&source_id).await)? else {
+    let Some(src) = e(state.db.get_source_summary(&source_id).await)? else {
         return Err("Source not found".into());
     };
     match src.source_type.as_str() {
@@ -3808,26 +3821,40 @@ pub async fn source_thumbnail(
             if img.is_empty() || img == "-" || !is_web_url(img) {
                 return Ok(String::new());
             }
+            // Hold a global slot through download and conversion. Recheck the
+            // cache after waiting so simultaneous windows can reuse the result.
             let cache = og_cache_path(&state, &source_id);
             if let Ok(bytes) = std::fs::read(&cache) {
-                return Ok(format!(
-                    "data:{};base64,{}",
-                    sniff_image_mime(&bytes),
-                    b64(&bytes)
-                ));
+                return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
             }
-            let Some(bytes) = ingest::fetch_image_bytes(img).await else {
+            let legacy = legacy_og_cache_path(&state, &source_id);
+            let bytes = if let Ok(bytes) = std::fs::read(&legacy) {
+                bytes
+            } else if let Some(bytes) = ingest::fetch_image_bytes(img).await {
+                bytes
+            } else {
                 return Ok(String::new());
+            };
+            let png = match crate::thumbnails::downsample(&bytes).await {
+                Ok(png) => png,
+                Err(err) => {
+                    crate::diagnostics::error("thumbnail", err.to_string());
+                    return Ok(String::new());
+                }
             };
             if let Some(dir) = cache.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(&cache, &bytes);
-            Ok(format!(
-                "data:{};base64,{}",
-                sniff_image_mime(&bytes),
-                b64(&bytes)
-            ))
+            // Atomic replacement keeps another window from reading half a PNG.
+            if let Some(dir) = cache.parent() {
+                if let Ok(mut temp) = tempfile::NamedTempFile::new_in(dir) {
+                    use std::io::Write;
+                    if temp.write_all(&png).is_ok() && temp.persist(&cache).is_ok() {
+                        let _ = std::fs::remove_file(legacy);
+                    }
+                }
+            }
+            Ok(format!("data:image/png;base64,{}", b64(&png)))
         }
         "image" => {
             if src.url.is_empty() {
@@ -10070,6 +10097,19 @@ pub async fn list_notes(
     notebook_id: String,
 ) -> Result<Vec<Note>, String> {
     e(state.db.list_notes(&notebook_id).await)
+}
+
+#[tauri::command]
+pub async fn list_note_summaries(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::models::NoteSummary>, String> {
+    e(state.db.list_note_summaries(&notebook_id).await)
+}
+
+#[tauri::command]
+pub async fn read_note(state: State<'_, AppState>, note_id: String) -> Result<Note, String> {
+    e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".into())
 }
 
 /// Fire-and-forget post-pass after a chat answer (docs/RFC-note-curator.md
