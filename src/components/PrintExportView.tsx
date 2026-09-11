@@ -1,3 +1,4 @@
+import { useNoteBody } from "@/lib/useNoteBody";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@/lib/store";
@@ -29,7 +30,7 @@ export function PrintExportView({
 }) {
   const notes = useStore((s) => s.notes);
   const appTheme = useStore((s) => s.theme);
-  const note = notes.find((n) => n.id === noteId);
+  const { note, error } = useNoteBody(notes.find((n) => n.id === noteId));
   // Slide pages print edge-to-edge on 16:9 landscape paper (print_webview).
   const deck =
     note?.kind === "slide_deck" ? parseDeck(note.content, appTheme) : null;
@@ -59,7 +60,7 @@ export function PrintExportView({
       });
     });
   }, [note, deck, pdfPath, asyncSheet, sheetReady]);
-  if (!note) return null;
+  if (!note) return error ? <div role="alert">Could not load note: {error}</div> : null;
 
   if (note.kind === "mind_map") return <PrintMindMap content={note.content} />;
   if (note.kind === "uml")

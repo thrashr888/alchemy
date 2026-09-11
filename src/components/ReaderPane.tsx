@@ -1,3 +1,4 @@
+import { useNoteBody } from "@/lib/useNoteBody";
 import {
   Fragment,
   useEffect,
@@ -621,10 +622,11 @@ export function ReaderPane() {
     current?.type === "source"
       ? (sources.find((s) => s.id === current.id) ?? null)
       : null;
-  const note =
+  const noteMeta =
     current?.type === "note"
       ? (notes.find((n) => n.id === current.id) ?? null)
       : null;
+  const { note, error: noteError, loading: noteLoading } = useNoteBody(noteMeta);
   const templates = useStore((s) => s.templates);
   const template =
     current?.type === "template"
@@ -1065,6 +1067,8 @@ export function ReaderPane() {
             pageView={pageMode}
           />
         )
+      ) : noteLoading || (noteError && !note) ? (
+        <div role="status" className="p-6 text-body text-muted-foreground">{noteError ?? "Loading note…"}</div>
       ) : note ? (
         <NoteReader
           key={note.id}
