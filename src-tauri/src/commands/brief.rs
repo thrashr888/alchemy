@@ -114,7 +114,11 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
 
     for nb in notebooks.iter().filter(|n| n.id != briefs_notebook_id) {
         let sources = state.db.list_sources(&nb.id).await.unwrap_or_default();
-        let notes = state.db.list_notes(&nb.id).await.unwrap_or_default();
+        let reports = state
+            .db
+            .reports_since(&nb.id, since)
+            .await
+            .unwrap_or_default();
         let ledger = state.db.list_ledger(&nb.id).await.unwrap_or_default();
 
         let mut nb_changed = String::new();
@@ -177,20 +181,9 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
             }
             items += 1;
         }
-        for note in notes
-            .iter()
-            .filter(|n| n.kind == "report" && n.updated_at > since)
-        {
+        for note in &reports {
             // Skip the run stamp line; give the writer the report's own head.
-            let body: String = note
-                .content
-                .lines()
-                .skip(2)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .chars()
-                .take(600)
-                .collect();
+            let body = report_excerpt(&note.content);
             nb_changed.push_str(&format!(
                 "  - scheduled report ran: \u{201c}{}\u{201d} — excerpt:\n    {}\n",
                 note.title,
@@ -275,6 +268,18 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
         context,
         item_count: items,
     }
+}
+
+/// Stop after the excerpt instead of allocating and joining the entire report.
+fn report_excerpt(content: &str) -> String {
+    content
+        .lines()
+        .skip(2)
+        .flat_map(|line| line.chars().chain(std::iter::once('\n')))
+        .take(600)
+        .collect::<String>()
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 const BRIEF_INSTRUCTION: &str = "You are writing the user's brief: one short document covering \
@@ -398,4 +403,22 @@ async fn synthesize_brief_audio(app: &AppHandle, note: &Note) -> anyhow::Result<
     // Open windows refresh their player; no window, no listener, no-op.
     let _ = app.emit("audio://ready", &note.id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brief_report_excerpt_skips_stamp_and_caps_unicode_content() {
+        assert_eq!(
+            report_excerpt("_Run today_\r\n\r\nFirst\r\nSecond"),
+            "First\nSecond"
+        );
+        assert!(report_excerpt("_Run today_\n").is_empty());
+        let content = format!("_Run today_\n\n{}", "日本語🦀".repeat(100_000));
+        let excerpt = report_excerpt(&content);
+        assert_eq!(excerpt.chars().count(), 600);
+        assert_eq!(excerpt, "日本語🦀".repeat(150));
+    }
 }
