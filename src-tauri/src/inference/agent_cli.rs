@@ -539,10 +539,8 @@ fn fold_system(system: &str, prompt: &str) -> String {
 /// live report, twice). `auto` is copilot's documented ask-the-service alias
 /// ("use 'auto' to let Copilot pick automatically"), so it can never name a
 /// retired model.
-fn copilot_args(prompt: &str, model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
+fn copilot_args(model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
     let mut args: Vec<String> = [
-        "-p",
-        prompt,
         "-s",
         "--output-format",
         "json",
@@ -997,6 +995,21 @@ impl AgentCli {
                 AgentKind::Gemini | AgentKind::Cursor | AgentKind::Hermes | AgentKind::Bob => cmd,
             };
         };
+        // Preserve system-role precedence without putting source context on
+        // argv. Private files are removed on completion, error or cancellation.
+        let system_file = if !system.is_empty()
+            && matches!(
+                self.kind,
+                AgentKind::Claude | AgentKind::Pi | AgentKind::Prime
+            ) {
+            use std::io::Write;
+            let mut file = tempfile::NamedTempFile::new().context("create agent system prompt")?;
+            file.write_all(system.as_bytes())
+                .context("write agent system prompt")?;
+            Some(file)
+        } else {
+            None
+        };
         match self.kind {
             AgentKind::Claude => {
                 // Streamed structured events; tools restricted to Alchemy's
@@ -1013,26 +1026,18 @@ impl AgentCli {
                     "mcp__alchemy__*",
                 ]);
                 set_model(&mut cmd);
-                if !system.is_empty() {
-                    cmd.args(["--append-system-prompt", &system]);
+                if let Some(file) = &system_file {
+                    cmd.arg("--append-system-prompt-file").arg(file.path());
                 }
                 // Prompt over stdin, not argv: stuffed retrieval contexts
                 // can exceed ARG_MAX.
             }
             AgentKind::Codex => {
-                // codex exec has no system flag: fold instructions into the
-                // prompt. JSON mode emits item-level events (no token
-                // deltas) — text arrives in item.completed chunks.
-                let full = if system.is_empty() {
-                    prompt.clone()
-                } else {
-                    format!("{system}\n\n---\n\n{prompt}")
-                };
-                // --skip-git-repo-check: bundled apps run outside any repo
-                // and codex refuses non-repo cwds without it.
+                // Codex reads the complete folded prompt from stdin when
+                // its positional prompt is '-'; argv has an OS size limit.
                 cmd.args(["exec", "--json", "--skip-git-repo-check"]);
                 set_model(&mut cmd);
-                cmd.arg(&full);
+                cmd.arg("-");
             }
             AgentKind::Cursor => {
                 // cursor-agent print mode speaks claude-shaped stream-json;
@@ -1051,41 +1056,22 @@ impl AgentCli {
                 set_model(&mut cmd);
             }
             AgentKind::Opencode => {
-                // Verified live: `run --format json` emits step_start / text
-                // / step_finish events; text parts carry the reply. Prompt
-                // is positional (argv-guarded below).
-                let full = fold_system(&system, &prompt);
-                if full.len() > 150_000 {
-                    return Err(anyhow!(
-                        "context too large for opencode's argv-based prompt"
-                    ));
-                }
+                // OpenCode run appends piped stdin to the initial message.
                 cmd.args(["run", "--format", "json"]);
                 set_model(&mut cmd);
-                cmd.arg(&full);
             }
             AgentKind::Copilot => {
-                // Verified live (CLI 1.0.83): JSONL on stdout, one event per
-                // line — see the parse arm. Prompt is positional under `-p`.
-                let full = fold_system(&system, &prompt);
-                if full.len() > 150_000 {
-                    return Err(anyhow!("context too large for copilot's argv-based prompt"));
-                }
+                // Copilot 1.0.83 reads a non-interactive prompt from stdin
+                // when -p is absent. Large briefs must not travel on argv.
                 cmd.args(copilot_args(
-                    &full,
                     self.model.as_deref(),
                     &copilot_configured_mcp_servers(),
                 ));
                 set_model(&mut cmd);
             }
             AgentKind::Hermes => {
-                // Verified live: `hermes -z <prompt>` prints the reply as
-                // plain text.
-                let full = fold_system(&system, &prompt);
-                if full.len() > 150_000 {
-                    return Err(anyhow!("context too large for hermes's argv-based prompt"));
-                }
-                cmd.args(["-z", &full]);
+                // Hermes chat reads stdin verbatim; -Q keeps quiet output.
+                cmd.args(["chat", "--query-file", "-", "--oneshot", "-Q"]);
                 set_model(&mut cmd);
             }
             AgentKind::Bob => {
@@ -1096,44 +1082,23 @@ impl AgentCli {
                 set_model(&mut cmd);
             }
             AgentKind::Prime | AgentKind::Pi => {
-                // pi / prime-agent --mode json: the same structured JSONL
-                // protocol (prime forked pi; both docs/json.md agree).
-                // Prompt is positional (argv-guarded); --append-system-prompt
-                // is a real flag in both.
-                if system.len() + prompt.len() > 150_000 {
-                    return Err(anyhow!(
-                        "context too large for {}'s argv-based prompt",
-                        self.kind.binary_name()
-                    ));
-                }
-                cmd.args(["--mode", "json"]);
+                // Both CLIs read piped stdin. --print makes one-shot mode
+                // explicit; --append-system-prompt accepts a file path.
+                cmd.args(["--mode", "json", "--print"]);
                 set_model(&mut cmd);
-                if !system.is_empty() {
-                    cmd.args(["--append-system-prompt", &system]);
+                if let Some(file) = &system_file {
+                    cmd.arg("--append-system-prompt").arg(file.path());
                 }
-                cmd.arg(&prompt);
             }
         }
         let stdin_payload = match self.kind {
-            AgentKind::Claude => Some(prompt.clone()),
-            AgentKind::Cursor | AgentKind::Gemini | AgentKind::Bob => {
-                Some(fold_system(&system, &prompt))
-            }
-            AgentKind::Codex
-            | AgentKind::Opencode
-            | AgentKind::Copilot
-            | AgentKind::Hermes
-            | AgentKind::Prime
-            | AgentKind::Pi => None,
+            AgentKind::Claude | AgentKind::Pi | AgentKind::Prime => prompt,
+            _ => fold_system(&system, &prompt),
         };
-        cmd.stdin(if stdin_payload.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
@@ -1143,10 +1108,8 @@ impl AgentCli {
         // can print startup messages before reading a large piped prompt;
         // awaiting write_all here would let both pipes fill and deadlock.
         let write_prompt = async move {
-            if let Some(payload) = stdin_payload {
-                let mut si = stdin.ok_or_else(|| anyhow!("no agent stdin"))?;
-                si.write_all(payload.as_bytes()).await?;
-            }
+            let mut si = stdin.ok_or_else(|| anyhow!("no agent stdin"))?;
+            si.write_all(stdin_payload.as_bytes()).await?;
             Ok::<(), anyhow::Error>(())
         };
         let stdout = child
@@ -1882,8 +1845,8 @@ mod tests {
     #[test]
     fn copilot_argv_refuses_every_configured_mcp_server() {
         let servers = vec!["alchemy".to_string(), "open-knowledge".to_string()];
-        let args = copilot_args("hi", None, &servers);
-        assert_eq!(&args[..2], &["-p", "hi"]);
+        let args = copilot_args(None, &servers);
+        assert!(!args.iter().any(|arg| arg == "-p" || arg == "--prompt"));
         for flag in [
             "-s",
             "--no-custom-instructions",
@@ -1903,7 +1866,7 @@ mod tests {
         assert!(joined.ends_with("--model auto"), "{joined}");
 
         // A configured model is set_model's job; no `auto` then.
-        let named = copilot_args("hi", Some("gpt-5.6-luna"), &[]);
+        let named = copilot_args(Some("gpt-5.6-luna"), &[]);
         assert!(!named.iter().any(|a| a == "--model"), "{named:?}");
         assert!(!named.iter().any(|a| a == "--disable-mcp-server"));
         assert!(named.iter().any(|a| a == "--disable-builtin-mcps"));
@@ -1976,6 +1939,132 @@ mod tests {
         }
     }
 
+    /// Full Unicode briefs bypass argv and survive startup output before
+    /// the child reads stdin; both output pipes must drain concurrently.
+    #[tokio::test]
+    async fn copilot_pipes_large_briefs_intact() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("copilot");
+        std::fs::write(&path, r#"#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in -p|--prompt|*Notebook*) exit 9;; esac
+done
+awk 'BEGIN { for (i=0;i<20000;i++) print "startup diagnostic" > "/dev/stderr"; for (i=0;i<20000;i++) print "{}" }'
+cat > "$0.input"
+printf '%s\n' '{"type":"assistant.message","data":{"messageId":"m","content":"brief received"}}'
+"#).expect("write fake copilot");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, path);
+        let messages = [
+            ChatTurn::system("Keep the notebook names."),
+            ChatTurn::user("Notebook 日本語 🦀\n".repeat(12_000)),
+        ];
+        let expected = fold_system(&messages[0].content, &messages[1].content);
+        assert!(expected.len() > 150_000);
+        let out = tokio::time::timeout(Duration::from_secs(30), cli.chat(&messages))
+            .await
+            .expect("large prompt must not deadlock")
+            .expect("copilot succeeds");
+        assert_eq!(out.text, "brief received");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("copilot.input")).unwrap(),
+            expected
+        );
+    }
+
+    /// Exercise every provider's real spawn/pipe path without credentials.
+    /// Both user and system text exceed the old argv ceiling; instruction
+    /// files must survive until the child reads them and then disappear.
+    #[tokio::test]
+    async fn every_provider_transports_large_prompts_without_argv_text() {
+        use std::os::unix::fs::PermissionsExt;
+        for kind in [
+            AgentKind::Claude,
+            AgentKind::Codex,
+            AgentKind::Cursor,
+            AgentKind::Gemini,
+            AgentKind::Opencode,
+            AgentKind::Copilot,
+            AgentKind::Hermes,
+            AgentKind::Bob,
+            AgentKind::Prime,
+            AgentKind::Pi,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("agent");
+            let reply = match kind {
+                AgentKind::Claude | AgentKind::Cursor => r#"{"type":"result","result":"received"}"#,
+                AgentKind::Codex => {
+                    r#"{"type":"item.completed","item":{"type":"agent_message","text":"received"}}"#
+                }
+                AgentKind::Opencode => r#"{"type":"text","part":{"text":"received"}}"#,
+                AgentKind::Copilot => {
+                    r#"{"type":"assistant.message","data":{"messageId":"m","content":"received"}}"#
+                }
+                AgentKind::Prime | AgentKind::Pi => {
+                    r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"received"}}"#
+                }
+                _ => "received",
+            };
+            let script = format!(
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" > "$0.args"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --append-system-prompt|--append-system-prompt-file)
+      shift
+      printf '%s' "$1" > "$0.system-path"
+      cat "$1" > "$0.system";;
+  esac
+  shift
+done
+cat > "$0.input"
+printf '%s\n' '{reply}'
+"#
+            );
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let cli = AgentCli::with_binary_for_test(kind, path.clone());
+            let messages = [
+                ChatTurn::system("Rules 日本語 🦀\n".repeat(12_000)),
+                ChatTurn::user("Notebook 日本語 🦀\n".repeat(12_000)),
+            ];
+            let out = tokio::time::timeout(Duration::from_secs(20), cli.chat(&messages))
+                .await
+                .expect("provider must finish")
+                .unwrap_or_else(|e| panic!("{kind:?}: {e:#}"));
+            assert_eq!(out.text.trim(), "received", "{kind:?}");
+            let argv = std::fs::read_to_string(path.with_extension("args")).unwrap();
+            assert!(argv.len() < 4096, "{kind:?} leaked context into argv");
+            let split = matches!(kind, AgentKind::Claude | AgentKind::Prime | AgentKind::Pi);
+            let expected = if split {
+                messages[1].content.clone()
+            } else {
+                fold_system(&messages[0].content, &messages[1].content)
+            };
+            assert_eq!(
+                std::fs::read_to_string(path.with_extension("input")).unwrap(),
+                expected,
+                "{kind:?}"
+            );
+            if split {
+                assert_eq!(
+                    std::fs::read_to_string(path.with_extension("system")).unwrap(),
+                    messages[0].content
+                );
+                let temp_path =
+                    std::fs::read_to_string(path.with_extension("system-path")).unwrap();
+                assert!(
+                    !std::path::Path::new(&temp_path).exists(),
+                    "temporary prompt leaked"
+                );
+            }
+        }
+    }
+
     /// A fake copilot that answers with its own argv, as one JSON message.
     fn argv_echoing_copilot() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("nbl-fakecli-{}", uuid::Uuid::new_v4()));
@@ -1983,7 +2072,7 @@ mod tests {
         let path = dir.join("cli.sh");
         std::fs::write(
             &path,
-            "#!/bin/sh\nprintf '{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"m\",\"content\":\"%s\"}}\n' \"$*\"\n",
+            "#!/bin/sh\ncat >/dev/null\nprintf '{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"m\",\"content\":\"%s\"}}\n' \"$*\"\n",
         )
         .expect("write fake cli");
         use std::os::unix::fs::PermissionsExt;
@@ -2007,7 +2096,7 @@ mod tests {
             .expect("fake copilot")
             .text;
         assert!(
-            argv.starts_with("-p hi -s --output-format json --stream on"),
+            argv.starts_with("-s --output-format json --stream on"),
             "{argv}"
         );
         assert!(argv.contains("--disable-builtin-mcps"), "{argv}");
@@ -2330,7 +2419,7 @@ mod live_smokes {
         }
     }
 
-    /// The full copilot path — `-p` prompt, JSON events, every MCP server
+    /// The full copilot path — piped prompt, JSON events, every MCP server
     /// refused, `--model auto` default, stats never in the answer.
     ///   cargo test agent_cli_copilot_smoke -- --ignored --nocapture
     #[tokio::test]
@@ -2345,6 +2434,28 @@ mod live_smokes {
         assert!(
             !out.text.contains("AI Credits") && !out.text.contains("Changes"),
             "footer leaked into the answer: {}",
+            out.text
+        );
+    }
+
+    /// Opt-in billed test of a brief larger than the former argv guard.
+    #[tokio::test]
+    #[ignore]
+    async fn agent_cli_copilot_large_brief_smoke() {
+        let cli = AgentCli::configured(AgentKind::Copilot, "", "");
+        let context = format!(
+            "Summarize only the action at the end in one sentence. Do not use tools.\n{}\nACTION: Review the release tomorrow. Reference: ALCHEMY_LARGE_BRIEF_OK",
+            "Notebook status: No changes today.\n".repeat(5_000)
+        );
+        assert!(context.len() > 150_000);
+        let out = cli
+            .chat(&[ChatTurn::user(context)])
+            .await
+            .expect("large Copilot brief failed");
+        assert!(
+            out.text.contains("ALCHEMY_LARGE_BRIEF_OK")
+                || out.text.to_lowercase().contains("release"),
+            "unexpected: {}",
             out.text
         );
     }
