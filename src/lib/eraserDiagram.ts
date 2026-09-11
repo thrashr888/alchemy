@@ -83,11 +83,21 @@ interface Frame {
 }
 
 let framePromise: Promise<Frame> | undefined;
+let frameElement: HTMLIFrameElement | undefined;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+const FRAME_IDLE_MS = 5_000;
 
-/** The render iframe, created once per document and set up with the stock library. */
+function releaseFrame() {
+  frameElement?.remove();
+  frameElement = undefined;
+  framePromise = undefined;
+}
+
+/** Reuse the measurement frame during a burst, then release its DOM and VM. */
 function getFrame(): Promise<Frame> {
   framePromise ??= new Promise<Frame>((resolve, reject) => {
     const iframe = document.createElement("iframe");
+    frameElement = iframe;
     iframe.setAttribute("aria-hidden", "true");
     iframe.tabIndex = -1;
     // Off-screen but laid out at a real size: measurement needs a viewport,
@@ -115,16 +125,24 @@ function getFrame(): Promise<Frame> {
     document.body.appendChild(iframe);
   });
   framePromise.catch(() => {
-    framePromise = undefined; // let the next render try again
+    releaseFrame(); // A failed boot must not leave another hidden frame behind.
   });
   return framePromise;
 }
 
 // The frame holds one scene at a time, so renders run one after another.
-let chain: Promise<unknown> = Promise.resolve();
+let chain: Promise<void> = Promise.resolve();
+let pending = 0;
 function queued<T>(task: () => Promise<T>): Promise<T> {
-  const next = chain.then(task, task);
-  chain = next.catch(() => undefined);
+  clearTimeout(idleTimer);
+  pending += 1;
+  const next = chain.then(task);
+  const settled = () => {
+    pending -= 1;
+    if (pending === 0) idleTimer = setTimeout(releaseFrame, FRAME_IDLE_MS);
+  };
+  // Only retain a completion signal, never the last serialized diagram.
+  chain = next.then(settled, settled);
   return next;
 }
 
@@ -255,66 +273,81 @@ export async function resolveDiagram(source: DiagramDoc, kind: DiagramKind): Pro
  * document is not a diagram eraser can draw; the caller shows the JSON and
  * the message, since the text is still the useful part.
  */
-export function renderDiagram(source: DiagramDoc, kind: DiagramKind): Promise<RenderedDiagram> {
+export function renderDiagram(
+  source: DiagramDoc,
+  kind: DiagramKind,
+  signal?: AbortSignal,
+): Promise<RenderedDiagram> {
   return queued(async () => {
+    signal?.throwIfAborted();
     const frame = await getFrame();
-    const { doc, payload, warnings } = await resolveDiagram(source, kind);
-    const measured = await frame.api.run(payload);
+    try {
+      signal?.throwIfAborted();
+      const { doc, payload, warnings } = await resolveDiagram(source, kind);
+      signal?.throwIfAborted();
+      const measured = await frame.api.run(payload);
+      signal?.throwIfAborted();
 
-    // Pass 2: the boxes the browser actually produced. A container's own
-    // measure includes its pass-1 members, so it contributes only its
-    // intrinsic (title) size and the layout re-derives the rest. A leaf
-    // reserves its ink, not just its routable body: an Icon's caption
-    // hangs below the glyph box, and a group sized to bodies alone would
-    // cut it off. Ink that starts left of (or above) the body — an Event's
-    // caption, centered under a 56px disc — widens the box and shifts the
-    // body inside it, so the caption never runs over a lane's title band.
-    const byId = new Map<string, ElementMeasure>(measured.measures.map((m) => [m.id, m]));
-    const shift = new Map<string, { x: number; y: number }>();
-    const second = placed(doc, kind, (entity) => {
-      const measure = byId.get(entity.id);
-      if (!measure) return estimateSize(entity);
-      if (CONTAINER_TAGS.has(entity.tag)) {
-        return { width: Math.ceil(measure.intrinsic.width), height: Math.ceil(measure.intrinsic.height) };
+      // Pass 2: the boxes the browser actually produced. A container's own
+      // measure includes its pass-1 members, so it contributes only its
+      // intrinsic (title) size and the layout re-derives the rest. A leaf
+      // reserves its ink, not just its routable body: an Icon's caption
+      // hangs below the glyph box, and a group sized to bodies alone would
+      // cut it off. Ink that starts left of (or above) the body — an Event's
+      // caption, centered under a 56px disc — widens the box and shifts the
+      // body inside it, so the caption never runs over a lane's title band.
+      const byId = new Map<string, ElementMeasure>(measured.measures.map((m) => [m.id, m]));
+      const shift = new Map<string, { x: number; y: number }>();
+      const second = placed(doc, kind, (entity) => {
+        const measure = byId.get(entity.id);
+        if (!measure) return estimateSize(entity);
+        if (CONTAINER_TAGS.has(entity.tag)) {
+          return { width: Math.ceil(measure.intrinsic.width), height: Math.ceil(measure.intrinsic.height) };
+        }
+        const body = measure.body ?? measure.intrinsic;
+        const ink = measure.ink;
+        const offset = { x: Math.max(0, -ink.x), y: Math.max(0, -ink.y) };
+        shift.set(entity.id, offset);
+        return {
+          width: Math.ceil(offset.x + Math.max(body.width, ink.x + ink.width)),
+          height: Math.ceil(offset.y + Math.max(body.height, ink.y + ink.height)),
+        };
+      });
+      for (const entity of payload.entities) {
+        const box = second.boxes.get(entity.id);
+        if (!box) continue;
+        const offset = shift.get(entity.id) ?? { x: 0, y: 0 };
+        entity.x = box.x + offset.x;
+        entity.y = box.y + offset.y;
+        if (CONTAINER_TAGS.has(entity.tag)) {
+          entity.width = box.width;
+          entity.height = box.height;
+        }
       }
-      const body = measure.body ?? measure.intrinsic;
-      const ink = measure.ink;
-      const offset = { x: Math.max(0, -ink.x), y: Math.max(0, -ink.y) };
-      shift.set(entity.id, offset);
+      await frame.api.run(payload);
+      signal?.throwIfAborted();
+
+      const { scene, css } = frame.api.serialize();
+      const element = frame.document.getElementById("eraser-scene");
       return {
-        width: Math.ceil(offset.x + Math.max(body.width, ink.x + ink.width)),
-        height: Math.ceil(offset.y + Math.max(body.height, ink.y + ink.height)),
+        scene,
+        // eraser paints for paper and expects the page's ink: a caption's
+        // color is `var(--er-ink, #242424)` with `--er-ink` inlined from the
+        // text run's own color, and a run with none leaves the property
+        // empty, so `var()` substitutes nothing and the caption inherits
+        // whatever surrounds the scene — the app's light-on-dark foreground,
+        // in every dark theme. The scene root sets the ink itself, so a
+        // caption is black on the white card wherever the scene lands and a
+        // run that names a color still gets it.
+        css: `${css}#eraser-scene{color:#242424}`,
+        width: Math.ceil(parseFloat(element?.style.width ?? "") || second.width),
+        height: Math.ceil(parseFloat(element?.style.height ?? "") || second.height),
+        warnings,
       };
-    });
-    for (const entity of payload.entities) {
-      const box = second.boxes.get(entity.id);
-      if (!box) continue;
-      const offset = shift.get(entity.id) ?? { x: 0, y: 0 };
-      entity.x = box.x + offset.x;
-      entity.y = box.y + offset.y;
-      if (CONTAINER_TAGS.has(entity.tag)) {
-        entity.width = box.width;
-        entity.height = box.height;
-      }
+    } finally {
+      // Measurement is finished. The viewer has its own scene; keeping a
+      // second hidden copy retains layout, SVG images and decoded textures.
+      frame.document.getElementById("eraser-scene")?.remove();
     }
-    await frame.api.run(payload);
-
-    const { scene, css } = frame.api.serialize();
-    const element = frame.document.getElementById("eraser-scene");
-    return {
-      scene,
-      // eraser paints for paper and expects the page's ink: a caption's
-      // color is `var(--er-ink, #242424)` with `--er-ink` inlined from the
-      // text run's own color, and a run with none leaves the property
-      // empty, so `var()` substitutes nothing and the caption inherits
-      // whatever surrounds the scene — the app's light-on-dark foreground,
-      // in every dark theme. The scene root sets the ink itself, so a
-      // caption is black on the white card wherever the scene lands and a
-      // run that names a color still gets it.
-      css: `${css}#eraser-scene{color:#242424}`,
-      width: Math.ceil(parseFloat(element?.style.width ?? "") || second.width),
-      height: Math.ceil(parseFloat(element?.style.height ?? "") || second.height),
-      warnings,
-    };
   });
 }
