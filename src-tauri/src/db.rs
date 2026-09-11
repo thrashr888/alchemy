@@ -2889,6 +2889,19 @@ impl Db {
         Ok(notes)
     }
 
+    /// Brief input: filter before loading bodies, so a daily brief doesn't
+    /// read every historical report and ordinary note in each notebook.
+    pub(crate) async fn reports_since(&self, notebook_id: &str, since: i64) -> Result<Vec<Note>> {
+        let filter = format!(
+            "notebook_id = '{}' AND kind = 'report' AND updated_at > {since}",
+            esc(notebook_id)
+        );
+        let batches = self.collect(T_NOTES, Some(&filter)).await?;
+        let mut notes = notes_from_batches(&batches)?;
+        notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        Ok(notes)
+    }
+
     /// The most recently updated notes across every notebook (home activity).
     pub async fn recent_notes(&self, limit: usize) -> Result<Vec<Note>> {
         let batches = self.collect(T_NOTES, None).await?;
@@ -5508,6 +5521,47 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[tokio::test]
+    async fn brief_reports_filter_notebook_kind_and_window_before_loading_bodies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        assert!(db
+            .reports_since("reader's notebook", 10)
+            .await
+            .unwrap()
+            .is_empty());
+        for (id, notebook, kind, at) in [
+            ("old", "reader's notebook", "report", 9),
+            ("boundary", "reader's notebook", "report", 10),
+            ("new", "reader's notebook", "report", 11),
+            ("newest", "reader's notebook", "report", 12),
+            ("ordinary", "reader's notebook", "note", 20),
+            ("other", "another notebook", "report", 20),
+        ] {
+            db.add_note(&Note {
+                id: id.into(),
+                notebook_id: notebook.into(),
+                title: id.into(),
+                content: format!("body for {id}"),
+                kind: kind.into(),
+                prompt: String::new(),
+                origin: String::new(),
+                status: String::new(),
+                created_at: 1,
+                updated_at: at,
+            })
+            .await
+            .unwrap();
+        }
+        let reports = db.reports_since("reader's notebook", 10).await.unwrap();
+        assert_eq!(
+            reports.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            ["newest", "new"]
+        );
+        assert_eq!(reports[0].content, "body for newest");
+        assert_eq!(reports[1].content, "body for new");
+    }
 
     #[tokio::test]
     async fn shared_content_coalesces_concurrent_misses_and_refreshes_after_write() {
