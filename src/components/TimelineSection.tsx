@@ -35,9 +35,8 @@ const LABEL_W = 200;
 const ROW_H = 34;
 const AXIS_H = 28;
 const PAD_R = 24;
-/** Fit is 1; the ceiling lets a two-month corpus zoom to an hour a screen. */
+/** Fit is 1; the ceiling (set per corpus) is an hour per screen. */
 const MIN_ZOOM = 1;
-const MAX_ZOOM = 800;
 const ZOOM_SPEED = 0.0025;
 /** Past this many pixels per day a batch's documents unfold beside it. */
 const DAYS_MODE_PX = 48;
@@ -83,6 +82,12 @@ function fmtSpan(start: number, end: number) {
       : `${fmtDayYear(start)} · ${fmtTime(start)}–${fmtTime(end)}`;
   }
   return `${fmtDayYear(start)} – ${fmtDayYear(end)}`;
+}
+/** "3 days", "6 hours", "2 months" — the visible span, for the zoom control. */
+function fmtSpanLength(ms: number) {
+  if (ms < DAY * 2) return plural(Math.max(1, Math.round(ms / HOUR)), "hour");
+  if (ms < DAY * 60) return plural(Math.round(ms / DAY), "day");
+  return plural(Math.round(ms / (DAY * 30.4)), "month");
 }
 function plural(n: number, one: string) {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
@@ -298,6 +303,7 @@ export function TimelineSection() {
   const pxPerMs = basePx * view.k;
   const xOf = (t: number) => LABEL_W + view.x + (t - t0) * pxPerMs;
   const tOf = (x: number) => t0 + (x - LABEL_W - view.x) / pxPerMs;
+  const maxZoom = Math.max(MIN_ZOOM, (t1 - t0) / HOUR);
   const pxPerDay = pxPerMs * DAY;
   const daysMode = pxPerDay >= DAYS_MODE_PX;
   const visT0 = tOf(LABEL_W);
@@ -310,13 +316,13 @@ export function TimelineSection() {
   const zoomAt = useCallback(
     (px: number, k: number) => {
       const v = viewRef.current;
-      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, k));
+      const next = Math.max(MIN_ZOOM, Math.min(maxZoom, k));
       if (next === v.k) return;
       const scale = next / v.k;
       const rel = px - LABEL_W;
       commitView({ k: next, x: rel - (rel - v.x) * scale });
     },
-    [commitView],
+    [commitView, maxZoom],
   );
 
   // Wheel: vertical scroll stays the lane list's; sideways scroll pans time;
@@ -366,12 +372,13 @@ export function TimelineSection() {
     zoomAt(LABEL_W + innerW / 2, viewRef.current.k * factor);
   const fit = () => commitView({ k: 1, x: 0 });
 
-  /** A batch click opens its day: enough zoom to unfold it, centred. */
+  /** A batch click opens its day: the day (or days) it spans fill the
+   *  pane, centred on the batch, so its documents have room to unfold. */
   const zoomToBatch = (b: TimelineBatch) => {
-    const span = Math.max(b.end - b.start, HOUR * 6);
+    const span = Math.max(b.end - b.start, DAY);
     const k = Math.max(
       MIN_ZOOM,
-      Math.min(MAX_ZOOM, (innerW * 0.6) / (span * basePx)),
+      Math.min(maxZoom, (innerW * 0.8) / (span * basePx)),
     );
     const mid = (b.start + b.end) / 2;
     commitView({ k, x: innerW / 2 - (mid - t0) * basePx * k });
@@ -586,14 +593,17 @@ export function TimelineSection() {
                     {batches.map((b) => {
                       const lane = laneIndex.get(b.notebookId);
                       if (lane === undefined) return null;
-                      const x0 = xOf(b.start);
-                      const x1 = Math.max(xOf(b.end), x0 + 6);
-                      if (x1 < LABEL_W || x0 > width) return null;
                       const count = b.sources + b.notes;
                       const h = Math.min(
                         22,
                         8 + Math.log2(Math.max(1, count)) * 2.6,
                       );
+                      // A batch that spans minutes is a circle at month
+                      // scale (size reads as count); one that spans hours
+                      // stretches into a pill as the zoom gives it room.
+                      const x0 = xOf(b.start);
+                      const x1 = Math.max(xOf(b.end), x0 + h);
+                      if (x1 < LABEL_W || x0 > width) return null;
                       const y = lane * ROW_H + (ROW_H - h) / 2;
                       const color = b.notebookColor || NOTEBOOK_PALETTE[0];
                       const outlined = b.sources === 0;
@@ -744,7 +754,7 @@ export function TimelineSection() {
             title="Fit the whole timeline"
             className="rounded-md px-2 py-1 text-micro font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground"
           >
-            {daysMode ? "days" : "months"} · {Math.round(view.k * 100)}%
+            {fmtSpanLength(visT1 - visT0)}
           </button>
           <ZoomButton
             label="Zoom in"

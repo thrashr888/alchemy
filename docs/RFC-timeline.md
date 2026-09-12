@@ -1,6 +1,6 @@
 # RFC: Timeline — the corpus by when it arrived
 
-Status: implementing on `cld/timeline` (go-ahead 2026-09-12).
+Status: built on `cld/timeline` (2026-09-12), verified against the live store in the dev app; awaiting Paul's try before it lands on main.
 Tracking: `bd show alchemy-release-vjm`. Origin: Reminders item "Add a new global timeline visualization of
 sources and notes (to the right of Chat and Registry, similar to our graph
 alternate view). sources may update too often so just track initial
@@ -168,6 +168,9 @@ away and does not need its own tab.
 - **Lanes with nothing in the current filter disappear** rather than
   collapsing into a "quiet" lane (open question 4): the notebook chip and
   type filter already answer "show me less".
+- **A batch click shows its day**: the day (or days) the batch spans fills
+  80% of the pane, centred on it. The zoom control reads as the visible
+  span ("30 hours", "2 months") — a percentage meant nothing at 170×.
 - The MCP tool is `corpus_timeline` (batches with sample titles, no
   items; `since`/`until` in epoch ms) — `timeline` alone collides with the
   generator kind of that name.
