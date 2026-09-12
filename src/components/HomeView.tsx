@@ -43,6 +43,7 @@ import {
   FileDown,
   ChevronRight,
   MessagesSquare,
+  ChartNoAxesGantt,
   PanelRightClose,
   Plus,
   Search,
@@ -71,6 +72,7 @@ import {
 import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
 import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
+import { TimelineSection } from "./TimelineSection";
 import {
   HomeTable,
   HomeViewControls,
@@ -292,6 +294,7 @@ function HomeSectionTabs() {
     { id: "notebooks", label: "Notebooks", icon: Library },
     { id: "chat", label: "Chat", icon: MessagesSquare },
     { id: "registry", label: "Registry", icon: Package },
+    { id: "timeline", label: "Timeline", icon: ChartNoAxesGantt },
   ] as const;
   return (
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
@@ -314,6 +317,8 @@ function HomeSectionTabs() {
           title={
             id === "registry"
               ? "The things your documents are about"
+              : id === "timeline"
+                ? "Every source and note, by the day it arrived"
               : id === "chat"
                 ? "Ask across every notebook"
                 : "Your notebooks"
@@ -1144,12 +1149,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <h1 className="text-page font-semibold tracking-tight">
                     {homeSection === "registry"
                       ? "Your registry"
-                      : "Your notebooks"}
+                      : homeSection === "timeline"
+                        ? "Your timeline"
+                        : "Your notebooks"}
                   </h1>
                   {homeSection === "registry" ? (
                     <p className="mt-1 text-body text-muted-foreground">
                       The things your documents are about: assets, people,
                       projects.
+                    </p>
+                  ) : homeSection === "timeline" ? (
+                    <p className="mt-1 text-body text-muted-foreground">
+                      Every source and note, by the day it arrived — grouped
+                      into the batches they came in.
                     </p>
                   ) : (
                   <p className="mt-1 text-body text-muted-foreground">
@@ -1188,7 +1200,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                       <Plus className="h-4 w-4" />
                       New card
                     </Button>
-                  ) : (
+                  ) : homeSection === "timeline" ? null : (
                     <>
                       <Button
                         variant="secondary"
@@ -1250,6 +1262,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <HomeChatThread chat={chat} />
             ) : homeSection === "registry" ? (
               <RegistrySection />
+            ) : homeSection === "timeline" ? (
+              <TimelineSection />
             ) : (
             <div
               ref={shelfRef}

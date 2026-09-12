@@ -12964,6 +12964,47 @@ pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, S
     })
 }
 
+/// The corpus by arrival, batched per notebook (docs/RFC-timeline.md).
+/// Read-only, computed fresh per call from `created_at`; `with_items`
+/// false returns batch shapes and sample titles only.
+pub(crate) async fn corpus_timeline_impl(
+    state: &AppState,
+    notebook_id: Option<&str>,
+    with_items: bool,
+) -> anyhow::Result<crate::models::CorpusTimeline> {
+    let rows = state.db.timeline_rows(notebook_id).await?;
+    let lanes: std::collections::HashMap<String, crate::timeline::LaneInfo> = state
+        .db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .map(|n| {
+            (
+                n.id,
+                crate::timeline::LaneInfo {
+                    title: n.title,
+                    color: n.color,
+                    system: n.status == "system",
+                },
+            )
+        })
+        .collect();
+    Ok(crate::timeline::batch(
+        rows,
+        &lanes,
+        crate::timeline::BATCH_GAP_MS,
+        with_items,
+    ))
+}
+
+#[tauri::command]
+pub async fn corpus_timeline(
+    state: State<'_, AppState>,
+    notebook_id: Option<String>,
+) -> Result<crate::models::CorpusTimeline, String> {
+    e(corpus_timeline_impl(&state, notebook_id.as_deref(), true).await)
+}
+
 /// Everything Settings → Activity renders — see activity.rs and
 /// docs/RFC-activity-view.md. Read-only; aggregated fresh per call.
 #[tauri::command]

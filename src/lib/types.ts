@@ -308,6 +308,42 @@ export type NoteKind =
   | "report"
   | "template";
 
+/** One document on the corpus timeline (docs/RFC-timeline.md). */
+export interface TimelineItem {
+  id: string;
+  kind: "source" | "note";
+  title: string;
+  /** The source's type, or the note's kind for notes. */
+  sourceType: string;
+  /** Notes only: "" (deliberate) | "auto". */
+  origin: string;
+  createdAt: number;
+}
+
+/** One notebook's additions within a quiet gap of one another. */
+export interface TimelineBatch {
+  notebookId: string;
+  notebookTitle: string;
+  notebookColor: string;
+  start: number;
+  end: number;
+  sources: number;
+  notes: number;
+  /** Up to eight titles, arrival order. */
+  samples: string[];
+  /** Every document, arrival order. */
+  items: TimelineItem[];
+}
+
+export interface CorpusTimeline {
+  /** Oldest first. */
+  batches: TimelineBatch[];
+  first: number;
+  last: number;
+  sources: number;
+  notes: number;
+}
+
 export interface Note {
   id: string;
   notebookId: string;

@@ -674,6 +674,56 @@ pub struct ActivityCount {
     pub count: i64,
 }
 
+/// One document on the corpus timeline (docs/RFC-timeline.md).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineItem {
+    pub id: String,
+    /// "source" | "note".
+    pub kind: String,
+    pub title: String,
+    /// The source's type, or the note's kind for notes ("summary", "report",
+    /// …) — what the UI colors and filters by.
+    pub source_type: String,
+    /// Notes only: "" (deliberate) | "auto" (the chat post-pass made it).
+    #[serde(default)]
+    pub origin: String,
+    pub created_at: i64,
+}
+
+/// One notebook's additions within a quiet gap of one another — the unit
+/// the timeline draws, because imports land in bursts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineBatch {
+    pub notebook_id: String,
+    pub notebook_title: String,
+    pub notebook_color: String,
+    pub start: i64,
+    pub end: i64,
+    pub sources: i64,
+    pub notes: i64,
+    /// Up to eight titles, arrival order — for the hover card and agents.
+    pub samples: Vec<String>,
+    /// Every document, arrival order; empty when the caller asked for the
+    /// shape only (MCP).
+    #[serde(default)]
+    pub items: Vec<TimelineItem>,
+}
+
+/// The whole corpus by arrival (docs/RFC-timeline.md).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorpusTimeline {
+    /// Oldest first.
+    pub batches: Vec<TimelineBatch>,
+    /// Earliest and latest `created_at` on the axis; 0 when empty.
+    pub first: i64,
+    pub last: i64,
+    pub sources: i64,
+    pub notes: i64,
+}
+
 /// Everything Settings → Activity renders, aggregated at read time from
 /// timestamps the app has always recorded — nothing new is tracked
 /// (docs/RFC-activity-view.md).

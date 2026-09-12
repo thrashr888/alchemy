@@ -78,7 +78,7 @@ export interface NavEntry {
 
 /** Home's center column: the notebook grid, the Registry's cast, or the
  *  corpus-wide conversation. */
-export type HomeSection = "notebooks" | "registry" | "chat";
+export type HomeSection = "notebooks" | "registry" | "chat" | "timeline";
 
 /** Home's conversation, as the store holds it: which thread is open and the
  *  turns already settled into it. Both come from the backend — the thread

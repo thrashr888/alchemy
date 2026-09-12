@@ -3002,6 +3002,73 @@ impl Db {
         Ok(out)
     }
 
+    /// Every source and note as a timeline row — id, notebook, title, type,
+    /// origin, created_at — in two projected column scans, no content
+    /// (docs/RFC-timeline.md). `notebook_id` narrows to one notebook.
+    pub async fn timeline_rows(
+        &self,
+        notebook_id: Option<&str>,
+    ) -> Result<Vec<crate::timeline::TimelineRow>> {
+        let filter = notebook_id.map(|id| format!("notebook_id = '{}'", esc(id)));
+        let mut out = Vec::new();
+        let batches = self
+            .collect_cols(
+                T_SOURCES,
+                filter.as_deref(),
+                &["id", "notebook_id", "title", "source_type", "created_at"],
+            )
+            .await?;
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let ty = str_col(b, "source_type")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push(crate::timeline::TimelineRow {
+                    notebook_id: nb.value(i).to_string(),
+                    item: crate::models::TimelineItem {
+                        id: id.value(i).to_string(),
+                        kind: "source".into(),
+                        title: title.value(i).to_string(),
+                        source_type: ty.value(i).to_string(),
+                        origin: String::new(),
+                        created_at: created.value(i),
+                    },
+                });
+            }
+        }
+        let batches = self
+            .collect_cols(
+                T_NOTES,
+                filter.as_deref(),
+                &["id", "notebook_id", "title", "kind", "origin", "created_at"],
+            )
+            .await?;
+        for b in &batches {
+            let id = str_col(b, "id")?;
+            let nb = str_col(b, "notebook_id")?;
+            let title = str_col(b, "title")?;
+            let kind = str_col(b, "kind")?;
+            let origin = str_col(b, "origin")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                out.push(crate::timeline::TimelineRow {
+                    notebook_id: nb.value(i).to_string(),
+                    item: crate::models::TimelineItem {
+                        id: id.value(i).to_string(),
+                        kind: "note".into(),
+                        title: title.value(i).to_string(),
+                        source_type: kind.value(i).to_string(),
+                        origin: origin.value(i).to_string(),
+                        created_at: created.value(i),
+                    },
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// (source_type, created_at, char_count) for every source — the Activity
     /// view's import series and corpus-size line, without dragging content.
     pub async fn source_activity(&self) -> Result<Vec<(String, i64, i64)>> {

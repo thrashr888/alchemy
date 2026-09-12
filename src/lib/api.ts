@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import { report } from "./diagnostics";
 import type {
+  CorpusTimeline,
   ProviderModels,
   AcpAgentInfo,
   ActivityStats,
@@ -452,6 +453,8 @@ export const api = {
   listNotes: (notebookId: string) =>
     run(query<Note[]>("list_notes", { notebookId })),
   activityStats: () => run(query<ActivityStats>("activity_stats")),
+  corpusTimeline: (notebookId?: string) =>
+    run(query<CorpusTimeline>("corpus_timeline", { notebookId })),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),

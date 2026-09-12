@@ -10,6 +10,19 @@ use super::*;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, ErrorData as McpError};
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct TimelineReq {
+    /// Narrow to one notebook; omit for the whole corpus.
+    #[serde(default)]
+    notebook_id: Option<String>,
+    /// Only batches ending at or after this epoch-millisecond timestamp.
+    #[serde(default)]
+    since: Option<i64>,
+    /// Only batches starting at or before this epoch-millisecond timestamp.
+    #[serde(default)]
+    until: Option<i64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SettingsReq {
     /// One of: get, set, models, test, pull, style, theme, connect,
     /// activity, setup.
@@ -164,6 +177,36 @@ impl AlchemyMcp {
                  connect, activity, or setup"
             ))),
         }
+    }
+
+    #[tool(
+        description = "The corpus by when it arrived (docs/RFC-timeline.md): every source and \
+                       note grouped into the batches they were added in — one notebook's \
+                       additions within 30 minutes of each other — oldest first, with counts \
+                       and up to eight sample titles per batch. Additions only (created_at), \
+                       never re-fetches. Use it for \"what came in last week\" or \"when did I \
+                       build this notebook\"; narrow with notebook_id, since, until (epoch \
+                       ms). Read-only."
+    )]
+    async fn corpus_timeline(
+        &self,
+        Parameters(TimelineReq {
+            notebook_id,
+            since,
+            until,
+        }): Parameters<TimelineReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let mut t = commands::corpus_timeline_impl(&state, notebook_id.as_deref(), false)
+            .await
+            .map_err(internal)?;
+        if since.is_some() || until.is_some() {
+            t.batches
+                .retain(|b| since.is_none_or(|s| b.end >= s) && until.is_none_or(|u| b.start <= u));
+            t.sources = t.batches.iter().map(|b| b.sources).sum();
+            t.notes = t.batches.iter().map(|b| b.notes).sum();
+        }
+        json_result(&t)
     }
 
     #[tool(
