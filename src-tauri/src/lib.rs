@@ -58,6 +58,7 @@ mod spotlight;
 mod templates;
 mod textsize;
 mod thumbnails;
+mod timeline;
 mod trace;
 mod tts;
 mod verify;
@@ -548,6 +549,7 @@ pub fn run() {
             commands::list_note_summaries,
             commands::read_note,
             commands::activity_stats,
+            commands::corpus_timeline,
             commands::home_activity,
             commands::source_thumbnail,
             commands::source_image,

@@ -1,6 +1,6 @@
 # RFC: Timeline — the corpus by when it arrived
 
-Status: draft, awaiting review (2026-09-12).
+Status: implementing on `cld/timeline` (go-ahead 2026-09-12).
 Tracking: `bd show alchemy-release-vjm`. Origin: Reminders item "Add a new global timeline visualization of
 sources and notes (to the right of Chat and Registry, similar to our graph
 alternate view). sources may update too often so just track initial
@@ -147,6 +147,30 @@ away and does not need its own tab.
    Studio list treats stale ones.
 4. **Density** — 45 lanes is a tall picture. Collapse notebooks with no
    batch in the visible range into one "quiet" lane at the bottom?
+
+## Decisions made while building (2026-09-12)
+
+- **Batches keep their color by notebook; unfolded documents color by type.**
+  A pill sits in a labeled lane, so notebook color there is identity, not
+  information; once a batch unfolds into ticks there is room for the
+  graph's type palette, and the FilterBar's dots are its legend.
+- **Wheel is the lane list's.** Forty-five lanes need a vertical scroll, so
+  a plain wheel scrolls; sideways scroll pans time; pinch and ⌘-scroll zoom
+  about the pointer; drag pans. The graph zooms on a bare wheel because it
+  has no list to scroll.
+- **A dense batch stays a pill in the day view**, with its count beside it,
+  until each document has four pixels of room; then it unfolds, and titles
+  appear once each tick has ~110px. Zooming past 800× fit reaches an hour
+  per screen on a two-month corpus.
+- **System notebooks (Briefs) stay off the axis**, the way they stay off
+  the shelf; archived notebooks stay on — they happened. Orphan rows from
+  a deleted notebook are dropped.
+- **Lanes with nothing in the current filter disappear** rather than
+  collapsing into a "quiet" lane (open question 4): the notebook chip and
+  type filter already answer "show me less".
+- The MCP tool is `corpus_timeline` (batches with sample titles, no
+  items; `since`/`until` in epoch ms) — `timeline` alone collides with the
+  generator kind of that name.
 
 ## Implementation notes
 
