@@ -49,6 +49,11 @@ pub struct GenJob {
     /// MCP's per-call provider override; None routes the Generate role.
     #[serde(default)]
     pub provider: Option<String>,
+    /// True when `note_id` is an existing note being regenerated in place
+    /// (its old content stays until the run succeeds). A cancel or failure
+    /// then restores the note instead of deleting or overwriting it.
+    #[serde(default)]
+    pub rebuild: bool,
     /// Concurrency key, stamped at dispatch (engine id or provider id).
     #[serde(default)]
     pub engine_key: String,
@@ -306,9 +311,10 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
 
     let ts = crate::commands::now();
     match produced {
-        // Cancelled mid-run: the pending note held nothing — remove it.
+        // Cancelled mid-run: the pending note held nothing — remove it. A
+        // rebuild's note held its previous content — hand it back.
         None => {
-            let _ = state.db.delete_note(&job.note_id).await;
+            settle_cancelled(&state, &job).await;
             let mut j = job.clone();
             j.status = "cancelled".into();
             emit_status(&app, &j, "", "");
@@ -338,7 +344,7 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
             // A user cancel surfaces as an engine error on some providers
             // (the stream drops) — honor the recorded cancel over the error.
             if queue.was_cancelled(&job.id) {
-                let _ = state.db.delete_note(&job.note_id).await;
+                settle_cancelled(&state, &job).await;
                 let mut j = job.clone();
                 j.status = "cancelled".into();
                 emit_status(&app, &j, "", "");
@@ -394,11 +400,17 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
                 );
                 let msg = crate::commands::classify_model_error(&raw)
                     .unwrap_or_else(|| format!("Generation failed: {raw}"));
-                let _ = state
-                    .db
-                    .update_note(&job.note_id, &placeholder_stripped(&job), &msg, ts)
-                    .await;
-                let _ = state.db.set_note_status(&job.note_id, "error").await;
+                if job.rebuild {
+                    // The old note is still the best version — keep it and
+                    // let the job row carry the failure.
+                    let _ = state.db.set_note_status(&job.note_id, "").await;
+                } else {
+                    let _ = state
+                        .db
+                        .update_note(&job.note_id, &placeholder_stripped(&job), &msg, ts)
+                        .await;
+                    let _ = state.db.set_note_status(&job.note_id, "error").await;
+                }
                 queue.set_status(&job.id, "error", &msg);
                 let mut j = job.clone();
                 j.status = "error".into();
@@ -416,6 +428,16 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
 
 /// The pending title without its "(generating…)" tail, so an error note
 /// reads as the artifact it wanted to be.
+/// A cancelled job's note: a fresh placeholder goes away; a rebuild target
+/// returns to the version it had before the run.
+async fn settle_cancelled(state: &crate::commands::AppState, job: &GenJob) {
+    if job.rebuild {
+        let _ = state.db.set_note_status(&job.note_id, "").await;
+    } else {
+        let _ = state.db.delete_note(&job.note_id).await;
+    }
+}
+
 fn placeholder_stripped(job: &GenJob) -> String {
     match crate::rag::artifact_spec(&job.kind) {
         Some((t, _)) => t.to_string(),
@@ -440,9 +462,26 @@ mod tests {
             error: String::new(),
             provider: None,
             engine_key: String::new(),
+            rebuild: false,
             created_at: crate::commands::now(),
             updated_at: crate::commands::now(),
         }
+    }
+
+    #[test]
+    fn legacy_jobs_are_not_rebuilds() {
+        // A job persisted before the flag existed is a fresh placeholder:
+        // deserializing it as a rebuild would keep an empty note alive on
+        // cancel instead of deleting it.
+        let mut saved = serde_json::to_value(job("legacy", "queued")).unwrap();
+        saved.as_object_mut().unwrap().remove("rebuild");
+        let loaded: GenJob = serde_json::from_value(saved).unwrap();
+        assert!(!loaded.rebuild);
+        let mut original = job("rebuild", "queued");
+        original.rebuild = true;
+        let round: GenJob =
+            serde_json::from_value(serde_json::to_value(&original).unwrap()).unwrap();
+        assert!(round.rebuild);
     }
 
     #[test]

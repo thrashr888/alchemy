@@ -3025,7 +3025,7 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
-    rebuildNote: async (note) => {
+    rebuildNote: async (note, prompt) => {
       const id = get().currentId;
       if (!id || get().generatingKind) return;
       set({ generatingKind: note.kind, artifactStreamText: "", error: null });
@@ -3034,7 +3034,7 @@ export const useStore = create<AppState>((set, get) => {
           note.id,
           id,
           note.kind,
-          note.prompt,
+          prompt ?? note.prompt,
         );
         // Template rebuilds keep their template name (the backend re-titles
         // unknown kinds "Report").

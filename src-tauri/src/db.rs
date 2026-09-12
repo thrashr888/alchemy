@@ -3500,6 +3500,18 @@ impl Db {
         Ok(())
     }
 
+    /// Replace the instructions a generated note was built with, so the
+    /// next Rebuild (and the note's own record of itself) carry the edit.
+    pub async fn set_note_prompt(&self, id: &str, prompt: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("prompt", format!("'{}'", esc(prompt)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     /// Set a note's curator status: "" (active) | "stale" | "archived".
     pub async fn set_note_status(&self, id: &str, status: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_NOTES).execute().await?;

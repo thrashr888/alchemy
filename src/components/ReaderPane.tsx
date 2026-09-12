@@ -25,7 +25,7 @@ import { DIAGRAM_KINDS, isDiagramKind } from "@/lib/diagramDoc";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { LazyRichEditor } from "./LazyRichEditor";
-import { StreamingBody } from "./StudioNoteViewer";
+import { RebuildPromptModal, StreamingBody } from "./StudioNoteViewer";
 import { KIND_LABEL } from "./studioArtifacts";
 import { Favicon } from "./SourcesPanel";
 import { useSourceActions } from "./SourceMenu";
@@ -597,6 +597,7 @@ export function ReaderPane() {
   const actions = useSourceActions();
   const [refreshTick, setRefreshTick] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [imageMode, setImageMode] = useState(true);
   // PDFs open as text, not pages: the reader is where citations land, and
@@ -824,6 +825,11 @@ export function ReaderPane() {
                   icon: <RefreshCw className="h-3.5 w-3.5" />,
                   onClick: () => void useStore.getState().rebuildNote(note),
                 },
+                {
+                  label: "Rebuild with prompt…",
+                  icon: <SlidersHorizontal className="h-3.5 w-3.5" />,
+                  onClick: () => setPromptOpen(true),
+                },
               ]
             : []),
           {
@@ -858,6 +864,10 @@ export function ReaderPane() {
   ];
   return (
     <div ref={rootRef} className="relative flex h-full flex-1 flex-col min-w-0">
+      <RebuildPromptModal
+        note={promptOpen ? note : null}
+        onClose={() => setPromptOpen(false)}
+      />
       {/* `group`: the toolbar RowMenu binds right-click to its nearest .group
           ancestor — without one, right-clicking the title bar did nothing. */}
       <div className="group relative z-10 flex h-12 shrink-0 items-center gap-0.5 border-b border-border px-3">

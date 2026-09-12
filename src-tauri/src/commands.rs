@@ -11273,6 +11273,65 @@ pub(crate) async fn enqueue_generation_impl(
         error: String::new(),
         provider,
         engine_key: String::new(),
+        rebuild: false,
+        created_at: ts,
+        updated_at: ts,
+    });
+    Ok(note)
+}
+
+/// Queue an existing generated note for regeneration in place, optionally
+/// under new instructions. The note keeps its content (status "generating")
+/// until the run succeeds; a cancel or failure hands it back untouched.
+/// Same rows the UI's Rebuild writes, so agents and people share one path.
+pub(crate) async fn enqueue_rebuild_impl(
+    state: &AppState,
+    note_id: &str,
+    prompt: Option<&str>,
+    provider: Option<String>,
+    origin: &str,
+) -> anyhow::Result<Note> {
+    let mut note = state
+        .db
+        .get_note(note_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no note with id {note_id}"))?;
+    if note.kind == "note" {
+        anyhow::bail!(
+            "\"{}\" is a written note, not a generated one — edit it instead",
+            note.title
+        );
+    }
+    if note.status == "generating" {
+        anyhow::bail!("\"{}\" is already generating", note.title);
+    }
+    if let Some(id) = provider.as_deref() {
+        let ai = state.ai.read().await.clone();
+        ai.engine_for_provider(id)?;
+    }
+    if let Some(p) = prompt {
+        let p = p.trim();
+        if p != note.prompt {
+            state.db.set_note_prompt(note_id, p).await?;
+            note.prompt = p.to_string();
+        }
+    }
+    state.db.set_note_status(note_id, "generating").await?;
+    note.status = "generating".into();
+    let ts = now();
+    state.gen_queue.enqueue(crate::genqueue::GenJob {
+        id: new_id(),
+        notebook_id: note.notebook_id.clone(),
+        kind: note.kind.clone(),
+        prompt: note.prompt.clone(),
+        source_ids: None,
+        note_id: note_id.to_string(),
+        origin: origin.to_string(),
+        status: "queued".to_string(),
+        error: String::new(),
+        provider,
+        engine_key: String::new(),
+        rebuild: true,
         created_at: ts,
         updated_at: ts,
     });
@@ -11473,6 +11532,9 @@ pub async fn rebuild_note(
     }
     let ts = now();
     e(state.db.update_note(&note_id, &title, &content, ts).await)?;
+    // The instructions travel with the note: an edited prompt is what the
+    // next Rebuild reuses, and what the note says it was built from.
+    e(state.db.set_note_prompt(&note_id, prompt.trim()).await)?;
 
     let note = Note {
         id: note_id,
@@ -11480,7 +11542,7 @@ pub async fn rebuild_note(
         title,
         content,
         kind,
-        prompt,
+        prompt: prompt.trim().to_string(),
         origin: String::new(),
         status: String::new(),
         created_at: ts,

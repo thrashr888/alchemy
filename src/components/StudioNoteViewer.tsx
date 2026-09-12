@@ -13,7 +13,7 @@ import { isDiagramKind } from "@/lib/diagramDoc";
 import { QuizView } from "./QuizView";
 import { SlideDeck } from "./SlideDeck";
 import { LazyRichEditor } from "./LazyRichEditor";
-import { Button, Input, Modal, Spinner } from "./ui";
+import { Button, Input, Modal, Spinner, Textarea } from "./ui";
 import { cn } from "@/lib/utils";
 import {
   AppWindow,
@@ -23,7 +23,68 @@ import {
   MessageSquare,
   Pencil,
   RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
+
+/** "Rebuild with prompt…": edit the instructions a generated note was
+ *  built with, then regenerate. The prompt is kept on the note, so a plain
+ *  Rebuild later reuses the edit and the note can say what it was asked. */
+export function RebuildPromptModal({
+  note,
+  onClose,
+}: {
+  note: Note | null;
+  onClose: () => void;
+}) {
+  const rebuildNote = useStore((state) => state.rebuildNote);
+  const [prompt, setPrompt] = useState("");
+  useEffect(() => {
+    if (note) setPrompt(note.prompt);
+  }, [note]);
+  return (
+    <Modal open={!!note} onClose={onClose} title="Rebuild with prompt">
+      {note && (
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void rebuildNote(note, prompt.trim());
+            onClose();
+          }}
+        >
+          <p className="text-caption text-muted-foreground">
+            Instructions for regenerating “{note.title}” from the current
+            sources. They stay with the note, so later rebuilds reuse them.
+          </p>
+          <Textarea
+            name="rebuild-prompt"
+            aria-label="Rebuild instructions"
+            autoFocus
+            rows={5}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="e.g. Lead with the open questions; keep it under 400 words."
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Rebuild
+            </Button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
 
 export function StreamingBody({ text }: { text: string }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -57,6 +118,7 @@ export function StudioNoteViewer({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [promptOpen, setPromptOpen] = useState(false);
 
   const startEdit = () => {
     if (!live) return;
@@ -167,15 +229,34 @@ export function StudioNoteViewer({
             </div>
             <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
               {live.kind !== "note" && (
-                <Button
-                  variant="secondary"
-                  onClick={() => rebuildNote(live)}
-                  disabled={rebuilding}
-                  title="Regenerate with the latest sources"
-                >
-                  {rebuilding ? <Spinner className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                  Rebuild
-                </Button>
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => rebuildNote(live)}
+                    disabled={rebuilding}
+                    title="Regenerate with the latest sources"
+                  >
+                    {rebuilding ? <Spinner className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    Rebuild
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setPromptOpen(true)}
+                    disabled={rebuilding}
+                    title={
+                      live.prompt
+                        ? `Edit the instructions and regenerate — currently: ${live.prompt}`
+                        : "Add instructions and regenerate"
+                    }
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    Rebuild with prompt…
+                  </Button>
+                  <RebuildPromptModal
+                    note={promptOpen ? live : null}
+                    onClose={() => setPromptOpen(false)}
+                  />
+                </>
               )}
               <CopyButton text={live.content} />
               <Button
