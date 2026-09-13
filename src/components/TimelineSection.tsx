@@ -46,7 +46,12 @@ const HOUR = 3_600_000;
 /** The lane label column, HTML rather than SVG so titles truncate. */
 const LABEL_W = 220;
 const ROW_H = 34;
-const AXIS_H = 28;
+/** The axis: a volume strip (VOL_H) over the tick labels. */
+const VOL_H = 18;
+const AXIS_H = 28 + VOL_H;
+/** How far past the corpus the pane can pan: a couple of days of margin,
+ *  not a month of nothing. */
+const PAN_PAD = 2 * DAY;
 const PAD_R = 24;
 const PANEL_W = 320;
 /** Fit is 1; the ceiling (set per corpus) is an hour per screen. */
@@ -218,9 +223,19 @@ export function TimelineSection() {
   const [view, setView] = useState(viewMemory ?? { k: 1, x: 0 });
   const viewRef = useRef(view);
   viewRef.current = view;
+  // The pane's geometry, for the clamp: set each render, read on commit.
+  const geom = useRef({ basePx: 0, innerW: 0, span: 0 });
   const commitView = useCallback((next: { k: number; x: number }) => {
-    viewMemory = next;
-    setView(next);
+    // Nothing past the corpus but a couple of days: a pan into empty
+    // months is a pan you have to undo.
+    const { basePx, innerW, span } = geom.current;
+    const pxPerMs = basePx * next.k;
+    const maxX = PAN_PAD * pxPerMs;
+    const minX = innerW - (span + PAN_PAD) * pxPerMs;
+    const x = Math.max(Math.min(next.x, maxX), Math.min(minX, maxX));
+    const clamped = { k: next.k, x };
+    viewMemory = clamped;
+    setView(clamped);
   }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Measured on the wrapper: the scroll pane's own width is what the panel
@@ -245,8 +260,13 @@ export function TimelineSection() {
     card: hoverCard,
   } = useHoverCard("right");
 
-  // Reload when the notebook list refreshes — the store re-lists after
-  // imports, deletes, and agent writes, so that's the cheap change signal.
+  // Reload when the corpus changes — the store re-lists notebooks after
+  // imports, deletes, and agent writes, and their counts are the cheap
+  // change signal. Keyed on the counts, not the array, so a re-list that
+  // changed nothing doesn't redraw under a drag.
+  const corpusKey = notebooks
+    .map((n) => `${n.id}:${n.sourceCount}:${n.noteCount}`)
+    .join("|");
   useEffect(() => {
     let live = true;
     api.corpusTimeline().then(
@@ -256,7 +276,7 @@ export function TimelineSection() {
     return () => {
       live = false;
     };
-  }, [notebooks]);
+  }, [corpusKey]);
 
   useEffect(() => {
     if (fresh !== "uncited" || citedIds) return;
@@ -378,6 +398,7 @@ export function TimelineSection() {
   const t0 = (data?.first ?? 0) - DAY / 2;
   const t1 = (data?.last ?? 0) + DAY / 2;
   const basePx = innerW / Math.max(1, t1 - t0);
+  geom.current = { basePx, innerW, span: t1 - t0 };
   const pxPerMs = basePx * view.k;
   const xOf = (t: number) => LABEL_W + view.x + (t - t0) * pxPerMs;
   const tOf = (x: number) => t0 + (x - LABEL_W - view.x) / pxPerMs;
@@ -388,6 +409,39 @@ export function TimelineSection() {
   const visT1 = tOf(paneW - PAD_R);
   const ticks = data ? axisTicks(visT0, visT1, pxPerMs) : [];
   const nowVisible = now >= visT0 && now <= visT1;
+  // Volume per tick interval, across every lane: the axis doubles as a
+  // histogram of what came in, so a burst reads before its markers do.
+  const volume = (() => {
+    if (ticks.length === 0) return [];
+    const step = ticks.length > 1 ? ticks[1].at - ticks[0].at : DAY;
+    const edges = [
+      ticks[0].at - step,
+      ...ticks.map((t) => t.at),
+      ticks[ticks.length - 1].at + step,
+    ];
+    const buckets = edges.slice(0, -1).map((at, i) => ({
+      at,
+      until: edges[i + 1],
+      sources: 0,
+      notes: 0,
+    }));
+    for (const b of batches)
+      for (const it of b.items) {
+        if (it.createdAt < edges[0] || it.createdAt >= edges[edges.length - 1])
+          continue;
+        let lo = 0;
+        let hi = buckets.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (buckets[mid].at <= it.createdAt) lo = mid;
+          else hi = mid - 1;
+        }
+        if (it.kind === "note") buckets[lo].notes += 1;
+        else buckets[lo].sources += 1;
+      }
+    return buckets;
+  })();
+  const volumeMax = Math.max(1, ...volume.map((v) => v.sources + v.notes));
 
   /** Zoom about a pane x, keeping the moment under it fixed. */
   const zoomAt = useCallback(
@@ -429,6 +483,13 @@ export function TimelineSection() {
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || (e.target as Element).closest("[data-node]")) return;
+    // A press on the vertical scrollbar (or the strip an overlay one
+    // occupies) is the browser's scroll, not a pan — treating it as one
+    // fought the thumb and threw the list back to the top.
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    if (e.clientX - rect.left >= Math.min(el.clientWidth, rect.width) - 16)
+      return;
     panning.current = {
       x: e.clientX,
       y: e.clientY,
@@ -616,39 +677,45 @@ export function TimelineSection() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
-          <FilterBar
-            bare
-            groups={groups}
-            group={groupValue}
-            onGroup={(v) => setGroup(v as TypeGroup)}
-            chips={tagChips}
-            chip={tagValue}
-            onChip={setTag}
-          />
-          {(
-            [
-              ["stale", "Stale", "Untouched for over 30 days"],
-              ["uncited", "Uncited", "Never came back as a citation"],
-            ] as const
-          ).map(([id, label, title]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setFresh(fresh === id ? null : id)}
-              title={title}
-              aria-pressed={fresh === id}
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-micro transition-colors",
-                fresh === id
-                  ? "border-primary/50 bg-primary/15 text-citation"
-                  : "border-border text-muted-foreground hover:bg-surface-2",
-              )}
-            >
-              {label}
-            </button>
-          ))}
+      <div className="shrink-0 px-6">
+        <div className="flex items-start gap-x-2">
+          {/* Its own block, so the chips wrap inside the column instead of
+              running off the pane when "more" opens them all. */}
+          <div className="min-w-0 flex-1">
+            <FilterBar
+              bare
+              groups={groups}
+              group={groupValue}
+              onGroup={(v) => setGroup(v as TypeGroup)}
+              chips={tagChips}
+              chip={tagValue}
+              onChip={setTag}
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-1 pt-1">
+            {(
+              [
+                ["stale", "Stale", "Untouched for over 30 days"],
+                ["uncited", "Uncited", "Never came back as a citation"],
+              ] as const
+            ).map(([id, label, title]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFresh(fresh === id ? null : id)}
+                title={title}
+                aria-pressed={fresh === id}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-micro transition-colors",
+                  fresh === id
+                    ? "border-primary/50 bg-primary/15 text-citation"
+                    : "border-border text-muted-foreground hover:bg-surface-2",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <Legend />
       </div>
@@ -689,6 +756,34 @@ export function TimelineSection() {
                   y2={AXIS_H - 0.5}
                   stroke="var(--border)"
                 />
+                {/* Square-root scale: a 264-file import still towers over
+                    a two-note evening without flattening everything else
+                    to a hairline. */}
+                {volume.map((v) => {
+                  const n = v.sources + v.notes;
+                  if (n === 0) return null;
+                  const x0 = Math.max(LABEL_W, xOf(v.at));
+                  const x1 = Math.min(paneW - PAD_R, xOf(v.until));
+                  if (x1 <= x0) return null;
+                  const h = Math.max(
+                    2,
+                    (Math.sqrt(n) / Math.sqrt(volumeMax)) * VOL_H,
+                  );
+                  return (
+                    <rect
+                      key={v.at}
+                      x={x0 + 1}
+                      y={VOL_H - h + 2}
+                      width={Math.max(1, x1 - x0 - 2)}
+                      height={h}
+                      rx={1}
+                      fill="var(--muted-foreground)"
+                      fillOpacity={0.35}
+                    >
+                      <title>{`${fmtDay(v.at)} – ${fmtDay(v.until)} · ${counts(v)}`}</title>
+                    </rect>
+                  );
+                })}
                 {ticks.map((t) => (
                   <g key={t.at} transform={`translate(${xOf(t.at)} 0)`}>
                     <line
