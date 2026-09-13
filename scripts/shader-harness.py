@@ -86,7 +86,9 @@ def themes() -> list[dict]:
             "dark": "dark: true" in body,
             "shader": field("shader") or "mist",
             "bg": field("background"),
-            "primary": field("primary"),
+            # An optional backdrop tint stands in for primary (see
+            # DitherBackground's readVar).
+            "primary": field("backdrop") or field("primary"),
         }
         if theme["bg"] and theme["primary"]:
             out.append(theme)

@@ -32,6 +32,8 @@ export interface Theme {
   shader?: ShaderVariant;
   /** Preferred transmutation-circle index in AlchemySymbol; random if unset. */
   sigil?: number;
+  /** Optional `backdrop` var tints the DitherBackground instead of
+   *  `primary` — for a theme whose accent isn't its atmosphere. */
   /** Mood phrase steering the generated epigraph. Default: alchemical. */
   mood?: string;
   /** Thinking-spinner verbs. Default: DEFAULT_VERBS. */
@@ -748,7 +750,7 @@ export const THEMES: Record<string, Theme> = {
     dark: true,
     shader: "crt", // a 1986 monitor with a program on it
     sigil: 3,
-    mood: "a black CRT booting QDOS, an amber prompt, a teal status line, green readouts ticking over",
+    mood: "a black CRT booting QDOS, white text, cyan headers, the cursor row lit yellow on red",
     verbs: [
       "Booting the kernel",
       "Mounting the volume",
@@ -758,16 +760,19 @@ export const THEMES: Record<string, Theme> = {
       "Flushing the buffer",
     ],
     vars: {
-      // Ported from shift/themes/qdos.scm: pure black, white text, #e8da59
-      // amber accent, #66b7b3 teal secondary, #67cc4d green, #ff6588 negative.
+      // The DOS palette from QDOS's ThemeColors default (qdos-plugin-api):
+      // white on black, cyan (#00aaaa) headers, yellow (#ffff55) on red
+      // (#aa0000) for the highlighted row, grey (#aaaaaa) for the rest.
+      // Bright red (#ff5555) for errors — DOS red is 2.7:1 on black.
       background: "#000000", surface: "#0a0a0a", "surface-2": "#141414", elevated: "#1c1c1c",
-      foreground: "#ffffff", muted: "#141414", "muted-foreground": "#67cc4d",
-      "subtle-foreground": "#52a83c", ring: "#e8da59", primary: "#e8da59",
-      "primary-hover": "#fff08a", "primary-foreground": "#000000", accent: "#1c1c1c",
-      "accent-foreground": "#ffffff", destructive: "#ff6588", success: "#67cc4d",
-      citation: "#66b7b3", selection: "rgba(157,31,20,0.55)",
-      border: "rgba(255,255,255,0.10)", "border-strong": "rgba(255,255,255,0.20)",
-      input: "rgba(255,255,255,0.12)", scrollbar: "rgba(103,204,77,0.25)",
+      foreground: "#ffffff", muted: "#141414", "muted-foreground": "#aaaaaa",
+      "subtle-foreground": "#9a9a9a", ring: "#ffff55", primary: "#aa0000",
+      "primary-hover": "#c40000", "primary-foreground": "#ffff55", accent: "#1c1c1c",
+      "accent-foreground": "#ffffff", destructive: "#ff5555", success: "#00aa00",
+      citation: "#00aaaa", selection: "rgba(170,0,0,0.60)", warning: "#ffff55",
+      backdrop: "#aaaaaa",
+      border: "rgba(255,255,255,0.14)", "border-strong": "rgba(255,255,255,0.30)",
+      input: "rgba(255,255,255,0.14)", scrollbar: "rgba(170,170,170,0.30)",
     },
   },
 };
@@ -822,6 +827,9 @@ export function applyTheme(name: string) {
   // a per-theme value would otherwise leak across switches.
   if (!theme.vars.warning)
     root.style.setProperty("--warning", theme.dark ? "#e8a33d" : "#9a6700");
+  // Same leak rule for the optional backdrop tint: a theme without one
+  // must not inherit the previous theme's.
+  if (!theme.vars.backdrop) root.style.removeProperty("--backdrop");
   root.dataset.theme = theme.id;
   root.dataset.scheme = theme.dark ? "dark" : "light";
   root.style.colorScheme = theme.dark ? "dark" : "light";

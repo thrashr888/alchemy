@@ -110,7 +110,9 @@ export function DitherBackground({
 
     const readVar = (name: string, fallback: [number, number, number]) =>
       hexToRgb(getComputedStyle(document.documentElement).getPropertyValue(name).trim()) ?? fallback;
-    gl.uniform3fv(uTint, readVar("--primary", [0.37, 0.42, 0.82]));
+    // A theme may tint its backdrop apart from its primary (`--backdrop`,
+    // optional): QDOS has a red primary and a grey-phosphor monitor.
+    gl.uniform3fv(uTint, readVar("--backdrop", readVar("--primary", [0.37, 0.42, 0.82])));
     gl.uniform3fv(uBg, readVar("--background", [0.03, 0.035, 0.04]));
 
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
