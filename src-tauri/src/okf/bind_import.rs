@@ -317,7 +317,12 @@ async fn import_files(
     let mut deleted = portable_deletions::read_deleted(bundle)?;
     deleted.extend(manifest.deleted_entities.iter().cloned());
     manifest.deleted_entities.extend(deleted.iter().cloned());
-    portable::prepare(bundle, &mut manifest, &deleted)?;
+    portable::prepare(
+        bundle,
+        &mut manifest,
+        &deleted,
+        portable::Duplicates::Refuse,
+    )?;
     save_manifest_checked(manifest_at, &manifest)?;
     recovery::recover_imports(state, notebook_id, &mut manifest, manifest_at).await?;
     for dir in ["sources", "notes"] {

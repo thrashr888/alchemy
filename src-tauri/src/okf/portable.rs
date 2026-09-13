@@ -333,10 +333,20 @@ fn free_variant(bundle: &Path, manifest: &OkfManifest, path: &str) -> String {
 /// Validate the whole set before importing any row. A moved file takes its
 /// existing local row and conflict baseline with it. Simultaneous copies of
 /// one identity are ambiguous, so keep both files and require repair.
+/// What `prepare` does with two files carrying one sync identity. Binding
+/// a folder refuses it — an invalid bundle must not seed rows — while the
+/// sync pass and the writer hold the pair and carry on with the rest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Duplicates {
+    Refuse,
+    Hold,
+}
+
 pub(super) fn prepare(
     bundle: &Path,
     manifest: &mut OkfManifest,
     deleted: &HashSet<String>,
+    duplicates: Duplicates,
 ) -> Result<bool, String> {
     let mut changed = false;
     let versioned = check_protocol(bundle)? || manifest.protocol_version == 1;
@@ -452,7 +462,25 @@ pub(super) fn prepare(
     }
     for (portable_id, locations) in &paths {
         if locations.len() > 1 {
-            return Err(format!("Multiple files have sync identity {portable_id}: {}. Both were preserved; give an intentional copy a new sync_id", locations.join(", ")));
+            if duplicates == Duplicates::Refuse {
+                return Err(format!("Multiple files have sync identity {portable_id}: {}. Both were preserved; give an intentional copy a new sync_id", locations.join(", ")));
+            }
+            // Two files with one identity — a cloud conflict copy, or a
+            // duplicate made by hand. Nothing here can say which is right,
+            // so both are held: not imported, not overwritten, and not a
+            // reason to stop the rest of the notebook syncing. This used to
+            // fail the whole pass, which left a notebook unsynced for days
+            // over one " 2.md" twin. Named in the log so the way out — a new
+            // sync_id for the intentional copy, or setting one aside — is in
+            // plain sight.
+            super::okf_notice(format!(
+                "Multiple files have sync identity {portable_id}: {}. Both are held, untouched, until one gets a new sync_id or is set aside",
+                locations.join(", ")
+            ));
+            for rel in locations {
+                candidate.held.insert(rel.clone());
+            }
+            continue;
         }
         let rel = &locations[0];
         let owners: Vec<_> = candidate
@@ -645,9 +673,11 @@ mod tests {
             );
         }
         let before = serde_json::to_value(&manifest).unwrap();
-        assert!(prepare(dir.path(), &mut manifest, &HashSet::new())
-            .unwrap_err()
-            .contains("multiple existing rows"));
+        assert!(
+            prepare(dir.path(), &mut manifest, &HashSet::new(), Duplicates::Hold)
+                .unwrap_err()
+                .contains("multiple existing rows")
+        );
         assert_eq!(serde_json::to_value(&manifest).unwrap(), before);
     }
 
@@ -697,9 +727,11 @@ mod tests {
             .unwrap();
         }
         let before = serde_json::to_value(&manifest).unwrap();
-        assert!(prepare(dir.path(), &mut manifest, &HashSet::new())
-            .unwrap_err()
-            .contains("both match one existing row"));
+        assert!(
+            prepare(dir.path(), &mut manifest, &HashSet::new(), Duplicates::Hold)
+                .unwrap_err()
+                .contains("both match one existing row")
+        );
         assert_eq!(serde_json::to_value(&manifest).unwrap(), before);
         assert_eq!(
             std::fs::read_dir(dir.path().join("sources"))
@@ -761,20 +793,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_identity_and_older_client_downgrade_fail_before_import() {
+    async fn duplicate_identity_is_held_and_the_rest_of_the_notebook_still_syncs() {
         let lab = Lab::new();
         let bundle = lab.0.join("bundle");
         let a = lab.replica("a", &bundle).await;
         seed(&a).await;
         let path = bundle.join("notes/original.md");
         std::fs::copy(&path, bundle.join("notes/copy.md")).unwrap();
+        // A second, unconflicted note from the owner arrives beside the twins.
+        a.db.add_note(&Note {
+            id: "other-note".into(),
+            notebook_id: "shared-notebook".into(),
+            title: "Other".into(),
+            content: "Other body".into(),
+            kind: "note".into(),
+            prompt: String::new(),
+            origin: "human:test".into(),
+            status: String::new(),
+            created_at: 2,
+            updated_at: 2,
+        })
+        .await
+        .unwrap();
+        write_bound(&a, "shared-notebook").await.unwrap();
         let b = lab.replica("b", &bundle).await;
-        assert!(reconcile(&b, "shared-notebook")
-            .await
-            .unwrap_err()
-            .contains("Multiple files"));
-        assert!(b.db.list_notes("shared-notebook").await.unwrap().is_empty());
+        // Two files, one identity: both are held and the pass goes on — the
+        // other note imports. It used to fail the whole notebook.
+        assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().created, 1);
+        let titles: Vec<String> =
+            b.db.list_notes("shared-notebook")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|n| n.title)
+                .collect();
+        assert_eq!(titles, vec!["Other"]);
+        // Neither twin was touched.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            std::fs::read_to_string(bundle.join("notes/copy.md")).unwrap()
+        );
+        // With the twin set aside, the original imports on the next pass.
         std::fs::remove_file(bundle.join("notes/copy.md")).unwrap();
+        assert_eq!(reconcile(&b, "shared-notebook").await.unwrap().created, 1);
+        assert_eq!(b.db.list_notes("shared-notebook").await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn older_client_downgrade_is_held_before_import() {
+        let lab = Lab::new();
+        let bundle = lab.0.join("bundle");
+        let a = lab.replica("a", &bundle).await;
+        seed(&a).await;
+        let path = bundle.join("notes/original.md");
+        let b = lab.replica("b", &bundle).await;
         let original = std::fs::read_to_string(&path).unwrap();
         let downgraded = original
             .lines()

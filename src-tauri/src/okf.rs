@@ -599,7 +599,7 @@ fn write_bundle_with(
     portable::drop_dead_aliases(&mut manifest, &live);
     let mut deleted = portable_deletions::read_deleted(bundle)?;
     deleted.extend(manifest.deleted_entities.iter().cloned());
-    portable::prepare(bundle, &mut manifest, &deleted)?;
+    portable::prepare(bundle, &mut manifest, &deleted, portable::Duplicates::Hold)?;
     let mut out = OkfWrite::default();
 
     // Place everything first: a note's `sources:` entries cite bundle paths,
@@ -4908,7 +4908,7 @@ fn note_held(notebook_id: &str, bundle: &Path, held: &std::collections::BTreeSet
     crate::diagnostics::record(
         crate::diagnostics::Event::new(crate::diagnostics::Level::Warn, "rust", "okf").message(
             format!(
-                "{} file(s) in {} carry an older Alchemy's identity and are left alone until every Alchemy is updated: {}{suffix}",
+                "{} file(s) in {} are held — not imported, not overwritten — until they can be placed (an older Alchemy's identity, or two files sharing one sync_id): {}{suffix}",
                 held.len(),
                 bundle.display(),
                 list.join(", ")
@@ -5185,7 +5185,7 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
     }
     let mut deleted = portable_deletions::read_deleted(&bundle)?;
     deleted.extend(manifest.deleted_entities.iter().cloned());
-    if portable::prepare(&bundle, &mut manifest, &deleted)? {
+    if portable::prepare(&bundle, &mut manifest, &deleted, portable::Duplicates::Hold)? {
         save_manifest_checked(&manifest_at, &manifest)?;
     }
     note_held(notebook_id, &bundle, &manifest.held);
