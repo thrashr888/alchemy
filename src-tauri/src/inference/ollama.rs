@@ -60,6 +60,7 @@ pub fn is_cold(model: &str, loaded: &[String]) -> bool {
 pub struct Ollama {
     http: reqwest::Client,
     config: OllamaConfig,
+    max_output_bytes: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +84,8 @@ struct ChatChunk {
     message: Option<ChatMessageDelta>,
     #[serde(default)]
     done: bool,
+    #[serde(default)]
+    done_reason: Option<String>,
     #[serde(default)]
     eval_count: Option<u64>,
     #[serde(default)]
@@ -120,7 +123,31 @@ impl Ollama {
             .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("failed to build reqwest client");
-        Self { http, config }
+        Self {
+            http,
+            config,
+            max_output_bytes: None,
+        }
+    }
+
+    /// A per-request generation budget; never changes the user's model or
+    /// the shared engine. A server token limit also gets a local byte
+    /// backstop, since a provider may ignore the requested ceiling.
+    pub fn with_output_limit(&self, tokens: u32) -> Self {
+        let mut bounded = self.clone();
+        let tokens = tokens.min(self.config.num_predict.unwrap_or(tokens));
+        bounded.config.num_predict = Some(tokens);
+        bounded.max_output_bytes = Some(tokens as usize * 32);
+        bounded
+    }
+
+    fn check_output_size(&self, bytes: usize) -> Result<()> {
+        if self.max_output_bytes.is_some_and(|max| bytes > max) {
+            anyhow::bail!(
+                "Diagram output exceeded its size limit — try a smaller diagram or fewer sources"
+            );
+        }
+        Ok(())
     }
 
     /// Longest a *loaded* model may take to its first token — prefill of a
@@ -394,6 +421,12 @@ impl Ollama {
                 })?;
             let Some(chunk) = next else { break };
             let bytes = chunk.context("error reading chat stream")?;
+            if let Some(max) = self.max_output_bytes {
+                anyhow::ensure!(
+                    buf.len().saturating_add(bytes.len()) <= max.max(65_536),
+                    "Diagram response exceeded its stream buffer limit — try a smaller diagram"
+                );
+            }
             buf.extend_from_slice(&bytes);
 
             // Ollama streams newline-delimited JSON objects.
@@ -407,11 +440,16 @@ impl Ollama {
                     any_token = true;
                     if let Some(delta) = parsed.message {
                         if !delta.content.is_empty() {
+                            self.check_output_size(full.len().saturating_add(delta.content.len()))?;
                             on_token(&delta.content);
                             full.push_str(&delta.content);
                         }
                     }
                     if parsed.done {
+                        anyhow::ensure!(
+                            self.max_output_bytes.is_none() || parsed.done_reason.as_deref() != Some("length"),
+                            "Diagram reached its output limit before finishing — try fewer sources or a smaller diagram"
+                        );
                         let stats = GenStats::from_parts(parsed.eval_count, parsed.eval_duration);
                         return Ok(ChatOutcome {
                             text: full,
@@ -541,6 +579,110 @@ impl Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagram_budget_is_local_and_does_not_raise_a_stricter_limit() {
+        let original = Ollama::new(OllamaConfig::default());
+        let bounded = original.with_output_limit(8_192);
+        let mut body = json!({});
+        bounded.apply_keep_alive(&mut body);
+        assert_eq!(body["options"]["num_predict"], 8_192);
+        assert!(bounded.check_output_size(262_144).is_ok());
+        assert!(bounded.check_output_size(262_145).is_err());
+        assert!(original.config.num_predict.is_none());
+        assert!(original.max_output_bytes.is_none());
+        let small = Ollama::new(OllamaConfig {
+            num_predict: Some(2048),
+            ..Default::default()
+        });
+        assert_eq!(small.with_output_limit(8192).config.num_predict, Some(2048));
+    }
+
+    #[tokio::test]
+    async fn bounded_diagram_streams_stop_before_emitting_oversized_output() {
+        use axum::{
+            body::Body,
+            routing::{get, post},
+            Router,
+        };
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let requests = Arc::new(AtomicUsize::new(0));
+        let seen = requests.clone();
+        let app = Router::new()
+            .route(
+                "/api/ps",
+                get(|| async { json!({"models": []}).to_string() }),
+            )
+            .route(
+                "/api/chat",
+                post(move |body: String| {
+                    let seen = seen.clone();
+                    async move {
+                        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                        assert_eq!(body["options"]["num_predict"], 8192);
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        let done = |reason: &str| {
+                            format!("{}\n", json!({"done":true,"done_reason":reason}))
+                        };
+                        let delta = |s: &str| {
+                            format!("{}\n", json!({"message":{"content":s},"done":false}))
+                        };
+                        let chunks = match body["model"].as_str().unwrap() {
+                            "complete" => vec![delta("classDiagram\n  class Café"), done("stop")],
+                            "truncated" => vec![delta("classDiagram"), done("length")],
+                            "oversized" => vec![delta(&"x".repeat(9000)); 32],
+                            "unterminated" => vec!["x".repeat(60000); 6],
+                            _ => panic!("unexpected mock model"),
+                        };
+                        Body::from_stream(futures_util::stream::iter(
+                            chunks.into_iter().map(Ok::<_, std::convert::Infallible>),
+                        ))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        for model in ["complete", "truncated", "oversized", "unterminated"] {
+            let engine = Ollama::new(OllamaConfig {
+                base_url: format!("http://{address}"),
+                chat_model: model.into(),
+                ..Default::default()
+            })
+            .with_output_limit(8192);
+            let mut emitted = String::new();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.chat_stream(&[], |s| emitted.push_str(s)),
+            )
+            .await
+            .unwrap();
+            if model == "complete" {
+                assert_eq!(result.unwrap().text, "classDiagram\n  class Café");
+                assert_eq!(emitted, "classDiagram\n  class Café");
+            } else {
+                assert!(
+                    result
+                        .err()
+                        .expect("budget error")
+                        .to_string()
+                        .contains("limit"),
+                    "{model}"
+                );
+            }
+            assert!(
+                emitted.len() <= 262144,
+                "{model} emitted beyond the local budget"
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 4);
+        server.abort();
+    }
 
     /// Warm-on-typing broke the cold-load notice: `ps` lists a model the
     /// instant loading starts, so a 30B model still paging in read as

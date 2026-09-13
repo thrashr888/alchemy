@@ -1,6 +1,36 @@
-// Resolved gallery-card visuals (data URIs) per source id, so reopening the
-// gallery paints instantly instead of re-running IPC + image fetches.
-// "" = checked, none. The backend also disk-caches og downloads. Lives
-// outside GalleryPane so the reader's image picker can invalidate a card
-// after the user hand-picks a new image.
-export const thumbMemory = new Map<string, string>();
+/** Recently used gallery thumbnails. Encoded images count conservatively as
+ * UTF-16; entry count also bounds empty results. Disk caching lives in Rust. */
+export class ThumbnailCache {
+  private entries = new Map<string, string>();
+  private bytes = 0;
+  constructor(private maxBytes = 16 * 1024 * 1024, private maxEntries = 128) {}
+  get size() { return this.entries.size; }
+  get byteLength() { return this.bytes; }
+  has(key: string) { return this.entries.has(key); }
+  get(key: string) {
+    const value = this.entries.get(key);
+    if (value !== undefined) {
+      this.entries.delete(key);
+      this.entries.set(key, value);
+    }
+    return value;
+  }
+  set(key: string, value: string) {
+    this.delete(key);
+    const bytes = (key.length + value.length) * 2;
+    if (bytes > this.maxBytes) return;
+    this.entries.set(key, value);
+    this.bytes += bytes;
+    while (this.bytes > this.maxBytes || this.entries.size > this.maxEntries) {
+      this.delete(this.entries.keys().next().value!);
+    }
+  }
+  delete(key: string) {
+    const value = this.entries.get(key);
+    if (value === undefined) return false;
+    this.bytes -= (key.length + value.length) * 2;
+    return this.entries.delete(key);
+  }
+  clear() { this.entries.clear(); this.bytes = 0; }
+}
+export const thumbMemory = new ThumbnailCache();

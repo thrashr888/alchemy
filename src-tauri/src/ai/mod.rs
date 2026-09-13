@@ -1253,26 +1253,6 @@ impl Ai {
             .await
     }
 
-    /// Stream a role's engine with its progress lines (`on_step`): an
-    /// agent CLI narrating its work, a cold Ollama model loading, a first
-    /// attempt that died and is being retried. Other engines stay silent.
-    pub async fn chat_role_stream_steps<F, S>(
-        &self,
-        role: Role,
-        messages: &[ChatTurn],
-        on_token: F,
-        on_step: S,
-    ) -> Result<ChatOutcome>
-    where
-        F: FnMut(&str),
-        S: FnMut(crate::inference::Step<'_>),
-    {
-        self.router
-            .chat_engine(role)
-            .chat_stream_steps(messages, on_token, on_step)
-            .await
-    }
-
     /// Gateway model listing (provider == "openai"); Err when not applicable.
     pub async fn list_gateway_models(&self) -> Result<Vec<String>> {
         match &self.openai {

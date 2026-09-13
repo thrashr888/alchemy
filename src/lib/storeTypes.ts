@@ -11,7 +11,7 @@ import type {
   MetaTurn,
   ModelHealth,
   ModelStat,
-  Note,
+  NoteSummary,
   NoteKind,
   Notebook,
   OkfBinding,
@@ -205,7 +205,7 @@ export interface AppState {
   messages: Message[];
   messagesHasMore: boolean;
   messagesLoadingOlder: boolean;
-  notes: Note[];
+  notes: NoteSummary[];
   reportSchedules: ReportSchedule[];
   templates: Template[];
   /** Re-list custom templates (after an in-app save/delete). */
@@ -568,7 +568,7 @@ export interface AppState {
   /** Regenerate a generated note from the current sources. `prompt`
    *  replaces the note's stored instructions (kept for later rebuilds);
    *  omitted, the stored ones are reused. */
-  rebuildNote: (note: Note, prompt?: string) => Promise<void>;
+  rebuildNote: (note: NoteSummary, prompt?: string) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;

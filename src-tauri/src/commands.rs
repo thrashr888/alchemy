@@ -3049,6 +3049,7 @@ async fn reingest_inner(
     }
     if existing.source_type == "url" && updated.image_url != existing.image_url {
         let _ = std::fs::remove_file(og_cache_path(state, &existing.id));
+        let _ = std::fs::remove_file(legacy_og_cache_path(state, &existing.id));
     }
     state
         .db
@@ -3257,6 +3258,7 @@ pub(crate) async fn set_source_image_impl(
     }
     state.db.set_source_image(source_id, image_url).await?;
     let _ = std::fs::remove_file(og_cache_path(state, source_id));
+    let _ = std::fs::remove_file(legacy_og_cache_path(state, source_id));
     Ok(Source {
         image_url: image_url.to_string(),
         content: String::new(),
@@ -3646,6 +3648,7 @@ fn cleanup_source_files(state: &AppState, source_id: &str) {
     }
     let _ = std::fs::remove_file(thumb_path(state, source_id));
     let _ = std::fs::remove_file(og_cache_path(state, source_id));
+    let _ = std::fs::remove_file(legacy_og_cache_path(state, source_id));
 }
 
 /// Bulk-delete a selection (docs/RFC-multi-select.md): two Lance predicate
@@ -3732,6 +3735,12 @@ fn thumb_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
 fn og_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
     app_data_dir(state)
         .join("thumbs")
+        .join(format!("{source_id}.og-v1.png"))
+}
+
+fn legacy_og_cache_path(state: &AppState, source_id: &str) -> std::path::PathBuf {
+    app_data_dir(state)
+        .join("thumbs")
         .join(format!("{source_id}.img"))
 }
 
@@ -3749,8 +3758,8 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
 }
 
 /// Data-URI thumbnail for a source's gallery card: PDFs render their first
-/// page (cached on disk, rendered once ever); images return the original
-/// file. Empty string when the source has no visual — the card falls back
+/// page (cached on disk); web images are resized to at most 480px before
+/// crossing IPC. Empty string when the source has no visual — the card falls back
 /// to typography. Base64 over IPC sidesteps the asset:// WKWebView decode
 /// caveat (see ImageView in ReaderPane.tsx).
 #[tauri::command]
@@ -3759,8 +3768,12 @@ pub async fn source_thumbnail(
     source_id: String,
 ) -> Result<String, String> {
     use base64::Engine;
+    let _slot = crate::thumbnails::SLOTS
+        .acquire()
+        .await
+        .map_err(|err| err.to_string())?;
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let Some(src) = e(state.db.get_source(&source_id).await)? else {
+    let Some(src) = e(state.db.get_source_summary(&source_id).await)? else {
         return Err("Source not found".into());
     };
     match src.source_type.as_str() {
@@ -3808,26 +3821,40 @@ pub async fn source_thumbnail(
             if img.is_empty() || img == "-" || !is_web_url(img) {
                 return Ok(String::new());
             }
+            // Hold a global slot through download and conversion. Recheck the
+            // cache after waiting so simultaneous windows can reuse the result.
             let cache = og_cache_path(&state, &source_id);
             if let Ok(bytes) = std::fs::read(&cache) {
-                return Ok(format!(
-                    "data:{};base64,{}",
-                    sniff_image_mime(&bytes),
-                    b64(&bytes)
-                ));
+                return Ok(format!("data:image/png;base64,{}", b64(&bytes)));
             }
-            let Some(bytes) = ingest::fetch_image_bytes(img).await else {
+            let legacy = legacy_og_cache_path(&state, &source_id);
+            let bytes = if let Ok(bytes) = std::fs::read(&legacy) {
+                bytes
+            } else if let Some(bytes) = ingest::fetch_image_bytes(img).await {
+                bytes
+            } else {
                 return Ok(String::new());
+            };
+            let png = match crate::thumbnails::downsample(&bytes).await {
+                Ok(png) => png,
+                Err(err) => {
+                    crate::diagnostics::error("thumbnail", err.to_string());
+                    return Ok(String::new());
+                }
             };
             if let Some(dir) = cache.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(&cache, &bytes);
-            Ok(format!(
-                "data:{};base64,{}",
-                sniff_image_mime(&bytes),
-                b64(&bytes)
-            ))
+            // Atomic replacement keeps another window from reading half a PNG.
+            if let Some(dir) = cache.parent() {
+                if let Ok(mut temp) = tempfile::NamedTempFile::new_in(dir) {
+                    use std::io::Write;
+                    if temp.write_all(&png).is_ok() && temp.persist(&cache).is_ok() {
+                        let _ = std::fs::remove_file(legacy);
+                    }
+                }
+            }
+            Ok(format!("data:image/png;base64,{}", b64(&png)))
         }
         "image" => {
             if src.url.is_empty() {
@@ -10072,6 +10099,19 @@ pub async fn list_notes(
     e(state.db.list_notes(&notebook_id).await)
 }
 
+#[tauri::command]
+pub async fn list_note_summaries(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<crate::models::NoteSummary>, String> {
+    e(state.db.list_note_summaries(&notebook_id).await)
+}
+
+#[tauri::command]
+pub async fn read_note(state: State<'_, AppState>, note_id: String) -> Result<Note, String> {
+    e(state.db.get_note(&note_id).await)?.ok_or_else(|| "Note not found".into())
+}
+
 /// Fire-and-forget post-pass after a chat answer (docs/RFC-note-curator.md
 /// phase 3): when the answer synthesized across sources, one model call
 /// decides whether the exchange produced a durable conclusion and saves it
@@ -10980,40 +11020,42 @@ async fn generate_content(
         )
     };
 
-    // One projected batch read — this was one full table scan per source on
-    // every Generate click and every scheduled report run.
     let ids: Vec<String> = sources.iter().map(|s| s.id.clone()).collect();
-    let mut full_by_id = state.db.source_contents(&ids).await?;
-    let mut contents = Vec::with_capacity(sources.len());
-    for s in &sources {
-        let full = full_by_id.remove(&s.id).unwrap_or_default();
-        // URL sources get a "Source URL:" line under their heading so
-        // generated notes can cite where each finding can be viewed. File
-        // sources carry their on-disk path under a "Source file:" label.
-        let heading = if s.url.is_empty() {
-            format!("## {}", s.title)
-        } else if is_web_url(&s.url) {
-            format!("## {}\nSource URL: {}", s.title, s.url)
-        } else {
-            format!("## {}\nSource file: {}", s.title, s.url)
-        };
-        contents.push((heading, full));
-    }
-    let mut corpus = if rag::is_diagram_kind(kind) {
-        // A diagram is a topology built from what each source is about, so
-        // the corpus is each source's stored gist (the gist sweep's
-        // distilled overview) and nothing is distilled here: the waterfill
-        // would have made one model call per over-budget source before the
-        // diagram call — dozens on a 50-source notebook, past the queue's
-        // deadline. One call, however many sources.
-        let gists = state.db.gists_for_sources(&ids).await.unwrap_or_default();
-        let entries: Vec<rag::DiagramSourceEntry<'_>> = sources
+    let headings: Vec<String> = sources
+        .iter()
+        .map(|s| {
+            if s.url.is_empty() {
+                format!("## {}", s.title)
+            } else if is_web_url(&s.url) {
+                format!("## {}\nSource URL: {}", s.title, s.url)
+            } else {
+                format!("## {}\nSource file: {}", s.title, s.url)
+            }
+        })
+        .collect();
+    let diagram = rag::uses_diagram_corpus(kind);
+    let mut corpus = if diagram {
+        // UML and mind maps are visual summaries too. Their old prose path
+        // made one extra model call per oversized source before generation.
+        let gists = state.db.gists_for_sources(&ids).await?;
+        let missing: Vec<String> = ids
             .iter()
-            .zip(&contents)
-            .map(|(s, (heading, full))| rag::DiagramSourceEntry {
+            .filter(|id| gists.get(*id).is_none_or(|gist| gist.trim().is_empty()))
+            .cloned()
+            .collect();
+        // Read only the fallback heads, and only for sources without gists.
+        // Full corpus bodies must not stay allocated while the model runs.
+        let heads = state
+            .db
+            .source_content_heads(&missing, rag::DIAGRAM_FALLBACK_HEAD_CHARS)
+            .await?;
+        let entries: Vec<rag::DiagramSourceEntry<'_>> = ids
+            .iter()
+            .zip(&headings)
+            .map(|(id, heading)| rag::DiagramSourceEntry {
                 heading,
-                gist: gists.get(&s.id).map(String::as_str),
-                content: full,
+                gist: gists.get(id).map(String::as_str),
+                content: heads.get(id).map(String::as_str).unwrap_or_default(),
             })
             .collect();
         let (corpus, fallbacks) = rag::diagram_corpus(&entries, budget);
@@ -11026,6 +11068,12 @@ async fn generate_content(
         }
         corpus
     } else {
+        let mut full_by_id = state.db.source_contents(&ids).await?;
+        let contents: Vec<(String, String)> = ids
+            .iter()
+            .zip(headings)
+            .map(|(id, heading)| (heading, full_by_id.remove(id).unwrap_or_default()))
+            .collect();
         waterfill_corpus(state, &instruction, &contents, budget, is_gateway).await
     };
     // The prior run rides outside the source budget with its own cap: it
@@ -11055,8 +11103,16 @@ async fn generate_content(
         rag::persona_block(&ai.config().profile)
     };
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let mut content =
-        run_generation_chat(state, app, &messages, provider, stream_note, steps.clone()).await?;
+    let mut content = run_generation_chat(
+        state,
+        app,
+        &messages,
+        provider,
+        stream_note,
+        steps.clone(),
+        diagram.then_some(8_192),
+    )
+    .await?;
 
     // A twenty-minute episode is ~3,000 words, and chat models routinely fade
     // early. Continue the episode (dropping any premature outro) until it's
@@ -11070,9 +11126,16 @@ async fn generate_content(
             }
             let trimmed = strip_outro(&content);
             let messages = rag::build_audio_continuation(&instruction, &corpus, &persona, &trimmed);
-            let more =
-                run_generation_chat(state, app, &messages, provider, stream_note, steps.clone())
-                    .await?;
+            let more = run_generation_chat(
+                state,
+                app,
+                &messages,
+                provider,
+                stream_note,
+                steps.clone(),
+                None,
+            )
+            .await?;
             // A tiny continuation means the model considers the episode done.
             if more.split_whitespace().count() < 100 {
                 break;
@@ -11092,6 +11155,7 @@ pub(crate) async fn run_generation_chat(
     provider: Option<&str>,
     stream_note: Option<&str>,
     steps: StepSink,
+    output_limit: Option<u32>,
 ) -> anyhow::Result<String> {
     let emit_tok = {
         let note_id = stream_note.map(|s| s.to_string());
@@ -11144,20 +11208,25 @@ pub(crate) async fn run_generation_chat(
             .into_owned()
         });
         let messages: &[crate::ai::ChatTurn] = budgeted.as_deref().unwrap_or(messages);
-        let out = match (&overridden, app) {
-            (Some((engine, _)), Some(app)) => {
-                let app = app.clone();
-                let emit_tok = emit_tok.clone();
-                engine
-                    .chat_stream(messages, move |tok| emit_tok(&app, tok))
-                    .await?
-            }
-            (Some((engine, _)), None) => engine.chat(messages).await?,
-            (None, Some(app)) => {
-                let app = app.clone();
-                let emit_tok = emit_tok.clone();
-                ai.chat_role_stream_steps(
-                    crate::inference::Role::Generate,
+        let role = if app.is_some() {
+            crate::inference::Role::Generate
+        } else {
+            crate::inference::Role::Chat
+        };
+        let mut engine = overridden
+            .as_ref()
+            .map(|(engine, _)| engine)
+            .unwrap_or_else(|| ai.engine(role))
+            .clone();
+        if let (Some(limit), crate::inference::ChatEngine::Ollama(ollama)) =
+            (output_limit, &mut engine)
+        {
+            *ollama = ollama.with_output_limit(limit);
+        }
+        let out = if let Some(app) = app {
+            let app = app.clone();
+            engine
+                .chat_stream_steps(
                     messages,
                     move |tok| emit_tok(&app, tok),
                     |step| {
@@ -11167,8 +11236,8 @@ pub(crate) async fn run_generation_chat(
                     },
                 )
                 .await?
-            }
-            (None, None) => ai.chat(messages).await?,
+        } else {
+            engine.chat(messages).await?
         };
         let model = match overridden {
             Some((_, model)) => model,

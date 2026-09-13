@@ -57,6 +57,7 @@ mod services;
 mod spotlight;
 mod templates;
 mod textsize;
+mod thumbnails;
 mod trace;
 mod tts;
 mod verify;
@@ -544,6 +545,8 @@ pub fn run() {
             commands::notion_check,
             commands::delete_message,
             commands::list_notes,
+            commands::list_note_summaries,
+            commands::read_note,
             commands::activity_stats,
             commands::home_activity,
             commands::source_thumbnail,

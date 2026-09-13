@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { useStore } from "./store";
-import type { Note } from "./types";
+import type { Note, NoteSummary } from "./types";
 
 /* Per-note export (docs/RFC-note-export.md), shared by the Studio panel and
  * the Notebook menu's Export Note… — lifted out of StudioPanel so lib code
@@ -37,7 +37,7 @@ const PDF_TARGET: ExportTarget = {
  *  a kind-true primary — poster image, slide deck, workbook, episode audio,
  *  Word document — plus a PDF of the note's own render for everything the
  *  print pipeline covers (audio stays audio). */
-export function exportTargets(n: Note): ExportTarget[] {
+export function exportTargets(n: NoteSummary | Note): ExportTarget[] {
   if (
     n.kind === "infographic" ||
     n.kind === "mind_map" ||
@@ -55,11 +55,14 @@ export function exportTargets(n: Note): ExportTarget[] {
     ];
   if (n.kind === "audio_overview")
     return [{ label: "Export audio", format: "m4a", ext: "m4a", name: "Audio" }];
-  if (n.kind === "data_table" || isTabular(n.content))
+  if (n.kind === "data_table" || ("content" in n && isTabular(n.content)))
     return [
       { label: "Export Excel", format: "xlsx", ext: "xlsx", name: "Excel workbook" },
       PDF_TARGET,
     ];
+  if (!("content" in n)) return [
+    { label: "Export…", format: "auto", ext: "", name: "" }, PDF_TARGET,
+  ];
   return [
     { label: "Export Word", format: "docx", ext: "docx", name: "Word document" },
     PDF_TARGET,
@@ -67,7 +70,16 @@ export function exportTargets(n: Note): ExportTarget[] {
 }
 
 /** Pick a destination in the native save dialog, export, reveal in Finder. */
-export async function exportNote(n: Note, t: ExportTarget): Promise<void> {
+export async function exportNote(n: NoteSummary, t: ExportTarget): Promise<void> {
+  if (t.format === "auto") {
+    try {
+      const full = await api.readNote(n.id);
+      return await exportNote(full, exportTargets(full)[0]);
+    } catch (error) {
+      useStore.getState().pushToast("error", String(error));
+      return;
+    }
+  }
   const safe = n.title.replace(/[/\\:]/g, "-").trim() || "Note";
   const dest = await save({
     defaultPath: `${safe}.${t.ext}`,
