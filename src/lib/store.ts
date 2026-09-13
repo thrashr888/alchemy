@@ -1,3 +1,5 @@
+import { coalescedRefresh } from "./coalescedRefresh";
+import { toNoteSummary } from "./noteSummary";
 import { create } from "zustand";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -403,7 +405,46 @@ const notebooksLoaded = new Promise<void>((resolve) => {
   setTimeout(resolve, 10_000);
 });
 
-export const useStore = create<AppState>((set, get) => {
+export const useStore = create<AppState>((rawSet, get) => {
+  // Commands and generation events can return full notes. Strip their large
+  // fields at this single boundary, including optimistic updates and undo.
+  let sourceRevision = 0;
+  let noteRevision = 0;
+  let notebookRevision = 0;
+  const set = (patch: Partial<AppState> | ((state: AppState) => Partial<AppState>)) => {
+    rawSet((state) => {
+      const next = typeof patch === "function" ? patch(state) : patch;
+      if ("currentId" in next) notebookRevision++;
+      if (next.sources) sourceRevision++;
+      if (next.notes) noteRevision++;
+      return next.notes ? { ...next, notes: next.notes.map(toNoteSummary) } : next;
+    });
+  };
+  const refreshSources = coalescedRefresh(async (isCurrent) => {
+    const id = get().currentId;
+    if (!id) return;
+    const revision = sourceRevision;
+    const navigation = notebookRevision;
+    const sources = await api.listSources(id);
+    if (!isCurrent() || navigation !== notebookRevision) return;
+    if (revision !== sourceRevision) { refreshSources.request(); return; }
+    {
+      set({ sources });
+      void get().refreshHygiene();
+      void get().refreshOkfLifecycle(id);
+    }
+  }, () => { /* api.run has already recorded the error. */ });
+  const refreshNotes = coalescedRefresh(async (isCurrent) => {
+    const id = get().currentId;
+    if (!id) return;
+    const revision = noteRevision;
+    const navigation = notebookRevision;
+    const notes = await api.listNoteSummaries(id);
+    if (!isCurrent() || navigation !== notebookRevision) return;
+    if (revision !== noteRevision) { refreshNotes.request(); return; }
+    set({ notes });
+  }, () => { /* api.run has already recorded the error. */ });
+
   /** Run an async action, surfacing any failure as the global error instead of
    *  swallowing it (unhandled rejection = the UI silently does nothing). */
   const guard = async (fn: () => Promise<void>) => {
@@ -904,11 +945,7 @@ export const useStore = create<AppState>((set, get) => {
       }>("sources://changed", (e) => {
         const p = e.payload;
         if (get().currentId !== p.notebookId) return;
-        void api.listSources(p.notebookId).then((sources) => set({ sources }));
-        void get().refreshHygiene();
-        // A bundle scan rewrites the lifecycle sidecar; re-read it so a
-        // concept retired on disk goes quiet here without a reload.
-        void get().refreshOkfLifecycle(p.notebookId);
+        refreshSources.request();
         const parts = [
           p.added && `${p.added} added`,
           p.updated && `${p.updated} updated`,
@@ -970,9 +1007,9 @@ export const useStore = create<AppState>((set, get) => {
           const current = get().currentId;
           if (!current || (notebookId && notebookId !== current)) return;
           if (scope === "sources")
-            void api.listSources(current).then((sources) => set({ sources }));
+            refreshSources.request();
           if (scope === "notes")
-            void api.listNotes(current).then((notes) => set({ notes }));
+            refreshNotes.request();
           if (scope === "ledger")
             set((state) => ({ ledgerBump: state.ledgerBump + 1 }));
           if (scope === "reports")
@@ -1410,6 +1447,9 @@ export const useStore = create<AppState>((set, get) => {
         // one flag, because they all arrive in the same Promise.all.
         notebookLoading: true,
       });
+      const navigation = notebookRevision;
+      const sourceLoad = sourceRevision;
+      const noteLoad = noteRevision;
       const nb = get().notebooks.find((n) => n.id === id);
       if (nb) void getCurrentWebviewWindow().setTitle(`${nb.title} — Alchemy`);
       try {
@@ -1417,23 +1457,23 @@ export const useStore = create<AppState>((set, get) => {
           [
             api.listSources(id),
             api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
-            api.listNotes(id),
+            api.listNoteSummaries(id),
             api.listReportSchedules(id),
           ],
         );
         // Guarded on both paths: a slow load for a notebook the user already
         // navigated away from must not clear the newer one's flag.
-        if (get().currentId === id)
+        if (get().currentId === id && navigation === notebookRevision)
           set({
-            sources,
+            ...(sourceLoad === sourceRevision ? { sources } : {}),
             messages: messagePage.messages,
             messagesHasMore: messagePage.hasMore,
-            notes,
+            ...(noteLoad === noteRevision ? { notes } : {}),
             reportSchedules,
             notebookLoading: false,
           });
       } catch (e) {
-        if (get().currentId === id)
+        if (get().currentId === id && navigation === notebookRevision)
           set({
             notebookLoading: false,
             error: e instanceof Error ? e.message : String(e),
@@ -2420,8 +2460,13 @@ export const useStore = create<AppState>((set, get) => {
         if (noteIds.length === 0) return;
         // Snapshot for the undo toast: restore_note re-inserts with kind and
         // prompt intact, so studio artifacts keep their viewer.
-        const doomed = get().notes.filter((n) => noteIds.includes(n.id));
-        await api.deleteNotes(noteIds);
+        // Fetch every undo body before the destructive call. A failed read must
+        // abort the deletion rather than offering an incomplete restore.
+        const doomed: Note[] = [];
+        for (const id of noteIds) doomed.push(await api.readNote(id));
+        let activeIds = [...noteIds];
+        let restoredCount = 0;
+        await api.deleteNotes(activeIds);
         set({
           notes: get().notes.filter((n) => !noteIds.includes(n.id)),
           picked: null,
@@ -2434,15 +2479,21 @@ export const useStore = create<AppState>((set, get) => {
           label,
           noteIds.length === 1 ? "Delete Note" : `Delete ${noteIds.length} Notes`,
           async () => {
-            // restore_note re-inserts under the original id, so redo can
-            // reuse the very same list.
-            for (const n of doomed) await api.restoreNote(n);
+            // Restores get new ids. Track each successful restore immediately
+            // so redo addresses those rows and a partial retry cannot duplicate
+            // notes that already came back.
+            while (restoredCount < doomed.length) {
+              doomed[restoredCount] = await api.restoreNote(doomed[restoredCount]);
+              restoredCount++;
+            }
+            activeIds = doomed.map((n) => n.id);
             const nb = get().currentId;
-            if (nb) set({ notes: await api.listNotes(nb) });
+            if (nb) set({ notes: await api.listNoteSummaries(nb) });
           },
           async () => {
-            await api.deleteNotes(noteIds);
-            set({ notes: get().notes.filter((n) => !noteIds.includes(n.id)) });
+            await api.deleteNotes(activeIds);
+            restoredCount = 0;
+            set({ notes: get().notes.filter((n) => !activeIds.includes(n.id)) });
           },
         );
       }),
@@ -2505,7 +2556,7 @@ export const useStore = create<AppState>((set, get) => {
         // has, so both lists can have grown.
         const [sources, notes] = await Promise.all([
           api.listSources(id),
-          api.listNotes(id),
+          api.listNoteSummaries(id),
         ]);
         if (get().currentId === id) set({ sources, notes });
         get().pushToast("success", "This notebook is now kept on disk.");
@@ -2657,7 +2708,7 @@ export const useStore = create<AppState>((set, get) => {
         const [messagePage, sources, notes, reportSchedules, templates] = await Promise.all([
           api.listMessagesPage(id, undefined, CHAT_PAGE_SIZE),
           api.listSources(id),
-          api.listNotes(id),
+          api.listNoteSummaries(id),
           api.listReportSchedules(id),
           api.listTemplates(),
         ]);
@@ -3034,7 +3085,7 @@ export const useStore = create<AppState>((set, get) => {
           note.id,
           id,
           note.kind,
-          note.prompt,
+          (await api.readNote(note.id)).prompt,
         );
         // Template rebuilds keep their template name (the backend re-titles
         // unknown kinds "Report").
@@ -3074,7 +3125,8 @@ export const useStore = create<AppState>((set, get) => {
         const id = get().currentId;
         if (!id) return;
         await api.updateNote(noteId, title, content);
-        set({ notes: await api.listNotes(id) });
+        const notes = await api.listNoteSummaries(id);
+        if (get().currentId === id) set({ notes });
       }),
 
     deleteNote: (noteId) => get().deleteNotesBatch([noteId]),
@@ -3283,7 +3335,7 @@ export const useStore = create<AppState>((set, get) => {
         const id = get().currentId;
         if (id) {
           set({
-            notes: await api.listNotes(id),
+            notes: await api.listNoteSummaries(id),
             reportSchedules: await api.listReportSchedules(id),
           });
         }

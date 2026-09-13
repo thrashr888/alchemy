@@ -1,3 +1,4 @@
+import { toNoteSummary } from "@/lib/noteSummary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -477,7 +478,7 @@ export function GrowPane() {
       .generateWikiIndex(currentId)
       .then((note) => {
         useStore.setState((st) => ({
-          notes: [note, ...st.notes.filter((x) => x.id !== note.id)],
+          notes: [toNoteSummary(note), ...st.notes.filter((x) => x.id !== note.id)],
         }));
         const st = useStore.getState();
         // Say what happened — a refresh rewrites in place, which is

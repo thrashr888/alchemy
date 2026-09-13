@@ -42,6 +42,7 @@ import type {
   RegistryCard,
   NightShiftStatus,
   Note,
+  NoteSummary,
   NoteKind,
   Notebook,
   NotebookGraph,
@@ -449,6 +450,9 @@ export const api = {
     run(cmd<Message>("add_note_to_chat", { noteId })),
 
   // Notes & artifacts
+  readNote: (noteId: string) => run(query<Note>("read_note", { noteId })),
+  listNoteSummaries: (notebookId: string) =>
+    run(query<NoteSummary[]>("list_note_summaries", { notebookId })),
   listNotes: (notebookId: string) =>
     run(query<Note[]>("list_notes", { notebookId })),
   activityStats: () => run(query<ActivityStats>("activity_stats")),

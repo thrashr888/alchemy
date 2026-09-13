@@ -631,6 +631,20 @@ pub struct Note {
     pub updated_at: i64,
 }
 
+/// Sidebar/graph rows: body and prompt are fetched only for an explicit use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSummary {
+    pub id: String,
+    pub notebook_id: String,
+    pub title: String,
+    pub kind: String,
+    pub origin: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 fn default_note_kind() -> String {
     "note".to_string()
 }

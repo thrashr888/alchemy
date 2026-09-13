@@ -1,3 +1,4 @@
+import { visibleAnimation } from "@/lib/visibleAnimation";
 import { useEffect, useRef, useState } from "react";
 import { THEMES, resolveThemeId, type ShaderVariant } from "@/lib/themes";
 
@@ -120,36 +121,17 @@ export function DitherBackground({
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.uniform2f(uRes, canvas.width, canvas.height);
     };
-    resize();
-
-    let raf = 0;
-    let last = 0;
     const startT = performance.now();
-    // Grain is a texture, not weather — it draws once, like reduced motion.
     const isStatic = reducedMotion || variant === "grain";
-    const render = (now: number) => {
-      if (!isStatic) raf = requestAnimationFrame(render);
-      if (now - last < 33) return;
-      last = now;
-      resize();
+    const stop = visibleAnimation(canvas, resize, (now) => {
       gl.uniform1f(uTime, isStatic ? 0 : (now - startT) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-    };
-    raf = requestAnimationFrame(render);
-
-    const ro = new ResizeObserver(() => {
-      resize();
-      // Static variants get no animation frames, so redraw on resize here.
-      if (isStatic) {
-        gl.uniform1f(uTime, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      }
-    });
-    ro.observe(canvas);
+    }, isStatic);
 
     return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
+      stop();
+      // Release the old drawing buffer too; the next effect resizes it.
+      canvas.width = canvas.height = 1;
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
@@ -573,24 +555,36 @@ void main(){
 
 function buildProgram(gl: WebGLRenderingContext): WebGLProgram | null {
   const compile = (type: number, src: string) => {
-    const s = gl.createShader(type)!;
+    const s = gl.createShader(type);
+    if (!s) return null;
     gl.shaderSource(s, src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
       console.warn("dither shader:", gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
       return null;
     }
     return s;
   };
   const vs = compile(gl.VERTEX_SHADER, VERT);
   const fs = compile(gl.FRAGMENT_SHADER, FRAG);
-  if (!vs || !fs) return null;
-  const p = gl.createProgram()!;
+  if (!vs || !fs) {
+    if (vs) gl.deleteShader(vs);
+    if (fs) gl.deleteShader(fs);
+    return null;
+  }
+  const p = gl.createProgram();
+  if (!p) { gl.deleteShader(vs); gl.deleteShader(fs); return null; }
   gl.attachShader(p, vs);
   gl.attachShader(p, fs);
   gl.linkProgram(p);
+  gl.detachShader(p, vs);
+  gl.detachShader(p, fs);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
     console.warn("dither link:", gl.getProgramInfoLog(p));
+    gl.deleteProgram(p);
     return null;
   }
   return p;

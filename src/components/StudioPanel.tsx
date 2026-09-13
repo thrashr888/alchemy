@@ -28,7 +28,7 @@ import {
   relativeTime,
   shortcutBlocked,
 } from "@/lib/utils";
-import type { Note } from "@/lib/types";
+import type { NoteSummary as Note } from "@/lib/types";
 import {
   FAMILY_ACCENT,
   KIND_LABEL,
@@ -321,24 +321,8 @@ export function StudioPanel() {
         label: `Copy ${n} notes`,
         icon: <Copy className="h-3.5 w-3.5" />,
         onClick: () => {
-          const all = useStore.getState().notes;
-          const text = ids
-            .map((id) => all.find((x) => x.id === id))
-            .filter((x): x is Note => !!x)
-            .map((x) => `# ${x.title}\n\n${x.content}`)
-            .join("\n\n---\n\n");
-          // Report what actually happened: a denied clipboard write used to
-          // toast success anyway and leave an unhandled rejection behind.
-          navigator.clipboard.writeText(text).then(
-            () => useStore.getState().pushToast("success", `${n} notes copied`),
-            (err: unknown) =>
-              useStore
-                .getState()
-                .pushToast(
-                  "error",
-                  err instanceof Error ? err.message : "Couldn't copy to the clipboard",
-                ),
-          );
+          void copyNotes(ids);
+
         },
       },
       {
@@ -397,10 +381,6 @@ export function StudioPanel() {
     time: relativeTime(n.updatedAt),
     meta: [
       { label: KIND_LABEL[n.kind] ?? n.kind },
-      {
-        label: "Length",
-        value: `${n.content.split(/\s+/).filter(Boolean).length.toLocaleString()} words`,
-      },
       ...(n.origin === "auto"
         ? [{ label: n.status === "stale" ? "Auto note · stale" : "Auto note" }]
         : []),
@@ -828,10 +808,7 @@ export function StudioPanel() {
                           label: "Copy text",
                           icon: <Copy className="h-3.5 w-3.5" />,
                           onClick: () => {
-                            void navigator.clipboard.writeText(n.content);
-                            useStore
-                              .getState()
-                              .pushToast("success", "Note copied");
+                            void copyNotes([n.id]);
                           },
                         },
                         ...exportTargets(n).map((t) => ({
@@ -919,11 +896,12 @@ export function StudioPanel() {
                           type="button"
                           onClick={() => {
                             void (async () => {
+                              const full = await api.readNote(n.id);
                               await deleteNote(n.id);
                               await useStore
                                 .getState()
-                                .generateArtifact(n.kind, n.prompt);
-                            })();
+                                .generateArtifact(n.kind, full.prompt);
+                            })().catch((error) => useStore.getState().pushToast("error", String(error)));
                           }}
                           className="rounded px-1 py-0.5 text-subtle-foreground hover:text-foreground"
                           title="Delete this attempt and generate again"
@@ -1075,4 +1053,18 @@ function GenTile({
       <span className="truncate">{label}</span>
     </button>
   );
+}
+
+async function copyNotes(ids: string[]) {
+  try {
+    const pieces: string[] = [];
+    for (const id of ids) {
+      const note = await api.readNote(id);
+      pieces.push(ids.length === 1 ? note.content : `# ${note.title}\n\n${note.content}`);
+    }
+    await navigator.clipboard.writeText(pieces.join("\n\n---\n\n"));
+    useStore.getState().pushToast("success", ids.length === 1 ? "Note copied" : `${ids.length} notes copied`);
+  } catch (error) {
+    useStore.getState().pushToast("error", String(error));
+  }
 }

@@ -157,6 +157,23 @@ fn pptx_note_bytes(note: &Note) -> Result<Vec<u8>> {
 /// Normalize an export format to the extension it writes. Shared with the
 /// drag-out staging path (dragout.rs), which needs the same name the Save
 /// dialog would have produced.
+/// Match the frontend's body-dependent Word/Excel choice without allocating
+/// one string or slice per line of a potentially large report.
+pub(crate) fn prose_export_format(content: &str) -> &'static str {
+    let (lines, tables) = content
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .fold((0usize, 0usize), |(lines, tables), line| {
+            (lines + 1, tables + usize::from(line.starts_with('|')))
+        });
+    if tables >= 2 && tables + 2 >= lines {
+        "xlsx"
+    } else {
+        "docx"
+    }
+}
+
 pub(crate) fn export_ext(format: &str) -> Result<&str> {
     let format = match format {
         "audio" | "mp3" => "m4a", // the episode is AAC; see the RFC
@@ -648,6 +665,21 @@ mod export_tests {
 | West | 1,200 | 900.5 |
 | East | 40% | n/a |
 ";
+
+    #[test]
+    fn prose_drag_format_preserves_table_workbooks() {
+        assert_eq!(
+            prose_export_format("| A | B |\n|---|---|\n| 1 | 2 |"),
+            "xlsx"
+        );
+        assert_eq!(prose_export_format("Title\n\n| A |\n|---|\nFooter"), "xlsx");
+        assert_eq!(prose_export_format("Ordinary report."), "docx");
+        assert_eq!(
+            prose_export_format("Intro\nMore text\nEven more\n| A |\n|---|"),
+            "docx"
+        );
+        assert_eq!(prose_export_format(""), "docx");
+    }
 
     #[test]
     fn tables_parse_with_headers_and_cells() {
