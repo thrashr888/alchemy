@@ -702,6 +702,13 @@ pub struct TimelineItem {
     /// Notes only: "" (deliberate) | "auto" (the chat post-pass made it).
     #[serde(default)]
     pub origin: String,
+    /// Sources only: space-separated user tags, for the tag filter.
+    #[serde(default)]
+    pub tags: String,
+    /// Sources only: last fetch or read; `created_at` for notes. The stale
+    /// facet reads age from this, as the Sources panel does.
+    #[serde(default)]
+    pub fetched_at: i64,
     pub created_at: i64,
 }
 

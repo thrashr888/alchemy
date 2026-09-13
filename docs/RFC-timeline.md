@@ -171,6 +171,27 @@ away and does not need its own tab.
 - **A batch click shows its day**: the day (or days) the batch spans fills
   80% of the pane, centred on it. The zoom control reads as the visible
   span ("30 hours", "2 months") — a percentage meant nothing at 170×.
+- **Second pass, after Paul's try and a design critique (2026-09-13):**
+  - A batch click opens a **panel** listing its documents (each a click
+    from the reader), with the axis left where it was; "zoom to its day"
+    is a button in the panel. Hover cards stay info-only.
+  - Batches that would overlap at the current zoom **merge into one
+    ringed marker** ("several imports"); clicking it zooms until they part.
+    Since batches in one lane are 30+ minutes apart by construction, they
+    always do.
+  - **Filters follow the Sources panel**: type, tag, Stale, Uncited. The
+    notebook chips went — filtering to one lane showed one row and little
+    else. Clicking a lane's name opens the notebook instead.
+  - **Color means notebook, only**: type dots left the filter bar and the
+    unfolded ticks, so red can't mean both "PDF" and "this notebook". A
+    one-line legend explains filled / outlined / ringed / size.
+  - Drag pans both ways (time through the view, lanes through the scroll).
+    Keyboard: ← → pan, + − zoom, 0 fit, T today, Esc closes the panel.
+    The control shows the visible date range and a Today button.
+  - Ticks get a 14px hit target; near-simultaneous documents share one
+    title slot; lanes highlight on hover so a far marker still reads as
+    its notebook's; the Ask box is hidden on this tab so the chart starts
+    higher.
 - The MCP tool is `corpus_timeline` (batches with sample titles, no
   items; `since`/`until` in epoch ms) — `timeline` alone collides with the
   generator kind of that name.

@@ -320,6 +320,10 @@ export interface TimelineItem {
   sourceType: string;
   /** Notes only: "" (deliberate) | "auto". */
   origin: string;
+  /** Sources only: space-separated user tags. */
+  tags: string;
+  /** Last fetch or read (sources); createdAt for notes. */
+  fetchedAt: number;
   createdAt: number;
 }
 

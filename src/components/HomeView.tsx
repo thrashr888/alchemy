@@ -1252,7 +1252,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               Enter asks across every notebook and opens the answer as a
               conversation. In the Chat tab it moves to the bottom of the
               pane, below the conversation it feeds. */}
-              {!chatOpen && <div className="mb-8">{askComposer}</div>}
+              {!chatOpen && homeSection !== "timeline" && (
+                <div className="mb-8">{askComposer}</div>
+              )}
             </div>
 
             {chatOpen ? (

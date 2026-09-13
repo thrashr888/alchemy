@@ -148,6 +148,8 @@ mod tests {
                     "pdf".into()
                 },
                 origin: String::new(),
+                tags: String::new(),
+                fetched_at: at,
                 created_at: at,
             },
         }

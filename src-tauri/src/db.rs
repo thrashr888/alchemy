@@ -3140,7 +3140,15 @@ impl Db {
             .collect_cols(
                 T_SOURCES,
                 filter.as_deref(),
-                &["id", "notebook_id", "title", "source_type", "created_at"],
+                &[
+                    "id",
+                    "notebook_id",
+                    "title",
+                    "source_type",
+                    "tags",
+                    "fetched_at",
+                    "created_at",
+                ],
             )
             .await?;
         for b in &batches {
@@ -3148,6 +3156,8 @@ impl Db {
             let nb = str_col(b, "notebook_id")?;
             let title = str_col(b, "title")?;
             let ty = str_col(b, "source_type")?;
+            let tags = str_col(b, "tags")?;
+            let fetched = i64_col(b, "fetched_at")?;
             let created = i64_col(b, "created_at")?;
             for i in 0..b.num_rows() {
                 out.push(crate::timeline::TimelineRow {
@@ -3158,6 +3168,8 @@ impl Db {
                         title: title.value(i).to_string(),
                         source_type: ty.value(i).to_string(),
                         origin: String::new(),
+                        tags: tags.value(i).to_string(),
+                        fetched_at: fetched.value(i),
                         created_at: created.value(i),
                     },
                 });
@@ -3186,6 +3198,8 @@ impl Db {
                         title: title.value(i).to_string(),
                         source_type: kind.value(i).to_string(),
                         origin: origin.value(i).to_string(),
+                        tags: String::new(),
+                        fetched_at: created.value(i),
                         created_at: created.value(i),
                     },
                 });
