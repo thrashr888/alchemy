@@ -3718,6 +3718,19 @@ impl Db {
         Ok(())
     }
 
+    /// Backdate a source to when it really arrived — a catalog item's own
+    /// publish date rather than the moment this app captured it — so
+    /// "Recent" and the timeline read the corpus's history, not the import's.
+    pub async fn set_source_created_at(&self, id: &str, created_at: i64) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("created_at", created_at.to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     /// Set a note's curator status: "" (active) | "stale" | "archived".
     pub async fn set_note_status(&self, id: &str, status: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_NOTES).execute().await?;

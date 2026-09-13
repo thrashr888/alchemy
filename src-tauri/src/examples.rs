@@ -18,6 +18,7 @@ use crate::commands::{app_data_dir, new_id, now, AppState};
 use crate::db::{Db, NOTEBOOK_PALETTE};
 use crate::ingest;
 use crate::models::{Notebook, RegistryCard, Source};
+use tauri::{Emitter, Manager};
 
 pub(crate) const INTRO_TITLE: &str = "Introduction to Alchemy";
 pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporations";
@@ -25,13 +26,17 @@ pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 pub(crate) const CURATED_TITLE: &str = "Curated Supply: Well-Designed Objects";
 pub(crate) const ALCHEMY_HISTORY_TITLE: &str = "The History of Alchemy";
 /// Paul's link catalog, published from its own repo (thrashr888/curated-links)
-/// and read here as a git source — the one starter whose content lives
-/// outside the app and grows between releases.
+/// as a JSON Feed. The app captures every item itself — the page behind the
+/// link, with its cover image and the item's tags — and checks the feed
+/// hourly for new ones, so this starter grows between releases. A post on
+/// X that stands alone (no page behind it) keeps its text as a text source.
 pub(crate) const LINKS_TITLE: &str = "Curated Links";
 const LINKS_ICON: &str = "globe";
-/// The monthly digests, as a subtree: one source per month, re-synced by
-/// sha probe, no clone of the whole repository.
-const LINKS_SOURCE_URL: &str = "https://github.com/thrashr888/curated-links/tree/main/links";
+const LINKS_FEED: &str =
+    "https://raw.githubusercontent.com/thrashr888/curated-links/main/feed/feed.json";
+/// Between page captures: polite to the sites, and cheap enough that a
+/// first fill of ~1,400 links finishes in the background within the hour.
+const LINKS_IMPORT_GAP: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// Lucide icon for the alchemy-history notebook. The title-keyword auto-pick
 /// (`auto_notebook_icon`) would file "History" under a landmark; a flask is
@@ -934,7 +939,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // The links starter refills itself: its content is a git source,
             // not built-in text, so an import that failed offline is retried
             // here rather than in refill_empty_starters.
-            return refilled || seed_links(state).await;
+            return refilled || seed_links(state, false).await;
         }
         // Every marker so far has held a small integer; anything else reads
         // as the original release.
@@ -986,7 +991,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // Network-shaped, so it never blocks the marker: an install that
             // upgraded offline gets the notebook now and its import on the
             // next launch that can reach GitHub.
-            added |= seed_links(state).await;
+            added |= seed_links(state, true).await;
         }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
@@ -1026,7 +1031,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             return seeded;
         }
     }
-    seeded |= seed_links(state).await;
+    seeded |= seed_links(state, true).await;
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
@@ -1039,52 +1044,271 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     seeded
 }
 
-/// The links starter: create it if it has never existed, and import its git
-/// source whenever it stands empty — first launch, an offline upgrade, or a
-/// cleanup that swept the source away. A deleted notebook stays deleted:
-/// this only ever runs when the marker says the notebook is still owed or
-/// when the notebook is present. Returns true when something landed.
-async fn seed_links(state: &AppState) -> bool {
+/// The links starter. `create` says whether a missing notebook is owed —
+/// true on first seeding and on the version top-up, false on an ordinary
+/// launch, where a deleted starter stays deleted. Whenever the notebook
+/// exists, a sync runs in the background: the feed is fetched and every
+/// item not yet in the notebook is captured. Returns true when the
+/// notebook was created; what the sync lands shows up on its own.
+async fn seed_links(state: &AppState, create: bool) -> bool {
     let db = &state.db;
     let notebooks = match db.list_notebooks().await {
         Ok(n) => n,
         Err(_) => return false,
     };
-    let nb = match notebooks.iter().find(|n| n.title == LINKS_TITLE) {
-        Some(nb) => nb.clone(),
-        None => {
-            if let Err(err) =
-                insert_notebook(db, LINKS_TITLE, LINKS_ICON, notebooks.len(), Vec::new()).await
-            {
-                crate::note!("examples: creating \u{201c}{LINKS_TITLE}\u{201d} failed ({err:#}); will retry next launch");
-                return false;
-            }
-            match db.list_notebooks().await {
-                Ok(all) => match all.into_iter().find(|n| n.title == LINKS_TITLE) {
-                    Some(nb) => nb,
-                    None => return false,
-                },
-                Err(_) => return false,
-            }
+    let created = if notebooks.iter().any(|n| n.title == LINKS_TITLE) {
+        false
+    } else if create {
+        if let Err(err) =
+            insert_notebook(db, LINKS_TITLE, LINKS_ICON, notebooks.len(), Vec::new()).await
+        {
+            crate::note!("examples: creating \u{201c}{LINKS_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+            return false;
         }
+        true
+    } else {
+        return false;
     };
-    match db.list_sources(&nb.id).await {
-        Ok(sources) if !sources.is_empty() => return false,
-        Ok(_) => {}
-        Err(_) => return false,
+    // The fill is network-shaped and long; it must not hold the opening
+    // tick. Same handle the background sweeps use.
+    if let Some(app) = crate::commands::app_handle() {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            sync_links(&state).await;
+        });
     }
-    match crate::commands::ingest_url(state, &nb.id, LINKS_SOURCE_URL, None).await {
-        Ok(_) => {
-            crate::note!("examples: \u{201c}{LINKS_TITLE}\u{201d} connected to {LINKS_SOURCE_URL}");
-            true
+    created
+}
+
+static LINKS_SYNCING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One feed item, in the shape the catalog publishes (JSON Feed 1.1 plus
+/// `external_url` for a post that pointed at this page).
+struct LinkItem {
+    url: String,
+    title: String,
+    text: String,
+    tags: String,
+    image: String,
+    via: String,
+    /// `date_published`, epoch ms; 0 when the feed didn't say.
+    published_ms: i64,
+}
+
+fn link_items(body: &str) -> Vec<LinkItem> {
+    let Ok(feed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let str_of = |v: &serde_json::Value, k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    feed.get("items")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|it| {
+                    let url = str_of(it, "url");
+                    if !url.starts_with("http") {
+                        return None;
+                    }
+                    let tags = it
+                        .get("tags")
+                        .and_then(|t| t.as_array())
+                        .map(|t| {
+                            t.iter()
+                                .filter_map(|x| x.as_str())
+                                .map(tag_slug)
+                                .filter(|x| !x.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+                    Some(LinkItem {
+                        url,
+                        title: str_of(it, "title"),
+                        text: str_of(it, "content_text"),
+                        tags,
+                        image: str_of(it, "image"),
+                        via: str_of(it, "external_url"),
+                        published_ms: chrono::DateTime::parse_from_rfc3339(&str_of(
+                            it,
+                            "date_published",
+                        ))
+                        .map(|d| d.timestamp_millis())
+                        .unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The key two links share when they are the same page: scheme and a
+/// trailing slash aside. The catalog canonicalizes upstream; this is the
+/// same rule on the notebook's side, so an older row never doubles.
+fn link_key(url: &str) -> String {
+    ingest::normalize_url(url)
+        .trim_end_matches('/')
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.")
+        .to_ascii_lowercase()
+}
+
+/// "AI agents & automation" → "ai-agents-automation": the catalog's labels
+/// as the space-separated tag tokens the app stores.
+fn tag_slug(label: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in label.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
         }
-        Err(err) => {
-            crate::note!(
-                "examples: importing the links catalog failed ({err:#}); will retry next launch"
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+fn is_social_post(url: &str) -> bool {
+    let host = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.")
+        .split('/')
+        .next()
+        .unwrap_or("");
+    matches!(host, "x.com" | "twitter.com" | "mobile.twitter.com")
+}
+
+/// Fetch the catalog's feed and capture every item the notebook doesn't
+/// hold yet. Pages go through the ordinary URL path (fetch, readability,
+/// og:image); a post on X that stands alone becomes a text source carrying
+/// the post's words, since X answers crawlers with a shell. Tags come from
+/// the item. Runs at launch and from the hourly tick; one at a time.
+pub(crate) async fn sync_links(state: &AppState) {
+    use std::sync::atomic::Ordering;
+    if LINKS_SYNCING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let done = sync_links_inner(state).await;
+    LINKS_SYNCING.store(false, Ordering::SeqCst);
+    if let Err(err) = done {
+        crate::note!("examples: links catalog sync stopped ({err:#}); the hourly pass retries");
+    }
+}
+
+async fn sync_links_inner(state: &AppState) -> anyhow::Result<()> {
+    let db = &state.db;
+    let Some(nb) = db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .find(|n| n.title == LINKS_TITLE)
+    else {
+        return Ok(());
+    };
+    let client = reqwest::Client::builder()
+        .user_agent(format!("Alchemy/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let body = client
+        .get(LINKS_FEED)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let items = link_items(&body);
+    if items.is_empty() {
+        anyhow::bail!("the feed had no items");
+    }
+    // url → (id, created_at): what the notebook holds, so an item already
+    // here is skipped — and one captured before backdating existed gets its
+    // publish date now.
+    let have: std::collections::HashMap<String, (String, i64)> = db
+        .list_sources(&nb.id)
+        .await?
+        .iter()
+        .map(|s| (link_key(&s.url), (s.id.clone(), s.created_at)))
+        .collect();
+    let mut landed = 0usize;
+    let mut failed = 0usize;
+    for item in items {
+        let key = link_key(&item.url);
+        if let Some((id, created_at)) = have.get(&key) {
+            if item.published_ms > 0 && *created_at != item.published_ms {
+                let _ = db.set_source_created_at(id, item.published_ms).await;
+            }
+            continue;
+        }
+        let stored = if is_social_post(&item.url) {
+            // The post is the content. Its words, the summary line the
+            // catalog wrote, and the link back.
+            let text = format!("# {}\n\n{}\n\nLink: {}\n", item.title, item.text, item.url);
+            let extracted = ingest::Extracted {
+                title: item.title.clone(),
+                source_type: "text".to_string(),
+                url: item.url.clone(),
+                text,
+                author: String::new(),
+                image_url: item.image.clone(),
+                feeds: Vec::new(),
+            };
+            crate::commands::store_extracted(state, &nb.id, extracted).await
+        } else {
+            crate::commands::ingest_url(state, &nb.id, &item.url, None).await
+        };
+        match stored {
+            Ok(src) => {
+                // The item's own date, not the capture's: newest-first in
+                // the panel and the gallery, and the timeline shows when the
+                // link was actually kept.
+                if item.published_ms > 0 {
+                    let _ = db.set_source_created_at(&src.id, item.published_ms).await;
+                }
+                if !item.tags.is_empty() {
+                    let _ = crate::commands::set_source_tags_impl(state, &src.id, &item.tags).await;
+                }
+                // Why it was kept: the post that pointed here, as the
+                // source's note, so the reader sees the words beside the page.
+                if !item.via.is_empty() && !item.text.is_empty() {
+                    let _ = db
+                        .set_source_note(&src.id, &format!("{}\n\nvia {}", item.text, item.via))
+                        .await;
+                }
+                landed += 1;
+            }
+            Err(err) => {
+                failed += 1;
+                let msg = format!("{err:#}");
+                if !msg.contains("Already in this notebook") && !msg.contains("already") {
+                    crate::note!("examples: links catalog: {} — {msg}", item.url);
+                }
+            }
+        }
+        tokio::time::sleep(LINKS_IMPORT_GAP).await;
+    }
+    if landed > 0 || failed > 0 {
+        crate::note!("examples: links catalog sync landed {landed}, failed {failed}");
+        if let Some(app) = crate::commands::app_handle() {
+            let _ = app.emit(
+                "mcp://changed",
+                serde_json::json!({ "scope": "sources", "notebookId": nb.id }),
             );
-            false
         }
     }
+    Ok(())
 }
 
 /// Put the built-in sources back into any starter notebook that still

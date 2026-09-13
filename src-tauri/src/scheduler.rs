@@ -645,6 +645,9 @@ async fn run_pass(app: &AppHandle) {
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
             let state = app2.state::<AppState>();
+            // The links catalog first: new items in the feed become sources
+            // before the OKF pass writes the notebook out.
+            crate::examples::sync_links(&state).await;
             run_okf_export(&app2, &state).await;
         });
     }
