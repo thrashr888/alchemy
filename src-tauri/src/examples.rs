@@ -24,6 +24,14 @@ pub(crate) const EARNINGS_TITLE: &str = "Earnings Reports for Top 50 Corporation
 pub(crate) const AI_RESEARCH_TITLE: &str = "AI Research: Landmark Papers";
 pub(crate) const CURATED_TITLE: &str = "Curated Supply: Well-Designed Objects";
 pub(crate) const ALCHEMY_HISTORY_TITLE: &str = "The History of Alchemy";
+/// Paul's link catalog, published from its own repo (thrashr888/curated-links)
+/// and read here as a git source — the one starter whose content lives
+/// outside the app and grows between releases.
+pub(crate) const LINKS_TITLE: &str = "Curated Links";
+const LINKS_ICON: &str = "globe";
+/// The monthly digests, as a subtree: one source per month, re-synced by
+/// sha probe, no clone of the whole repository.
+const LINKS_SOURCE_URL: &str = "https://github.com/thrashr888/curated-links/tree/main/links";
 
 /// Lucide icon for the alchemy-history notebook. The title-keyword auto-pick
 /// (`auto_notebook_icon`) would file "History" under a landmark; a flask is
@@ -48,6 +56,7 @@ pub(crate) const STARTER_TITLES: &[&str] = &[
     AI_RESEARCH_TITLE,
     CURATED_TITLE,
     ALCHEMY_HISTORY_TITLE,
+    LINKS_TITLE,
 ];
 
 /// Is this notebook one the app seeded rather than one the user made?
@@ -903,7 +912,7 @@ const CURATED_SOURCES: &[CuratedSource] = &[
 /// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
 /// version; the original release wrote "1", the papers top-up "2", the
 /// curated-objects notebook "3", and the alchemy-history notebook "4".
-const EXAMPLES_VERSION: &str = "4";
+const EXAMPLES_VERSION: &str = "5";
 
 pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
@@ -915,13 +924,17 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // built-in sources back, since they are the app's, not the
             // user's, and an empty starter teaches nothing.
             let ai = state.ai.read().await.clone();
-            return match refill_empty_starters(&state.db, &ai).await {
+            let refilled = match refill_empty_starters(&state.db, &ai).await {
                 Ok(n) => n > 0,
                 Err(err) => {
                     crate::note!("examples: refilling an emptied starter failed ({err:#}); will retry next launch");
                     false
                 }
             };
+            // The links starter refills itself: its content is a git source,
+            // not built-in text, so an import that failed offline is retried
+            // here rather than in refill_empty_starters.
+            return refilled || seed_links(state).await;
         }
         // Every marker so far has held a small integer; anything else reads
         // as the original release.
@@ -969,6 +982,12 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
                 }
             }
         }
+        if seeded_at < 5 {
+            // Network-shaped, so it never blocks the marker: an install that
+            // upgraded offline gets the notebook now and its import on the
+            // next launch that can reach GitHub.
+            added |= seed_links(state).await;
+        }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
         }
@@ -1007,6 +1026,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             return seeded;
         }
     }
+    seeded |= seed_links(state).await;
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
@@ -1017,6 +1037,54 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         crate::note!("examples: couldn't write marker: {err}");
     }
     seeded
+}
+
+/// The links starter: create it if it has never existed, and import its git
+/// source whenever it stands empty — first launch, an offline upgrade, or a
+/// cleanup that swept the source away. A deleted notebook stays deleted:
+/// this only ever runs when the marker says the notebook is still owed or
+/// when the notebook is present. Returns true when something landed.
+async fn seed_links(state: &AppState) -> bool {
+    let db = &state.db;
+    let notebooks = match db.list_notebooks().await {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let nb = match notebooks.iter().find(|n| n.title == LINKS_TITLE) {
+        Some(nb) => nb.clone(),
+        None => {
+            if let Err(err) =
+                insert_notebook(db, LINKS_TITLE, LINKS_ICON, notebooks.len(), Vec::new()).await
+            {
+                crate::note!("examples: creating \u{201c}{LINKS_TITLE}\u{201d} failed ({err:#}); will retry next launch");
+                return false;
+            }
+            match db.list_notebooks().await {
+                Ok(all) => match all.into_iter().find(|n| n.title == LINKS_TITLE) {
+                    Some(nb) => nb,
+                    None => return false,
+                },
+                Err(_) => return false,
+            }
+        }
+    };
+    match db.list_sources(&nb.id).await {
+        Ok(sources) if !sources.is_empty() => return false,
+        Ok(_) => {}
+        Err(_) => return false,
+    }
+    match crate::commands::ingest_url(state, &nb.id, LINKS_SOURCE_URL, None).await {
+        Ok(_) => {
+            crate::note!("examples: \u{201c}{LINKS_TITLE}\u{201d} connected to {LINKS_SOURCE_URL}");
+            true
+        }
+        Err(err) => {
+            crate::note!(
+                "examples: importing the links catalog failed ({err:#}); will retry next launch"
+            );
+            false
+        }
+    }
 }
 
 /// Put the built-in sources back into any starter notebook that still
