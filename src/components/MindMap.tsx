@@ -291,6 +291,7 @@ export function PanCanvas({
   return (
     <div
       ref={viewportRef}
+      data-reader-scroll
       className="relative h-full min-h-[320px] w-full cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
       onPointerDown={(e) => {
         if (e.button !== 0) return;

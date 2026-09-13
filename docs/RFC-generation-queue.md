@@ -79,6 +79,15 @@ MCP gains `list_generations`, plus enqueue via the existing generate tools
 (they now return a job id immediately) and `cancel_generation`. The Staff
 feed shows queue activity the same way wiki/growth events land today.
 
+**Rebuilds ride the same queue** (2026-09-12). A job with `rebuild: true`
+targets an existing generated note instead of a fresh placeholder: the note
+keeps its content under status `generating` until the run succeeds, and a
+cancel or failure hands it back untouched (a placeholder would be deleted
+or overwritten with the error). `rebuild_note` over MCP is that job, with
+optional new instructions that the note then stores as its prompt — the
+same prompt the app's **Rebuild with prompt…** edits, so people and agents
+regenerate through one record.
+
 ## What changes for the user
 
 - Click three generator tiles in a row: three pending notes appear, each
