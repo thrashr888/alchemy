@@ -20,7 +20,9 @@ export type ShaderVariant =
   | "contrib"
   | "corona"
   | "steam"
-  | "phosphor";
+  | "phosphor"
+  | "blueprint"
+  | "crt";
 
 export interface Theme {
   id: string;
@@ -688,7 +690,7 @@ export const THEMES: Record<string, Theme> = {
     id: "blueprint",
     label: "Blueprint",
     dark: true,
-    shader: "trellis", // a triangulated lattice — the drafting grid
+    shader: "blueprint", // the drafting sheet itself
     sigil: 3,
     mood: "a cobalt drafting sheet, white ink, a title block and dimension lines, the smell of ammonia",
     verbs: [
@@ -744,7 +746,7 @@ export const THEMES: Record<string, Theme> = {
     id: "qdos",
     label: "QDOS",
     dark: true,
-    shader: "phosphor", // a CRT at rest
+    shader: "crt", // a 1986 monitor with a program on it
     sigil: 3,
     mood: "a black CRT booting QDOS, an amber prompt, a teal status line, green readouts ticking over",
     verbs: [

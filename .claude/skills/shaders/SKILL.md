@@ -1,6 +1,6 @@
 ---
 name: shaders
-description: Use when editing, adding, or reviewing a WebGL shader mode in src/components/DitherBackground.tsx (the notebook backdrop, one GLSL program with 17 theme-driven modes) or src/components/settings/TileShader.tsx (Activity tile washes), or when a theme in src/lib/themes.ts gets a new `shader` variant. Renders the real GLSL in a browser harness so the change is seen before it ships.
+description: Use when editing, adding, or reviewing a WebGL shader mode in src/components/DitherBackground.tsx (the notebook backdrop, one GLSL program with 19 theme-driven modes) or src/components/settings/TileShader.tsx (Activity tile washes), or when a theme in src/lib/themes.ts gets a new `shader` variant. Renders the real GLSL in a browser harness so the change is seen before it ships.
 ---
 
 # Shaders — render before you ship

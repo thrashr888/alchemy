@@ -25,9 +25,10 @@ export function useReducedMotion(): boolean {
  * aetheric mist by default, code rain, retro horizon, paper grain, an
  * instrument dial, a slipstream, a trellis lattice, rebus bars, bokeh city
  * lights, snowfall, a moonlit veil, a glitching raster, orbital paths, a
- * contribution wall, a solar corona, café steam, or CRT phosphor — but every
- * keeps the dither, the central glow, and the transmutation ring so it always
- * reads as the same design element.
+ * contribution wall, a solar corona, café steam, CRT phosphor, a drafting
+ * sheet, or a 1986 monitor with a program on it — but every mode keeps the
+ * dither, the central glow, and the transmutation ring so it always reads
+ * as the same design element.
  * WebGL1 (with an array-free Bayer) so it runs everywhere, incl. WKWebView.
  */
 const SHADER_MODE: Record<ShaderVariant, number> = {
@@ -48,6 +49,8 @@ const SHADER_MODE: Record<ShaderVariant, number> = {
   corona: 14,
   steam: 15,
   phosphor: 16,
+  blueprint: 17,
+  crt: 18,
 };
 export function DitherBackground({
   themeKey,
@@ -521,6 +524,115 @@ float trellisField(vec2 uv, float glow){
   return clamp((tube + node) * (0.30 + glow*0.70) * wave + glow*0.10, 0.0, 1.0);
 }
 
+// mode 17 — blueprint: a cobalt drafting sheet. A fine grid under a coarser
+// one, construction circles struck about the transmutation ring, dashed
+// centrelines, a dimension line with its extension lines and end ticks, and
+// a title block in the corner — with the mottle of a real cyanotype so the
+// paper isn't flat. Nothing moves but the mottle's slow breath: a drawing
+// is finished, not animated.
+float bpGrid(vec2 p, float s, float w){
+  vec2 g = 0.5 - abs(fract(p * s) - 0.5);
+  return smoothstep(w, 0.0, min(g.x, g.y) / s);
+}
+float bpLine(float d, float px){ return smoothstep(px * 1.3, 0.0, d); }
+float blueprintField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  float px = 1.0 / u_res.y;
+  float ar = u_res.x / u_res.y;
+  float r = length(uv);
+  float grid = bpGrid(uv, 20.0, px * 1.0) * 0.30 + bpGrid(uv, 4.0, px * 1.6) * 0.55;
+  // Construction circles about the ring (which main() draws at r = 0.36).
+  float circles = bpLine(abs(r - 0.24), px) * 0.55
+                + bpLine(abs(r - 0.48), px) * 0.55
+                + bpLine(abs(r - 0.60), px) * 0.35;
+  // Engineering centrelines: long dash, gap, short dash.
+  float dx = fract(uv.x * 4.0);
+  float dy = fract(uv.y * 4.0);
+  float dashx = step(dx, 0.62) * (1.0 - step(0.50, dx) * step(dx, 0.55));
+  float dashy = step(dy, 0.62) * (1.0 - step(0.50, dy) * step(dy, 0.55));
+  float centre = (bpLine(abs(uv.y), px) * dashx + bpLine(abs(uv.x), px) * dashy) * 0.45;
+  // Dimension line over the ring: its diameter, with extension lines and
+  // the end ticks a draughtsman strikes at 45 degrees. (Above, not below:
+  // the title block owns the bottom of the sheet.)
+  float dimY = 0.44;
+  float dim = bpLine(abs(uv.y - dimY), px) * step(abs(uv.x), 0.36);
+  float ext = bpLine(abs(abs(uv.x) - 0.36), px * 0.8) * step(0.385, uv.y) * step(uv.y, dimY + 0.03) * 0.6;
+  float tick = bpLine(abs((uv.y - dimY) - (abs(uv.x) - 0.36)), px) * step(abs(abs(uv.x) - 0.36), 0.018);
+  // Title block, bottom right: a box, one partition, rows of "lettering".
+  float x1 = 0.5 * ar - 0.05;
+  float x0 = x1 - 0.42;
+  float y0 = -0.47;
+  float y1 = -0.31;
+  float inX = step(x0, uv.x) * step(uv.x, x1);
+  float inY = step(y0, uv.y) * step(uv.y, y1);
+  float box = (bpLine(min(abs(uv.x - x0), abs(uv.x - x1)), px) * inY
+             + bpLine(min(abs(uv.y - y0), abs(uv.y - y1)), px) * inX
+             + bpLine(abs(uv.x - (x0 + 0.13)), px) * inY
+             + bpLine(abs(uv.y - (y0 + y1) * 0.5), px) * inX) * 0.7;
+  vec2 lc = vec2((uv.x - x0 - 0.15) * 90.0, (uv.y - y0 - 0.02) * 60.0);
+  float letters = step(0.0, lc.x) * step(lc.x, 24.0) * inY * step(uv.x, x1 - 0.02)
+                * step(0.55, hash(floor(lc / vec2(3.0, 1.0)))) * step(0.35, fract(lc.y)) * step(fract(lc.y), 0.85)
+                * step(fract(lc.x * 0.33), 0.8) * 0.5;
+  float mottle = fbm(uv * 3.0 + vec2(t * 0.012, -t * 0.008)) * 0.14;
+  float ink = grid * (0.55 + glow * 0.45) + circles + centre + dim * 0.7 + ext + tick * 0.7 + box + letters;
+  return clamp(ink + mottle + glow * 0.08, 0.0, 1.0);
+}
+
+// mode 18 — crt: a 1986 monitor with a program on it. Two double-line
+// panel frames, a menu bar, columns of text runs, one highlighted row, a
+// status line, a scanline raster, a refresh band rolling down, the barrel
+// of the glass, and a cursor blinking. Phosphor (mode 16) is an idle amber
+// tube; this one is showing you something.
+float crtFrame(vec2 p, vec2 a, vec2 b, float px){
+  float inX = step(a.x, p.x) * step(p.x, b.x);
+  float inY = step(a.y, p.y) * step(p.y, b.y);
+  float o = smoothstep(px * 1.2, 0.0, min(abs(p.x - a.x), abs(p.x - b.x))) * inY
+          + smoothstep(px * 1.2, 0.0, min(abs(p.y - a.y), abs(p.y - b.y))) * inX;
+  float g = px * 3.5;
+  float i = smoothstep(px * 1.2, 0.0, min(abs(p.x - a.x - g), abs(p.x - b.x + g))) * step(a.y + g, p.y) * step(p.y, b.y - g)
+          + smoothstep(px * 1.2, 0.0, min(abs(p.y - a.y - g), abs(p.y - b.y + g))) * step(a.x + g, p.x) * step(p.x, b.x - g);
+  return clamp(o + i, 0.0, 1.0);
+}
+float crtField(vec2 uv, float glow){
+  float t = mod(u_time, 2048.0);
+  float px = 1.0 / u_res.y;
+  float ar = u_res.x / u_res.y;
+  // The glass: a touch of barrel so straight lines bow like a tube's.
+  vec2 c = uv * (1.0 + 0.06 * dot(uv, uv));
+  float left = -0.5 * ar;
+  float right = 0.5 * ar;
+  // 25 rows of character cells; columns sized so a cell is 0.55 as wide.
+  float rows = 25.0;
+  float cellH = 1.0 / rows;
+  float cellW = cellH * 0.55;
+  vec2 ch = vec2((c.x - left) / cellW, (0.5 - c.y) / cellH);
+  vec2 id = floor(ch);
+  float split = left + 0.36 * (right - left);
+  float frames = crtFrame(c, vec2(left + 0.02, -0.44), vec2(split - 0.01, 0.38), px)
+               + crtFrame(c, vec2(split + 0.01, -0.44), vec2(right - 0.02, 0.38), px);
+  // Text: words are runs of a few cells, present or not by a hash of the
+  // word; glyphs leave a gutter so the run reads as characters, not a bar.
+  float word = step(hash(vec2(floor(id.x / 5.0), id.y)), 0.50);
+  float glyph = step(0.18, fract(ch.x)) * step(0.22, fract(ch.y)) * step(fract(ch.y), 0.85);
+  float inLeft = step(left + 0.04, c.x) * step(c.x, split - 0.03) * step(-0.42, c.y) * step(c.y, 0.36);
+  float inRight = step(split + 0.03, c.x) * step(c.x, right - 0.04) * step(-0.42, c.y) * step(c.y, 0.36);
+  // The right panel is a listing: every row; the left is sparser labels.
+  float text = word * glyph * (inRight + inLeft * step(0.5, fract(id.y * 0.5 + 0.25)) * 0.8);
+  // Menu bar and status line: full-width rows of words.
+  float bar = word * glyph * (step(abs(id.y - 0.0), 0.5) + step(abs(id.y - 24.0), 0.5)) * step(left + 0.02, c.x) * step(c.x, right - 0.02);
+  // The highlighted row: the one the cursor keys have you on.
+  float hi = step(abs(id.y - 5.0), 0.5) * inRight * 0.55;
+  // The cursor, blinking at the prompt.
+  float cursor = step(abs(id.x - 3.0), 0.5) * step(abs(id.y - 2.0), 0.5) * inLeft * step(0.5, fract(t * 1.1)) * 0.9;
+  float scan = 0.82 + 0.18 * sin(c.y * u_res.y * 3.14159);
+  float pos = 0.55 - fract(t * 0.04) * 1.3;
+  float band = 0.10 * exp(-(c.y - pos) * (c.y - pos) * 80.0);
+  float vig = smoothstep(1.12, 0.50, length(c * vec2(0.82, 1.22)));
+  float flicker = 0.97 + 0.03 * sin(t * 6.3);
+  float lit = frames * 0.85 + text * 0.55 + bar * 0.6 + hi + cursor;
+  return clamp((0.06 + lit * scan + band) * vig * flicker + glow * 0.06, 0.0, 1.0);
+}
+
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
   float r = length(uv);
@@ -544,7 +656,9 @@ void main(){
   else if (u_mode < 13.5) L = contribField(uv, glow);
   else if (u_mode < 14.5) L = coronaField(uv, glow);
   else if (u_mode < 15.5) L = steamField(uv, glow);
-  else                    L = phosphorField(uv, glow);
+  else if (u_mode < 16.5) L = phosphorField(uv, glow);
+  else if (u_mode < 17.5) L = blueprintField(uv, glow);
+  else                    L = crtField(uv, glow);
   float ring = smoothstep(0.006, 0.0, abs(r - 0.36)) * glow * 0.4;
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;
