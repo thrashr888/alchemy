@@ -565,7 +565,10 @@ export interface AppState {
 
   generateArtifact: (kind: NoteKind, prompt?: string) => Promise<void>;
   generateFromTemplate: (template: Template) => Promise<void>;
-  rebuildNote: (note: Note) => Promise<void>;
+  /** Regenerate a generated note from the current sources. `prompt`
+   *  replaces the note's stored instructions (kept for later rebuilds);
+   *  omitted, the stored ones are reused. */
+  rebuildNote: (note: Note, prompt?: string) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;

@@ -8,6 +8,19 @@ use super::*;
 use crate::models::ReportSchedule;
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct RebuildNoteReq {
+    /// The generated note to regenerate (from list_notes; kind != "note").
+    note_id: String,
+    /// New instructions for this and future rebuilds. Omit to reuse the
+    /// note's stored prompt; pass "" to clear it.
+    #[serde(default)]
+    instructions: Option<String>,
+    /// Optional provider override for THIS run, as in generate.
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct GenerateReq {
     /// Notebook to generate from.
     notebook_id: String,
@@ -184,6 +197,31 @@ impl AlchemyMcp {
                 .await
                 .map_err(|e| invalid(format!("{e:#}")))?;
         self.changed("notes", Some(&notebook_id));
+        json_result(&note)
+    }
+
+    #[tool(
+        description = "Regenerate an existing generated note in place from the notebook's current sources, optionally under new instructions (which the note then keeps for its next rebuild). Returns the note IMMEDIATELY with status \"generating\" and its previous content still intact — poll get_note until status is \"\"; a failed or cancelled run leaves the old version as it was. Written notes (kind \"note\") can't be rebuilt — update_note them instead."
+    )]
+    async fn rebuild_note(
+        &self,
+        Parameters(RebuildNoteReq {
+            note_id,
+            instructions,
+            provider,
+        }): Parameters<RebuildNoteReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let note = commands::enqueue_rebuild_impl(
+            &state,
+            &note_id,
+            instructions.as_deref(),
+            provider,
+            "mcp",
+        )
+        .await
+        .map_err(|e| invalid(format!("{e:#}")))?;
+        self.changed("notes", Some(&note.notebook_id));
         json_result(&note)
     }
 
