@@ -912,7 +912,7 @@ export function TimelineSection() {
                           unfolded.add(c);
                           for (const it of items) marks.push(xOf(it.createdAt));
                         } else {
-                          marks.push(c.x0, c.x1 + 24);
+                          marks.push(c.x0, c.x1);
                         }
                       }
                       marks.sort((a, b) => a - b);
@@ -977,17 +977,33 @@ export function TimelineSection() {
                               width={c.x1 - c.x0}
                               height={h}
                               rx={h / 2}
-                              fill={outlined ? "var(--background)" : l.color}
-                              fillOpacity={outlined ? 1 : unfold ? 0.25 : 0.85}
+                              // Unfolded, the pill is only the batch's span
+                              // behind its ticks, and only when that span
+                              // is wide enough to mean anything — a ring the
+                              // size of a tick collided with it and its title.
+                              fill={
+                                outlined && !unfold
+                                  ? "var(--background)"
+                                  : l.color
+                              }
+                              fillOpacity={
+                                unfold
+                                  ? c.x1 - c.x0 > 24
+                                    ? 0.12
+                                    : 0
+                                  : outlined
+                                    ? 1
+                                    : 0.85
+                              }
                               stroke={
                                 isSelected
                                   ? "var(--foreground)"
-                                  : outlined
+                                  : outlined && !unfold
                                     ? l.color
                                     : "none"
                               }
                               strokeWidth={
-                                isSelected ? 1.5 : outlined ? 1.5 : 0
+                                isSelected || (outlined && !unfold) ? 1.5 : 0
                               }
                               className="cursor-pointer"
                               onClick={() => {
@@ -1002,7 +1018,7 @@ export function TimelineSection() {
                                 {`${l.title} · ${counts(c)}${several ? ` · ${plural(c.batches.length, "import")}` : ""}`}
                               </title>
                             </rect>
-                            {!unfold && daysMode && (
+                            {!unfold && daysMode && roomAfter(c.x1) >= 34 && (
                               <text
                                 x={c.x1 + (several ? 9 : 6)}
                                 y={cy + 3.5}

@@ -656,6 +656,118 @@ export const THEMES: Record<string, Theme> = {
       citation: "#7b5530", selection: "rgba(160,82,45,0.22)", ...lightBorder,
     },
   },
+  "acid-garage": {
+    id: "acid-garage",
+    label: "Acid Garage",
+    dark: true,
+    shader: "glitch", // a raster hum with an interference band rolling through
+    sigil: 3,
+    mood: "a garage lit acid lime and cyan over deep purple, a 303 squelching through concrete, fog on the floor",
+    verbs: [
+      "Tuning the 303",
+      "Riding the filter sweep",
+      "Warming the valves",
+      "Cutting the acetate",
+      "Dropping the bass",
+      "Priming the fog machine",
+    ],
+    vars: {
+      // Ported from shift/themes/acid.scm: #170626 canvas, #1e0c32 panel,
+      // #b6ff00 accent, #45f6ff secondary, #ae7deb muted.
+      background: "#170626", surface: "#1e0c32", "surface-2": "#26123d", elevated: "#2d1848",
+      foreground: "#f4edff", muted: "#26123d", "muted-foreground": "#c9aef2",
+      "subtle-foreground": "#ae7deb", ring: "#b6ff00", primary: "#b6ff00",
+      "primary-hover": "#ccff4d", "primary-foreground": "#170626", accent: "#2d1848",
+      "accent-foreground": "#f4edff", destructive: "#ff6588", success: "#b6ff00",
+      citation: "#45f6ff", selection: "rgba(69,246,255,0.30)",
+      border: "rgba(182,255,0,0.12)", "border-strong": "rgba(182,255,0,0.22)",
+      input: "rgba(182,255,0,0.14)", scrollbar: "rgba(174,125,235,0.28)",
+    },
+  },
+  blueprint: {
+    id: "blueprint",
+    label: "Blueprint",
+    dark: true,
+    shader: "trellis", // a triangulated lattice — the drafting grid
+    sigil: 3,
+    mood: "a cobalt drafting sheet, white ink, a title block and dimension lines, the smell of ammonia",
+    verbs: [
+      "Inking the section",
+      "Dimensioning the plan",
+      "Squaring the title block",
+      "Tracing the elevation",
+      "Checking the tolerances",
+      "Rolling out the sheet",
+    ],
+    vars: {
+      // Ported from shift/themes/blueprint.scm (xterm 18/19/229/153):
+      // #000087 canvas, #0000af panel, #ffffaf accent, #afd7ff secondary.
+      background: "#000087", surface: "#0808a0", "surface-2": "#1414b0", elevated: "#1c1cbc",
+      foreground: "#eeeeee", muted: "#1414b0", "muted-foreground": "#c9dcf7",
+      "subtle-foreground": "#afd7ff", ring: "#ffffaf", primary: "#ffffaf",
+      "primary-hover": "#ffffd7", "primary-foreground": "#000087", accent: "#1c1cbc",
+      "accent-foreground": "#eeeeee", destructive: "#ff8787", success: "#87ff87",
+      citation: "#87ffff", selection: "rgba(255,255,175,0.30)",
+      border: "rgba(175,215,255,0.16)", "border-strong": "rgba(175,215,255,0.30)",
+      input: "rgba(175,215,255,0.18)", scrollbar: "rgba(175,215,255,0.26)",
+    },
+  },
+  paddock: {
+    id: "paddock",
+    label: "Paddock",
+    dark: false,
+    shader: "bars", // sector bars on a timing sheet
+    sigil: 3,
+    mood: "a paper timing sheet in the paddock, racing-red pencil, sector splits and tyre temps, engines idling",
+    verbs: [
+      "Timing the sector",
+      "Warming the tyres",
+      "Reading the telemetry",
+      "Calling the pit window",
+      "Trimming the wing",
+      "Scrubbing the slicks",
+    ],
+    vars: {
+      // Ported from shift/themes/paddock.scm (xterm 230/235/160/22/240/187):
+      // #ffffd7 paper, #262626 ink, #d70000 red, #005f00 green, #d7d7af panel.
+      background: "#ffffd7", surface: "#f7f7cd", "surface-2": "#ececbf", elevated: "#ffffe4",
+      foreground: "#262626", muted: "#ececbf", "muted-foreground": "#585858",
+      "subtle-foreground": "#66665a", ring: "#d70000", primary: "#d70000",
+      "primary-hover": "#b80000", "primary-foreground": "#ffffd7", accent: "#d7d7af",
+      "accent-foreground": "#262626", destructive: "#b00000", success: "#005f00",
+      citation: "#1f4e9c", selection: "rgba(215,0,0,0.20)",
+      border: "rgba(38,38,38,0.16)", "border-strong": "rgba(38,38,38,0.30)",
+      input: "rgba(38,38,38,0.20)", scrollbar: "rgba(38,38,38,0.30)",
+    },
+  },
+  qdos: {
+    id: "qdos",
+    label: "QDOS",
+    dark: true,
+    shader: "phosphor", // a CRT at rest
+    sigil: 3,
+    mood: "a black CRT booting QDOS, an amber prompt, a teal status line, green readouts ticking over",
+    verbs: [
+      "Booting the kernel",
+      "Mounting the volume",
+      "Polling the bus",
+      "Seeking the sector",
+      "Refreshing the phosphor",
+      "Flushing the buffer",
+    ],
+    vars: {
+      // Ported from shift/themes/qdos.scm: pure black, white text, #e8da59
+      // amber accent, #66b7b3 teal secondary, #67cc4d green, #ff6588 negative.
+      background: "#000000", surface: "#0a0a0a", "surface-2": "#141414", elevated: "#1c1c1c",
+      foreground: "#ffffff", muted: "#141414", "muted-foreground": "#67cc4d",
+      "subtle-foreground": "#52a83c", ring: "#e8da59", primary: "#e8da59",
+      "primary-hover": "#fff08a", "primary-foreground": "#000000", accent: "#1c1c1c",
+      "accent-foreground": "#ffffff", destructive: "#ff6588", success: "#67cc4d",
+      citation: "#66b7b3", selection: "rgba(157,31,20,0.55)",
+      border: "rgba(255,255,255,0.10)", "border-strong": "rgba(255,255,255,0.20)",
+      input: "rgba(255,255,255,0.12)", scrollbar: "rgba(103,204,77,0.25)",
+    },
+  },
 };
 
 export const THEME_LIST = Object.values(THEMES).sort((a, b) => a.label.localeCompare(b.label));
