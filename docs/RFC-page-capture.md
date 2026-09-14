@@ -181,6 +181,15 @@ the user captures what they can already see.
 
 ## 8. Addendum — the extension ingest seam (clip capture)
 
+The capture webview is also **silent by construction**. wry hands WKWebView
+an autoplay-anything media policy, so a page with an autoplaying player —
+several turned up in one launch-time feed poll — would play sound from a
+window nobody can see. Every frame gets a document-start script that pins
+`HTMLMediaElement` muted at volume 0, starts Web Audio contexts suspended
+and makes `resume()` a no-op, and blanks speech synthesis; the window is
+additionally suspended page-wide with `setAllMediaPlaybackSuspended:`
+(macOS 12+). Reading a page must never be audible.
+
 The hidden capture webview (§2) is powerful but blind in one specific way:
 it is a **cookieless session**. Intranet pages, anything behind a login, a
 paywall the user subscribes to, a private Notion/Google Doc — the render

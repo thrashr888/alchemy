@@ -11,6 +11,10 @@
 //! page can invoke nothing — it is a plain browser surface outside the
 //! app's IPC boundary. Results come back through the native WKWebView
 //! `evaluateJavaScript` completion handler, not Tauri IPC.
+//!
+//! The window is also silent: media is muted in every frame by `MUTE_JS`
+//! and suspended page-wide natively, so an autoplaying player on a page
+//! being read in the background never makes a sound.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,6 +60,80 @@ const RESETTLE_CAP: Duration = Duration::from_secs(2);
 /// A domain-memory entry older than this is re-probed via the fast path —
 /// sites change, and a stale "rendered" marker would tax every add.
 const MEMORY_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// Injected at document start in every frame (the main document and each
+/// iframe — embeds are where the autoplaying players live). The capture
+/// window exists to read a page, never to hear it: wry hands WKWebView an
+/// autoplay-anything media policy, so a page with an autoplaying player
+/// — a curated-links feed poll at launch found several — starts playing
+/// sound from a window nobody can see. Every media element is forced
+/// muted (the property setters are pinned so page scripts can't un-mute),
+/// Web Audio contexts start suspended and never resume, and speech
+/// synthesis is a no-op. The native page-wide suspend in
+/// `rendered_capture` is the second belt; this covers frames and engines
+/// it doesn't reach.
+const MUTE_JS: &str = r#"
+(() => {
+  if (window.__alcapMuted) return;
+  window.__alcapMuted = true;
+  try {
+    const P = HTMLMediaElement.prototype;
+    const muted = Object.getOwnPropertyDescriptor(P, 'muted');
+    const volume = Object.getOwnPropertyDescriptor(P, 'volume');
+    const silence = (el) => {
+      try {
+        if (muted && muted.set) muted.set.call(el, true);
+        if (volume && volume.set) volume.set.call(el, 0);
+      } catch (e) {}
+    };
+    if (muted && muted.set) {
+      Object.defineProperty(P, 'muted', {
+        configurable: true,
+        get() { return true; },
+        set() { silence(this); },
+      });
+    }
+    if (volume && volume.set) {
+      Object.defineProperty(P, 'volume', {
+        configurable: true,
+        get() { return 0; },
+        set() { silence(this); },
+      });
+    }
+    const play = P.play;
+    P.play = function () {
+      silence(this);
+      return play.apply(this, arguments);
+    };
+    // Autoplay attributes start playback without calling play(); the
+    // play event still fires, in every frame, before sound is audible.
+    const onMedia = (ev) => {
+      const el = ev.target;
+      if (el instanceof HTMLMediaElement) silence(el);
+    };
+    for (const type of ['loadstart', 'play', 'playing', 'volumechange']) {
+      document.addEventListener(type, onMedia, true);
+    }
+  } catch (e) {}
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) {
+      AC.prototype.resume = function () { return Promise.resolve(); };
+      const Quiet = function (...args) {
+        const ctx = new AC(...args);
+        try { ctx.suspend(); } catch (e) {}
+        return ctx;
+      };
+      Quiet.prototype = AC.prototype;
+      window.AudioContext = Quiet;
+      if (window.webkitAudioContext) window.webkitAudioContext = Quiet;
+    }
+  } catch (e) {}
+  try {
+    if (window.speechSynthesis) window.speechSynthesis.speak = function () {};
+  } catch (e) {}
+})();
+"#;
 
 /// Injected before any page script runs (WKUserScript at document start, so
 /// it re-arms across redirects). Counts in-flight fetch/XHR for a network-
@@ -472,8 +550,14 @@ async fn rendered_capture(url: &str) -> Result<Rendered> {
             .inner_size(1280.0, 900.0)
             .user_agent(SAFARI_UA)
             .initialization_script(INIT_JS)
+            .initialization_script_for_all_frames(MUTE_JS)
             .build()
             .context("could not create capture window")?;
+    // Page-wide media suspend (macOS 12+): the native half of the mute,
+    // covering whatever MUTE_JS can't reach. Best effort — the script
+    // still runs when the selector is missing.
+    #[cfg(target_os = "macos")]
+    let _ = window.with_webview(|wv| unsafe { mac_suspend_media(wv.inner().cast()) });
 
     let result = drive(&window, url).await;
     // Destroy, not close — no close-requested round trip for a window
@@ -641,6 +725,24 @@ async fn eval_string(window: &tauri::WebviewWindow, js: impl Into<String>) -> Re
         let _ = (window, js);
         Err(anyhow!("rendered capture is macOS-only for now"))
     }
+}
+
+/// Suspend all media playback in the capture page — `WKWebView`'s
+/// `setAllMediaPlaybackSuspended:` (macOS 12+; checked, not assumed). Runs
+/// on the main thread via `with_webview`.
+#[cfg(target_os = "macos")]
+unsafe fn mac_suspend_media(webview: *mut objc2::runtime::AnyObject) {
+    use objc2::{msg_send, sel};
+
+    let responds: bool = msg_send![
+        webview,
+        respondsToSelector: sel!(setAllMediaPlaybackSuspended:completionHandler:)
+    ];
+    if !responds {
+        return;
+    }
+    let done = block2::RcBlock::new(|| {});
+    let _: () = msg_send![webview, setAllMediaPlaybackSuspended: true, completionHandler: &*done];
 }
 
 /// Runs on the main thread via `with_webview`. The completion handler fires
