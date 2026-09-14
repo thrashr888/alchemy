@@ -446,10 +446,15 @@ export function SourcesPanel() {
   // goes; loose web sources from a busy domain fold into a group row
   // (Pillar 1 rollups) at rest — an active filter answers its own question,
   // so it shows flat matches.
+  // Newest first: the store lists sources oldest-first (the order they
+  // were added), but a panel is read from the top, and what arrived last
+  // is what you came back for. Children keep their own order under a
+  // folder.
+  const newestFirst = [...sources].reverse();
   const rows: SourceRow[] = [];
   const looseByHost = new Map<string, Source[]>();
   if (!filterActive) {
-    for (const s of sources) {
+    for (const s of newestFirst) {
       if (s.parentId || s.sourceType !== "url" || !s.url) continue;
       const host = hostname(s.url);
       if (!host) continue;
@@ -468,7 +473,7 @@ export function SourcesPanel() {
       collapsed: (x, kidCount) => isCollapsed(x.id, kidCount),
       matches: filterActive ? matchesFilters : undefined,
     });
-  for (const s of sources) {
+  for (const s of newestFirst) {
     if (s.parentId) continue;
     if (FOLDER_TYPES.includes(s.sourceType)) {
       for (const r of subtree(s))

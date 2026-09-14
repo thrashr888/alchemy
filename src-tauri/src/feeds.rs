@@ -181,7 +181,71 @@ fn resolve(base: &str, href: &str) -> Option<String> {
             }
         }
     };
-    (out.starts_with("http://") || out.starts_with("https://")).then_some(out)
+    if !(out.starts_with("http://") || out.starts_with("https://")) {
+        return None;
+    }
+    Some(normalize_dots(&out))
+}
+
+/// Collapse `.` and `..` segments in a URL's path — a page under
+/// `/blog/2026/07/22/` that advertises `../../../../../feed.xml` is
+/// advertising `/feed.xml`, and the two spellings must not become two
+/// feeds. Query and fragment are left as they came.
+fn normalize_dots(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (host, path_q) = rest.split_once('/').unwrap_or((rest, ""));
+    if !path_q.contains("/.") && !path_q.starts_with('.') {
+        return url.to_string();
+    }
+    let (path, tail) = match path_q.find(['?', '#']) {
+        Some(i) => (&path_q[..i], &path_q[i..]),
+        None => (path_q, ""),
+    };
+    let mut segs: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "." => {}
+            ".." => {
+                segs.pop();
+            }
+            other => segs.push(other),
+        }
+    }
+    format!("{scheme}://{host}/{}{tail}", segs.join("/"))
+}
+
+/// One key for every spelling of "the feed of this directory": `atom.xml`,
+/// `rss.xml`, `feed.xml`, `feed.atom`, `index.xml`, `feed_rss_updated.xml`
+/// and the rest are the same feed in different clothes, and a site that
+/// advertises three of them is offering one thing. A named feed
+/// (`podcast.rss`, `news.rss`) keeps its own key — those really differ.
+pub fn feed_family_key(url: &str) -> String {
+    let key = crate::growth::canonical_key(url);
+    let (dir, file) = match key.rfind('/') {
+        Some(i) => (&key[..i], &key[i + 1..]),
+        None => (key.as_str(), ""),
+    };
+    let stem = file
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".xml")
+        .trim_end_matches(".rss")
+        .trim_end_matches(".atom")
+        .trim_end_matches(".json");
+    let generic = matches!(
+        stem,
+        "feed" | "rss" | "atom" | "index" | "rss2" | "atom1" | "all" | "feeds"
+    ) || stem.starts_with("feed_")
+        || stem.starts_with("rss_")
+        || stem.starts_with("atom_");
+    if generic {
+        format!("{dir}/<feed>")
+    } else {
+        key
+    }
 }
 
 /// One feed the app can offer to follow (docs/RFC-events.md §2).
@@ -730,7 +794,34 @@ pub async fn discovered_proposals(
         })
         .collect();
     out.sort_by(|a, b| a.anchor.cmp(&b.anchor).then(a.url.cmp(&b.url)));
-    crate::growth::dedupe_proposals(out)
+    // Atom, RSS, and `feed_updated` spellings of one feed collapse to the
+    // first; what's left that still shares a title gets its file name, so
+    // "Follow Amp" twice reads "Follow Amp (news)" and "Follow Amp (podcast)".
+    let mut families: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<_> = crate::growth::dedupe_proposals(out)
+        .into_iter()
+        .filter(|p| families.insert(feed_family_key(&p.url)))
+        .collect();
+    let mut anchors: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for p in &out {
+        *anchors.entry(p.anchor.clone()).or_default() += 1;
+    }
+    for p in &mut out {
+        if anchors.get(&p.anchor).copied().unwrap_or(0) > 1 {
+            let stem = p
+                .url
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .split(['?', '#', '.'])
+                .next()
+                .unwrap_or("");
+            if !stem.is_empty() {
+                p.anchor = format!("{} ({stem})", p.anchor);
+            }
+        }
+    }
+    out
 }
 
 /// Everything the app can offer to follow for one source: what its page
@@ -1326,6 +1417,48 @@ mod tests {
             "application/json",
             r#"{"version": 2, "data": []}"#
         ));
+    }
+
+    #[test]
+    fn relative_feed_links_lose_their_dot_segments() {
+        assert_eq!(
+            resolve(
+                "https://gepa-ai.github.io/gepa/blog/2026/07/22/post/",
+                "../../../../feed_rss_created.xml"
+            )
+            .unwrap(),
+            "https://gepa-ai.github.io/gepa/blog/feed_rss_created.xml"
+        );
+        assert_eq!(
+            resolve("https://a.b/x/y/", "./feed.xml").unwrap(),
+            "https://a.b/x/y/feed.xml"
+        );
+        assert_eq!(
+            normalize_dots("https://a.b/p/../q?x=1#f"),
+            "https://a.b/q?x=1#f"
+        );
+    }
+
+    #[test]
+    fn feed_spellings_share_one_family() {
+        let same = [
+            "https://sidecar.haplab.com/blog/atom.xml",
+            "https://sidecar.haplab.com/blog/rss.xml",
+            "http://www.sidecar.haplab.com/blog/feed.xml",
+            "https://sidecar.haplab.com/blog/feed_updated.xml",
+            "https://sidecar.haplab.com/blog/index.xml",
+        ];
+        let keys: std::collections::HashSet<String> =
+            same.iter().map(|u| feed_family_key(u)).collect();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert_ne!(
+            feed_family_key("https://ampcode.com/news.rss"),
+            feed_family_key("https://ampcode.com/podcast.rss")
+        );
+        assert_ne!(
+            feed_family_key("https://a.b/blog/feed.xml"),
+            feed_family_key("https://a.b/feed.xml")
+        );
     }
 
     #[test]
