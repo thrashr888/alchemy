@@ -3538,86 +3538,16 @@ async fn open_found_bundles_inner(
     }
     let mut opened = Vec::new();
     for folder in found {
-        let path = folder.to_string_lossy().to_string();
-        // Re-read the bindings for every folder: a bind may have landed
-        // since the listing was taken, and acting on a stale map is how one
-        // folder ended up with two notebooks writing into it.
-        let notebooks = e(state.db.list_notebooks().await)?;
-        let known = known_notebooks(&data_dir, &notebooks)?;
-        let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
-        let doc = parse_okf_doc(&index);
-        if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), &folder)?
-        {
-            continue;
-        }
-        let decision = if discovery::has_reservation(&data_dir, &folder)? {
-            FoundBundle::Import
-        } else {
-            decide_bundle(
-                &folder,
-                doc.nested("alchemy", "id").as_deref(),
-                doc.str("title").as_deref(),
-                &known,
-            )
-        };
-        let outcome = match decision {
-            FoundBundle::Skip(why) => {
-                crate::note!("okf: left {path} alone: {why}");
-                continue;
-            }
-            // The same notebook by another route — the other Mac's copy, a
-            // share, a folder moved — rebinds rather than duplicating.
-            FoundBundle::Rebind(id) => {
-                let existing = binding_for_checked(&data_dir, &id)?;
-                let binding_id = existing
-                    .as_ref()
-                    .map(|binding| binding.id.clone())
-                    .unwrap_or_else(new_id);
-                let manifest_at = manifest_path(&data_dir, &binding_id);
-                let claims = if existing.is_some() {
-                    load_manifest_checked(&manifest_at).map(|_| ())
-                } else {
-                    adopt_imported_files(state, &id, &folder, &manifest_at).await
-                };
-                if let Err(error) = claims {
-                    crate::diagnostics::error("okf", format!("could not bind {path}: {error}"));
-                    continue;
-                }
-                let published = bindings::update_discovered(&data_dir, &id, &folder, |bindings| {
-                    if bindings.get(&id) != existing.as_ref() {
-                        return Err("The notebook binding changed during discovery".into());
-                    }
-                    bindings.insert(
-                        id.clone(),
-                        OkfBinding {
-                            path: path.clone(),
-                            id: binding_id,
-                            last_write_at: 0,
-                            lost: false,
-                        },
-                    );
-                    Ok(())
-                })?;
-                if published.is_none() {
-                    continue;
-                }
-                write_bound(state, &id).await.map(|_| id)
-            }
-            FoundBundle::Import => match discover_bundle(state, &folder).await {
-                Ok(id) => write_bound(state, &id).await.map(|_| id),
-                Err(error) => Err(error),
-            },
-        };
-        match outcome {
-            Ok(_) => {
-                let name = folder
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+        match open_found_folder(state, &folder).await {
+            Ok(Some(name)) => {
                 crate::note!("okf: opened {name} from the Notebooks folder");
                 opened.push(name);
             }
-            Err(err) => crate::diagnostics::error("okf", format!("could not open {path}: {err}")),
+            Ok(None) => {}
+            Err(err) => crate::diagnostics::error(
+                "okf",
+                format!("could not open {}: {err}", folder.display()),
+            ),
         }
     }
     if !opened.is_empty() {
@@ -3632,6 +3562,240 @@ async fn open_found_bundles_inner(
         crate::commands::notify_changed("notebooks", None);
     }
     Ok(opened.len())
+}
+
+/// Open one found bundle: rebind when its `alchemy.id` is a notebook this
+/// machine has, import when it is new, skip when the decision says so.
+/// `Ok(Some(name))` when it opened; `Ok(None)` when it was left alone.
+/// Shared by the Notebooks-folder pass and the iCloud Drive offer.
+async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<String>, String> {
+    let data_dir = app_data_dir(state);
+    let path = folder.to_string_lossy().to_string();
+    // Re-read the bindings for every folder: a bind may have landed since
+    // the listing was taken, and acting on a stale map is how one folder
+    // ended up with two notebooks writing into it.
+    let notebooks = e(state.db.list_notebooks().await)?;
+    let known = known_notebooks(&data_dir, &notebooks)?;
+    let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
+    let doc = parse_okf_doc(&index);
+    if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), folder)? {
+        return Ok(None);
+    }
+    let decision = if discovery::has_reservation(&data_dir, folder)? {
+        FoundBundle::Import
+    } else {
+        decide_bundle(
+            folder,
+            doc.nested("alchemy", "id").as_deref(),
+            doc.str("title").as_deref(),
+            &known,
+        )
+    };
+    let outcome = match decision {
+        FoundBundle::Skip(why) => {
+            crate::note!("okf: left {path} alone: {why}");
+            return Ok(None);
+        }
+        // The same notebook by another route — the other Mac's copy, a
+        // share, a folder moved — rebinds rather than duplicating.
+        FoundBundle::Rebind(id) => {
+            let existing = binding_for_checked(&data_dir, &id)?;
+            let binding_id = existing
+                .as_ref()
+                .map(|binding| binding.id.clone())
+                .unwrap_or_else(new_id);
+            let manifest_at = manifest_path(&data_dir, &binding_id);
+            let claims = if existing.is_some() {
+                load_manifest_checked(&manifest_at).map(|_| ())
+            } else {
+                adopt_imported_files(state, &id, folder, &manifest_at).await
+            };
+            if let Err(error) = claims {
+                return Err(format!("could not bind {path}: {error}"));
+            }
+            let published = bindings::update_discovered(&data_dir, &id, folder, |bindings| {
+                if bindings.get(&id) != existing.as_ref() {
+                    return Err("The notebook binding changed during discovery".into());
+                }
+                bindings.insert(
+                    id.clone(),
+                    OkfBinding {
+                        path: path.clone(),
+                        id: binding_id,
+                        last_write_at: 0,
+                        lost: false,
+                    },
+                );
+                Ok(())
+            })?;
+            if published.is_none() {
+                return Ok(None);
+            }
+            write_bound(state, &id).await.map(|_| id)
+        }
+        FoundBundle::Import => match discover_bundle(state, folder).await {
+            Ok(id) => write_bound(state, &id).await.map(|_| id),
+            Err(error) => Err(error),
+        },
+    };
+    outcome.map(|_| {
+        Some(
+            folder
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+    })
+}
+
+// ---- Shared notebooks (docs/RFC-shared-notebook.md) -------------------------
+
+/// A bundle at the root of iCloud Drive that this Mac has not opened. That
+/// root is where a folder shared with this Apple ID lands, and where
+/// "Share with someone…" puts one; it is also the user's own space, so a
+/// bundle there is offered, never opened on its own.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedBundleOffer {
+    pub path: String,
+    pub title: String,
+    /// The bundle's own `alchemy.id`, empty when its index carries none.
+    pub notebook_id: String,
+}
+
+fn icloud_drive_root() -> Option<PathBuf> {
+    let root = home_dir().join("Library/Mobile Documents/com~apple~CloudDocs");
+    root.is_dir().then_some(root)
+}
+
+fn shared_dismissals_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("okf").join("shared-dismissed.json")
+}
+
+fn load_shared_dismissals(data_dir: &Path) -> std::collections::HashSet<String> {
+    std::fs::read_to_string(shared_dismissals_path(data_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Bundles under `root` (one level, as iCloud lays shared folders out) that
+/// are not bound, not the Notebooks folder or inside it, and not dismissed.
+pub(crate) fn shared_offers_in(
+    root: &Path,
+    notebooks_dir: &Path,
+    bound: &std::collections::HashSet<String>,
+    dismissed: &std::collections::HashSet<String>,
+) -> Vec<SharedBundleOffer> {
+    let notebooks_dir = same_folder(notebooks_dir);
+    unopened_bundles(root, bound)
+        .into_iter()
+        .filter(|p| {
+            let p = same_folder(p);
+            p != notebooks_dir && !p.starts_with(&notebooks_dir)
+        })
+        .filter(|p| !dismissed.contains(&p.to_string_lossy().to_string()))
+        .map(|p| {
+            let index = std::fs::read_to_string(p.join("index.md")).unwrap_or_default();
+            let doc = parse_okf_doc(&index);
+            let title = doc.str("title").unwrap_or_else(|| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+            SharedBundleOffer {
+                path: p.to_string_lossy().to_string(),
+                title,
+                notebook_id: doc.nested("alchemy", "id").unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+/// What iCloud Drive holds that could be opened here.
+pub(crate) async fn shared_bundle_offers(state: &AppState) -> Vec<SharedBundleOffer> {
+    let Some(root) = icloud_drive_root() else {
+        return Vec::new();
+    };
+    let data_dir = app_data_dir(state);
+    let bound: std::collections::HashSet<String> = load_bindings_checked(&data_dir)
+        .unwrap_or_default()
+        .values()
+        .map(|b| b.path.clone())
+        .collect();
+    let (notebooks_dir, _) = notebooks_home(state).await;
+    shared_offers_in(
+        &root,
+        &notebooks_dir,
+        &bound,
+        &load_shared_dismissals(&data_dir),
+    )
+}
+
+/// Open one offered bundle: the same import-or-rebind path the Notebooks
+/// folder uses, for one folder the person chose.
+pub(crate) async fn open_shared_bundle(
+    app: &AppHandle,
+    state: &AppState,
+    path: &str,
+) -> Result<String, String> {
+    let folder = PathBuf::from(path);
+    let Some(root) = icloud_drive_root() else {
+        return Err("iCloud Drive isn't available on this Mac".into());
+    };
+    if !same_folder(&folder).starts_with(same_folder(&root)) || !folder.is_dir() {
+        return Err("That folder isn't in iCloud Drive".into());
+    }
+    if crate::commands::find_bundle_root(folder.clone()).as_deref() != Ok(folder.as_path()) {
+        return Err("That folder isn't an Alchemy notebook".into());
+    }
+    let name = open_found_folder(state, &folder)
+        .await?
+        .ok_or_else(|| "That notebook couldn't be opened here — see the log".to_string())?;
+    crate::fswatch::rearm(app).await;
+    let _ = app.emit(
+        "okf://opened",
+        serde_json::json!({ "count": 1, "titles": [name.clone()] }),
+    );
+    crate::commands::notify_changed("notebooks", None);
+    Ok(name)
+}
+
+/// "Not now" for one offered folder: remembered by path, so the banner
+/// stays quiet about it until it moves or is asked for by the ⋯ verb.
+pub(crate) fn dismiss_shared_bundle(data_dir: &Path, path: &str) -> Result<(), String> {
+    let mut set = load_shared_dismissals(data_dir);
+    set.insert(path.to_string());
+    let at = shared_dismissals_path(data_dir);
+    if let Some(parent) = at.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(
+        &at,
+        serde_json::to_string_pretty(&set).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn shared_bundle_offers_cmd(
+    state: State<'_, AppState>,
+) -> Result<Vec<SharedBundleOffer>, String> {
+    Ok(shared_bundle_offers(&state).await)
+}
+
+#[tauri::command]
+pub async fn open_shared_bundle_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    open_shared_bundle(&app, &state, &path).await
+}
+
+#[tauri::command]
+pub fn dismiss_shared_bundle_cmd(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    dismiss_shared_bundle(&app_data_dir(&state), &path)
 }
 
 // ---- Originals in `references/` (docs/RFC-okf-live.md §6) -------------------
@@ -6787,4 +6951,42 @@ pub async fn move_notebooks_to_icloud_container(
     }
     crate::note!("okf: moved {} notebooks into {}", done.len(), offer.to);
     Ok(done.len())
+}
+
+#[cfg(test)]
+mod shared_notebook_tests {
+    use super::*;
+
+    #[test]
+    fn shared_offers_are_bundles_at_the_root_that_nobody_here_opened() {
+        let dir = std::env::temp_dir().join(format!("shared-offers-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        std::fs::create_dir_all(root.join("Notebooks/Inside/sources")).unwrap();
+        std::fs::write(
+            root.join("Notebooks/Inside/index.md"),
+            "---\ntitle: \"Inside\"\n---\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("Shared With Me/sources")).unwrap();
+        std::fs::write(
+            root.join("Shared With Me/index.md"),
+            "---\ntitle: \"Household\"\nalchemy:\n  id: \"nb-1\"\n---\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("Bound/notes")).unwrap();
+        std::fs::create_dir_all(root.join("Dismissed/notes")).unwrap();
+        std::fs::create_dir_all(root.join("Just a folder")).unwrap();
+        let bound: std::collections::HashSet<String> =
+            [root.join("Bound").to_string_lossy().to_string()].into();
+        let dismissed: std::collections::HashSet<String> =
+            [root.join("Dismissed").to_string_lossy().to_string()].into();
+        let offers = shared_offers_in(&root, &root.join("Notebooks"), &bound, &dismissed);
+        let titles: Vec<&str> = offers.iter().map(|o| o.title.as_str()).collect();
+        // The Notebooks folder and what's inside it are the other pass's;
+        // a bound bundle is open; a dismissed one was declined; a plain
+        // folder is somebody else's. What's left is the share.
+        assert_eq!(titles, vec!["Household"], "{offers:?}");
+        assert_eq!(offers[0].notebook_id, "nb-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

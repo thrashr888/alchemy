@@ -34,6 +34,12 @@ struct BindOkfReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SharedPathReq {
+    /// The bundle folder's absolute path, from list_shared_notebooks.
+    path: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct NotebookIdReq {
     /// Notebook id.
     notebook_id: String,
@@ -98,6 +104,30 @@ impl AlchemyMcp {
             .map_err(internal)?;
         self.changed("notebooks", Some(&notebook_id));
         json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": bound }))
+    }
+
+    #[tool(
+        description = "Notebooks sitting at the root of iCloud Drive that this Mac hasn't opened — where a folder someone shared with the user lands (docs/RFC-shared-notebook.md). Each is a bundle folder with its title and, when its index carries one, its notebook id. Nothing here is opened on its own; the user (or you, on their say-so) opens one with open_shared_notebook."
+    )]
+    async fn list_shared_notebooks(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        json_result(&crate::okf::shared_bundle_offers(&state).await)
+    }
+
+    #[tool(
+        description = "Open a notebook found in iCloud Drive here: the same import-or-rebind path the Notebooks folder uses, for one folder. Only on the user's say-so — a shared folder is somebody's, and opening it binds this Mac to it."
+    )]
+    async fn open_shared_notebook(
+        &self,
+        Parameters(SharedPathReq { path }): Parameters<SharedPathReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let app = self.app.clone();
+        let state = self.state();
+        let name = crate::okf::open_shared_bundle(&app, &state, &path)
+            .await
+            .map_err(invalid)?;
+        self.changed("notebooks", None);
+        json_result(&serde_json::json!({ "opened": name, "path": path }))
     }
 
     #[tool(
