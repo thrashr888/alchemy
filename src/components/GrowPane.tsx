@@ -17,6 +17,7 @@ import type { GrowSections } from "@/lib/storeTypes";
 import {
   Button,
   EmptyState,
+  Input,
   Spinner,
   Switch,
   useConfirm,
@@ -163,6 +164,46 @@ export function GrowPane() {
       await refreshSource(h.sourceId);
     } finally {
       setRetrying(null);
+    }
+    await refreshHygiene();
+  };
+  // Fix the URL in place: a link that arrived mangled (a catalog that
+  // swallowed a closing paren) is one edit away from working, and the
+  // source keeps its id, tags and notes — a repair, not a re-add.
+  const [urlEdit, setUrlEdit] = useState<{ id: string; value: string } | null>(null);
+  const [savingUrl, setSavingUrl] = useState(false);
+  const urlEditable = (h: { kind: string; sourceId: string }) => {
+    if (h.kind === "note") return false;
+    const type = sources.find((s) => s.id === h.sourceId)?.sourceType;
+    return type === "url" || type === "feed";
+  };
+  const startUrlEdit = (sourceId: string) =>
+    setUrlEdit({
+      id: sourceId,
+      value: sources.find((s) => s.id === sourceId)?.url ?? "",
+    });
+  const saveUrlEdit = async () => {
+    if (!urlEdit || savingUrl) return;
+    const { id, value } = urlEdit;
+    const current = sources.find((s) => s.id === id)?.url ?? "";
+    if (!value.trim() || value.trim() === current) {
+      setUrlEdit(null);
+      return;
+    }
+    setSavingUrl(true);
+    try {
+      await api.setSourceUrl(id, value);
+      pushToast("success", "URL fixed — fetched it again");
+      setUrlEdit(null);
+    } catch {
+      /* surfaced by the api layer's toast path; the edit stays open */
+    } finally {
+      setSavingUrl(false);
+    }
+    if (currentId) {
+      const fresh = await api.listSources(currentId);
+      if (useStore.getState().currentId === currentId)
+        useStore.setState({ sources: fresh });
     }
     await refreshHygiene();
   };
@@ -956,78 +997,130 @@ export function GrowPane() {
                           className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
                         />
                       )}
-                      <div className="min-w-0 flex-1">
-                        <div
-                          className="truncate text-body text-foreground"
-                          title={h.title}
-                        >
-                          {h.title || "Untitled"}
-                        </div>
-                        <div
-                          className="truncate text-caption text-muted-foreground"
-                          title={h.detail}
-                        >
-                          {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
-                        </div>
-                      </div>
-                      {h.bucket === "missing-file" &&
-                        (foundPaths[h.sourceId]?.length ?? 0) > 0 && (
+                      {urlEdit?.id === h.sourceId ? (
+                        <>
+                          <Input
+                            autoFocus
+                            type="url"
+                            aria-label="Source URL"
+                            value={urlEdit.value}
+                            disabled={savingUrl}
+                            onChange={(e) =>
+                              setUrlEdit({ id: h.sourceId, value: e.target.value })
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void saveUrlEdit();
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                setUrlEdit(null);
+                              }
+                            }}
+                            className="h-7 min-w-0 flex-1 text-caption"
+                          />
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() =>
-                              void relocate(
-                                h.sourceId,
-                                foundPaths[h.sourceId][0],
-                              )
-                            }
-                            title={`Found at ${foundPaths[h.sourceId][0]} — point the source there and re-read it`}
+                            disabled={savingUrl}
+                            onClick={() => void saveUrlEdit()}
+                            title="Save the URL and fetch it again"
                           >
-                            Found it — move
+                            {savingUrl ? "Fetching…" : "Save"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={savingUrl}
+                            onClick={() => setUrlEdit(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className="truncate text-body text-foreground"
+                            title={h.title}
+                          >
+                            {h.title || "Untitled"}
+                          </div>
+                          <div
+                            className="truncate text-caption text-muted-foreground"
+                            title={h.detail}
+                          >
+                            {HYGIENE_LABEL[h.bucket] ?? h.bucket} · {h.detail}
+                          </div>
+                        </div>
+                        {urlEditable(h) && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => startUrlEdit(h.sourceId)}
+                            title={`Correct the address (${sources.find((s) => s.id === h.sourceId)?.url ?? ""}) and fetch it again`}
+                          >
+                            Edit URL
                           </Button>
                         )}
-                      {h.bucket === "missing-file" && (
+                        {h.bucket === "missing-file" &&
+                          (foundPaths[h.sourceId]?.length ?? 0) > 0 && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() =>
+                                void relocate(
+                                  h.sourceId,
+                                  foundPaths[h.sourceId][0],
+                                )
+                              }
+                              title={`Found at ${foundPaths[h.sourceId][0]} — point the source there and re-read it`}
+                            >
+                              Found it — move
+                            </Button>
+                          )}
+                        {h.bucket === "missing-file" && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => void locate(h.sourceId)}
+                            title="Pick the file's new location yourself"
+                          >
+                            Locate…
+                          </Button>
+                        )}
+                        {h.kind !== "note" && h.bucket !== "duplicate" && (
+                          <Button
+                            variant="ghost"
+                            disabled={retrying === h.sourceId}
+                            onClick={() => void retryIssue(h)}
+                            title="Fetch it again now"
+                          >
+                            {retrying === h.sourceId ? "Retrying…" : "Retry"}
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
-                          onClick={() => void locate(h.sourceId)}
-                          title="Pick the file's new location yourself"
+                          onClick={() => keepOne(h)}
+                          title={
+                            h.kind === "note"
+                              ? "Dismiss this flag and keep the note"
+                              : "Dismiss this flag and keep the source"
+                          }
                         >
-                          Locate…
+                          Keep
                         </Button>
-                      )}
-                      {h.kind !== "note" && h.bucket !== "duplicate" && (
                         <Button
                           variant="ghost"
-                          disabled={retrying === h.sourceId}
-                          onClick={() => void retryIssue(h)}
-                          title="Fetch it again now"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => removeIssue(h)}
+                          title={
+                            h.kind === "note"
+                              ? "Delete the note"
+                              : "Remove the source and its chunks"
+                          }
                         >
-                          {retrying === h.sourceId ? "Retrying…" : "Retry"}
+                          Remove
                         </Button>
+                        </>
                       )}
-                      <Button
-                        variant="ghost"
-                        onClick={() => keepOne(h)}
-                        title={
-                          h.kind === "note"
-                            ? "Dismiss this flag and keep the note"
-                            : "Dismiss this flag and keep the source"
-                        }
-                      >
-                        Keep
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="text-destructive hover:bg-destructive/10"
-                        onClick={() => removeIssue(h)}
-                        title={
-                          h.kind === "note"
-                            ? "Delete the note"
-                            : "Remove the source and its chunks"
-                        }
-                      >
-                        Remove
-                      </Button>
                     </div>
                   ))
                 )}

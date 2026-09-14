@@ -620,6 +620,7 @@ pub fn run() {
             commands::growth_web_enabled,
             commands::set_growth_web_enabled,
             commands::relocate_source,
+            commands::set_source_url,
             commands::find_moved_file,
             commands::apply_tag_merge,
             commands::live_view_back,

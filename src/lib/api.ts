@@ -277,6 +277,10 @@ export const api = {
     run(cmd<Source>("set_source_image", { sourceId, imageUrl })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
+  /** Correct a web source's URL in place and re-fetch it (Grow's attention
+   *  row). The URL is saved even when the re-fetch fails. */
+  setSourceUrl: (sourceId: string, url: string) =>
+    run(ai<Source>("set_source_url", { sourceId, url })),
   /** Batch refresh (RFC-multi-select): returns immediately; the backend
    *  refreshes sequentially and emits one sources://changed at the end. */
   refreshSources: (notebookId: string, sourceIds: string[]) =>

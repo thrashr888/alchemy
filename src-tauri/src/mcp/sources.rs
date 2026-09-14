@@ -141,6 +141,14 @@ struct SourceIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SetSourceUrlReq {
+    /// Source id (from list_sources).
+    source_id: String,
+    /// The corrected http(s) URL.
+    url: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct UpdateSourceReq {
     /// Source id (from list_sources).
     source_id: String,
@@ -663,7 +671,24 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone — never a source whose originDevice is another Mac; that one's file was never here, and list_sources reports it as remote), \"duplicate\" (the same page, file or note added twice — matched by canonical URL, or by content for files, pasted text and notes; the oldest copy is the keeper and its id is in \"keeperId\"), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note or refresh_source; this is also the check the app's own refresh button runs."
+        description = "Correct a web source's URL in place and re-fetch it — the repair for a link that arrived mangled (source_hygiene reports it as \"unreachable\"). Only url and feed sources; the source keeps its id, tags and notes. Returns the refreshed source, or an error naming why the new URL still couldn't be fetched (the URL stays saved)."
+    )]
+    async fn set_source_url(
+        &self,
+        Parameters(SetSourceUrlReq { source_id, url }): Parameters<SetSourceUrlReq>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let _heartbeat = Heartbeat::start(&ctx, format!("re-fetching {url}"));
+        let state = self.state();
+        let source = commands::set_source_url_impl(&self.app, &state, &source_id, &url)
+            .await
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        self.changed("sources", Some(&source.notebook_id));
+        json_result(&source)
+    }
+
+    #[tool(
+        description = "Run the hygiene check over a notebook now and return what needs attention (docs/RFC-source-hygiene.md). Each issue carries a \"kind\" of \"source\" or \"note\" and a bucket. Proposed removals: \"unreachable\" (repeated refresh failures), \"missing-file\" (local file gone — never a source whose originDevice is another Mac; that one's file was never here, and list_sources reports it as remote), \"duplicate\" (the same page, file or note added twice — matched by canonical URL, or by content for files, pasted text and notes; the oldest copy is the keeper and its id is in \"keeperId\"), \"husk\" (old failed import with no content) and \"empty-note\" (a note that was never written). Nothing is deleted automatically. Also informational \"stale\" (due for re-fetch; the background sweep handles those). Act on proposals with delete_source, delete_note, refresh_source or set_source_url (an unreachable link that is merely mangled); this is also the check the app's own refresh button runs."
     )]
     async fn source_hygiene(
         &self,

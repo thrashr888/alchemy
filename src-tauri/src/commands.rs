@@ -11784,9 +11784,58 @@ pub async fn relocate_source(
     }
     let source =
         e(state.db.get_source(&source_id).await)?.ok_or_else(|| "source not found".to_string())?;
-    e(state.db.set_source_path(&source_id, &path).await)?;
+    e(state.db.set_source_origin(&source_id, &path).await)?;
     notify_changed("sources", Some(&source.notebook_id));
     Ok(())
+}
+
+/// Correct a web source's URL in place and fetch it again — the Grow
+/// attention row's answer to a link that arrived mangled (a catalog that
+/// swallowed a closing paren, a feed entry with trailing punctuation). The
+/// source keeps its id, notes, tags and history; only the origin changes,
+/// so the fix is a repair, not a remove-and-re-add. Shared by the IPC
+/// command and the MCP tool.
+pub(crate) async fn set_source_url_impl(
+    app: &AppHandle,
+    state: &AppState,
+    source_id: &str,
+    url: &str,
+) -> anyhow::Result<Source> {
+    let url = url.trim();
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| anyhow::anyhow!("That isn't a valid URL ({e})"))?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some(),
+        "Only http(s) links can be set here"
+    );
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
+    anyhow::ensure!(
+        matches!(existing.source_type.as_str(), "url" | "feed"),
+        "{} sources don't have a URL to change — use Locate for files",
+        existing.source_type
+    );
+    if existing.url != url {
+        state.db.set_source_origin(source_id, url).await?;
+        notify_changed("sources", Some(&existing.notebook_id));
+    }
+    refresh_source_impl(app, state, source_id)
+        .await
+        .map_err(|err| anyhow::anyhow!("Saved the new URL, but fetching it failed: {err:#}"))
+}
+
+#[tauri::command]
+pub async fn set_source_url(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    url: String,
+) -> Result<Source, String> {
+    e(set_source_url_impl(&app, &state, &source_id, &url).await)
 }
 
 /// Spotlight candidates for a missing file, by exact name — the proactive

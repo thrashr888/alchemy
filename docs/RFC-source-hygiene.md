@@ -58,6 +58,7 @@ Two columns on `sources`: `fetched_at` (i64 ms, set by `reingest` on every succe
 
 - Source rows in the affected buckets get a quiet `Badge` ("unreachable", "duplicate", "missing") + `opacity-60`, the exact stale-note idiom.
 - The sources panel header shows a one-line affordance when proposals exist ("3 sources need attention") opening a review modal: each item shows the reason and diff context, with per-item **Remove** / **Keep** (Keep suppresses the flag until the signal changes). Removal goes through the batch `delete_sources` command from RFC-multi-select.
+- **Edit URL** (url and feed sources) corrects the address in place and re-fetches — the answer to a link that arrived mangled (a catalog that dragged sentence punctuation into the host, `https://delta.dev）。/`). The source keeps its id, tags, notes and history; the strikes reset with the origin. `set_source_url` over IPC and MCP; the URL is saved even when the re-fetch still fails, so the error names the next thing to fix rather than undoing the edit.
 - "Keep" for `unreachable` resets `fetch_failures` (real backend state — the retry cadence restarts); for the other buckets it's a per-notebook localStorage suppression. Deliberate: a kept duplicate is a viewing preference, the signal itself stays true, and the MCP report keeps showing it to agents.
 
 ### UI

@@ -1730,11 +1730,14 @@ impl Db {
     /// Point a source at a new on-disk origin (the file moved) and clear
     /// its failure count so hygiene stops flagging it. Content untouched —
     /// the caller re-ingests through the normal refresh path.
-    pub async fn set_source_path(&self, source_id: &str, path: &str) -> Result<()> {
+    /// Point a source at a new origin — a moved file's path or a corrected
+    /// URL — and forget its failure strikes: the user just fixed the thing
+    /// the strikes were counting.
+    pub async fn set_source_origin(&self, source_id: &str, origin: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_SOURCES).execute().await?;
         tbl.update()
             .only_if(format!("id = '{}'", esc(source_id)))
-            .column("url", format!("'{}'", esc(path)))
+            .column("url", format!("'{}'", esc(origin)))
             .column("fetch_failures", "0".to_string())
             .execute()
             .await?;
