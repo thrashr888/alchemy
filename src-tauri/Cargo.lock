@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "alchemy"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "agent-client-protocol",
  "aho-corasick",
