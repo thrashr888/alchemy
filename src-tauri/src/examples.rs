@@ -1201,7 +1201,9 @@ pub(crate) async fn sync_links(state: &AppState) {
     {
         return;
     }
+    state.db.set_bulk_fill(true);
     let done = sync_links_inner(state).await;
+    state.db.set_bulk_fill(false);
     LINKS_SYNCING.store(false, Ordering::SeqCst);
     if let Err(err) = done {
         crate::note!("examples: links catalog sync stopped ({err:#}); the hourly pass retries");
@@ -1252,6 +1254,9 @@ async fn sync_links_inner(state: &AppState) -> anyhow::Result<()> {
             }
             continue;
         }
+        // A person's request always goes first: the fill waits out anything
+        // in flight before each capture, the way the sweeps do.
+        crate::foreground::wait_idle().await;
         let stored = if is_social_post(&item.url) {
             // The post is the content. Its words, the summary line the
             // catalog wrote, and the link back.
@@ -1271,21 +1276,25 @@ async fn sync_links_inner(state: &AppState) -> anyhow::Result<()> {
         };
         match stored {
             Ok(src) => {
-                // The item's own date, not the capture's: newest-first in
-                // the panel and the gallery, and the timeline shows when the
-                // link was actually kept.
-                if item.published_ms > 0 {
-                    let _ = db.set_source_created_at(&src.id, item.published_ms).await;
-                }
-                if !item.tags.is_empty() {
-                    let _ = crate::commands::set_source_tags_impl(state, &src.id, &item.tags).await;
-                }
-                // Why it was kept: the post that pointed here, as the
+                // One write for everything the item says about itself: its
+                // tags, its own date (not the capture's — newest-first in the
+                // panel and the gallery, and the timeline shows when the
+                // link was kept), and the post that pointed here as the
                 // source's note, so the reader sees the words beside the page.
-                if !item.via.is_empty() && !item.text.is_empty() {
-                    let _ = db
-                        .set_source_note(&src.id, &format!("{}\n\nvia {}", item.text, item.via))
-                        .await;
+                let note = if !item.via.is_empty() && !item.text.is_empty() {
+                    format!("{}\n\nvia {}", item.text, item.via)
+                } else {
+                    String::new()
+                };
+                let tags = crate::commands::normalize_tags(&item.tags);
+                let created = (item.published_ms > 0).then_some(item.published_ms);
+                if let Err(err) = db
+                    .stamp_catalog_source(&src.id, &tags, created, &note)
+                    .await
+                {
+                    crate::note!("examples: stamping {} failed ({err:#})", item.url);
+                } else if !note.is_empty() {
+                    let _ = crate::commands::index_snote(state, &src, &note).await;
                 }
                 landed += 1;
             }
@@ -1297,10 +1306,27 @@ async fn sync_links_inner(state: &AppState) -> anyhow::Result<()> {
                 }
             }
         }
+        // Every few hundred rows, fold the fragments the writes left behind
+        // so a scan mid-fill plans over dozens of files, not thousands.
+        if landed > 0 && landed.is_multiple_of(300) {
+            let _ = db.compact_table("sources").await;
+        }
         tokio::time::sleep(LINKS_IMPORT_GAP).await;
     }
     if landed > 0 || failed > 0 {
         crate::note!("examples: links catalog sync landed {landed}, failed {failed}");
+        let _ = db.touch_notebook(&nb.id, now()).await;
+        // A fill leaves a fragment per write behind; compacting right after
+        // is what keeps the next Grow or hygiene scan under its timeout.
+        if landed >= 50 {
+            match db.maintain().await {
+                Ok((bytes, versions)) => crate::note!(
+                    "examples: compacted after the fill — {} MB reclaimed, {versions} versions pruned",
+                    bytes / 1_048_576
+                ),
+                Err(err) => crate::note!("examples: compaction after the fill failed ({err:#})"),
+            }
+        }
         if let Some(app) = crate::commands::app_handle() {
             let _ = app.emit(
                 "mcp://changed",

@@ -279,6 +279,10 @@ pub struct Db {
     /// pattern whose search takes milliseconds). While deferred, `add_chunks`
     /// only marks the index dirty; `flush_fts` rebuilds once at the end.
     fts_deferred: std::sync::atomic::AtomicBool,
+    /// A bulk fill is writing a row every second or two: content-scan
+    /// readers may answer from a scan a few seconds old rather than
+    /// re-planning behind every write (see `sources_with_content_shared`).
+    bulk_fill: std::sync::atomic::AtomicBool,
     fts_dirty: std::sync::atomic::AtomicBool,
     /// The chunks table has been seen with its context column (Phase 1.5);
     /// see `has_chunk_context`.
@@ -326,6 +330,9 @@ struct SourcesContent {
 /// concurrent section fetches and a refresh click behind them; short enough
 /// that the text is not resident for the rest of the session.
 const CONTENT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+/// How old a content scan may be and still answer a read that arrived
+/// after the table changed — the window a bulk import writes inside.
+const CONTENT_CACHE_STALE_OK: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Above this, the scan is served but not held: a notebook whose text runs
 /// to tens of megabytes is exactly the one that must not be duplicated in
@@ -407,6 +414,7 @@ impl Db {
             scan_slots: tokio::sync::Semaphore::new(4),
             fts_lock: tokio::sync::Mutex::new(()),
             fts_deferred: std::sync::atomic::AtomicBool::new(false),
+            bulk_fill: std::sync::atomic::AtomicBool::new(false),
             fts_dirty: std::sync::atomic::AtomicBool::new(false),
             chunk_context_seen: std::sync::atomic::AtomicBool::new(false),
             fts_notify: tokio::sync::Notify::new(),
@@ -1540,10 +1548,16 @@ impl Db {
         let version = self.table_version(T_SOURCES).await;
         if let Some(v) = version {
             if let Some(c) = slot.as_ref() {
-                if c.notebook_id == notebook_id
-                    && c.version == v
-                    && c.at.elapsed() < CONTENT_CACHE_TTL
-                {
+                // Same version within the TTL is a hit. During a bulk fill
+                // so is a scan from the last few seconds under a different
+                // version: a fill writes a row every second or two, and
+                // re-planning a 1,400-source scan behind every write is how
+                // Grow timed out mid-fill. Outside a fill a write always
+                // refreshes — a source you just added shows up in Grow.
+                let filling = self.bulk_fill.load(std::sync::atomic::Ordering::SeqCst);
+                let fresh_enough = c.version == v && c.at.elapsed() < CONTENT_CACHE_TTL
+                    || filling && c.at.elapsed() < CONTENT_CACHE_STALE_OK;
+                if c.notebook_id == notebook_id && fresh_enough {
                     return Ok(c.sources.clone());
                 }
             }
@@ -2147,11 +2161,41 @@ impl Db {
             .store(k.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Enter/leave bulk-fill mode for content-scan readers (see
+    /// `sources_with_content_shared`). Distinct from `defer_fts`: the FTS
+    /// index still updates per write here, only the readers relax.
+    pub fn set_bulk_fill(&self, on: bool) {
+        self.bulk_fill
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Enter/leave bulk-write mode (see `fts_deferred`). Leaving does NOT
     /// rebuild — call `flush_fts` after, so error paths can still flush.
     pub fn defer_fts(&self, on: bool) {
         self.fts_deferred
             .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Compact one table and prune its old versions — the sources table
+    /// during a bulk fill, so the scans that read it stay one fragment
+    /// deep instead of one per row written. Best-effort.
+    pub async fn compact_table(&self, name: &str) -> Result<()> {
+        use lancedb::table::OptimizeAction;
+        let tbl = self.conn.open_table(name).execute().await?;
+        let _ = tbl
+            .optimize(OptimizeAction::Compact {
+                options: Default::default(),
+                remap_options: None,
+            })
+            .await;
+        let _ = tbl
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(lancedb::table::optimize::Duration::minutes(10)),
+                delete_unverified: None,
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await;
+        Ok(())
     }
 
     /// Reclaim disk and scan speed: compact fragmented tables and prune old
@@ -3728,6 +3772,30 @@ impl Db {
             .column("created_at", created_at.to_string())
             .execute()
             .await?;
+        Ok(())
+    }
+
+    /// Stamp a captured catalog item in one write: its tags, when it was
+    /// kept, and the note that says why. Three separate updates would be
+    /// three Lance versions per source — a 1,400-item fill left 4,000
+    /// fragments for every scan to plan over, and Grow timed out on them.
+    pub async fn stamp_catalog_source(
+        &self,
+        id: &str,
+        tags: &str,
+        created_at: Option<i64>,
+        note: &str,
+    ) -> Result<()> {
+        let tbl = self.conn.open_table(T_SOURCES).execute().await?;
+        let mut update = tbl
+            .update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("tags", format!("'{}'", esc(tags)))
+            .column("note", format!("'{}'", esc(note)));
+        if let Some(ts) = created_at {
+            update = update.column("created_at", ts.to_string());
+        }
+        update.execute().await?;
         Ok(())
     }
 

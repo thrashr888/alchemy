@@ -3309,7 +3309,11 @@ pub(crate) async fn set_source_note_impl(
 /// (Re)build the chunk rows for a source annotation — the `index_note`
 /// pattern with the `snote:` owner prefix. No confabulation gate: the user
 /// wrote it (RFC-source-tags §Per-source notes).
-async fn index_snote(state: &AppState, source: &Source, note: &str) -> anyhow::Result<()> {
+pub(crate) async fn index_snote(
+    state: &AppState,
+    source: &Source,
+    note: &str,
+) -> anyhow::Result<()> {
     state.db.delete_snote_chunks(&source.id).await?;
     if note.is_empty() {
         return Ok(());
