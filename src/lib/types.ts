@@ -311,6 +311,14 @@ export type NoteKind =
 /** Collection rows never carry bodies or generation prompts. */
 export type NoteSummary = Omit<Note, "content" | "prompt">;
 
+/** A notebook found in iCloud Drive that this Mac hasn't opened
+ *  (docs/RFC-shared-notebook.md): where a folder shared with you lands. */
+export interface SharedBundleOffer {
+  path: string;
+  title: string;
+  notebookId: string;
+}
+
 /** One document on the corpus timeline (docs/RFC-timeline.md). */
 export interface TimelineItem {
   id: string;

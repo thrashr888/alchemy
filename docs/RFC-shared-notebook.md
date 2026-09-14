@@ -1,6 +1,6 @@
 # RFC: A shared notebook — two people, one folder
 
-Status: draft, awaiting review (2026-09-13).
+Status: phase 1 built on `cld/shared-notebook` (2026-09-14); phases 2–4 pending.
 Origin: Reminders item "make it so my wife can collab on a notebook over
 icloud." Builds on [RFC-okf-live.md](RFC-okf-live.md) §5.6 (shared
 folders: iCloud, Dropbox, two Macs) and §5.7 (the Notebooks folder).
@@ -102,6 +102,27 @@ share from Mac A, accept on Mac B, open on B, add a source on B, see it on
 A with her name, delete it on A, see it in B's Trash with his. Everything
 below the OS boundary — the shared root watch, the delete-as-proposal
 rule — gets the usual two-data-dir tests.
+
+### Phase 1, as built
+
+- **Offered, not opened.** The Notebooks-folder pass opens what it finds
+  on its own (§5.7); a bundle at the root of iCloud Drive is offered in
+  the HealthBanner instead — "“X” is in your iCloud Drive. Open · Not now".
+  That root is also the user's own space, and a bundle there may be an
+  experiment as easily as a share. `okf::shared_offers_in` is the filter
+  (one level down, not bound, not the Notebooks folder or inside it, not
+  dismissed), read at mount and every five minutes: a share accepted in
+  Finder lands with no event this app sees.
+- **Ownership is not detected.** macOS marks a shared item through
+  Foundation resource keys, not anything `mdls` or an xattr exposes, and
+  the offer does not need it: a bundle you can open is a bundle you can
+  open, whoever put it there.
+- **One open path.** `open_found_folder` is the per-folder half of the
+  Notebooks pass, factored out so the offer's Open runs the same
+  rebind-or-import decision and the same claims. A dismissed folder is
+  remembered by path in `okf/shared-dismissed.json`.
+- **Agents see the same offers** through `list_shared_notebooks` and
+  `open_shared_notebook`.
 
 ## Open questions
 

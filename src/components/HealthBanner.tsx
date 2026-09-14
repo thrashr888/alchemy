@@ -7,7 +7,11 @@ import {
   subscribeReindexPending,
 } from "@/lib/reindex";
 import { Button, LiveRegion } from "./ui";
-import type { IcloudMoveOffer, ModelStatus } from "@/lib/types";
+import type {
+  IcloudMoveOffer,
+  ModelStatus,
+  SharedBundleOffer,
+} from "@/lib/types";
 import { AlertTriangle, HardDrive, LifeBuoy } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { crashNotice, revealLog, type CrashNotice } from "@/lib/diagnostics";
@@ -89,6 +93,17 @@ export function HealthBanner({
   // the one launch that follows the crash.
   const [crash, setCrash] = useState<CrashNotice | null>(null);
   const [crashDismissed, setCrashDismissed] = useState(false);
+  // Notebooks sitting in iCloud Drive (docs/RFC-shared-notebook.md): read
+  // at mount and every few minutes — a share accepted in Finder lands
+  // there without any event this app sees.
+  const [sharedOffers, setSharedOffers] = useState<SharedBundleOffer[]>([]);
+  const reloadSharedOffers = () =>
+    api.sharedBundleOffers().then(setSharedOffers, () => setSharedOffers([]));
+  useEffect(() => {
+    void reloadSharedOffers();
+    const timer = window.setInterval(() => void reloadSharedOffers(), 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     let alive = true;
     const ask = () => {
@@ -147,6 +162,42 @@ export function HealthBanner({
       fixes: [
         { label: "Reveal", run: () => revealLog() },
         { label: "Dismiss", run: () => setCrashDismissed(true) },
+      ],
+    });
+  }
+
+  // A notebook sitting in iCloud Drive that this Mac hasn't opened
+  // (docs/RFC-shared-notebook.md): a folder someone shared, or one the
+  // other Mac put there. Offered, never opened on its own — iCloud Drive's
+  // root is the user's, and a bundle there may be an experiment.
+  for (const offer of sharedOffers) {
+    rows.push({
+      key: `shared:${offer.path}`,
+      tone: "offer",
+      title: `“${offer.title}” is in your iCloud Drive.`,
+      detail: "Open it here to read and edit it in step with whoever shares the folder.",
+      fixes: [
+        {
+          label: "Open",
+          primary: true,
+          run: async () => {
+            try {
+              const name = await api.openSharedBundle(offer.path);
+              pushToast("success", `Opened ${name}.`);
+            } catch (err) {
+              pushToast("error", err instanceof Error ? err.message : String(err));
+            } finally {
+              void reloadSharedOffers();
+            }
+          },
+        },
+        {
+          label: "Not now",
+          run: async () => {
+            await api.dismissSharedBundle(offer.path).catch(() => {});
+            void reloadSharedOffers();
+          },
+        },
       ],
     });
   }
