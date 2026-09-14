@@ -620,16 +620,41 @@ export function StudioPanel() {
               </div>
 
               {showInstructions ? (
-                <Textarea
-                  rows={2}
-                  autoFocus
-                  name="generation-instructions"
-                  aria-label="Generation instructions"
-                  value={instructions}
-                  onChange={(e) => setInstructions(e.target.value)}
-                  placeholder="Optional instructions applied to the next generation…"
-                  className="mt-2.5 text-caption"
-                />
+                <div className="mt-2.5 flex flex-col gap-1.5">
+                  <Textarea
+                    rows={2}
+                    autoFocus
+                    name="generation-instructions"
+                    aria-label="Generation instructions"
+                    value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Escape folds an empty box; typed text needs the
+                      // explicit verb below, so a stray key never eats it.
+                      if (e.key === "Escape" && !instructions.trim()) {
+                        e.preventDefault();
+                        setShowInstructions(false);
+                      }
+                    }}
+                    placeholder="Optional instructions applied to the next generation…"
+                    className="text-caption"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInstructions("");
+                      setShowInstructions(false);
+                    }}
+                    className="self-start text-micro text-muted-foreground transition-colors hover:text-foreground"
+                    title={
+                      instructions.trim()
+                        ? "Drop these instructions and hide the box"
+                        : "Hide the instructions box"
+                    }
+                  >
+                    {instructions.trim() ? "− Remove instructions" : "− Hide instructions"}
+                  </button>
+                </div>
               ) : (
                 <button
                   onClick={() => setShowInstructions(true)}
