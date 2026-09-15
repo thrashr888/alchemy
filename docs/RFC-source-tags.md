@@ -49,6 +49,7 @@ One editable annotation per source (not a Note entity — no relation, no curato
 - **Reader `DocProperties`**: Tags row + Note row (the block is already excluded from find-in-source and citation anchoring via `data-doc-meta`, so nothing added here corrupts highlight matching).
 - **Sources panel `RowMenu`**: "Edit tags…" / "Edit note…" using the existing inline-edit modal pattern; hover card shows tags.
 - **MCP**: `set_source_tags` / `set_source_note` tools (+ tags/note in `get_source` output) — agent-reachable per house convention.
+- **MCP reads by tag** (2026-09-14): `list_sources` takes `tag` (every listed tag must be present; `#` and case optional), `query` (title/url substring), `source_type` and `limit`; `search` takes `tag` and scopes retrieval to the sources carrying it, the way an @mention does. The Curated Links notebook is 2,400 rows, and its feed items carry the catalog's categories as tags — "the AI-agents links" is one call, not a page-through.
 
 ## What retrieval honestly gains
 

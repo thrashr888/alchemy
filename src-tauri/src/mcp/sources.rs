@@ -141,6 +141,67 @@ struct SourceIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ListSourcesReq {
+    /// Notebook id (from list_notebooks).
+    notebook_id: String,
+    /// Keep only sources carrying every one of these tags — space- or
+    /// comma-separated, `#` optional, case-insensitive ("ai-agents-automation
+    /// #code-repositories"). Tags are the user's labels; a feed's items carry
+    /// its categories as tags.
+    #[serde(default)]
+    tag: String,
+    /// Case-insensitive substring matched against title and url.
+    #[serde(default)]
+    query: String,
+    /// Keep only this source type (url, feed, text, markdown, pdf, git, …).
+    #[serde(default)]
+    source_type: String,
+    /// Cap the result (default: everything that matches).
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// The filter half of `list_sources`, kept pure so it can be tested:
+/// every wanted tag must be present, the substring must hit title or url,
+/// the type must match. Empty filters keep everything.
+pub(crate) fn filter_sources(
+    sources: Vec<Source>,
+    tag: &str,
+    query: &str,
+    source_type: &str,
+) -> Vec<Source> {
+    let wanted: Vec<String> = tag
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .map(|t| t.trim_start_matches('#').to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let query = query.trim().to_lowercase();
+    let source_type = source_type.trim().to_lowercase();
+    sources
+        .into_iter()
+        .filter(|s| {
+            if !wanted.is_empty() {
+                let have: Vec<String> = s
+                    .tags
+                    .split_whitespace()
+                    .map(|t| t.to_lowercase())
+                    .collect();
+                if !wanted.iter().all(|w| have.iter().any(|h| h == w)) {
+                    return false;
+                }
+            }
+            if !query.is_empty()
+                && !s.title.to_lowercase().contains(&query)
+                && !s.url.to_lowercase().contains(&query)
+            {
+                return false;
+            }
+            source_type.is_empty() || s.source_type.to_lowercase() == source_type
+        })
+        .collect()
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SetSourceUrlReq {
     /// Source id (from list_sources).
     source_id: String,
@@ -330,21 +391,31 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). status \"error\" means the import failed — see the error field; \"processing\" means the content is stored and readable but still being indexed — search reaches it shortly, no action needed. originDevice names the Mac the source was imported on; remote:true means its file lives on that other Mac and its path does not resolve here — the text is fully readable and searchable, but do not refresh it, reveal it, or propose removing it."
+        description = "List a notebook's sources (id, title, type, url, status, char/chunk counts, tags and note — the user's own labels and annotation — and image_url, the page's lead image for url sources; \"-\" means checked and none). Filter with tag (every listed tag must be present — e.g. {\"notebook_id\":\"<id>\",\"tag\":\"#ai-agents-automation\"} pulls the Curated Links items in that category), query (substring of title or url), source_type, and limit; a big notebook is thousands of rows, so filter rather than page through everything. status \"error\" means the import failed — see the error field; \"processing\" means the content is stored and readable but still being indexed — search reaches it shortly, no action needed. originDevice names the Mac the source was imported on; remote:true means its file lives on that other Mac and its path does not resolve here — the text is fully readable and searchable, but do not refresh it, reveal it, or propose removing it."
     )]
     async fn list_sources(
         &self,
-        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+        Parameters(ListSourcesReq {
+            notebook_id,
+            tag,
+            query,
+            source_type,
+            limit,
+        }): Parameters<ListSourcesReq>,
     ) -> Result<CallToolResult, McpError> {
         let state = self.state();
-        let mut sources: Vec<Source> = state
+        let all = state
             .db
             .list_sources(&notebook_id)
             .await
-            .map_err(internal)?
+            .map_err(internal)?;
+        let mut sources: Vec<Source> = filter_sources(all, &tag, &query, &source_type)
             .into_iter()
             .map(slim)
             .collect();
+        if let Some(limit) = limit {
+            sources.truncate(limit as usize);
+        }
         crate::device::mark_remote(&commands::app_data_dir(&state), &notebook_id, &mut sources);
         json_result(&sources)
     }
@@ -709,5 +780,106 @@ impl AlchemyMcp {
             cadence,
             commands::now(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::filter_sources;
+    use crate::models::Source;
+
+    fn src(id: &str, source_type: &str, title: &str, url: &str, tags: &str) -> Source {
+        Source {
+            origin_device: String::new(),
+            remote: false,
+            id: id.into(),
+            notebook_id: "nb".into(),
+            title: title.into(),
+            source_type: source_type.into(),
+            url: url.into(),
+            content: String::new(),
+            char_count: 100,
+            chunk_count: 1,
+            created_at: 0,
+            status: "ready".into(),
+            error: String::new(),
+            parent_id: String::new(),
+            mtime: 0,
+            author: String::new(),
+            image_url: String::new(),
+            tags: tags.into(),
+            note: String::new(),
+            fetched_at: 0,
+            fetch_failures: 0,
+        }
+    }
+
+    fn corpus() -> Vec<Source> {
+        vec![
+            src(
+                "a",
+                "url",
+                "Scape",
+                "https://scape.work/",
+                "websites-products ai-agents-automation",
+            ),
+            src(
+                "b",
+                "url",
+                "Delta",
+                "https://delta.dev/",
+                "websites-products",
+            ),
+            src(
+                "c",
+                "text",
+                "A post on X",
+                "https://x.com/p/1",
+                "social-media-discussions",
+            ),
+        ]
+    }
+
+    fn ids(v: Vec<Source>) -> Vec<String> {
+        v.into_iter().map(|s| s.id).collect()
+    }
+
+    #[test]
+    fn empty_filters_keep_everything() {
+        assert_eq!(ids(filter_sources(corpus(), "", "", "")), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn every_listed_tag_must_be_present_hash_and_case_optional() {
+        assert_eq!(
+            ids(filter_sources(corpus(), "#Websites-Products", "", "")),
+            ["a", "b"]
+        );
+        assert_eq!(
+            ids(filter_sources(
+                corpus(),
+                "websites-products, ai-agents-automation",
+                "",
+                ""
+            )),
+            ["a"]
+        );
+        assert!(filter_sources(corpus(), "nope", "", "").is_empty());
+    }
+
+    #[test]
+    fn query_matches_title_or_url_and_type_narrows() {
+        assert_eq!(ids(filter_sources(corpus(), "", "DELTA", "")), ["b"]);
+        assert_eq!(ids(filter_sources(corpus(), "", "x.com", "")), ["c"]);
+        assert_eq!(ids(filter_sources(corpus(), "", "", "text")), ["c"]);
+        assert_eq!(
+            ids(filter_sources(
+                corpus(),
+                "websites-products",
+                "scape",
+                "url"
+            )),
+            ["a"]
+        );
     }
 }

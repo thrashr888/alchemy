@@ -41,6 +41,35 @@ struct SearchReq {
     /// Max passages to return (default 6, max 20).
     #[serde(default)]
     max_results: Option<u32>,
+    /// Search only sources carrying every one of these tags (space- or
+    /// comma-separated, `#` optional) — the notebook's other sources and its
+    /// notes are left out of the pool.
+    #[serde(default)]
+    tag: String,
+}
+
+/// A tag narrows the pool to the sources that carry it, the way an
+/// @mention does in the app — resolved up front so retrieval never pays for
+/// the rest of the notebook. `None` when no tag was asked for.
+async fn tag_scope(
+    state: &crate::AppState,
+    notebook_id: &str,
+    tag: &str,
+) -> Result<Option<Vec<String>>, McpError> {
+    if tag.trim().is_empty() {
+        return Ok(None);
+    }
+    let all = state.db.list_sources(notebook_id).await.map_err(internal)?;
+    let ids: Vec<String> = super::sources::filter_sources(all, tag, "", "")
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    if ids.is_empty() {
+        return Err(invalid(format!(
+            "no source in this notebook carries the tag(s) {tag:?}"
+        )));
+    }
+    Ok(Some(ids))
 }
 
 #[tool_router(router = search_router, vis = "pub(super)")]
@@ -48,7 +77,7 @@ impl AlchemyMcp {
     // -- Search --
 
     #[tool(
-        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks AND notes. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; a passage with a non-empty noteId came from a note (a prior conclusion — yours or the user's), not a source document: weigh it as secondhand and use get_note for its full text. Use get_source for a source passage's full document. Synthesize answers yourself from the passages. Example: {\"notebook_id\":\"<id from list_notebooks>\",\"query\":\"what tradeoffs did we weigh for retry backoff?\",\"max_results\":8}"
+        description = "Hybrid search (vector similarity + BM25 keyword, rank-fused) over a notebook's source chunks AND notes. Runs on the local embedder — cheap, call freely. Returns passages with sourceId/sourceTitle/snippet/distance; a passage with a non-empty noteId came from a note (a prior conclusion — yours or the user's), not a source document: weigh it as secondhand and use get_note for its full text. Use get_source for a source passage's full document. Synthesize answers yourself from the passages. Add tag to search only the sources carrying those tags (a Curated Links category, the user's own labels). Example: {\"notebook_id\":\"<id from list_notebooks>\",\"query\":\"what tradeoffs did we weigh for retry backoff?\",\"max_results\":8}"
     )]
     async fn search(
         &self,
@@ -56,6 +85,7 @@ impl AlchemyMcp {
             notebook_id,
             query,
             max_results,
+            tag,
         }): Parameters<SearchReq>,
     ) -> Result<CallToolResult, McpError> {
         let query = query.trim().to_string();
@@ -64,13 +94,14 @@ impl AlchemyMcp {
         }
         let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
         let state = self.state();
+        let scope = tag_scope(&state, &notebook_id, &tag).await?;
         let query_vec = {
             let ai = state.ai.read().await.clone();
             ai.embed_one(&query).await.map_err(internal)?
         };
         let citations = state
             .db
-            .search_chunks(&notebook_id, query_vec, &query, k, None)
+            .search_chunks(&notebook_id, query_vec, &query, k, scope.as_deref())
             .await
             .map_err(internal)?;
         crate::trace::log(
@@ -179,6 +210,7 @@ impl AlchemyMcp {
             notebook_id,
             query,
             max_results,
+            tag,
         }): Parameters<SearchReq>,
     ) -> Result<CallToolResult, McpError> {
         let query = query.trim().to_string();
@@ -187,6 +219,7 @@ impl AlchemyMcp {
         }
         let k = max_results.unwrap_or(6).clamp(1, 20) as usize;
         let state = self.state();
+        let scope = tag_scope(&state, &notebook_id, &tag).await?;
         let ai = state.ai.read().await.clone();
         let query_vec = ai.embed_one(&query).await.map_err(internal)?;
         // Cross-encoder tiers retrieve a 3x pool and rerank it down to k,
@@ -194,7 +227,7 @@ impl AlchemyMcp {
         let fetch_k = if ai.has_xenc() { k * 3 } else { k };
         let mut trace = state
             .db
-            .search_chunks_trace(&notebook_id, query_vec, &query, fetch_k, None)
+            .search_chunks_trace(&notebook_id, query_vec, &query, fetch_k, scope.as_deref())
             .await
             .map_err(internal)?;
         trace.final_hits = ai.rerank_hits(&query, trace.final_hits, k).await;
