@@ -1072,6 +1072,17 @@ export function ChatPanel() {
                 }
               }}
             />
+            {/* Named sources ride on their own line above the tools: a long
+                title in the tools row squeezed the pills and wrapped. */}
+            {activeMentions.length > 0 && (
+              <div
+                className="min-w-0 truncate px-1.5 pt-1 text-micro text-subtle-foreground"
+                title={activeMentions.map((m) => m.title).join(", ")}
+              >
+                Searching only:{" "}
+                {activeMentions.map((m) => m.title).join(", ")}
+              </div>
+            )}
             <div className="flex items-center gap-1.5 px-1.5 pt-1">
               <button
                 onClick={toggleAgentMode}
@@ -1087,15 +1098,6 @@ export function ChatPanel() {
                 {agentMode ? "Deep research: on" : "Deep research: off"}
               </button>
               <ModelPill />
-              {activeMentions.length > 0 && (
-                <span
-                  className="min-w-0 truncate text-micro text-subtle-foreground"
-                  title={activeMentions.map((m) => m.title).join(", ")}
-                >
-                  Searching only:{" "}
-                  {activeMentions.map((m) => m.title).join(", ")}
-                </span>
-              )}
               <span className="flex-1" />
               {sending ? (
                 <Button
