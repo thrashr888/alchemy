@@ -314,8 +314,12 @@ button {
 /* Tables read as data, not as a spreadsheet screenshot: one hairline
    frame around the whole thing (the scroll container, .table-wrap),
    horizontal rules between rows, NO vertical grid — the column gap does
-   that job. Linear's table language, per DESIGN.md. */
-.prose .table-wrap {
+   that job. Linear's table language, per DESIGN.md.
+   .tableWrapper is TipTap's own wrapper in the note editor — the same
+   frame, or a wide table in an open note drags the whole column sideways
+   (the editor's scroll box is the nearest ancestor that clips). */
+.prose .table-wrap,
+.prose .tableWrapper {
   margin: 0.2em 0 0.9em;
   border: 1px solid var(--border);
   border-radius: 8px;
