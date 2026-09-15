@@ -41,6 +41,8 @@ import {
   FileDown,
   FileText,
   Plus,
+  Search,
+  X,
   Trash2,
   StickyNote,
   Square,
@@ -288,14 +290,21 @@ export function StudioPanel() {
       // The order holds for this session either way.
     }
   };
-  const listedNotes = useMemo(
-    () =>
-      sortNotes(
-        notes.filter((n) => n.status !== "archived" && !isWikiPage(n)),
-        noteSort,
-      ),
-    [notes, noteSort],
+  // Notebooks with dozens of notes need a way in: a title filter (the list
+  // rows are summaries without content),
+  // the same affordance the sources panel has. Session-local on purpose.
+  const [noteQuery, setNoteQuery] = useState("");
+  const shownNotes = useMemo(
+    () => notes.filter((n) => n.status !== "archived" && !isWikiPage(n)),
+    [notes],
   );
+  const listedNotes = useMemo(() => {
+    const q = noteQuery.trim().toLowerCase();
+    const matched = q
+      ? shownNotes.filter((n) => n.title.toLowerCase().includes(q))
+      : shownNotes;
+    return sortNotes(matched, noteSort);
+  }, [shownNotes, noteQuery, noteSort]);
   const visibleNoteIds = listedNotes.map((n) => n.id);
   const visibleNoteIdsRef = useRef(visibleNoteIds);
   visibleNoteIdsRef.current = visibleNoteIds;
@@ -681,6 +690,13 @@ export function StudioPanel() {
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
             Notes
+            {shownNotes.length > 0 && (
+              <span className="ml-1.5 normal-case tracking-normal text-subtle-foreground/80">
+                {noteQuery.trim()
+                  ? `${listedNotes.length} of ${shownNotes.length}`
+                  : shownNotes.length}
+              </span>
+            )}
           </span>
           <div className="flex items-center gap-0.5">
             {/* A menu rather than a select: the panel is 320px at rest, and
@@ -715,6 +731,39 @@ export function StudioPanel() {
           </div>
         </div>
 
+        {(shownNotes.length > 8 || noteQuery) && (
+          <div className="relative px-4 pb-2">
+            <Search className="pointer-events-none absolute left-6 top-1/2 h-3.5 w-3.5 -translate-y-1/2 -mt-1 text-subtle-foreground" />
+            <input
+              value={noteQuery}
+              onChange={(e) => setNoteQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && noteQuery) {
+                  e.preventDefault();
+                  setNoteQuery("");
+                }
+              }}
+              placeholder="Filter notes…"
+              aria-label="Filter notes"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              {...({ writingsuggestions: "false" } as Record<string, string>)}
+              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
+            />
+            {noteQuery && (
+              <button
+                type="button"
+                onClick={() => setNoteQuery("")}
+                aria-label="Clear filter"
+                className="absolute right-5 top-1/2 -translate-y-1/2 -mt-1 rounded p-0.5 text-subtle-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
         <div className="px-2 pb-2">
           {notebookLoading && notes.length === 0 ? (
             <LoadingState label="Loading notes…" compact />
@@ -724,6 +773,10 @@ export function StudioPanel() {
               title="No notes yet"
               hint="Generate a document above or write your own note."
             />
+          ) : listedNotes.length === 0 && noteQuery.trim() ? (
+            <div className="px-3 py-2 text-caption text-subtle-foreground">
+              No notes match “{noteQuery.trim()}”.
+            </div>
           ) : (
             <div className="flex flex-col gap-1.5">
               {listedNotes.map((n) => (
