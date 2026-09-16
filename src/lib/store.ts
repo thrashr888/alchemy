@@ -3258,9 +3258,13 @@ export const useStore = create<AppState>((rawSet, get) => {
           return;
         }
         await revealItemInDir(folder.path).catch(() => {});
+        // A folder in somebody else's cloud is shared from that client, not
+        // from Finder's Share menu (docs/RFC-shared-notebook.md §4).
         get().pushToast(
           "info",
-          "In Finder, click Share \u2192 Collaborate and add them.",
+          folder.service
+            ? `This notebook lives in ${folder.service} \u2014 share the folder from there.`
+            : "In Finder, click Share \u2192 Collaborate and add them.",
         );
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));

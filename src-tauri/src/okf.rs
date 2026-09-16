@@ -3841,20 +3841,112 @@ pub(crate) fn shared_notebooks_dir() -> Option<PathBuf> {
     icloud_drive_root().map(|root| root.join(SHARED_FOLDER))
 }
 
+/// Where a bound bundle already is, as far as sharing is concerned (§1, §4).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SharePlacement {
+    /// Nowhere a person can be invited: the app's own iCloud container, a
+    /// plain local folder, a second drive. The bundle moves into
+    /// `Alchemy Shared/`.
+    Move,
+    /// Already in iCloud Drive proper — a Notebooks folder the user put
+    /// there, or a notebook shared once before. Shareable exactly where it
+    /// sits, so nothing moves and the sheet opens on it as it is.
+    InPlaceIcloud,
+    /// Dropbox, Google Drive, OneDrive, Box: a folder that syncs, that its
+    /// own client shares, and that the user chose (RFC-okf-live §5.7 — a
+    /// Notebooks folder pointed somewhere else is their decision). Marked
+    /// shared, never moved; the invitation is made in that service.
+    OtherCloud(String),
+}
+
+/// The File Provider mount every non-Apple cloud client lands under.
+const CLOUD_STORAGE: &str = "/Library/CloudStorage/";
+
+/// The service behind a `~/Library/CloudStorage/` path, named the way a
+/// person would say it. The mount is `Dropbox`, `GoogleDrive-me@gmail.com`,
+/// `OneDrive-Personal`, `Box-Box`: the provider, then the account.
+fn cloud_storage_service(bundle: &Path) -> Option<String> {
+    let path = bundle.to_string_lossy().to_string();
+    let mount = path.split(CLOUD_STORAGE).nth(1)?.split('/').next()?;
+    let provider = mount.split('-').next().unwrap_or(mount).trim();
+    if provider.is_empty() {
+        return None;
+    }
+    Some(match provider {
+        "GoogleDrive" => "Google Drive".to_string(),
+        other => other.to_string(),
+    })
+}
+
+/// What sharing should do with a bundle at this path — the whole rule, pure
+/// over the path so it can be read and tested without a disk.
+///
+/// `icloud_drive` is iCloud Drive proper (`com~apple~CloudDocs`), not the
+/// app's container: a container is private to one Apple ID, which is the
+/// reason any of this moves at all.
+pub(crate) fn share_placement(bundle: &Path, icloud_drive: Option<&Path>) -> SharePlacement {
+    if let Some(service) = cloud_storage_service(bundle) {
+        return SharePlacement::OtherCloud(service);
+    }
+    match icloud_drive {
+        Some(root) if bundle.starts_with(root) => SharePlacement::InPlaceIcloud,
+        _ => SharePlacement::Move,
+    }
+}
+
 /// Put a notebook where it can be shared, and mark it so (§1).
 ///
-/// A bound bundle is *renamed* into `Alchemy Shared/` — same folder, same
-/// binding id, same manifest, the way the container migration moves one
+/// A bundle that is nowhere shareable — the app's container, a plain local
+/// folder — is *renamed* into `Alchemy Shared/`: same folder, same binding
+/// id, same manifest, the way the container migration moves one
 /// (`rebind_moved`); nothing is copied and nothing is deleted, so moving it
-/// back later is the same move in the other direction. A notebook that was
-/// never on disk is bound there and seeded through the ordinary bind. The
-/// share sheet is the caller's next step; this half is what an agent can do
-/// too.
+/// back later is the same move in the other direction. A bundle already in
+/// iCloud Drive, or in a Dropbox/Drive/OneDrive folder the user chose, is
+/// marked and left exactly where it is (`share_placement`). A notebook that
+/// was never on disk is bound into the shared folder and seeded through the
+/// ordinary bind. The share sheet is the caller's next step; this half is
+/// what an agent can do too.
+///
+/// Returns the folder, and the service to make the invitation in when that
+/// is not macOS's own sheet — empty for iCloud.
 pub(crate) async fn share_notebook(
     app: &AppHandle,
     state: &AppState,
     notebook_id: &str,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
+    let data_dir = app_data_dir(state);
+    // Where it already is decides everything, and is asked before iCloud
+    // Drive is: a notebook in somebody's Dropbox is shareable on a Mac with
+    // no iCloud account at all.
+    if let Some(binding) = binding_for_checked(&data_dir, notebook_id)? {
+        match share_placement(
+            &same_folder(Path::new(&binding.path)),
+            icloud_drive_root().as_deref(),
+        ) {
+            SharePlacement::Move => {}
+            SharePlacement::InPlaceIcloud => {
+                // Already somewhere a person can be invited: the shared
+                // folder from an earlier share, or a Notebooks folder the
+                // user put in iCloud Drive. Moving it would be rearranging
+                // their filing for no gain.
+                mark_binding_shared(&data_dir, notebook_id)?;
+                return Ok((binding.path, String::new()));
+            }
+            SharePlacement::OtherCloud(service) => {
+                // Dropbox and the rest share folders perfectly well, from
+                // their own client. Hauling somebody's notebook out of the
+                // service they chose and into iCloud is not ours to do — and
+                // the rule that makes the other person's deletes proposals is
+                // worth just as much there, so the mark still goes on.
+                mark_binding_shared(&data_dir, notebook_id)?;
+                crate::note!(
+                    "okf: {} is in {service}; marked shared where it is",
+                    binding.path
+                );
+                return Ok((binding.path, service));
+            }
+        }
+    }
     let Some(root) = shared_notebooks_dir() else {
         return Err(
             "iCloud Drive isn't switched on for this Mac, so there's nowhere to share a notebook from."
@@ -3863,7 +3955,6 @@ pub(crate) async fn share_notebook(
     };
     std::fs::create_dir_all(&root)
         .map_err(|err| format!("Couldn't make {}: {err}", root.display()))?;
-    let data_dir = app_data_dir(state);
     let Some(binding) = binding_for_checked(&data_dir, notebook_id)? else {
         // Never kept on disk. It gets its folder in the shared root and the
         // ordinary seed pass — the same bind the ⋯ menu's Keep verb runs.
@@ -3876,15 +3967,9 @@ pub(crate) async fn share_notebook(
         let path = bind_impl(app, state, notebook_id, &folder.to_string_lossy()).await?;
         mark_binding_shared(&data_dir, notebook_id)?;
         crate::note!("okf: {title} is bound in {} to be shared", root.display());
-        return Ok(path);
+        return Ok((path, String::new()));
     };
     let from = PathBuf::from(&binding.path);
-    if same_folder(&from).starts_with(same_folder(&root)) {
-        // Already in the shared folder — from a previous share, or because
-        // the Notebooks folder is pointed there. Nothing to move.
-        mark_binding_shared(&data_dir, notebook_id)?;
-        return Ok(binding.path);
-    }
     if !from.is_dir() {
         return Err(
             "This notebook's folder isn't where Alchemy left it. Open it again before sharing it."
@@ -3925,7 +4010,7 @@ pub(crate) async fn share_notebook(
         from.display(),
         to.display()
     ));
-    Ok(to.to_string_lossy().to_string())
+    Ok((to.to_string_lossy().to_string(), String::new()))
 }
 
 /// Record that this binding's folder is shared with somebody. Merged into
@@ -3947,6 +4032,10 @@ pub struct SharedNotebookFolder {
     /// The share sheet is on screen. False means the caller should reveal the
     /// folder in Finder and say which menu to use.
     pub sheet: bool,
+    /// The service the invitation is made in when it isn't macOS's own sheet
+    /// — "Dropbox", "Google Drive" — so the fallback can name it. Empty for
+    /// an iCloud folder, where Finder's Share menu is the answer.
+    pub service: String,
 }
 
 #[tauri::command]
@@ -3955,10 +4044,16 @@ pub async fn share_notebook_cmd(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<SharedNotebookFolder, String> {
-    let path = share_notebook(&app, &state, &notebook_id).await?;
-    let sheet = show_share_sheet(&app, Path::new(&path)).await;
+    let (path, service) = share_notebook(&app, &state, &notebook_id).await?;
+    // CloudSharing is Apple's, and only for Apple's items. Asking it about a
+    // Dropbox folder raises nothing and teaches the user nothing.
+    let sheet = service.is_empty() && show_share_sheet(&app, Path::new(&path)).await;
     crate::commands::notify_changed("notebooks", None);
-    Ok(SharedNotebookFolder { path, sheet })
+    Ok(SharedNotebookFolder {
+        path,
+        sheet,
+        service,
+    })
 }
 
 // ---- Deletions as proposals (docs/RFC-shared-notebook.md §3) ---------------
@@ -6525,7 +6620,7 @@ pub fn is_evicted_stub(path: &Path) -> bool {
 /// file there is left alone until its own client brings it back — which is
 /// safe, because every caller already treats a stub as absent.
 fn icloud_can_hydrate(path: &Path) -> bool {
-    !path.to_string_lossy().contains("/Library/CloudStorage/")
+    !path.to_string_lossy().contains(CLOUD_STORAGE)
 }
 
 /// Ask for a file that is not downloaded, and say so. Returns true when the
@@ -7387,6 +7482,70 @@ mod shared_notebook_tests {
         assert_eq!(titles, vec!["Household"], "{offers:?}");
         assert_eq!(offers[0].notebook_id, "nb-1");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sharing_only_moves_a_bundle_that_is_nowhere_shareable() {
+        let home = Path::new("/Users/someone");
+        let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
+        let at = |path: &str| share_placement(Path::new(path), Some(&icloud));
+        // The app's container is private to one Apple ID, and a plain local
+        // folder is not shared with anybody: both move.
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/iCloud~com~thrashr888~alchemy/Documents/Household"),
+            SharePlacement::Move
+        );
+        assert_eq!(
+            at("/Users/someone/Documents/Alchemy/Household"),
+            SharePlacement::Move
+        );
+        assert_eq!(at("/Volumes/Archive/Household"), SharePlacement::Move);
+        // Already somewhere a person can be invited: nothing to rearrange.
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Alchemy Shared/Household"),
+            SharePlacement::InPlaceIcloud
+        );
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Notebooks/Household"),
+            SharePlacement::InPlaceIcloud
+        );
+        // Somebody else's sync folder, named the way they would say it.
+        for (path, service) in [
+            (
+                "/Users/someone/Library/CloudStorage/Dropbox/Notebooks/Household",
+                "Dropbox",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/GoogleDrive-me@gmail.com/My Drive/Household",
+                "Google Drive",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/OneDrive-Personal/Household",
+                "OneDrive",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/Box-Box/Household",
+                "Box",
+            ),
+        ] {
+            assert_eq!(
+                at(path),
+                SharePlacement::OtherCloud(service.into()),
+                "{path}"
+            );
+        }
+        // A Mac with iCloud Drive switched off still has a Dropbox.
+        assert_eq!(
+            share_placement(
+                Path::new("/Users/someone/Library/CloudStorage/Dropbox/Household"),
+                None
+            ),
+            SharePlacement::OtherCloud("Dropbox".into())
+        );
+        assert_eq!(
+            share_placement(Path::new("/Users/someone/Documents/Household"), None),
+            SharePlacement::Move
+        );
     }
 
     #[test]

@@ -82,6 +82,9 @@ export interface DeletionProposal {
 export interface SharedNotebookFolder {
   path: string;
   sheet: boolean;
+  /** The service the invitation is made in when it isn't macOS's own sheet
+   *  ("Dropbox", "Google Drive"); empty for an iCloud folder. */
+  service: string;
 }
 
 /** Whether the Notebooks folder can move into the app's own iCloud container,

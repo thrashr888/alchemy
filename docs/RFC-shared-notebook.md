@@ -136,7 +136,15 @@ rule — gets the usual two-data-dir tests.
   separate lists, so it was added to both), and wears no SF Symbol:
   DESIGN.md's menu rule is symbols per group, all or none, and that
   group of plain verbs has none.
-- **A move, both ways.** `std::fs::rename` into
+- **A move, both ways — and only when there is nowhere better.**
+  `share_placement` reads the path first: a bundle already anywhere under
+  iCloud Drive proper is shareable where it sits and is marked without
+  moving, and one under `~/Library/CloudStorage/` (Dropbox, Google Drive,
+  OneDrive, Box) is marked where it sits too — that service shares folders
+  itself, the user chose it (RFC-okf-live §5.7), and the app says so
+  instead of raising a sheet Apple only offers for its own items. What
+  moves is what is nowhere shareable: the app's container, a plain local
+  folder, another drive. `std::fs::rename` into
   `iCloud Drive/Alchemy Shared/`, `free_name`'s `-2` on a collision, and
   `rebind_moved` to repoint the binding — the same three the container
   migration uses, so the binding id and its manifest survive and no hash

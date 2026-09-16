@@ -141,7 +141,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Put a notebook where another person can be invited into it (docs/RFC-shared-notebook.md): its folder moves into iCloud Drive/Alchemy Shared, keeping its files, its sync record and its history, and the notebook is marked shared — which is what makes another person's deletions arrive as proposals rather than removals. Returns the folder's path. It cannot show the macOS share sheet, so tell the user to open that folder in Finder and use Share to invite whoever they meant."
+        description = "Put a notebook where another person can be invited into it (docs/RFC-shared-notebook.md) and mark it shared — which is what makes another person's deletions arrive as proposals rather than removals. A notebook in the app's container or a plain local folder moves into iCloud Drive/Alchemy Shared, keeping its files, its sync record and its history; one already in iCloud Drive, or in a Dropbox/Google Drive/OneDrive folder, is marked where it sits and never moved. Returns the folder's path, and shareFrom when the invitation belongs in that service rather than Finder. It cannot show the macOS share sheet, so tell the user where to make the invitation."
     )]
     async fn share_notebook(
         &self,
@@ -149,11 +149,17 @@ impl AlchemyMcp {
     ) -> Result<CallToolResult, McpError> {
         let app = self.app.clone();
         let state = self.state();
-        let path = crate::okf::share_notebook(&app, &state, &notebook_id)
+        let (path, service) = crate::okf::share_notebook(&app, &state, &notebook_id)
             .await
             .map_err(invalid)?;
         self.changed("notebooks", None);
-        json_result(&serde_json::json!({ "notebookId": notebook_id, "sharedPath": path }))
+        json_result(&serde_json::json!({
+            "notebookId": notebook_id,
+            "sharedPath": path,
+            // Set when the folder is somebody else's cloud and the invitation
+            // is made there rather than in Finder.
+            "shareFrom": service,
+        }))
     }
 
     #[tool(
