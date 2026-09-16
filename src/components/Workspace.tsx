@@ -11,7 +11,7 @@ import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
 import { SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
-import { Button, RowMenu, useConfirm } from "./ui";
+import { Button, RowMenu, useConfirm, type RowMenuItem } from "./ui";
 import { NavButtons } from "./NavButtons";
 import { NotebookEditModal } from "./NotebookEditModal";
 import { shortcutBlocked } from "@/lib/utils";
@@ -91,98 +91,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  return (
-    <div className="app-root flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
-      <header
-        data-tauri-drag-region
-        className="flex h-12 items-center gap-2 pl-[84px] pr-3"
-      >
-        <NavButtons />
-        <div className="mx-1 h-4 w-px bg-border" />
-        {/* A destination, not a direction: the chevron this button used to
-            carry read as a second Back arrow next to the real one. The
-            Library glyph is the app's one icon for "your notebooks" — the
-            Notebooks tab on Home wears it too. */}
-        {/* No `title`: the button already says "Notebooks", so the tooltip
-            only restated it — and a native tooltip raised from inside a
-            `data-tauri-drag-region` header outlives the drag. Move the
-            window while it is up and macOS leaves it painted at its old
-            screen point, which is how "Your notebooks" ended up floating
-            over the Studio list. */}
-        <Button variant="ghost" size="sm" onClick={close}>
-          <Library className="h-4 w-4" />
-          Notebooks
-        </Button>
-        <div className="mx-1 h-4 w-px bg-border" />
-        {/* `group`: the name cluster is a right-clickable object — the ⋯
-            RowMenu inside binds contextmenu to this div, carrying the same
-            verbs as a notebook row on Home (color lives in Rename's dialog).
-            The ⋯ stays visible (hover-reveal reflowed the tabs beside it)
-            and the name is chrome, not copy — no text selection. */}
-        <div className="group relative flex select-none items-center gap-1.5 min-w-0">
-          {/* The icon wears the notebook's color; a separate color dot read
-              as a status light next to Home's green ones. */}
-          {(() => {
-            const Icon = notebookIcon(notebook?.icon);
-            return (
-              <Icon
-                className="h-3.5 w-3.5 shrink-0 text-primary"
-                style={notebook?.color ? { color: notebook.color } : undefined}
-              />
-            );
-          })()}
-          {/* The name is also the switcher: click it for the other
-              notebooks, most recently touched first, and the Library for
-              the rest. Archived and system notebooks stay out of the list —
-              they are not places someone jumps to mid-thought. */}
-          <RowMenu
-            alwaysVisible
-            rowContext={false}
-            label="Switch notebook"
-            trigger={
-              <span className="flex min-w-0 items-center gap-1">
-                <span
-                  className="truncate text-body font-semibold"
-                  title={notebook?.title}
-                >
-                  {notebook?.title ?? "Notebook"}
-                </span>
-                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-              </span>
-            }
-            triggerClassName="flex min-w-0 items-center rounded-md px-1 py-0.5 transition-colors hover:bg-surface-2"
-            menuClassName="w-64"
-            align="left"
-            items={[
-              ...[...notebooks]
-                .filter((n) => n.status === "")
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-                .slice(0, 12)
-                .map((n) => {
-                  const Icon = notebookIcon(n.icon);
-                  return {
-                    label: n.title,
-                    icon: <Icon className="h-3.5 w-3.5" />,
-                    checked: n.id === currentId,
-                    onClick: () => {
-                      if (n.id !== currentId)
-                        void useStore.getState().selectNotebook(n.id);
-                    },
-                  };
-                }),
-              {
-                label: "All notebooks…",
-                icon: <Library className="h-3.5 w-3.5" />,
-                onClick: close,
-              },
-            ]}
-          />
-          <OkfChip />
-          {notebook && (
-            <RowMenu
-              alwaysVisible
-              label={`Options for ${notebook.title}`}
-              items={[
+  // The notebook's own verbs — the top half of the title menu; the switcher
+  // is the bottom half. One dropdown, not a ⌄ beside a ⋯.
+  const notebookVerbs: RowMenuItem[] = notebook
+    ? [
+
                 {
                   label: "Rename",
                   icon: <Pencil className="h-3.5 w-3.5" />,
@@ -269,9 +182,96 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                       void useStore.getState().deleteNotebook(notebook.id);
                   },
                 },
-              ]}
-            />
-          )}
+      ]
+    : [];
+
+  return (
+    <div className="app-root flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
+      <header
+        data-tauri-drag-region
+        className="flex h-12 items-center gap-2 pl-[84px] pr-3"
+      >
+        <NavButtons />
+        <div className="mx-1 h-4 w-px bg-border" />
+        {/* A destination, not a direction: the chevron this button used to
+            carry read as a second Back arrow next to the real one. The
+            Library glyph is the app's one icon for "your notebooks" — the
+            Notebooks tab on Home wears it too. */}
+        {/* No `title`: the button already says "Notebooks", so the tooltip
+            only restated it — and a native tooltip raised from inside a
+            `data-tauri-drag-region` header outlives the drag. Move the
+            window while it is up and macOS leaves it painted at its old
+            screen point, which is how "Your notebooks" ended up floating
+            over the Studio list. */}
+        <Button variant="ghost" size="sm" onClick={close}>
+          <Library className="h-4 w-4" />
+          Notebooks
+        </Button>
+        <div className="mx-1 h-4 w-px bg-border" />
+        {/* `group`: the name cluster is a right-clickable object — the title
+            RowMenu binds contextmenu to this div, carrying the same verbs as
+            a notebook row on Home (color lives in Rename's dialog) plus the
+            switcher. The name is chrome, not copy — no text selection. */}
+        <div className="group relative flex select-none items-center gap-1.5 min-w-0">
+          {/* The icon wears the notebook's color; a separate color dot read
+              as a status light next to Home's green ones. */}
+          {(() => {
+            const Icon = notebookIcon(notebook?.icon);
+            return (
+              <Icon
+                className="h-3.5 w-3.5 shrink-0 text-primary"
+                style={notebook?.color ? { color: notebook.color } : undefined}
+              />
+            );
+          })()}
+          {/* One menu off the name: the notebook's verbs, then "Switch to"
+              — the other notebooks, most recently touched first, and the
+              Library for the rest. Archived and system notebooks stay out of
+              the list; they are not places someone jumps to mid-thought. */}
+          <RowMenu
+            alwaysVisible
+            label={notebook ? `Options for ${notebook.title}` : "Switch notebook"}
+            trigger={
+              <span className="flex min-w-0 items-center gap-1">
+                <span
+                  className="truncate text-body font-semibold"
+                  title={notebook?.title}
+                >
+                  {notebook?.title ?? "Notebook"}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+              </span>
+            }
+            triggerClassName="flex min-w-0 items-center rounded-md px-1 py-0.5 transition-colors hover:bg-surface-2"
+            menuClassName="w-64"
+            align="left"
+            items={[
+              ...notebookVerbs,
+              { label: "Switch to", hint: true, onClick: () => {} },
+              ...[...notebooks]
+                .filter((n) => n.status === "")
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .slice(0, 12)
+                .map((n) => {
+                  const Icon = notebookIcon(n.icon);
+                  return {
+                    label: n.title,
+                    icon: <Icon className="h-3.5 w-3.5" />,
+                    checked: n.id === currentId,
+                    onClick: () => {
+                      if (n.id !== currentId)
+                        void useStore.getState().selectNotebook(n.id);
+                    },
+                  };
+                }),
+              {
+                label: "All notebooks…",
+                icon: <Library className="h-3.5 w-3.5" />,
+                onClick: close,
+              },
+            ]}
+          />
+          <OkfChip />
         </div>
         <div className="mx-2">
           <CenterModeTabs />
