@@ -16432,6 +16432,8 @@ mod tool_tests {
             name: "Bayside Marina Policy".into(),
             origin: String::new(),
             triage: String::new(),
+            mentions: 0,
+            surfaced: false,
             identifiers: "bay-4471 hull-9921".into(),
             note: "Renews in September".into(),
             facts: vec![CardFact {

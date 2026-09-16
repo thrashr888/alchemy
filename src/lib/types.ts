@@ -622,6 +622,9 @@ export interface SuggestOutcome {
   /** True when another suggest pass already held the single-flight guard
    *  and this ask did nothing. */
   alreadyRunning: boolean;
+  /** True when a whole-corpus ask stopped at the queue's ceiling — rule on
+   *  the current suggestions and more will follow. */
+  queueFull: boolean;
 }
 
 /** One document filed under a card. `matched` is the receipt and is never
@@ -649,6 +652,14 @@ export interface RegistryCard {
    *  "recommended" = the triage pass thinks this one matters, "routine" =
    *  triaged and not singled out. Cleared once the card is ruled on. */
   triage: "" | "recommended" | "routine";
+  /** Documents across the corpus that mention this card by name, counted
+   *  by the triage scan while the card is still suggested. Orders the
+   *  queue: the most-mentioned surface first. */
+  mentions: number;
+  /** Whether a suggested card is one of the few the strip shows right now.
+   *  Computed by the backend on every list; the rest wait, unseen, until a
+   *  ruling frees a slot. Always false on cards of any other origin. */
+  surfaced: boolean;
   /** Space-separated normalized tokens (VIN, policy number, serial) — the
    *  strongest auto-attach signal; strong full-name matches attach too,
    *  with a "name matched" receipt. */

@@ -296,8 +296,14 @@ export function RegistrySection() {
   // Suggested cards are proposals, not cast members: they get their own
   // group above the grid, and dismissed ones never render at all (the row
   // survives only as the suggester's refusal memory).
+  // The backend surfaces the few most likely to be kept; the rest wait
+  // unseen until a ruling frees a slot, and the strip says how many.
   const suggested = useMemo(
-    () => cards.filter((c) => c.origin === "auto"),
+    () => cards.filter((c) => c.origin === "auto" && c.surfaced),
+    [cards],
+  );
+  const waiting = useMemo(
+    () => cards.filter((c) => c.origin === "auto" && !c.surfaced).length,
     [cards],
   );
   const mine = useMemo(() => cards.filter((c) => !c.origin), [cards]);
@@ -418,7 +424,9 @@ export function RegistrySection() {
             ? "A suggest pass is already running"
             : out.created.length > 0
               ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
-              : "Nothing new to suggest",
+              : out.queueFull
+                ? "The queue is full — rule on the suggestions shown and more will follow"
+                : "Nothing new to suggest",
         );
       void load();
     } catch (e) {
@@ -468,7 +476,7 @@ export function RegistrySection() {
         className="relative z-10 min-h-0 flex-1 select-none overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
-          <SuggestionStrip cards={suggested} onChanged={load} />
+          <SuggestionStrip cards={suggested} waiting={waiting} onChanged={load} />
           {/* Unconditional, like the notebook shelf's: gating this on
               "are there confirmed cards" made the whole row — filter AND
               view toggle — vanish whenever the cast was empty or held only
@@ -1018,9 +1026,13 @@ function CardTable({
     guess never comes back. */
 function SuggestionStrip({
   cards,
+  waiting,
   onChanged,
 }: {
+  /** The surfaced suggestions — the backend's pick of the likeliest keeps. */
   cards: RegistryCard[];
+  /** How many more wait unseen for a slot. */
+  waiting: number;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -1132,6 +1144,10 @@ function SuggestionStrip({
         Things that recur across your documents. Keeping one adds it to your
         registry and files its documents under it. Filing changes nothing in
         the documents themselves.
+        {/* The queue's ceiling, said out loud: bounded work is only
+            trustworthy when you can see the bound. */}
+        {waiting > 0 &&
+          ` ${waiting} more ${waiting === 1 ? "waits" : "wait"} behind these and ${waiting === 1 ? "surfaces" : "surface"} as you rule.`}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {ordered.map((c) => (
@@ -1147,8 +1163,13 @@ function SuggestionStrip({
             )}
             <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
             <span className="text-body" title={c.triage === "recommended" ? "Recommended — recurs across your documents" : undefined}>{c.name}</span>
+            {/* The receipt: why this one is in front of you — how many
+                documents name it. A suggestion with no reason showing is a
+                guess; with the count it is a claim you can check. */}
             <span className="text-micro text-subtle-foreground">
               {kindLabel(c.kind)}
+              {c.mentions > 0 &&
+                ` · ${c.mentions} doc${c.mentions === 1 ? "" : "s"}`}
             </span>
             {/* Every chip repeats the same two verbs, so the name has to say
                 which suggestion it acts on. */}

@@ -287,6 +287,35 @@ a different shape (per-notebook lifecycle statuses, no suggested strip), so
 they keep their own review flow; folding them into this triage is follow-up
 work if their queue ever grows a keep-all surface.
 
+**The queue has a ceiling (2026-09).** Eight per notebook is a short list;
+eight across thirty-five notebooks is an inbox of three hundred, and the
+first sweep on a real library queued about a hundred chips nobody could
+read. Two caps fix the shape without touching the closed cast:
+
+- **Surfaced: 10.** The strip shows at most ten suggestions — the ones most
+  likely to be kept: the triage pass's picks first, then by `mentions` (how
+  many documents across the corpus name the card, counted by the same
+  canonical-word scan triage already runs, now over every pending card and
+  persisted on it), then oldest first so nothing waits forever. The rest
+  wait, unseen, and the strip says how many ("12 more wait behind these").
+  Each chip shows its count ("Asset · 5 docs") — the receipt for why it is
+  in front of you. `surfaced` is computed on every list, never stored: a
+  ruling changes the answer. **Keep all** / **Dismiss all** (and the MCP
+  `rule_all_suggested`) rule only on what is shown — a sweep verdict over
+  things nobody read is exactly the machine judgment the cast refuses.
+- **Backlog: 40.** Once the store holds forty pending suggestions, the sweep
+  stops asking notebooks for more — without recording that it asked, so the
+  notebook is asked once a ruling frees a slot, this run, not the next
+  launch. Notebooks are asked most recently updated first, so what fills a
+  freed slot comes from what you are working on. The whole-corpus **Suggest**
+  button keeps the same ceiling and says so ("the queue is full — rule on
+  the suggestions shown"); a notebook-scoped ask bypasses it, because a
+  question about one notebook deserves its eight rows. Forty is the triage
+  batch size, so everything held gets weighed.
+
+Bounded, visible, reversible, stoppable — the invariant's four words for
+automatic work, each now literally true of the queue.
+
 The Small role it runs on had no setting until now: it was Apple Foundation
 Models when the sidecar was present, else a fallthrough to the chat
 provider — so on a machine with a 65B chat model these short structured jobs

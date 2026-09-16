@@ -732,8 +732,17 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     let dir = ai.data_dir().to_path_buf();
     let mut asked = load_suggest_state(&dir);
     let mut asked_dirty = false;
+    let mut pending = pending_suggestions(&db.list_registry().await.unwrap_or_default());
 
+    // Notebooks arrive most recently updated first, so when there is room
+    // for only a few, they come from what the person is working on now.
     for nb in db.list_notebooks().await? {
+        // Room first, before the per-run marker and the stamp: a notebook
+        // skipped for want of room was never asked, and gets asked once a
+        // ruling frees a slot — this run, not the next launch.
+        if pending >= BACKLOG_CAP {
+            break;
+        }
         {
             let mut guard = SUGGESTED.lock().unwrap();
             let seen = guard.get_or_insert_with(Default::default);
@@ -758,10 +767,12 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
         // the previous notebook must block the same name here, or every
         // notebook that shares a dependency mints its own copy of it.
         let existing = db.list_registry().await.unwrap_or_default();
-        proposed += suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
+        let made = suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
             .await
             .unwrap_or_default()
             .len();
+        proposed += made;
+        pending += made;
     }
     if asked_dirty {
         save_suggest_state(&dir, &asked);
@@ -795,6 +806,61 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
 const MIN_QUEUE_TO_TRIAGE: usize = 4;
 /// Suggestions weighed per pass — one batched call, never one per card.
 const MAX_TRIAGE_BATCH: usize = 40;
+
+// ---- The queue's ceiling ---------------------------------------------------
+//
+// Eight proposals per notebook is a short list; eight across thirty-five
+// notebooks is an inbox of three hundred, and the strip that showed every
+// one of them as a chip was unreadable. So the queue has two ceilings. The
+// SURFACED cap is how many the strip shows: the ones most likely to be
+// kept — the triage pass's picks first, then by how many documents mention
+// them — and the rest wait, unseen, until a ruling frees a slot. The
+// BACKLOG cap is how many the store holds in all; once it is reached the
+// sweep stops asking notebooks for more, without recording that it asked,
+// so the trickle resumes from the most recently updated notebook the
+// moment there is room. Bounded, visible (the strip says how many wait),
+// and stoppable by the same ruling it always was.
+
+/// Suggestions the strip shows at once.
+pub(crate) const SURFACED_CAP: usize = 10;
+/// Suggestions held in all (shown + waiting) before the sweep stops asking.
+/// The triage batch size, so everything held gets weighed.
+const BACKLOG_CAP: usize = MAX_TRIAGE_BATCH;
+
+/// Mark which suggested cards (`origin: "auto"`) are shown right now: the
+/// top `SURFACED_CAP` by triage verdict, then mentions, then age (older
+/// first, so nothing waits forever), then name. Computed on every list,
+/// never stored — a ruling changes the answer, and stale state here would
+/// show eleven or hide the one you just freed a slot for. Cards of any
+/// other origin are left `false`.
+pub(crate) fn surface_suggestions(cards: &mut [RegistryCard]) {
+    let mut queue: Vec<usize> = cards
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.origin == "auto")
+        .map(|(i, _)| i)
+        .collect();
+    queue.sort_by(|&a, &b| {
+        let (a, b) = (&cards[a], &cards[b]);
+        (b.triage == "recommended")
+            .cmp(&(a.triage == "recommended"))
+            .then(b.mentions.cmp(&a.mentions))
+            .then(a.created_at.cmp(&b.created_at))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    for c in cards.iter_mut() {
+        c.surfaced = false;
+    }
+    for i in queue.into_iter().take(SURFACED_CAP) {
+        cards[i].surfaced = true;
+    }
+}
+
+/// How many suggestions the store holds — the number the backlog cap
+/// bounds.
+fn pending_suggestions(cards: &[RegistryCard]) -> usize {
+    cards.iter().filter(|c| c.origin == "auto").count()
+}
 /// Characters of context shown on each side of a candidate's first mention.
 const TRIAGE_SNIPPET_RADIUS: usize = 70;
 
@@ -817,12 +883,11 @@ pub(crate) async fn triage_suggested_cards(
     static RETRIAGED_THIS_RUN: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
     let refresh = !RETRIAGED_THIS_RUN.load(SeqCst);
-    let queue: Vec<RegistryCard> = cards
-        .into_iter()
-        .filter(|c| c.origin == "auto" && (refresh || c.triage.is_empty()))
-        .take(MAX_TRIAGE_BATCH)
-        .collect();
-    if queue.len() < MIN_QUEUE_TO_TRIAGE {
+    // Every pending suggestion is counted, judged or not: the count is what
+    // orders the queue (`surface_suggestions`), so a card the model has not
+    // weighed yet still needs its number to take its place in line.
+    let mut queue: Vec<RegistryCard> = cards.into_iter().filter(|c| c.origin == "auto").collect();
+    if queue.is_empty() {
         return Ok(0);
     }
     // Frequency across the corpus's SOURCES, not its gists. A fresh import
@@ -867,11 +932,42 @@ pub(crate) async fn triage_suggested_cards(
         // the person using it.
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+    // Persist the counts that moved, without touching `updated_at` — a
+    // recount is the queue learning, not the card changing. The bump
+    // re-orders the strip.
+    let mut recounted = 0usize;
+    for (i, card) in queue.iter_mut().enumerate() {
+        let n = mentions[i] as i64;
+        if card.mentions != n {
+            card.mentions = n;
+            if db.update_registry_card(card).await.is_ok() {
+                recounted += 1;
+            }
+        }
+    }
+    if recounted > 0 {
+        super::notify_changed("registry", None);
+    }
+    // The model weighs the most-mentioned candidates awaiting a verdict —
+    // one batch, and the ones that will surface first are in it.
+    let mut batch: Vec<usize> = (0..queue.len())
+        .filter(|&i| refresh || queue[i].triage.is_empty())
+        .collect();
+    batch.sort_by(|&a, &b| {
+        mentions[b]
+            .cmp(&mentions[a])
+            .then(queue[a].created_at.cmp(&queue[b].created_at))
+    });
+    batch.truncate(MAX_TRIAGE_BATCH);
+    if batch.len() < MIN_QUEUE_TO_TRIAGE {
+        return Ok(0);
+    }
     let mut lines = String::new();
-    for (i, c) in queue.iter().enumerate() {
+    for (k, &i) in batch.iter().enumerate() {
+        let c = &queue[i];
         lines.push_str(&format!(
             "{}. {}|{} — in {} document{}{}\n",
-            i + 1,
+            k + 1,
             c.kind,
             c.name,
             mentions[i],
@@ -888,18 +984,19 @@ pub(crate) async fn triage_suggested_cards(
         .await
         .map_err(|e| anyhow::anyhow!("{e:#}"))?
         .text;
-    let picked = parse_triage_reply(&reply, queue.len());
+    let picked = parse_triage_reply(&reply, batch.len());
     let ts = now();
     let mut marked = 0usize;
-    for (i, mut card) in queue.into_iter().enumerate() {
-        card.triage = if picked.contains(&(i + 1)) {
+    for (k, &i) in batch.iter().enumerate() {
+        let card = &mut queue[i];
+        card.triage = if picked.contains(&(k + 1)) {
             "recommended"
         } else {
             "routine"
         }
         .into();
         card.updated_at = ts;
-        if db.update_registry_card(&card).await.is_ok() {
+        if db.update_registry_card(card).await.is_ok() {
             marked += 1;
         }
     }
@@ -1166,6 +1263,8 @@ async fn suggest_for_notebook(
                 name: name.clone(),
                 origin: "auto".into(),
                 triage: String::new(),
+                mentions: 0,
+                surfaced: false,
                 identifiers: String::new(),
                 note: String::new(),
                 facts,
@@ -1198,6 +1297,7 @@ pub(crate) async fn suggest_now(
             created: Vec::new(),
             reply: String::new(),
             already_running: true,
+            queue_full: false,
         });
     };
     // Heal what an earlier race left behind before proposing more.
@@ -1205,6 +1305,12 @@ pub(crate) async fn suggest_now(
         super::notify_changed("registry", None);
     }
     let gists = db.list_gists().await.map_err(|e| e.to_string())?;
+    // A whole-corpus ask keeps the same ceiling as the sweep: more
+    // proposals than the queue can show would only wait unseen. The
+    // notebook-scoped ask (from inside a notebook, or an agent naming one)
+    // bypasses it — that is a question about one notebook, and eight rows
+    // is its answer.
+    let bounded = notebook_id.is_none();
     let nbs: Vec<String> = match notebook_id {
         Some(id) => vec![id],
         None => db
@@ -1215,12 +1321,17 @@ pub(crate) async fn suggest_now(
             .map(|n| n.id)
             .collect(),
     };
+    let mut queue_full = false;
     let mut reply = String::new();
     let mut made: Vec<String> = Vec::new();
     for nb in nbs {
         // Refetched per notebook, like the sweep: a card minted for the
         // previous notebook must block the same name here.
         let existing = db.list_registry().await.unwrap_or_default();
+        if bounded && pending_suggestions(&existing) >= BACKLOG_CAP {
+            queue_full = true;
+            break;
+        }
         made.extend(
             suggest_for_notebook(db, &ai, &nb, &gists, &existing, Some(&mut reply))
                 .await
@@ -1250,6 +1361,7 @@ pub(crate) async fn suggest_now(
         created: made,
         reply,
         already_running: false,
+        queue_full,
     })
 }
 
@@ -1276,6 +1388,10 @@ pub struct SuggestOutcome {
     /// ask did nothing — surfaced so the caller can say "already running"
     /// instead of "nothing new".
     pub already_running: bool,
+    /// True when a whole-corpus ask stopped at the queue's ceiling
+    /// (`BACKLOG_CAP`) — the caller can say "rule on these first" instead
+    /// of "nothing new". Never set on a notebook-scoped ask.
+    pub queue_full: bool,
 }
 
 fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
@@ -1522,7 +1638,9 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String, Vec<Car
 
 #[tauri::command]
 pub async fn list_registry(state: State<'_, AppState>) -> Result<Vec<RegistryCard>, String> {
-    e(state.db.list_registry().await)
+    let mut cards = e(state.db.list_registry().await)?;
+    surface_suggestions(&mut cards);
+    Ok(cards)
 }
 
 /// Rule on a suggested card: "" confirms it (it becomes yours, and its
@@ -1558,21 +1676,24 @@ pub async fn set_card_origin(
 }
 
 /// Rule on suggested cards in bulk — the strip's "Keep recommended" /
-/// "Keep all" / "Dismiss all". Shared with the MCP tool. With
-/// `only_recommended`, only the cards the triage pass marked are ruled; the
-/// rest stay in the queue. One rematch sweep at the end instead of one per
-/// card, so keeping a dozen suggestions doesn't read the corpus a dozen
-/// times over.
+/// "Keep all" / "Dismiss all". Shared with the MCP tool. Only the SURFACED
+/// suggestions are ruled: the waiting ones were never shown, and a sweep
+/// verdict over things nobody has read is exactly the machine judgment the
+/// closed cast exists to refuse. With `only_recommended`, only the shown
+/// cards the triage pass marked are ruled; the rest stay in the queue. One
+/// rematch sweep at the end instead of one per card, so keeping a dozen
+/// suggestions doesn't read the corpus a dozen times over.
 pub(crate) async fn rule_all_suggested_cards(
     db: &std::sync::Arc<crate::db::Db>,
     origin: &str,
     only_recommended: bool,
 ) -> Result<usize, String> {
-    let cards = db.list_registry().await.map_err(|e| e.to_string())?;
+    let mut cards = db.list_registry().await.map_err(|e| e.to_string())?;
+    surface_suggestions(&mut cards);
     let ts = now();
     let mut ruled = 0usize;
     for mut card in cards {
-        if card.origin != "auto" {
+        if card.origin != "auto" || !card.surfaced {
             continue;
         }
         if only_recommended && card.triage != "recommended" {
@@ -1687,6 +1808,8 @@ pub async fn add_registry_card(
         name,
         origin: String::new(),
         triage: String::new(),
+        mentions: 0,
+        surfaced: false,
         identifiers: normalize_tags(&identifiers.unwrap_or_default()),
         note: note.unwrap_or_default().trim().to_string(),
         facts: facts.unwrap_or_default(),
@@ -1888,6 +2011,8 @@ mod tests {
             name: name.into(),
             origin: String::new(),
             triage: String::new(),
+            mentions: 0,
+            surfaced: false,
             identifiers: identifiers.into(),
             note: String::new(),
             facts: vec![],
@@ -2180,6 +2305,46 @@ mod tests {
             hay,
         );
         assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn the_strip_shows_the_likeliest_keeps_and_holds_the_rest() {
+        let mut cards: Vec<RegistryCard> = (0..(SURFACED_CAP + 3))
+            .map(|i| {
+                let mut c = card(&format!("thing {i:02}"), "");
+                c.id = format!("c{i}");
+                c.origin = "auto".into();
+                c.mentions = i as i64; // later cards are mentioned more
+                c.created_at = i as i64;
+                c
+            })
+            .collect();
+        // The least-mentioned card carries the triage pick; a kept card
+        // sits among them with a huge count and must never surface.
+        cards[0].triage = "recommended".into();
+        let mut mine = card("mine", "");
+        mine.mentions = 999;
+        cards.push(mine);
+
+        surface_suggestions(&mut cards);
+
+        let shown: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.surfaced)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(shown.len(), SURFACED_CAP);
+        assert!(shown.contains(&"c0"), "the triage pick surfaces first");
+        assert!(!cards.iter().find(|c| c.name == "mine").unwrap().surfaced);
+        // The waiting ones are the least-mentioned untriaged: c1, c2, c3.
+        for held in ["c1", "c2", "c3"] {
+            assert!(!shown.contains(&held), "{held} should wait");
+        }
+        // Ruling on one frees a slot for the next in line.
+        cards.iter_mut().find(|c| c.id == "c0").unwrap().origin = String::new();
+        surface_suggestions(&mut cards);
+        assert!(cards.iter().find(|c| c.id == "c3").unwrap().surfaced);
+        assert!(!cards.iter().find(|c| c.id == "c0").unwrap().surfaced);
     }
 
     #[test]

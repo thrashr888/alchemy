@@ -158,6 +158,8 @@ impl AlchemyMcp {
             name,
             origin: String::new(),
             triage: String::new(),
+            mentions: 0,
+            surfaced: false,
             identifiers: commands::normalize_tags(&identifiers.unwrap_or_default()),
             note: note.unwrap_or_default().trim().to_string(),
             facts: to_facts(facts),
@@ -175,13 +177,14 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "List the registry's cards (alphabetical), optionally filtered by kind or by a notebook they hold documents in. Each card: id, kind, name, identifiers, note, facts, and attachments with the receipt for why each document is filed there (an identifier string, \"name\", or \"manual\") plus its status (confirmed | proposed | rejected)."
+        description = "List the registry's cards (alphabetical), optionally filtered by kind or by a notebook they hold documents in. Each card: id, kind, name, identifiers, note, facts, and attachments with the receipt for why each document is filed there (an identifier string, \"name\", or \"manual\") plus its status (confirmed | proposed | rejected). Suggested cards (origin \"auto\") also carry `mentions` (documents that name them) and `surfaced` (whether the user's strip shows them now — the queue shows a few at a time, likeliest keeps first, and the rest wait until a ruling frees a slot)."
     )]
     async fn list_registry(
         &self,
         Parameters(ListRegistryReq { kind, notebook_id }): Parameters<ListRegistryReq>,
     ) -> Result<CallToolResult, McpError> {
         let mut cards = self.state().db.list_registry().await.map_err(internal)?;
+        commands::surface_suggestions(&mut cards);
         if let Some(kind) = kind {
             cards.retain(|c| c.kind == kind);
         }
@@ -326,7 +329,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Rule on suggested cards (origin \"auto\") in bulk: \"keep\" confirms them all into the user's registry, \"keep-recommended\" confirms only the ones the triage pass marked (triage \"recommended\"), \"dismiss\" turns them all down (remembered, so the same guesses never return). Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
+        description = "Rule on the SURFACED suggested cards (origin \"auto\", surfaced true) in bulk: \"keep\" confirms them into the user's registry, \"keep-recommended\" confirms only the ones the triage pass marked (triage \"recommended\"), \"dismiss\" turns them down (remembered, so the same guesses never return). Waiting suggestions are untouched — they were never shown. Returns how many were ruled. Only do this when the user asked for a sweep — suggestions are normally theirs to judge one by one."
     )]
     async fn rule_all_suggested(
         &self,
