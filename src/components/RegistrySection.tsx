@@ -356,7 +356,8 @@ export function RegistrySection() {
    *  checked against. */
   const cardBatchItems = (ids: string[]): RowMenuItem[] => [
     {
-      label: `Delete ${ids.length} cards…`,
+      label: `Delete ${ids.length} Cards…`,
+      symbol: "trash",
       icon: <Trash2 className="h-3.5 w-3.5" />,
       danger: true,
       onClick: () =>
@@ -962,7 +963,8 @@ function CardTable({
                       onClick: () => useStore.setState({ openCardId: c.id }),
                     },
                     {
-                      label: "Delete card",
+                      label: "Delete Card",
+                      symbol: "trash",
                       danger: true,
                       onClick: () => void deleteCardsUndoable([c], onChanged),
                     },
@@ -1213,7 +1215,8 @@ function CardTile({
           items={[
             { label: "Open", onClick: onOpen },
             {
-              label: "Delete card",
+              label: "Delete Card",
+              symbol: "trash",
               danger: true,
               onClick: () => void deleteCardsUndoable([card], onChanged),
             },
@@ -1406,7 +1409,7 @@ function CardDetail({
 
   const docBatchItems = (ids: string[]): RowMenuItem[] => [
     {
-      label: `Unfile ${ids.length} documents`,
+      label: `Unfile ${ids.length} Documents`,
       icon: <Trash2 className="h-3.5 w-3.5" />,
       onClick: () =>
         void (async () => {
@@ -1417,7 +1420,7 @@ function CardDetail({
         })(),
     },
     {
-      label: `Unlink ${ids.length} only`,
+      label: `Unlink ${ids.length} Only`,
       icon: <X className="h-3.5 w-3.5" />,
       onClick: () =>
         void (async () => {
@@ -1511,19 +1514,20 @@ function CardDetail({
               }
               items={[
                 {
-                  label: "Open document",
+                  label: "Open Document",
+                  symbol: "doc.text",
                   icon: <FileText className="h-3.5 w-3.5" />,
                   onClick: () => openDoc(a),
                 },
                 {
-                  label: "Unfile — don't re-attach",
+                  label: "Unfile — Don't Re-attach",
                   icon: <Trash2 className="h-3.5 w-3.5" />,
                   // Rejection, not deletion: the pair is remembered, so the
                   // sweep never re-attaches this document to this card.
                   onClick: () => void setStatus(a.sourceId, "rejected"),
                 },
                 {
-                  label: "Unlink only",
+                  label: "Unlink Only",
                   icon: <X className="h-3.5 w-3.5" />,
                   // Forgets the pair entirely, so auto-filing may propose it
                   // again — the right choice when the filing was a mistake

@@ -327,7 +327,8 @@ export function StudioPanel() {
     const n = ids.length;
     return [
       {
-        label: `Copy ${n} notes`,
+        label: `Copy ${n} Notes`,
+        symbol: "doc.on.doc",
         icon: <Copy className="h-3.5 w-3.5" />,
         onClick: () => {
           void copyNotes(ids);
@@ -335,7 +336,8 @@ export function StudioPanel() {
         },
       },
       {
-        label: `Delete ${n} notes…`,
+        label: `Delete ${n} Notes…`,
+        symbol: "trash",
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
         onClick: () => void confirmDeleteNotes(ids),
@@ -874,7 +876,7 @@ export function StudioPanel() {
                         n.status === "generating"
                           ? [
                               {
-                                label: "Stop generating",
+                                label: "Stop Generating",
                                 icon: <Square className="h-3.5 w-3.5" />,
                                 danger: true,
                                 onClick: () =>
@@ -883,7 +885,8 @@ export function StudioPanel() {
                             ]
                           : [
                         {
-                          label: "Copy text",
+                          label: "Copy Text",
+                          symbol: "doc.on.doc",
                           icon: <Copy className="h-3.5 w-3.5" />,
                           onClick: () => {
                             void copyNotes([n.id]);
@@ -918,6 +921,7 @@ export function StudioPanel() {
                         },
                         {
                           label: "Delete",
+                          symbol: "trash",
                           icon: <Trash2 className="h-3.5 w-3.5" />,
                           danger: true,
                           onClick: () => void deleteNote(n.id),

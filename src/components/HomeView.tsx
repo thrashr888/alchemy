@@ -581,21 +581,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       // Name, icon, AND color — the edit dialog owns the notebook's look,
       // so color no longer needs its own pop-over or menu entry.
       label: "Rename",
+      symbol: "pencil",
       icon: <Pencil className="h-3.5 w-3.5" />,
       onClick: () => setEditing(nb),
     },
     {
-      label: "Export notebook…",
+      label: "Export Notebook…",
+      symbol: "square.and.arrow.down",
       icon: <FileDown className="h-3.5 w-3.5" />,
       onClick: () => void useStore.getState().exportNotebookOkf(nb.id),
     },
     {
       label: "Archive",
+      symbol: "archivebox",
       icon: <Archive className="h-3.5 w-3.5" />,
       onClick: () => void setStatus(nb.id, "archived"),
     },
     {
       label: "Delete…",
+      symbol: "trash",
       icon: <Trash2 className="h-3.5 w-3.5" />,
       danger: true,
       onClick: async () => {
@@ -618,7 +622,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
    *  take, because the count alone can't be checked against. */
   const notebookBatchItems = (ids: string[]): RowMenuItem[] => [
     {
-      label: `Archive ${ids.length} notebooks`,
+      label: `Archive ${ids.length} Notebooks`,
+      symbol: "archivebox",
       icon: <Archive className="h-3.5 w-3.5" />,
       onClick: () =>
         void (async () => {
@@ -630,7 +635,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         })(),
     },
     {
-      label: `Delete ${ids.length} notebooks…`,
+      label: `Delete ${ids.length} Notebooks…`,
+      symbol: "trash",
       icon: <Trash2 className="h-3.5 w-3.5" />,
       danger: true,
       onClick: () =>
@@ -1417,6 +1423,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                               items={[
                                 {
                                   label: "Delete…",
+                                  symbol: "trash",
                                   icon: <Trash2 className="h-3.5 w-3.5" />,
                                   danger: true,
                                   onClick: async () => {

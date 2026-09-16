@@ -25,7 +25,8 @@ export function sourceOriginItems(s: Source): RowMenuItem[] {
     ...(web
       ? [
           {
-            label: "Open original",
+            label: "Open Original",
+            symbol: "arrow.up.right.square",
             icon: <ExternalLink className="h-3.5 w-3.5" />,
             onClick: () => void openUrl(s.url),
           },
@@ -33,12 +34,14 @@ export function sourceOriginItems(s: Source): RowMenuItem[] {
       : [
           {
             label: "Show in Finder",
+            symbol: "folder",
             icon: <FolderOpen className="h-3.5 w-3.5" />,
             onClick: () => void revealItemInDir(s.url),
           },
         ]),
     {
-      label: web ? "Copy URL" : "Copy file path",
+      label: web ? "Copy URL" : "Copy File Path",
+      symbol: "link",
       icon: <Link2 className="h-3.5 w-3.5" />,
       onClick: () => {
         void navigator.clipboard
@@ -60,12 +63,14 @@ export function sourceMetaItems(
 ): RowMenuItem[] {
   return [
     {
-      label: s.tags ? "Edit tags…" : "Add tags…",
+      label: s.tags ? "Edit Tags…" : "Add Tags…",
+      symbol: "tag",
       icon: <Tag className="h-3.5 w-3.5" />,
       onClick: () => openTagEdit({ ids: [s.id], title: s.title, value: s.tags }),
     },
     {
-      label: s.note ? "Edit note…" : "Add note…",
+      label: s.note ? "Edit Note…" : "Add Note…",
+      symbol: "note.text",
       icon: <StickyNote className="h-3.5 w-3.5" />,
       onClick: () =>
         openNoteEdit({ id: s.id, title: s.title, value: s.note }),

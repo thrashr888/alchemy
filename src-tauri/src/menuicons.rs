@@ -6,8 +6,9 @@
 //! Tauri's menu API has no handle to the item, so the app's native menus —
 //! every RowMenu row with an icon — came up text-only. This hooks
 //! `-[NSMenuItem setImage:]` process-wide: after the original runs, an item
-//! that just received an image is marked visible. Items without images are
-//! untouched, and on a macOS that lacks the property nothing changes.
+//! that just received an image is marked visible and the image marked as a
+//! template. Items without images are untouched, and on a macOS that lacks
+//! the property nothing changes.
 
 #[cfg(target_os = "macos")]
 use std::sync::OnceLock;
@@ -67,6 +68,10 @@ unsafe extern "C-unwind" fn set_image(
         orig(this, sel, image);
     }
     if !image.is_null() {
+        // Every image the app puts on a menu row is a monochrome SF Symbol
+        // glyph (src/assets/menu-symbols): as a template image AppKit tints
+        // it for the appearance and inverts it under the highlight.
+        let _: () = msg_send![image, setTemplate: true];
         // NSMenuItemImageVisibility: 0 automatic, 1 visible, 2 hidden.
         let _: () = msg_send![this, setPreferredImageVisibility: 1isize];
     }

@@ -432,20 +432,23 @@ export function GalleryPane() {
       ...(refreshable.length
         ? [
             {
-              label: `Refresh ${refreshable.length} sources`,
+              label: `Refresh ${refreshable.length} Sources`,
+              symbol: "arrow.clockwise",
               icon: <RefreshCw className="h-3.5 w-3.5" />,
               onClick: () => void refreshSourcesBatch(refreshable),
             },
           ]
         : []),
       {
-        label: `Tag ${count} sources…`,
+        label: `Tag ${count} Sources…`,
+        symbol: "tag",
         icon: <Pencil className="h-3.5 w-3.5" />,
         onClick: () =>
           actions.setTagEdit({ ids, title: `${count} sources`, value: "" }),
       },
       {
-        label: `Remove ${count} sources…`,
+        label: `Remove ${count} Sources…`,
+        symbol: "trash",
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
         onClick: () => void removeSourcesGuarded(ids, confirm),

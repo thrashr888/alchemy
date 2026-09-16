@@ -261,14 +261,16 @@ export function Reports() {
                   ...(latestNote(r)
                     ? [
                         {
-                          label: "Open the latest result",
+                          label: "Open the Latest Result",
+                          symbol: "doc.text",
                           icon: <FileText className="h-3.5 w-3.5" />,
                           onClick: () => showLatest(r),
                         },
                       ]
                     : []),
                   {
-                    label: "Run now",
+                    label: "Run Now",
+                    symbol: "play",
                     icon: <Play className="h-3.5 w-3.5" />,
                     onClick: () => void runNow(r.id),
                   },
@@ -279,11 +281,13 @@ export function Reports() {
                   },
                   {
                     label: "Edit…",
+                    symbol: "pencil",
                     icon: <Pencil className="h-3.5 w-3.5" />,
                     onClick: () => openEdit(r),
                   },
                   {
                     label: "Delete",
+                    symbol: "trash",
                     icon: <Trash2 className="h-3.5 w-3.5" />,
                     danger: true,
                     onClick: () => void remove(r.id),

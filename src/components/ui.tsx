@@ -1168,6 +1168,11 @@ export interface RowMenuItem {
   /** Key equivalent shown beside the label in a native menu ("CmdOrCtrl+R").
    *  Display only — the app's own key handling still fires the verb. */
   accelerator?: string;
+  /** SF Symbol shown beside the label in a native menu — only where the
+   *  glyph carries a familiar meaning (trash, folder, link); most rows go
+   *  without, per the HIG. Must be in src/assets/menu-symbols (see
+   *  scripts/menu-symbols.swift). The panel fallback keeps `icon`. */
+  symbol?: string;
   /** A divider between groups; the label and onClick are ignored. */
   separator?: boolean;
   /** A submenu: the label is its title, these are its rows. The custom
@@ -1181,47 +1186,35 @@ export interface RowMenuItem {
 let nativeMenusAvailable =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-/** Menu icons are Lucide React elements; a native row wants pixels. The
- *  PNGs in src/assets/menu-icons are those elements rasterized once
- *  (scripts/menu-icons.mjs — rerun when a menu gains a new icon), 32 px in
- *  the menu ink of each appearance: NSMenu gets no template flag through
- *  this API, so light and dark are two files. Bytes are fetched once per
- *  session and handed to Tauri as an Image. */
-const MENU_ICON_URLS = import.meta.glob("../assets/menu-icons/*.png", {
+/** A native row's image: the SF Symbol named by `symbol`, rasterized once
+ *  into src/assets/menu-symbols by scripts/menu-symbols.swift (black glyph
+ *  on clear, 2×, the menu's own symbol configuration). The app marks it a
+ *  template image on the way in (menuicons.rs), so AppKit tints it for the
+ *  appearance and inverts it under the highlight. Bytes are fetched once
+ *  per session and handed to Tauri as an Image. */
+const MENU_SYMBOL_URLS = import.meta.glob("../assets/menu-symbols/*.png", {
   eager: true,
   query: "?url",
   import: "default",
 }) as Record<string, string>;
-const iconCache = new Map<string, Promise<TauriImage | undefined>>();
-function menuIconImage(
-  icon: React.ReactNode,
-  appearance: "light" | "dark",
-): Promise<TauriImage | undefined> {
-  const name =
-    React.isValidElement(icon) && typeof icon.type !== "string"
-      ? (icon.type as { displayName?: string }).displayName
-      : undefined;
-  if (!name) return Promise.resolve(undefined);
-  const url = MENU_ICON_URLS[`../assets/menu-icons/${name}-${appearance}.png`];
-  if (!url) return Promise.resolve(undefined);
-  const hit = iconCache.get(url);
+const symbolCache = new Map<string, Promise<TauriImage | undefined>>();
+function menuSymbolImage(symbol: string): Promise<TauriImage | undefined> {
+  const url = MENU_SYMBOL_URLS[`../assets/menu-symbols/${symbol}.png`];
+  if (!url) {
+    console.warn(`[menu] no rasterized symbol for "${symbol}" — run scripts/menu-symbols.swift`);
+    return Promise.resolve(undefined);
+  }
+  const hit = symbolCache.get(url);
   if (hit) return hit;
   const job = (async () => {
     const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
     return TauriImage.fromBytes(bytes);
   })().catch((e) => {
-    console.error("[menu-icon] failed", url, e);
+    console.error("[menu] symbol image failed", url, e);
     return undefined;
   });
-  iconCache.set(url, job);
+  symbolCache.set(url, job);
   return job;
-}
-
-/** Which of the two icon inks the native menu will sit on. */
-function menuAppearance(): "light" | "dark" {
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
 }
 
 /** Build and pop a native menu from RowMenu items at a window-relative
@@ -1232,7 +1225,6 @@ async function popupNativeMenu(
   items: RowMenuItem[],
   at: { x: number; y: number },
 ): Promise<void> {
-  const appearance = menuAppearance();
   // Real item objects rather than option bags: Tauri's JS converts an
   // icon image only on top-level option bags, so a submenu's rows would
   // lose theirs. Each constructor converts its own.
@@ -1267,9 +1259,7 @@ async function popupNativeMenu(
         );
         continue;
       }
-      const icon = it.icon
-        ? await menuIconImage(it.icon, appearance)
-        : undefined;
+      const icon = it.symbol ? await menuSymbolImage(it.symbol) : undefined;
       rows.push(
         icon
           ? await IconMenuItem.new({

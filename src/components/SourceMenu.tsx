@@ -90,21 +90,21 @@ export function sourceMenuItems(
     s.status !== "placeholder";
   const refreshLabel =
     s.sourceType === "feed"
-      ? "Check feed now"
+      ? "Check Feed Now"
       : isFolder
-    ? "Rescan folder now"
+    ? "Rescan Folder Now"
     : s.sourceType === "mac"
-      ? "Sync now"
+      ? "Sync Now"
       : s.status === "placeholder"
-        ? "Download & embed"
+        ? "Download & Embed"
         : isWebUrl(s.url)
           ? "Refresh from URL"
-          : "Refresh from file";
+          : "Refresh from File";
   return [
     ...(askable && !omit.has("ask")
       ? [
           {
-            label: "Ask about this source",
+            label: "Ask About This Source",
             icon: <MessageSquare className="h-3.5 w-3.5" />,
             onClick: () => st.askAboutSource(s.id),
           },
@@ -118,6 +118,7 @@ export function sourceMenuItems(
       ? [
           {
             label: refreshLabel,
+            symbol: "arrow.clockwise",
             icon: <RefreshCw className="h-3.5 w-3.5" />,
             onClick: () => void st.refreshSource(s.id),
           },
@@ -128,7 +129,7 @@ export function sourceMenuItems(
     ...(s.sourceType === "url" && !s.parentId && isWebUrl(s.url)
       ? [
           {
-            label: "Follow updates…",
+            label: "Follow Updates…",
             icon: <Rss className="h-3.5 w-3.5" />,
             onClick: () => host.followUpdates(s),
           },
@@ -139,7 +140,7 @@ export function sourceMenuItems(
     ...(isMacNote
       ? [
           {
-            label: "Edit note",
+            label: "Edit Note",
             icon: <Pencil className="h-3.5 w-3.5" />,
             onClick: () => host.editMacNote(s),
           },
@@ -148,7 +149,7 @@ export function sourceMenuItems(
     ...(isMacReminders
       ? [
           {
-            label: "Add reminder…",
+            label: "Add Reminder…",
             icon: <Plus className="h-3.5 w-3.5" />,
             onClick: () => host.addReminder(s),
           },
@@ -157,7 +158,7 @@ export function sourceMenuItems(
     ...(editable
       ? [
           {
-            label: "Edit text",
+            label: "Edit Text",
             icon: <Pencil className="h-3.5 w-3.5" />,
             onClick: () => host.editText(s),
           },
@@ -168,7 +169,8 @@ export function sourceMenuItems(
     ...(s.sourceType === "url"
       ? [
           {
-            label: "Choose card image…",
+            label: "Choose Card Image…",
+            symbol: "photo",
             icon: <ImageIcon className="h-3.5 w-3.5" />,
             onClick: () => host.chooseImage(s),
           },
@@ -191,7 +193,7 @@ export function sourceMenuItems(
     ...(omit.has("origin") ? [] : sourceOriginItems(s)),
     ...sourceMetaItems(s, host.setTagEdit, host.setNoteEdit),
     {
-      label: "File under a card…",
+      label: "File Under a Card…",
       icon: <Package className="h-3.5 w-3.5" />,
       onClick: () => host.attach(s),
     },
@@ -200,6 +202,7 @@ export function sourceMenuItems(
       : [
           {
             label: "Remove…",
+            symbol: "trash",
             icon: <Trash2 className="h-3.5 w-3.5" />,
             danger: true,
             onClick: () => host.remove(s),

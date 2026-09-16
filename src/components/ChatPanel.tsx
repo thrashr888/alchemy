@@ -1829,7 +1829,7 @@ function MessageActions({
       actions={[
         copyAction(content),
         {
-          label: "Save as note",
+          label: "Save as Note",
           doneLabel: "Saved",
           icon: <NotebookPen className="h-3.5 w-3.5" />,
           title: "Save this response as a note",

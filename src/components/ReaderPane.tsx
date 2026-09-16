@@ -674,7 +674,7 @@ export function ReaderPane() {
   const askAction =
     source && source.status === "ready"
       ? {
-          label: "Ask about this source",
+          label: "Ask About This Source",
           icon: <MessageSquare className="h-3.5 w-3.5" />,
           onClick: () => useStore.getState().askAboutSource(source.id),
         }
@@ -685,13 +685,15 @@ export function ReaderPane() {
   const originAction = source?.url && !source.remote
     ? isWebUrl(source.url)
       ? {
-          label: "Open original",
+          label: "Open Original",
+          symbol: "arrow.up.right.square",
           icon: <ExternalLink className="h-3.5 w-3.5" />,
           onClick: () => void openUrl(source.url),
         }
       : source.sourceType !== "mac"
         ? {
             label: "Show in Finder",
+            symbol: "folder",
             icon: <FolderOpen className="h-3.5 w-3.5" />,
             onClick: () => void revealItemInDir(source.url),
           }
@@ -699,7 +701,8 @@ export function ReaderPane() {
     : null;
   const refreshAction = source?.url && !source.remote
     ? {
-        label: source.sourceType === "mac" ? "Sync now" : "Refresh",
+        label: source.sourceType === "mac" ? "Sync Now" : "Refresh",
+        symbol: "arrow.clockwise",
         icon: <RefreshCw className="h-3.5 w-3.5" />,
         onClick: () => {
           if (syncing || !source) return;
@@ -715,14 +718,16 @@ export function ReaderPane() {
     : null;
   const popOutAction = note
     ? {
-        label: "Open in its own window",
+        label: "Open in Its Own Window",
+        symbol: "macwindow",
         icon: <AppWindow className="h-3.5 w-3.5" />,
         onClick: () => void api.newWindow(note.notebookId, note.id),
       }
     : null;
   const copyLinkAction = note
     ? {
-        label: "Copy link",
+        label: "Copy Link",
+        symbol: "link",
         icon: <Link2 className="h-3.5 w-3.5" />,
         onClick: () => {
           void navigator.clipboard
@@ -732,7 +737,8 @@ export function ReaderPane() {
       }
     : source?.url
       ? {
-          label: isWebUrl(source.url) ? "Copy URL" : "Copy file path",
+          label: isWebUrl(source.url) ? "Copy URL" : "Copy File Path",
+          symbol: "link",
           icon: <Link2 className="h-3.5 w-3.5" />,
           onClick: () => {
             void navigator.clipboard
@@ -774,18 +780,21 @@ export function ReaderPane() {
             ? [
                 {
                   label: "Rebuild",
+                  symbol: "arrow.clockwise",
                   icon: <RefreshCw className="h-3.5 w-3.5" />,
                   onClick: () => void useStore.getState().rebuildNote(note),
                 },
                 {
-                  label: "Rebuild with prompt…",
+                  label: "Rebuild with Prompt…",
+                  symbol: "slider.horizontal.3",
                   icon: <SlidersHorizontal className="h-3.5 w-3.5" />,
                   onClick: () => setPromptOpen(true),
                 },
               ]
             : []),
           {
-            label: "Copy text",
+            label: "Copy Text",
+            symbol: "doc.on.doc",
             icon: <Copy className="h-3.5 w-3.5" />,
             onClick: () => {
               void navigator.clipboard.writeText(note.content).then(
@@ -798,7 +807,7 @@ export function ReaderPane() {
             },
           },
           {
-            label: "Discuss in chat",
+            label: "Discuss in Chat",
             icon: <MessageSquare className="h-3.5 w-3.5" />,
             onClick: () => {
               void useStore.getState().discussNoteInChat(note.id);
@@ -806,7 +815,7 @@ export function ReaderPane() {
             },
           },
           {
-            label: "Convert to source",
+            label: "Convert to Source",
             icon: <FileInput className="h-3.5 w-3.5" />,
             onClick: () => void useStore.getState().convertNoteToSource(note.id),
           },

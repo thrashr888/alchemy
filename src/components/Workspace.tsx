@@ -98,11 +98,13 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
                 {
                   label: "Rename",
+                  symbol: "pencil",
                   icon: <Pencil className="h-3.5 w-3.5" />,
                   onClick: () => setEditing(notebook),
                 },
                 {
                   label: "Export Notebook…",
+                  symbol: "square.and.arrow.down",
                   icon: <FileDown className="h-3.5 w-3.5" />,
                   onClick: () =>
                     void useStore.getState().exportNotebookOkf(notebook.id),
@@ -113,6 +115,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   ? [
                       {
                         label: "Show Bundle in Finder",
+                        symbol: "folder",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void revealItemInDir(binding.path).catch(() => {}),
@@ -123,6 +126,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         // thing to do is put the user in front of the right
                         // one and say what to do there.
                         label: "Share Folder…",
+                        symbol: "square.and.arrow.up",
                         icon: <Users className="h-3.5 w-3.5" />,
                         onClick: () => {
                           void revealItemInDir(binding.path).catch(() => {});
@@ -136,6 +140,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                       },
                       {
                         label: "Stop Keeping on Disk",
+                        symbol: "externaldrive.badge.xmark",
                         icon: <FolderOpen className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void useStore.getState().unbindNotebookOkf(),
@@ -144,6 +149,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : [
                       {
                         label: "Keep on Disk as OKF…",
+                        symbol: "externaldrive",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: async () => {
                           const picked = await open({
@@ -161,6 +167,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   // The store leaves the notebook when its current one is
                   // archived or deleted — no extra navigation here.
                   label: "Archive",
+                  symbol: "archivebox",
                   icon: <Archive className="h-3.5 w-3.5" />,
                   onClick: () =>
                     void useStore
@@ -169,6 +176,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                 },
                 {
                   label: "Delete…",
+                  symbol: "trash",
                   icon: <Trash2 className="h-3.5 w-3.5" />,
                   danger: true,
                   onClick: async () => {
@@ -276,6 +284,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               { label: "", separator: true, onClick: () => {} },
               {
                 label: "All Notebooks…",
+                symbol: "books.vertical",
                 icon: <Library className="h-3.5 w-3.5" />,
                 onClick: close,
               },

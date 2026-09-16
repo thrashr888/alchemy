@@ -269,17 +269,20 @@ function App() {
   // RowMenu-bearing row, the reader's selection actions) that handler runs
   // first and has already claimed the event; everywhere else the stock menu
   // is suppressed. Two exceptions keep the platform's own text verbs: an
-  // editable field (Cut/Copy/Paste/Look Up/spelling) and a live text
-  // selection (Copy/Look Up/Translate).
+  // editable field (Cut/Copy/Paste/Look Up/spelling) and a live selection
+  // inside content — the reader, a note, a chat turn. A selection that
+  // strayed onto chrome (a tile label dragged across) earns no menu.
   useEffect(() => {
+    const CONTENT = 'input, textarea, [contenteditable="true"], .selectable, .prose';
     const onContextMenu = (e: MouseEvent) => {
       if (e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
       if (!t) return;
-      if (t.isContentEditable || t.closest("input, textarea, [contenteditable=\"true\"]"))
-        return;
-      const sel = window.getSelection();
-      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      if (t.isContentEditable || t.closest(CONTENT)) {
+        if (t.closest("input, textarea, [contenteditable=\"true\"]")) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      }
       e.preventDefault();
     };
     document.addEventListener("contextmenu", onContextMenu);

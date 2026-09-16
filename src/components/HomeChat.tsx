@@ -340,6 +340,7 @@ export function HomeThreadsSidebar({
                   items={[
                     {
                       label: "Delete…",
+                      symbol: "trash",
                       icon: <Trash2 className="h-3.5 w-3.5" />,
                       danger: true,
                       onClick: async () => {

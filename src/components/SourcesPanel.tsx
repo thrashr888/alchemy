@@ -582,20 +582,23 @@ export function SourcesPanel() {
       ...(refreshable.length
         ? [
             {
-              label: `Refresh ${refreshable.length} sources`,
+              label: `Refresh ${refreshable.length} Sources`,
+              symbol: "arrow.clockwise",
               icon: <RefreshCw className="h-3.5 w-3.5" />,
               onClick: () => void refreshSourcesBatch(refreshable),
             },
           ]
         : []),
       {
-        label: `Tag ${n} sources…`,
+        label: `Tag ${n} Sources…`,
+        symbol: "tag",
         icon: <Tag className="h-3.5 w-3.5" />,
         onClick: () =>
           setTagEdit({ ids, title: `${n} sources`, value: "" }),
       },
       {
-        label: `Remove ${n} sources…`,
+        label: `Remove ${n} Sources…`,
+        symbol: "trash",
         icon: <Trash2 className="h-3.5 w-3.5" />,
         danger: true,
         onClick: () => void confirmRemoveBatch(ids),
