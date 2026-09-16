@@ -10,6 +10,7 @@ import {
 } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Image as TauriImage } from "@tauri-apps/api/image";
+import { renderToStaticMarkup } from "react-dom/server";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -1173,6 +1174,10 @@ export interface RowMenuItem {
    *  without, per the HIG. Must be in src/assets/menu-symbols (see
    *  scripts/menu-symbols.swift). The panel fallback keeps `icon`. */
   symbol?: string;
+  /** Show `icon` (a Lucide element) in a native menu too, drawn in this
+   *  color — the one case for it: a notebook's own glyph in its own color
+   *  in the switcher. Rasterized in the webview per (icon, color). */
+  iconColor?: string;
   /** A divider between groups; the label and onClick are ignored. */
   separator?: boolean;
   /** A submenu: the label is its title, these are its rows. The custom
@@ -1198,6 +1203,57 @@ const MENU_SYMBOL_URLS = import.meta.glob("../assets/menu-symbols/*.png", {
   import: "default",
 }) as Record<string, string>;
 const symbolCache = new Map<string, Promise<TauriImage | undefined>>();
+
+/** A native row's image from a Lucide element, drawn in a color: 18 pt at
+ *  2×, once per (icon, color) per session. Kept for the notebook switcher
+ *  only — every other native row is an SF Symbol. Sized 18×18 pt on
+ *  purpose: menuicons.rs tells these apart from the 20×16 pt symbol
+ *  canvases and leaves them untemplated, so the color survives. */
+const MENU_ICON_PT = 18;
+const iconCache = new Map<string, Promise<TauriImage | undefined>>();
+function menuIconImage(
+  icon: React.ReactNode,
+  color: string,
+): Promise<TauriImage | undefined> {
+  let svg: string;
+  try {
+    svg = renderToStaticMarkup(icon as React.ReactElement);
+  } catch {
+    return Promise.resolve(undefined);
+  }
+  if (!svg.startsWith("<svg")) return Promise.resolve(undefined);
+  const key = `${color}\u0000${svg}`;
+  const hit = iconCache.get(key);
+  if (hit) return hit;
+  const job = (async () => {
+    const tinted = svg.replace(/currentColor/g, color);
+    const img = new window.Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("icon svg failed to load"));
+      img.src = `data:image/svg+xml;utf8,${encodeURIComponent(tinted)}`;
+    });
+    const px = MENU_ICON_PT * 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = px;
+    canvas.height = px;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(img, 0, 0, px, px);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
+    if (!blob) return undefined;
+    return TauriImage.fromBytes(new Uint8Array(await blob.arrayBuffer()));
+  })().catch(() => undefined);
+  iconCache.set(key, job);
+  return job;
+}
+
+/** Tauri's check items carry no image and its icon items no tick, so a
+ *  ticked row with an icon goes native as an icon item whose title starts
+ *  with this mark; menuicons.rs strips it and sets the row's state. */
+const CURRENT_MARK = "\u200B";
 function menuSymbolImage(symbol: string): Promise<TauriImage | undefined> {
   const url = MENU_SYMBOL_URLS[`../assets/menu-symbols/${symbol}.png`];
   if (!url) {
@@ -1236,6 +1292,10 @@ async function popupNativeMenu(
     const rows: Row[] = [];
     for (const [i, it] of list.entries()) {
       if (it.separator) {
+        // Groups are assembled from spreads, so a divider can land first or
+        // next to another; a menu never opens with one or shows two.
+        const last = rows[rows.length - 1];
+        if (rows.length === 0 || last instanceof PredefinedMenuItem) continue;
         rows.push(await PredefinedMenuItem.new({ item: "Separator" }));
         continue;
       }
@@ -1244,22 +1304,35 @@ async function popupNativeMenu(
         continue;
       }
       if (it.hint) {
-        if (i > 0) rows.push(await PredefinedMenuItem.new({ item: "Separator" }));
+        const last = rows[rows.length - 1];
+        if (i > 0 && rows.length > 0 && !(last instanceof PredefinedMenuItem))
+          rows.push(await PredefinedMenuItem.new({ item: "Separator" }));
         rows.push(await MenuItem.new({ text: it.label, enabled: false }));
         continue;
       }
+      const icon = it.symbol
+        ? await menuSymbolImage(it.symbol)
+        : it.icon && it.iconColor
+          ? await menuIconImage(it.icon, it.iconColor)
+          : undefined;
       if (it.checked !== undefined) {
         rows.push(
-          await CheckMenuItem.new({
-            text: it.label,
-            checked: it.checked,
-            accelerator: it.accelerator,
-            action: () => it.onClick(),
-          }),
+          icon
+            ? await IconMenuItem.new({
+                text: (it.checked ? CURRENT_MARK : "") + it.label,
+                icon,
+                accelerator: it.accelerator,
+                action: () => it.onClick(),
+              })
+            : await CheckMenuItem.new({
+                text: it.label,
+                checked: it.checked,
+                accelerator: it.accelerator,
+                action: () => it.onClick(),
+              }),
         );
         continue;
       }
-      const icon = it.symbol ? await menuSymbolImage(it.symbol) : undefined;
       rows.push(
         icon
           ? await IconMenuItem.new({
@@ -1618,6 +1691,7 @@ export function RowMenu({
                 ? [{ ...it, items: undefined, hint: true }, ...it.items]
                 : [it],
             )
+            .filter((it, i, all) => !(it.separator && (i === 0 || all[i - 1]?.separator)))
             .map((it, i) =>
             it.separator ? (
               <div key={`sep-${i}`} className="my-1 h-px bg-border" />

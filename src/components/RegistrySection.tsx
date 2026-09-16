@@ -962,6 +962,7 @@ function CardTable({
                       label: "Open",
                       onClick: () => useStore.setState({ openCardId: c.id }),
                     },
+                    { label: "", separator: true, onClick: () => {} },
                     {
                       label: "Delete Card",
                       symbol: "trash",
@@ -1214,6 +1215,7 @@ function CardTile({
           contextItems={onContextItems}
           items={[
             { label: "Open", onClick: onOpen },
+            { label: "", separator: true, onClick: () => {} },
             {
               label: "Delete Card",
               symbol: "trash",
@@ -1515,7 +1517,6 @@ function CardDetail({
               items={[
                 {
                   label: "Open Document",
-                  symbol: "doc.text",
                   icon: <FileText className="h-3.5 w-3.5" />,
                   onClick: () => openDoc(a),
                 },

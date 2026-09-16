@@ -583,7 +583,6 @@ export function SourcesPanel() {
         ? [
             {
               label: `Refresh ${refreshable.length} Sources`,
-              symbol: "arrow.clockwise",
               icon: <RefreshCw className="h-3.5 w-3.5" />,
               onClick: () => void refreshSourcesBatch(refreshable),
             },
@@ -591,11 +590,11 @@ export function SourcesPanel() {
         : []),
       {
         label: `Tag ${n} Sources…`,
-        symbol: "tag",
         icon: <Tag className="h-3.5 w-3.5" />,
         onClick: () =>
           setTagEdit({ ids, title: `${n} sources`, value: "" }),
       },
+      { label: "", separator: true, onClick: () => {} },
       {
         label: `Remove ${n} Sources…`,
         symbol: "trash",

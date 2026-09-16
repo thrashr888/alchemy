@@ -42,9 +42,9 @@ pub fn set_tray_status(app: &AppHandle, text: &str) {
 pub(crate) fn set_tray_pause_label(app: &AppHandle, paused: bool) {
     if let Some(controls) = app.try_state::<TrayControls>() {
         let label = if paused {
-            "Resume scheduled runs"
+            "Resume Scheduled Runs"
         } else {
-            "Pause until morning"
+            "Pause Until Morning"
         };
         let _ = controls.pause.set_text(label);
     }
@@ -285,7 +285,7 @@ pub fn setup(
     let status_item = MenuItemBuilder::with_id("tray:status", "Starting…")
         .enabled(false)
         .build(app)?;
-    let pause_item = MenuItemBuilder::with_id("tray:pause", "Pause until morning").build(app)?;
+    let pause_item = MenuItemBuilder::with_id("tray:pause", "Pause Until Morning").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .item(&status_item)
         .separator()

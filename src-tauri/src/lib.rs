@@ -299,6 +299,9 @@ pub fn run() {
             // First read back through the ensured tables — the honest "tables
             // are readable" signal, not just "the directory opened".
             startup.stamp("tables_ready");
+            // Before any menu exists: the hook must see the menu bar's own
+            // images too, or macOS 26+ hides them (menuicons.rs).
+            menuicons::install();
             let handles = menu::build(&app.handle().clone(), &recents)?;
             app.set_menu(handles.menu)?;
             // Deep links, tray, global hotkey (docs/RFC-macos-integrations.md).
@@ -372,8 +375,6 @@ pub fn run() {
             // Spotlight needs AppState (it reads the db to build the index).
             #[cfg(target_os = "macos")]
             spotlight::setup(app);
-            // Native menu rows keep their icons on macOS 26+ (menuicons.rs).
-            menuicons::install();
 
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
             app.manage(mcp::McpState::default());

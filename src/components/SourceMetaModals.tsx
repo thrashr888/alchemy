@@ -22,6 +22,7 @@ export function sourceOriginItems(s: Source): RowMenuItem[] {
   if (!s.url || s.sourceType === "mac") return [];
   const web = isWebUrl(s.url);
   return [
+    { label: "", separator: true, onClick: () => {} },
     ...(web
       ? [
           {
@@ -62,15 +63,14 @@ export function sourceMetaItems(
   openNoteEdit: (state: NonNullable<NoteEditState>) => void,
 ): RowMenuItem[] {
   return [
+    { label: "", separator: true, onClick: () => {} },
     {
       label: s.tags ? "Edit Tags…" : "Add Tags…",
-      symbol: "tag",
       icon: <Tag className="h-3.5 w-3.5" />,
       onClick: () => openTagEdit({ ids: [s.id], title: s.title, value: s.tags }),
     },
     {
       label: s.note ? "Edit Note…" : "Add Note…",
-      symbol: "note.text",
       icon: <StickyNote className="h-3.5 w-3.5" />,
       onClick: () =>
         openNoteEdit({ id: s.id, title: s.title, value: s.note }),

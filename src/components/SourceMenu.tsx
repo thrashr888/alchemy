@@ -118,7 +118,6 @@ export function sourceMenuItems(
       ? [
           {
             label: refreshLabel,
-            symbol: "arrow.clockwise",
             icon: <RefreshCw className="h-3.5 w-3.5" />,
             onClick: () => void st.refreshSource(s.id),
           },
@@ -170,7 +169,6 @@ export function sourceMenuItems(
       ? [
           {
             label: "Choose Card Image…",
-            symbol: "photo",
             icon: <ImageIcon className="h-3.5 w-3.5" />,
             onClick: () => host.chooseImage(s),
           },
@@ -200,6 +198,7 @@ export function sourceMenuItems(
     ...(omit.has("remove")
       ? []
       : [
+          { label: "", separator: true, onClick: () => {} },
           {
             label: "Remove…",
             symbol: "trash",

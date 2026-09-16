@@ -281,6 +281,56 @@ What each clause means here:
 
 When a rule here conflicts with a web idiom, the Mac wins.
 
+### Menus — the NSMenu formula
+
+Every menu is a native menu (NSMenu through `RowMenu`'s `native` default),
+because a menu is where the app most obviously either is or isn't a Mac
+app. The custom panel exists only for rows that need HTML the native row
+can't hold, and a menu that needs it should first ask whether it needs
+those rows. The rules, from the HIG's menu chapter and macOS 26's menus:
+
+- **Title-style capitalization.** Every row: "Export Notebook…", "Keep on
+  Disk as OKF…", "All Notebooks…". Names inside a row (a notebook's title,
+  a source's) keep their own case.
+- **An ellipsis means "asks for more."** A row that opens a dialog, a
+  picker, or a confirmation ends in "…"; a row that acts at once doesn't.
+- **Group, then order.** Related rows sit together behind dividers; the
+  destructive pair (Archive, Delete…) sits last behind its own. A pop-up
+  from a title lists the *choices* as its body, ticks the current one, and
+  folds the object's verbs into one submenu named for the object
+  ("Notebook"). One submenu level, never two. No disabled header rows —
+  if a list needs a label to be understood, it needs fewer rows.
+- **Symbols per group, all or none.** Apple's rule verbatim: "Use menu
+  item icons sparingly and with purpose" and "provide icons for all menu
+  items in a group, or none of them." So the divider groups decide: a
+  group gets symbols only when every row in it has a purposeful one —
+  the origin trio (Open Original `arrow.up.right.square`, Show in Finder
+  `folder`, Copy URL `link`: file-system locations), the destructive pair
+  (Archive `archivebox`, Delete… `trash`), or a list of objects that wear
+  those glyphs elsewhere (each notebook's own icon in its own color in the
+  switcher; the Library's `books.vertical`). A group of plain verbs —
+  Rename, Refresh, Edit…, Add…, Copy Text, sort orders, hints — goes
+  without, and one row that "deserves" a symbol never gets it alone: cut a
+  divider so it has a group, or leave it plain. SF Symbols only, template
+  images (the menu's text color, inverted under the highlight). If you
+  can't find a symbol that clearly represents the row, don't show one.
+- **Symbols are rasterized once.** `scripts/menu-symbols.swift` draws the
+  named symbols with the menu's own configuration onto a 20×16 pt canvas
+  (so labels share a column) into `src/assets/menu-symbols/`; a row names
+  one by `symbol`. `menuicons.rs` marks them template and sets
+  `preferredImageVisibility` — macOS 26+ hides every menu image without
+  it. Rerun the script when a menu gains a symbol the set lacks. The one
+  runtime raster is the notebook switcher's colored notebook icons.
+- **The stock context menu never shows.** Reload / Share / AutoFill /
+  Services is browser chrome. It appears only inside a text field or over
+  a real selection in content (the reader, a note, a chat turn), where the
+  platform's own text verbs belong; everywhere else right-click opens the
+  object's menu or nothing.
+- **The menu bar, the tray, and the Dock menu follow the same rules** and
+  come out plain: none of their groups qualifies, so none carries a
+  symbol. (macOS 26 adds its own gear to a standard Settings row; ours is
+  custom and stays bare.) The Dock menu is titles only.
+
 ### Multi-select — the Finder pattern
 
 Any surface listing selectable objects (source rows, gallery cards, note

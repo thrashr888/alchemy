@@ -328,13 +328,13 @@ export function StudioPanel() {
     return [
       {
         label: `Copy ${n} Notes`,
-        symbol: "doc.on.doc",
         icon: <Copy className="h-3.5 w-3.5" />,
         onClick: () => {
           void copyNotes(ids);
 
         },
       },
+      { label: "", separator: true, onClick: () => {} },
       {
         label: `Delete ${n} Notes…`,
         symbol: "trash",
@@ -884,9 +884,9 @@ export function StudioPanel() {
                               },
                             ]
                           : [
+                        { label: "", separator: true, onClick: () => {} },
                         {
                           label: "Copy Text",
-                          symbol: "doc.on.doc",
                           icon: <Copy className="h-3.5 w-3.5" />,
                           onClick: () => {
                             void copyNotes([n.id]);
@@ -919,6 +919,7 @@ export function StudioPanel() {
                             );
                           },
                         },
+                        { label: "", separator: true, onClick: () => {} },
                         {
                           label: "Delete",
                           symbol: "trash",

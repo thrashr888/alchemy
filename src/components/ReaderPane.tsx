@@ -669,7 +669,7 @@ export function ReaderPane() {
     useStore.setState({ readerEditIntent: null });
     if (sourceEditable) setEditing(true);
   }, [editIntent, source, sourceEditable]);
-  // "Ask about this source": scope the chat to this one document and land in
+  // "Ask About This Source": scope the chat to this one document and land in
   // the composer. Placeholders have no chunks yet — nothing to ask about.
   const askAction =
     source && source.status === "ready"
@@ -702,7 +702,6 @@ export function ReaderPane() {
   const refreshAction = source?.url && !source.remote
     ? {
         label: source.sourceType === "mac" ? "Sync Now" : "Refresh",
-        symbol: "arrow.clockwise",
         icon: <RefreshCw className="h-3.5 w-3.5" />,
         onClick: () => {
           if (syncing || !source) return;
@@ -719,7 +718,6 @@ export function ReaderPane() {
   const popOutAction = note
     ? {
         label: "Open in Its Own Window",
-        symbol: "macwindow",
         icon: <AppWindow className="h-3.5 w-3.5" />,
         onClick: () => void api.newWindow(note.notebookId, note.id),
       }
@@ -727,7 +725,6 @@ export function ReaderPane() {
   const copyLinkAction = note
     ? {
         label: "Copy Link",
-        symbol: "link",
         icon: <Link2 className="h-3.5 w-3.5" />,
         onClick: () => {
           void navigator.clipboard
@@ -738,7 +735,6 @@ export function ReaderPane() {
     : source?.url
       ? {
           label: isWebUrl(source.url) ? "Copy URL" : "Copy File Path",
-          symbol: "link",
           icon: <Link2 className="h-3.5 w-3.5" />,
           onClick: () => {
             void navigator.clipboard
@@ -766,7 +762,7 @@ export function ReaderPane() {
     : [];
   if (compact && refreshAction) {
     sourceItems.splice(
-      sourceItems[0]?.label === "Ask about this source" ? 1 : 0,
+      sourceItems[0]?.label === "Ask About This Source" ? 1 : 0,
       0,
       refreshAction,
     );
@@ -780,13 +776,11 @@ export function ReaderPane() {
             ? [
                 {
                   label: "Rebuild",
-                  symbol: "arrow.clockwise",
                   icon: <RefreshCw className="h-3.5 w-3.5" />,
                   onClick: () => void useStore.getState().rebuildNote(note),
                 },
                 {
                   label: "Rebuild with Prompt…",
-                  symbol: "slider.horizontal.3",
                   icon: <SlidersHorizontal className="h-3.5 w-3.5" />,
                   onClick: () => setPromptOpen(true),
                 },
@@ -794,7 +788,6 @@ export function ReaderPane() {
             : []),
           {
             label: "Copy Text",
-            symbol: "doc.on.doc",
             icon: <Copy className="h-3.5 w-3.5" />,
             onClick: () => {
               void navigator.clipboard.writeText(note.content).then(

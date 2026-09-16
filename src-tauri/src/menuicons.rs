@@ -68,11 +68,42 @@ unsafe extern "C-unwind" fn set_image(
         orig(this, sel, image);
     }
     if !image.is_null() {
-        // Every image the app puts on a menu row is a monochrome SF Symbol
-        // glyph (src/assets/menu-symbols): as a template image AppKit tints
-        // it for the appearance and inverts it under the highlight.
-        let _: () = msg_send![image, setTemplate: true];
+        // Two kinds of image reach a row. SF Symbol glyphs
+        // (src/assets/menu-symbols, a 20×16 pt canvas at 2×) want to be
+        // template images — AppKit draws them in the menu's text color,
+        // white on dark and black on light, and inverts them under the
+        // highlight. A notebook's own icon in its own color (the switcher,
+        // 18 pt at 2×) must keep its color.
+        // The point size is unreliable (muda rescales to an 18 pt height),
+        // so tell them apart by the bitmap: symbols are 40×32 px, notebook
+        // icons 36×36 px.
+        let reps: *mut objc2_foundation::NSArray<objc2::runtime::AnyObject> =
+            msg_send![image, representations];
+        let mut symbol = false;
+        if !reps.is_null() {
+            if let Some(rep) = (*reps).firstObject() {
+                let w: isize = msg_send![&*rep, pixelsWide];
+                let h: isize = msg_send![&*rep, pixelsHigh];
+                symbol = w == 40 && h == 32;
+            }
+        }
+        if symbol {
+            let _: () = msg_send![image, setTemplate: true];
+        }
         // NSMenuItemImageVisibility: 0 automatic, 1 visible, 2 hidden.
         let _: () = msg_send![this, setPreferredImageVisibility: 1isize];
+        // A ticked row with an icon: Tauri's check items carry no image, so
+        // the webview sends an icon item whose title leads with U+200B and
+        // the tick is set here (ui.tsx CURRENT_MARK).
+        let title: *mut objc2_foundation::NSString = msg_send![this, title];
+        if !title.is_null() {
+            let text = (*title).to_string();
+            if let Some(rest) = text.strip_prefix('\u{200B}') {
+                let clean = objc2_foundation::NSString::from_str(rest);
+                let _: () = msg_send![this, setTitle: &*clean];
+                // NSControlStateValueOn
+                let _: () = msg_send![this, setState: 1isize];
+            }
+        }
     }
 }

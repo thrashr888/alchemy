@@ -581,16 +581,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       // Name, icon, AND color — the edit dialog owns the notebook's look,
       // so color no longer needs its own pop-over or menu entry.
       label: "Rename",
-      symbol: "pencil",
       icon: <Pencil className="h-3.5 w-3.5" />,
       onClick: () => setEditing(nb),
     },
     {
       label: "Export Notebook…",
-      symbol: "square.and.arrow.down",
       icon: <FileDown className="h-3.5 w-3.5" />,
       onClick: () => void useStore.getState().exportNotebookOkf(nb.id),
     },
+    { label: "", separator: true, onClick: () => {} },
     {
       label: "Archive",
       symbol: "archivebox",

@@ -98,13 +98,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
                 {
                   label: "Rename",
-                  symbol: "pencil",
                   icon: <Pencil className="h-3.5 w-3.5" />,
                   onClick: () => setEditing(notebook),
                 },
                 {
                   label: "Export Notebook…",
-                  symbol: "square.and.arrow.down",
                   icon: <FileDown className="h-3.5 w-3.5" />,
                   onClick: () =>
                     void useStore.getState().exportNotebookOkf(notebook.id),
@@ -115,7 +113,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   ? [
                       {
                         label: "Show Bundle in Finder",
-                        symbol: "folder",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void revealItemInDir(binding.path).catch(() => {}),
@@ -126,7 +123,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         // thing to do is put the user in front of the right
                         // one and say what to do there.
                         label: "Share Folder…",
-                        symbol: "square.and.arrow.up",
                         icon: <Users className="h-3.5 w-3.5" />,
                         onClick: () => {
                           void revealItemInDir(binding.path).catch(() => {});
@@ -140,7 +136,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                       },
                       {
                         label: "Stop Keeping on Disk",
-                        symbol: "externaldrive.badge.xmark",
                         icon: <FolderOpen className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void useStore.getState().unbindNotebookOkf(),
@@ -149,7 +144,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : [
                       {
                         label: "Keep on Disk as OKF…",
-                        symbol: "externaldrive",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: async () => {
                           const picked = await open({
@@ -274,6 +268,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   return {
                     label: n.title,
                     icon: <Icon className="h-3.5 w-3.5" />,
+                    iconColor: n.color || undefined,
                     checked: n.id === currentId,
                     onClick: () => {
                       if (n.id !== currentId)
