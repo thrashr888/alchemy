@@ -1038,11 +1038,14 @@ function SuggestionStrip({
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
 
-  // Recommended first — the triage pass exists so the ones worth keeping
-  // are the first ones you read.
+  // The queue's own order (the backend's `surface_suggestions` rank):
+  // recommended first — the triage pass exists so the ones worth keeping
+  // are the first ones you read — then the most-mentioned, then oldest.
   const ordered = [...cards].sort(
     (a, b) =>
-      Number(b.triage === "recommended") - Number(a.triage === "recommended"),
+      Number(b.triage === "recommended") - Number(a.triage === "recommended") ||
+      b.mentions - a.mentions ||
+      a.createdAt - b.createdAt,
   );
   const recommended = cards.filter((c) => c.triage === "recommended").length;
 
