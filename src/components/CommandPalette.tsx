@@ -36,7 +36,6 @@ import {
   Search,
   Settings,
   Sparkles,
-  Logs,
   Package,
   SquarePen,
   Upload,
@@ -333,7 +332,7 @@ export function CommandPalette() {
           icon: <LayoutGrid className="h-3.5 w-3.5" />,
           run: () => {
             close();
-            useStore.setState({ galleryOpen: true, ledgerOpen: false });
+            useStore.setState({ galleryOpen: true, growOpen: false });
           },
         },
         {
@@ -542,18 +541,12 @@ export function CommandPalette() {
     return hits.map((h) => ({
       id: `hit-${h.kind}-${h.id}`,
       group:
-        h.kind === "card"
-          ? "Registry"
-          : h.kind === "ledger"
-            ? "Ledger"
-            : "Search sources & notes",
+        h.kind === "card" ? "Registry" : "Search sources & notes",
       label: h.title || h.snippet.slice(0, 60) || "Untitled",
       keywords: h.snippet,
       icon:
         h.kind === "card" ? (
           <Package className="h-3.5 w-3.5" />
-        ) : h.kind === "ledger" ? (
-          <Logs className="h-3.5 w-3.5" />
         ) : h.kind === "note" ? (
           <SquarePen className="h-3.5 w-3.5" />
         ) : (
@@ -571,10 +564,6 @@ export function CommandPalette() {
               homeSection: "registry",
               openCardId: h.id,
             });
-          } else if (h.kind === "ledger") {
-            // Open the notebook's Ledger tab — where the row can be acted on.
-            await s.selectNotebook(h.notebookId);
-            useStore.setState({ ledgerOpen: true, galleryOpen: false });
           } else if (h.kind === "note") {
             // StudioPanel auto-opens this id once the notebook's notes load.
             useStore.setState({ justCreatedNoteId: h.id });

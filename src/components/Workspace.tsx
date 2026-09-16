@@ -5,7 +5,6 @@ import { useStore } from "@/lib/store";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { CenterModeTabs, ReaderPane } from "./ReaderPane";
-import { LedgerPane } from "./LedgerPane";
 import { GalleryPane } from "./GalleryPane";
 import { GrowPane } from "./GrowPane";
 import { StudioPanel } from "./StudioPanel";
@@ -39,7 +38,6 @@ import { OkfChip } from "./OkfChip";
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
   const readerOpen = useStore((s) => s.reader.open);
-  const ledgerOpen = useStore((s) => s.ledgerOpen);
   const galleryOpen = useStore((s) => s.galleryOpen);
   const growOpen = useStore((s) => s.growOpen);
   const notebooks = useStore((s) => s.notebooks);
@@ -274,7 +272,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             The panels' roots are positioned, so they paint above this. */}
         {chatBlank &&
           !readerOpen &&
-          !ledgerOpen &&
           !galleryOpen &&
           !growOpen &&
           !glassOn && (
@@ -294,8 +291,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             <GrowPane />
           ) : galleryOpen ? (
             <GalleryPane />
-          ) : ledgerOpen ? (
-            <LedgerPane />
           ) : readerOpen ? (
             <ReaderPane />
           ) : (

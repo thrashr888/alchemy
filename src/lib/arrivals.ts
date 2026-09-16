@@ -1,31 +1,11 @@
-import { api } from "./api";
 import type { SourceEvent } from "./types";
 
 /**
  * Arrivals (docs/RFC-events.md §6): what the watchers saw since the reader
- * last looked. Pure helpers over `SourceEvent` rows — the strip in the
- * sources panel and the Home digest both tally with these, and neither
- * calls a model.
- *
- * The seen watermark is per notebook, in the database (`app_state`): the
- * app is single-tenant by design, so UI state belongs there too, not in a
- * webview's localStorage that another window or a reinstall forgets.
+ * last looked. Pure helpers over `SourceEvent` rows — the Home digest
+ * tallies with these, and never calls a model. (The sources-panel strip
+ * and its seen watermark were removed 2026-09-15.)
  */
-
-/** Epoch ms the notebook's arrivals were last dismissed; 0 = never. */
-export async function loadSeenAt(notebookId: string): Promise<number> {
-  try {
-    return await api.arrivalsSeenAt(notebookId);
-  } catch {
-    return 0;
-  }
-}
-
-export function saveSeenAt(notebookId: string, at: number) {
-  void api.markArrivalsSeen(notebookId, at).catch(() => {
-    /* best-effort — the strip just shows again next time */
-  });
-}
 
 /** How many items an event stands for. Folder scans coalesce a pass into
  *  one row ("3 new files", "12 files gone") so a sync tool dropping 400

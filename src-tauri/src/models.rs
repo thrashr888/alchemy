@@ -182,46 +182,6 @@ pub struct ModelStat {
     pub avg_ttft_ms: f64,
 }
 
-/// One anchor pinning a ledger entry to verbatim source text. The quote is
-/// the anchor — it survives re-chunking and drives find-in-source
-/// highlighting, the same contract citations already use.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LedgerAnchor {
-    pub source_id: String,
-    #[serde(default)]
-    pub quote: String,
-}
-
-/// One typed ledger row (RFC-v12-steward pillar 2): memory the machine can
-/// act on. Kinds and their lifecycles:
-///   assertion: asserted → corroborated | contradicted | stale
-///   fact:      current → superseded
-///   decision:  decided → superseded
-///   question:  open → answered
-///   log:       logged (terminal — a log line is what happened)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LedgerEntry {
-    pub id: String,
-    pub notebook_id: String,
-    /// "assertion" | "fact" | "decision" | "question" | "log"
-    pub kind: String,
-    pub text: String,
-    /// The because: rationale for decisions, context for others. Optional.
-    #[serde(default)]
-    pub why: String,
-    pub status: String,
-    /// "" for user- and agent-written rows, "auto" for rows the chat
-    /// post-pass minted on its own (same contract as auto notes).
-    #[serde(default)]
-    pub origin: String,
-    #[serde(default)]
-    pub anchors: Vec<LedgerAnchor>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
 /// One key fact on a registry card — an ordered label/value pair, the same
 /// shape the reader's document-properties grid already renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

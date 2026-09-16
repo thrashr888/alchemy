@@ -131,7 +131,7 @@ two-host podcast voiced on-device.*
   windowed rendering, a filter box with kind, tag, and freshness facets
   (including "uncited" — sources retrieval has never used), and busy web
   domains folding into collapsible groups.
-- **Grow** — a center pane (Chat ⇄ Reader ⇄ Gallery ⇄ Grow ⇄ Ledger) that
+- **Grow** — a center pane (Chat ⇄ Reader ⇄ Gallery ⇄ Grow) that
   proposes ways a notebook could grow. Questions it answered thinly become
   standing questions; Alchemy then suggests files already on your Mac
   (Spotlight), pages your sources keep citing, and — per-notebook opt-in,

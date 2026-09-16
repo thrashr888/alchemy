@@ -22,8 +22,8 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
 use crate::models::{
-    Citation, LedgerEntry, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
-    RegistryCard, ReportSchedule, RunReceipt, Source, SourceEvent,
+    Citation, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook, RegistryCard,
+    ReportSchedule, RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -42,7 +42,6 @@ const T_RECEIPTS: &str = "run_receipts";
 /// is single-tenant by design; a second store beside it is a second
 /// source of truth.
 const T_KV: &str = "app_state";
-const T_LEDGER: &str = "ledger";
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
@@ -444,8 +443,6 @@ impl Db {
         db.migrate_source_events().await?;
         db.ensure_table(T_RECEIPTS, receipts_schema()).await?;
         db.migrate_receipts().await?;
-        db.ensure_table(T_LEDGER, ledger_schema()).await?;
-        db.migrate_ledger().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
         db.migrate_registry().await?;
         db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
@@ -512,11 +509,6 @@ impl Db {
     async fn migrate_registry(&self) -> Result<()> {
         self.add_string_column(T_REGISTRY, "origin", "").await?;
         self.add_string_column(T_REGISTRY, "triage", "").await
-    }
-
-    /// Add the `origin` column ("") to pre-existing ledger tables.
-    async fn migrate_ledger(&self) -> Result<()> {
-        self.add_string_column(T_LEDGER, "origin", "").await
     }
 
     /// Add the `trigger` column ("interval") to pre-existing schedule tables.
@@ -3284,11 +3276,10 @@ impl Db {
         &self,
         recent_limit: usize,
         report_limit: usize,
-    ) -> Result<(Vec<Note>, Vec<Note>, i64, i64, i64, i64)> {
-        let (source_batches, note_batches, ledger_batches) = tokio::try_join!(
+    ) -> Result<(Vec<Note>, Vec<Note>, i64, i64, i64)> {
+        let (source_batches, note_batches) = tokio::try_join!(
             self.collect_cols(T_SOURCES, None, &["char_count"]),
             self.collect(T_NOTES, None),
-            self.collect_cols(T_LEDGER, None, &["id"]),
         )?;
 
         let (mut source_count, mut chars) = (0i64, 0i64);
@@ -3310,15 +3301,7 @@ impl Db {
             .cloned()
             .collect();
         notes.truncate(recent_limit);
-        let ledger_count = ledger_batches.iter().map(|b| b.num_rows() as i64).sum();
-        Ok((
-            notes,
-            reports,
-            source_count,
-            chars,
-            note_count,
-            ledger_count,
-        ))
+        Ok((notes, reports, source_count, chars, note_count))
     }
 
     /// BM25-only search across every notebook — no embedding round-trip, so
@@ -4672,134 +4655,6 @@ impl Db {
             .collect())
     }
 
-    pub async fn add_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
-        let schema = ledger_schema();
-        let batch = ledger_batch(&schema, entry)?;
-        self.add_batch(T_LEDGER, schema, batch).await
-    }
-
-    /// How many ledger rows the Weave moved to a contradicted or superseded
-    /// state since `since` (freshness.rs). Counted from persisted status
-    /// rather than instrumented at the call site, the same way due-ness is
-    /// derived rather than queued.
-    pub async fn ledger_upsets_since(&self, since: i64) -> Result<u32> {
-        let batches = self
-            .collect(T_LEDGER, Some(&format!("updated_at >= {since}")))
-            .await?;
-        let mut count = 0;
-        for b in &batches {
-            let status = str_col(b, "status")?;
-            let updated = i64_col(b, "updated_at")?;
-            let created = i64_col(b, "created_at")?;
-            for i in 0..b.num_rows() {
-                // A row that arrived already contradicted was minted that
-                // way; only a row the night CHANGED is a finding.
-                if updated.value(i) == created.value(i) {
-                    continue;
-                }
-                if matches!(status.value(i), "contradicted" | "superseded") {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
-    }
-
-    pub async fn list_ledger(&self, notebook_id: &str) -> Result<Vec<LedgerEntry>> {
-        let batches = self
-            .collect(
-                T_LEDGER,
-                Some(&format!("notebook_id = '{}'", esc(notebook_id))),
-            )
-            .await?;
-        let mut out = Vec::new();
-        for b in &batches {
-            let id = str_col(b, "id")?;
-            let nb = str_col(b, "notebook_id")?;
-            let kind = str_col(b, "kind")?;
-            let text = str_col(b, "text")?;
-            let why = str_col(b, "why")?;
-            let status = str_col(b, "status")?;
-            let origin = opt_str_col(b, "origin");
-            let anchors = str_col(b, "anchors")?;
-            let created = i64_col(b, "created_at")?;
-            let updated = i64_col(b, "updated_at")?;
-            for i in 0..b.num_rows() {
-                out.push(LedgerEntry {
-                    id: id.value(i).to_string(),
-                    notebook_id: nb.value(i).to_string(),
-                    kind: kind.value(i).to_string(),
-                    text: text.value(i).to_string(),
-                    why: why.value(i).to_string(),
-                    status: status.value(i).to_string(),
-                    origin: origin
-                        .as_ref()
-                        .map(|c| c.value(i).to_string())
-                        .unwrap_or_default(),
-                    anchors: serde_json::from_str(anchors.value(i)).unwrap_or_default(),
-                    created_at: created.value(i),
-                    updated_at: updated.value(i),
-                });
-            }
-        }
-        // Newest first — the ledger reads as a record, latest on top.
-        out.sort_by_key(|e| std::cmp::Reverse(e.created_at));
-        Ok(out)
-    }
-
-    pub async fn get_ledger_entry(&self, id: &str) -> Result<Option<LedgerEntry>> {
-        let batches = self
-            .collect(T_LEDGER, Some(&format!("id = '{}'", esc(id))))
-            .await?;
-        for b in &batches {
-            if b.num_rows() > 0 {
-                let anchors = str_col(b, "anchors")?;
-                return Ok(Some(LedgerEntry {
-                    id: str_col(b, "id")?.value(0).to_string(),
-                    notebook_id: str_col(b, "notebook_id")?.value(0).to_string(),
-                    kind: str_col(b, "kind")?.value(0).to_string(),
-                    text: str_col(b, "text")?.value(0).to_string(),
-                    why: str_col(b, "why")?.value(0).to_string(),
-                    status: str_col(b, "status")?.value(0).to_string(),
-                    origin: opt_str_col(b, "origin")
-                        .as_ref()
-                        .map(|c| c.value(0).to_string())
-                        .unwrap_or_default(),
-                    anchors: serde_json::from_str(anchors.value(0)).unwrap_or_default(),
-                    created_at: i64_col(b, "created_at")?.value(0),
-                    updated_at: i64_col(b, "updated_at")?.value(0),
-                }));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Update text/why/status in place; anchors travel whole as JSON.
-    pub async fn update_ledger_entry(&self, entry: &LedgerEntry) -> Result<()> {
-        let tbl = self.conn.open_table(T_LEDGER).execute().await?;
-        tbl.update()
-            .only_if(format!("id = '{}'", esc(&entry.id)))
-            .column("text", format!("'{}'", esc(&entry.text)))
-            .column("why", format!("'{}'", esc(&entry.why)))
-            .column("status", format!("'{}'", esc(&entry.status)))
-            .column(
-                "anchors",
-                format!(
-                    "'{}'",
-                    esc(&serde_json::to_string(&entry.anchors).unwrap_or_default())
-                ),
-            )
-            .column("updated_at", entry.updated_at.to_string())
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    pub async fn delete_ledger_entry(&self, id: &str) -> Result<()> {
-        self.delete_where(T_LEDGER, &format!("id = '{}'", esc(id)))
-            .await
-    }
-
     // ---- Registry (docs/RFC-registry.md) ----
 
     pub async fn add_registry_card(&self, card: &RegistryCard) -> Result<()> {
@@ -5662,41 +5517,6 @@ fn source_event_batch(schema: &SchemaRef, e: &SourceEvent) -> Result<RecordBatch
             Arc::new(StringArray::from(vec![e.detail.clone()])),
             Arc::new(StringArray::from(vec![e.diff.clone()])),
             Arc::new(Int64Array::from(vec![e.at])),
-        ],
-    )?)
-}
-
-fn ledger_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("notebook_id", DataType::Utf8, false),
-        Field::new("kind", DataType::Utf8, false),
-        Field::new("text", DataType::Utf8, false),
-        Field::new("why", DataType::Utf8, false),
-        Field::new("status", DataType::Utf8, false),
-        Field::new("origin", DataType::Utf8, false),
-        Field::new("anchors", DataType::Utf8, false),
-        Field::new("created_at", DataType::Int64, false),
-        Field::new("updated_at", DataType::Int64, false),
-    ]))
-}
-
-fn ledger_batch(schema: &SchemaRef, e: &LedgerEntry) -> Result<RecordBatch> {
-    Ok(RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![e.id.clone()])),
-            Arc::new(StringArray::from(vec![e.notebook_id.clone()])),
-            Arc::new(StringArray::from(vec![e.kind.clone()])),
-            Arc::new(StringArray::from(vec![e.text.clone()])),
-            Arc::new(StringArray::from(vec![e.why.clone()])),
-            Arc::new(StringArray::from(vec![e.status.clone()])),
-            Arc::new(StringArray::from(vec![e.origin.clone()])),
-            Arc::new(StringArray::from(vec![
-                serde_json::to_string(&e.anchors).unwrap_or_default()
-            ])),
-            Arc::new(Int64Array::from(vec![e.created_at])),
-            Arc::new(Int64Array::from(vec![e.updated_at])),
         ],
     )?)
 }

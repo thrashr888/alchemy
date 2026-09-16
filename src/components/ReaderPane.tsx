@@ -500,14 +500,12 @@ export function CenterModeTabs() {
       ? "grow"
       : s.galleryOpen
         ? "gallery"
-        : s.ledgerOpen
-          ? "ledger"
-          : s.reader.open
-            ? "reader"
-            : "chat",
+        : s.reader.open
+          ? "reader"
+          : "chat",
   );
   const tab = (
-    id: "chat" | "reader" | "gallery" | "ledger" | "grow",
+    id: "chat" | "reader" | "gallery" | "grow",
     icon: React.ReactNode,
     label: string,
     onClick: () => void,
@@ -536,7 +534,6 @@ export function CenterModeTabs() {
     <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
       {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
         useStore.setState({
-          ledgerOpen: false,
           galleryOpen: false,
           growOpen: false,
         });
@@ -548,7 +545,6 @@ export function CenterModeTabs() {
         "Reader",
         () =>
           useStore.setState((st) => ({
-            ledgerOpen: false,
             galleryOpen: false,
             growOpen: false,
             reader: { ...st.reader, open: true },
@@ -558,7 +554,6 @@ export function CenterModeTabs() {
       {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
         useStore.setState({
           galleryOpen: true,
-          ledgerOpen: false,
           growOpen: false,
         }),
       )}
@@ -566,14 +561,6 @@ export function CenterModeTabs() {
         useStore.setState({
           growOpen: true,
           galleryOpen: false,
-          ledgerOpen: false,
-        }),
-      )}
-      {tab("ledger", <Logs className="h-3.5 w-3.5" />, "Ledger", () =>
-        useStore.setState({
-          ledgerOpen: true,
-          galleryOpen: false,
-          growOpen: false,
         }),
       )}
     </div>

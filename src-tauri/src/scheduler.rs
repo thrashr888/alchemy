@@ -49,12 +49,6 @@ static LAST_OKF: AtomicI64 = AtomicI64::new(0);
 static OKF_RUNNING: AtomicBool = AtomicBool::new(false);
 const OKF_EVERY_MS: i64 = 60 * 60 * 1000;
 
-/// Epoch ms of the last nightly Weave pass, and the window it judges. Hourly
-/// rather than per-tick: judging is the expensive stage, and a source that
-/// changed two minutes ago is no more urgent than one that changed fifty.
-static LAST_WEAVE: AtomicI64 = AtomicI64::new(0);
-const WEAVE_EVERY_MS: i64 = 60 * 60 * 1000;
-
 /// Epoch ms of the last tick-driven catch-up sweep (gists, tags, cards,
 /// hygiene). Imports and edits kick the same sweep the moment they land —
 /// that is the event path, and it is where almost all the work happens.
@@ -489,13 +483,6 @@ pub(crate) fn lateness(due_at: i64, started_at: i64) -> Option<String> {
     Some(format!("{days} days late"))
 }
 
-/// Put the Weave's stamp back when a pass could not do its work, so the
-/// changes it skipped come round again on the next window instead of being
-/// silently written off.
-pub(crate) fn rewind_weave_stamp(to: i64) {
-    LAST_WEAVE.store(to, Ordering::Relaxed);
-}
-
 /// Take the day's snapshot if it hasn't been taken, and leave a receipt
 /// either way. Runs on the pass thread: an APFS clone is a metadata
 /// operation, and the fallback copy only happens on volumes that cannot
@@ -711,28 +698,6 @@ async fn run_pass(app: &AppHandle) {
             // lives inside; the cadence it works to is days, so hourly is
             // already generous.
             crate::hygiene::spawn_sweep(app);
-        }
-        // 2. Verification. The Weave already judges a source the moment it
-        //    arrives; this catches the case that matters more — a watched
-        //    page changed at 3 AM, and the conclusion it undermines was
-        //    written in March. Its own stamp, so a Mac that stays awake does
-        //    not re-judge the same changes every minute.
-        let last_weave = LAST_WEAVE.load(Ordering::Relaxed);
-        if now_ms() - last_weave >= WEAVE_EVERY_MS {
-            LAST_WEAVE.store(now_ms(), Ordering::Relaxed);
-            // Never run is a fresh install, not a licence to judge the whole
-            // corpus: start from the last hour, not from the epoch.
-            let since = if last_weave == 0 {
-                now_ms() - WEAVE_EVERY_MS
-            } else {
-                last_weave
-            };
-            crate::commands::weave::spawn_nightly(
-                state.db.clone(),
-                state.ai.read().await.clone(),
-                since,
-                budget.clone(),
-            );
         }
     } else {
         crate::note!(

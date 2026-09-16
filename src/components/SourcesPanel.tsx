@@ -48,7 +48,6 @@ import {
   visibleGrowthProposals,
 } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
-import { ArrivalsStrip, useArrivals } from "./ArrivalsStrip";
 import { OkfBadges } from "./OkfBadges";
 import type { Source } from "@/lib/types";
 import {
@@ -270,7 +269,6 @@ export function SourcesPanel() {
   const hygiene = useStore((s) => s.hygiene);
   const refreshHygiene = useStore((s) => s.refreshHygiene);
   // Arrivals (RFC-events §6): what the watchers saw since the last dismiss.
-  const arrivals = useArrivals(currentId);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // One source, one menu: the row verbs and every modal they open come
@@ -715,7 +713,7 @@ export function SourcesPanel() {
             onClick={() =>
               useStore.setState((st) => ({
                 galleryOpen: !st.galleryOpen,
-                ledgerOpen: false,
+                growOpen: false,
               }))
             }
             disabled={!currentId}
@@ -963,9 +961,6 @@ export function SourcesPanel() {
           </EmptyState>
         ) : (
           <>
-            {/* What changed since the reader last looked — one line of
-                tallies, the events on click, gone on "Mark seen". */}
-            <ArrivalsStrip unseen={arrivals.unseen} onDismiss={arrivals.dismiss} />
             {/* Master selection row: which sources feed chat & Studio. Always
                 labeled — a bare checkbox over empty space read as a blank,
                 menu-less source row in every notebook. */}
@@ -996,7 +991,6 @@ export function SourcesPanel() {
                   useStore.setState({
                     growOpen: true,
                     galleryOpen: false,
-                    ledgerOpen: false,
                   })
                 }
                 className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
@@ -1255,16 +1249,6 @@ export function SourcesPanel() {
                             (s.url && hostname(s.url)) ||
                             "Untitled"}
                         </span>
-                        {/* New-dot: an unseen arrival landed here (folder
-                            children roll up to their parent). Cleared by
-                            the strip's Mark seen. */}
-                        {arrivals.sourceIds.has(s.id) && (
-                          <span
-                            aria-label="Changed since you last looked"
-                            title="Changed since you last looked"
-                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                          />
-                        )}
                         {issueBySource.has(s.id) && (
                           <Badge
                             className="shrink-0"

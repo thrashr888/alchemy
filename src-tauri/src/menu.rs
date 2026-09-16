@@ -234,14 +234,6 @@ const CMD: &[Command] = &[
         context: "Notebook",
     },
     Command {
-        id: "menu-toggle-ledger",
-        menu_label: "Ledger",
-        accelerator: None,
-        keys: "⌘ 5",
-        label: "Show or hide Ledger",
-        context: "Notebook",
-    },
-    Command {
         id: "menu-toggle-glass",
         menu_label: "Liquid Glass",
         accelerator: None,
@@ -573,7 +565,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // the line-start/line-end meaning. The menu items stay for
     // discoverability and mouse use.
     // Two groups of sidebar toggles, one per view, and only the view you are
-    // in is live: a notebook's Sources/Studio/Gallery/Ledger mean nothing on
+    // in is live: a notebook's Sources/Studio/Gallery/Grow mean nothing on
     // Home, and Home's four cards mean nothing inside a notebook. Kept as
     // handles so `set_menu_context` can flip `enabled` as the frontend moves
     // between views — the menu itself is never rebuilt. Each group is in rail
@@ -589,7 +581,6 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         cmd_item(app, "menu-toggle-studio")?,
         cmd_item(app, "menu-toggle-gallery")?,
         cmd_item(app, "menu-toggle-grow")?,
-        cmd_item(app, "menu-toggle-ledger")?,
     ];
     let mut view = SubmenuBuilder::new(app, "View")
         .item(&cmd_item(app, "menu-back")?)

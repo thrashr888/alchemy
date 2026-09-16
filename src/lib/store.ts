@@ -550,13 +550,9 @@ export const useStore = create<AppState>((rawSet, get) => {
     undoStack: [],
     redoStack: [],
     justCreatedNoteId: null,
-    // Center-column Ledger mode (Chat | Reader | Ledger) + a bump counter
-    // the pane watches so agent writes appear live (mcp://changed).
-    ledgerOpen: false,
     galleryOpen: false,
     growOpen: false,
     readerEditIntent: null,
-    ledgerBump: 0,
     registryBump: 0,
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
@@ -701,10 +697,10 @@ export const useStore = create<AppState>((rawSet, get) => {
       } else if (!window.__ALCHEMY_FRESH__ && !boot) {
         // Restore the precise last view: the dashboard stays the dashboard
         // (an explicit lastView with nb: null beats lastNotebookId), and a
-        // notebook reopens in its center mode — chat, reader, or ledger.
+        // notebook reopens in its center mode — chat, reader, gallery, grow.
         let view: {
           nb: string | null;
-          mode: "chat" | "reader" | "ledger" | "gallery" | "grow";
+          mode: "chat" | "reader" | "gallery" | "grow";
           doc?: ReaderDoc;
           readerHistory?: ReaderDoc[];
           readerIndex?: number;
@@ -742,8 +738,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             );
             set({ reader: { open: view?.mode === "reader", history: hist, index } });
           }
-          if (view?.mode === "ledger") set({ ledgerOpen: true });
-          else if (view?.mode === "gallery") set({ galleryOpen: true });
+          if (view?.mode === "gallery") set({ galleryOpen: true });
           else if (view?.mode === "grow") set({ growOpen: true });
           else if (view?.mode === "reader" && hist.length === 0 && view.doc)
             get().openInReader(view.doc);
@@ -1010,8 +1005,6 @@ export const useStore = create<AppState>((rawSet, get) => {
             refreshSources.request();
           if (scope === "notes")
             refreshNotes.request();
-          if (scope === "ledger")
-            set((state) => ({ ledgerBump: state.ledgerBump + 1 }));
           if (scope === "reports")
             void api
               .listReportSchedules(current)
@@ -1201,9 +1194,6 @@ export const useStore = create<AppState>((rawSet, get) => {
         } else if (e.payload.id === "menu-toggle-grow") {
           if (get().currentId) toggleNotebookPanel("grow");
           else s.pushToast("info", "Open a notebook to grow it");
-        } else if (e.payload.id === "menu-toggle-ledger") {
-          if (get().currentId) toggleNotebookPanel("ledger");
-          else s.pushToast("info", "Open a notebook to read its ledger");
         } else if (e.payload.id === "menu-toggle-glass") {
           s.setReading({ glass: !get().reading.glass });
         } else if (e.payload.id.startsWith("theme:")) {
@@ -2644,7 +2634,6 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: next,
         pendingInput: "",
         galleryOpen: false,
-        ledgerOpen: false,
         growOpen: false,
       });
       if (get().reader.open) get().closeReader();
@@ -2830,13 +2819,12 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Re-opening the current doc just updates the highlight in place —
       // clicking three citations into one source is one history entry.
       // Opening a document is an explicit trip to the Reader, so it always
-      // leaves Ledger mode — the ledger otherwise wins the center column
+      // leaves Gallery and Grow — either otherwise wins the center column
       // and the reader opens invisibly underneath it.
       if (current && current.type === doc.type && current.id === doc.id) {
         const next = [...history];
         next[index] = doc;
         set({
-          ledgerOpen: false,
           galleryOpen: false,
           growOpen: false,
           reader: { open: true, history: next, index },
@@ -2845,7 +2833,6 @@ export const useStore = create<AppState>((rawSet, get) => {
       }
       const next = [...history.slice(0, index + 1), doc];
       set({
-        ledgerOpen: false,
         galleryOpen: false,
         growOpen: false,
         reader: { open: true, history: next, index: next.length - 1 },
@@ -3490,7 +3477,6 @@ async function applyNav(delta: 1 | -1): Promise<void> {
     } else {
       useStore.setState({
         galleryOpen: target.mode === "gallery",
-        ledgerOpen: target.mode === "ledger",
         growOpen: target.mode === "grow",
       });
       if (st.reader.open) st.closeReader();
@@ -3518,14 +3504,13 @@ export const NOTEBOOK_PANELS = [
   "studio",
   "gallery",
   "grow",
-  "ledger",
 ] as const;
 
 export type NotebookPanel = (typeof NOTEBOOK_PANELS)[number];
 
 /** Show or hide one of them. The single owner of what each toggle means, for
  *  the View menu, ⌘1–4 (App.tsx), and anything else that grows one. Gallery
- *  and Ledger share the center, so opening either closes the other.
+ *  and Grow share the center, so opening either closes the other.
  *  A no-op with no notebook open — callers that want to say so do it first. */
 export function toggleNotebookPanel(panel: NotebookPanel): void {
   const s = useStore.getState();
@@ -3535,20 +3520,12 @@ export function toggleNotebookPanel(panel: NotebookPanel): void {
   else if (panel === "gallery")
     useStore.setState({
       galleryOpen: !s.galleryOpen,
-      ledgerOpen: false,
       growOpen: false,
-    });
-  else if (panel === "grow")
-    useStore.setState({
-      growOpen: !s.growOpen,
-      galleryOpen: false,
-      ledgerOpen: false,
     });
   else
     useStore.setState({
-      ledgerOpen: !s.ledgerOpen,
+      growOpen: !s.growOpen,
       galleryOpen: false,
-      growOpen: false,
     });
 }
 
@@ -3578,7 +3555,6 @@ export async function navAtomic(go: () => Promise<void> | void): Promise<void> {
 useStore.subscribe((s, prev) => {
   if (
     s.currentId === prev.currentId &&
-    s.ledgerOpen === prev.ledgerOpen &&
     s.galleryOpen === prev.galleryOpen &&
     s.growOpen === prev.growOpen &&
     s.reader === prev.reader &&
@@ -3596,11 +3572,9 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
     ? ("grow" as const)
     : s.galleryOpen
       ? ("gallery" as const)
-      : s.ledgerOpen
-        ? ("ledger" as const)
-        : s.reader.open
-          ? ("reader" as const)
-          : ("chat" as const);
+      : s.reader.open
+        ? ("reader" as const)
+        : ("chat" as const);
   const rdoc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
   // Highlight is a one-time citation jump, not a place — drop it.
   const doc = rdoc && { type: rdoc.type, id: rdoc.id };
@@ -3638,7 +3612,7 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
 // the user just asked for cues itself where it happens (sendMessage).
 
 // Remember the precise open view — dashboard vs notebook, and the center
-// mode (chat / reader / ledger) with the reader's current doc — so a reload
+// mode (chat / reader / gallery / grow) with the reader's current doc — so a reload
 // or relaunch lands back exactly where the user was. Main window only:
 // secondary windows share localStorage and would clobber the main spot.
 // Settings is deliberately not a view; dialogs don't survive reloads.
@@ -3646,7 +3620,6 @@ if (getCurrentWebview().label === "main") {
   useStore.subscribe((s, prev) => {
     if (
       s.currentId === prev.currentId &&
-      s.ledgerOpen === prev.ledgerOpen &&
       s.galleryOpen === prev.galleryOpen &&
       s.growOpen === prev.growOpen &&
       s.reader === prev.reader &&
@@ -3664,11 +3637,9 @@ if (getCurrentWebview().label === "main") {
           ? "grow"
           : s.galleryOpen
             ? "gallery"
-            : s.ledgerOpen
-              ? "ledger"
-              : s.reader.open
-                ? "reader"
-                : "chat",
+            : s.reader.open
+              ? "reader"
+              : "chat",
         // Highlight is a one-time citation jump, not a place — drop it.
         doc: doc && { type: doc.type, id: doc.id },
         // The whole back/forward stack (doc refs only), so ⌘[ still works

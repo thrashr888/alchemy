@@ -1,5 +1,14 @@
 # RFC: Alchemy V12 — The Steward
 
+> **Status note (2026-09-15):** Pillar 2, the Ledger, was removed. Paul never
+> wrote a row himself — every one of the 48 rows in the store was minted by
+> the chat post-pass — and nothing in retrieval or the evals read them; the
+> only consumers were the Weave contradiction pass, a Brief section and the
+> night's findings line, all removed with it. The Ledger tab, ⌘5, the four
+> MCP tools, the intro note, and the `ledger` table's schema are gone; an
+> existing store's table is left in place, unread. The rest of this RFC
+> stands as written.
+
 ## Summary
 
 Alchemy today is the "V8 prosumer": grounded chat with citations, deep-research

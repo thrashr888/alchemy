@@ -281,7 +281,7 @@ function NotebookTable({
 }
 
 /** Home's center switch, the exact sibling of the notebook's
- *  Chat|Reader|Gallery|Ledger tabs (CenterModeTabs, ReaderPane.tsx): one
+ *  Chat|Reader|Gallery|Grow tabs (CenterModeTabs, ReaderPane.tsx): one
  *  control, in the title bar, choosing what the center column shows about a
  *  constant subject. There the subject is one notebook; here it's the whole
  *  corpus — its notebooks, the cast of things they're about, or the
@@ -749,7 +749,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         useStore.setState({
           growOpen: true,
           galleryOpen: false,
-          ledgerOpen: false,
         });
       else
         useStore
@@ -1171,8 +1170,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                           `${stats.sources} ${stats.sources === 1 ? "source" : "sources"}`,
                           stats.notes > 0 &&
                             `${stats.notes} ${stats.notes === 1 ? "note" : "notes"}`,
-                          stats.ledger > 0 &&
-                            `${stats.ledger} ledger ${stats.ledger === 1 ? "entry" : "entries"}`,
                           `${Intl.NumberFormat().format(stats.chars)} characters indexed`,
                         ]
                           .filter(Boolean)

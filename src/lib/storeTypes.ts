@@ -63,7 +63,7 @@ export interface ReaderDoc {
  *  highlight — a citation jump is an event, not a place). */
 export interface NavEntry {
   nb: string | null;
-  mode: "chat" | "reader" | "ledger" | "gallery" | "grow";
+  mode: "chat" | "reader" | "gallery" | "grow";
   doc?: { type: ReaderDoc["type"]; id: string };
   /** Home's section, when this entry IS Home (`nb: null`). Home has tabs the
    *  way a notebook has center modes, and a tab is a place: back should
@@ -279,9 +279,8 @@ export interface AppState {
   undoStack: HistoryEntry[];
   redoStack: HistoryEntry[];
   justCreatedNoteId: string | null;
-  /** Center-column Ledger mode; reader wins below it, chat is the default. */
-  ledgerOpen: boolean;
-  /** Center-column source Gallery mode; wins above Ledger. */
+  /** Center-column source Gallery mode; reader wins below it, chat is the
+   *  default. */
   galleryOpen: boolean;
   /** Center-column Grow mode (RFC-living-notebook Pillar 2) — the growth
    *  review surface; wins above Gallery. */
@@ -289,8 +288,6 @@ export interface AppState {
   /** Source id the Reader should open straight into edit mode (gallery's
    *  "Edit text" action); the Reader consumes and clears it. */
   readerEditIntent: string | null;
-  /** Bumped when an agent writes the ledger (mcp://changed scope "ledger"). */
-  ledgerBump: number;
   /** Bumped when the registry changes (agents, or the arrival sweep filing
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;

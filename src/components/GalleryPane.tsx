@@ -31,7 +31,7 @@ import {
 
 /* The source Gallery (docs/RFC-source-gallery.md): the notebook's sources as
  * a masonry of visual cards — a mymind/are.na-style browse surface beside
- * Chat, Reader, and Ledger. Scraped pages lead with their og:image, PDFs
+ * Chat, Reader, and Grow. Scraped pages lead with their og:image, PDFs
  * with their first page, images with themselves, text with its opening
  * lines; folders drill into their own level. */
 

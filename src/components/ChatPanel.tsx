@@ -315,7 +315,7 @@ export function ChatPanel() {
   // slash picker and autosize all see an ordinary keypress. The caret goes
   // to the end first: a draft left behind is being continued, not prefixed.
   // This panel only mounts while the chat is the notebook's center surface,
-  // so the reader, gallery, ledger and Grow never lose a key to it.
+  // so the reader, gallery and Grow never lose a key to it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!strayTypingKey(e)) return;

@@ -242,6 +242,12 @@ schedule. No cron grammar, as RFC-night-shift decided.
 
 ### 6. Arrivals
 
+> **Status note (2026-09-15):** the sources-panel strip ("N changed › Mark
+> seen"), its per-row new-dots and the per-notebook seen watermark
+> (`arrivals_seen_at` / `mark_arrivals_seen`) were removed — a queue the
+> user had to clear was maintenance, not help. The events table, the Home
+> tallies (`HomeReportsFeed`), and the live cards stay.
+
 One strip, two places, reading `source_events_since` and nothing else:
 
 - **In a notebook**, above the sources list when there are unseen events:

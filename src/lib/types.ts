@@ -464,7 +464,6 @@ export interface CorpusStats {
   sources: number;
   chars: number;
   notes: number;
-  ledger: number;
 }
 
 /** One local calendar day of activity (Settings → Activity; Rust activity.rs). */
@@ -528,11 +527,10 @@ export interface GrepHit {
 
 /** One global-search result (command menu). */
 export interface SearchHit {
-  kind: "source" | "note" | "content" | "card" | "ledger";
+  kind: "source" | "note" | "content" | "card";
   notebookId: string;
   /** Source id for source/content hits, note id for notes, card id for
-   *  registry cards (which carry no notebookId — they're corpus-scoped),
-   *  entry id for ledger rows. */
+   *  registry cards (which carry no notebookId — they're corpus-scoped). */
   id: string;
   title: string;
   snippet: string;
@@ -603,29 +601,6 @@ export interface HomeActivity {
   recentNotes: Note[];
   reports: Note[];
   stats: CorpusStats;
-}
-
-/** One anchor pinning a ledger entry to verbatim source text. */
-export interface LedgerAnchor {
-  sourceId: string;
-  quote: string;
-}
-
-/** One typed ledger row (the Steward's memory): kind-specific lifecycles —
- *  assertion asserted→corroborated|contradicted|stale, fact current→
- *  superseded, decision decided→superseded, question open→answered, log. */
-export interface LedgerEntry {
-  id: string;
-  notebookId: string;
-  kind: "assertion" | "fact" | "decision" | "question" | "log";
-  text: string;
-  why: string;
-  status: string;
-  /** "" for user/agent rows, "auto" for chat-minted rows. */
-  origin: string;
-  anchors: LedgerAnchor[];
-  createdAt: number;
-  updatedAt: number;
 }
 
 /** The Registry's kinds (RFC-registry). */

@@ -9,7 +9,7 @@ Alchemy is a local-first research notebook. You import sources — documents, we
 The home screen is a shelf of notebooks; Alchemy opens to the one you used last. Inside a notebook you get three columns:
 
 - **Sources**, on the left: everything you have imported. Checkboxes control which sources a chat question searches.
-- **The center column**, which switches between **Chat** (streamed, cited answers), **Reader** (a full document view with find-in-source), and **Ledger** (the notebook's record; more in "The Ledger" source).
+- **The center column**, which switches between **Chat** (streamed, cited answers), **Reader** (a full document view with find-in-source), **Gallery** (your sources as cards), and **Grow** (what the notebook could take in next).
 - **Studio**, on the right: generated documents and notes, from one-click summaries to flashcard decks.
 
 ## Your first five minutes
@@ -33,4 +33,4 @@ Whichever model answers, your sources stay put: search uses a built-in private m
 
 ## Where to go next
 
-The other sources in this notebook cover the rest: adding sources, how chat and citations actually work, the Studio's generators, the Ledger, and a closing set of tips and examples. Ask about any of them in chat — this notebook is the demo.
+The other sources in this notebook cover the rest: adding sources, how chat and citations actually work, the Studio's generators, and a closing set of tips and examples. Ask about any of them in chat — this notebook is the demo.

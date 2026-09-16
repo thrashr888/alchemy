@@ -238,7 +238,7 @@ function App() {
         else s.navForward();
       } else if (e.key >= "1" && e.key <= "5" && !e.shiftKey && !e.altKey) {
         // ⌘1–5 run down whichever set of sidebars is on screen: a notebook's
-        // Sources/Studio/Gallery/Grow/Ledger, or Home's Chats/Staff/Brief/Latest
+        // Sources/Studio/Gallery/Grow, or Home's Chats/Staff/Brief/Latest
         // Reports — in the order the rails read, which is the View menu's
         // order too. Context-dependent, so it can't be a native menu key
         // equivalent (those are global to the process and would fire in the

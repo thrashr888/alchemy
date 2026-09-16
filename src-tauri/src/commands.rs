@@ -11,14 +11,11 @@ use uuid::Uuid;
 
 mod brief;
 mod diagnostics;
-mod ledger;
 mod registry;
 pub(crate) mod reports;
 mod second_look;
-pub(crate) mod weave;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
-pub use ledger::*;
 pub use registry::*;
 pub use reports::*;
 pub use second_look::*;
@@ -1793,18 +1790,6 @@ pub(crate) async fn spawn_embed_stage(
         // used to kick — now downstream of the chunks it reads. The gist
         // sweep self-gates (SWEEPING), so per-source kicks don't stack.
         crate::gist::spawn_sweep(db.clone(), ai.clone());
-        // Judgment on arrival for deliberate adds only — folder children
-        // skip (a bulk import judging hundreds of files against the ledger
-        // would be noise; their later CHANGES still weave via reingest).
-        if source.parent_id.is_empty() {
-            weave::spawn_weave(
-                db.clone(),
-                ai,
-                source.notebook_id.clone(),
-                source.title.clone(),
-                extracted.text.chars().take(4_000).collect(),
-            );
-        }
         // File the arrival under any card that claims it — folder children
         // included: a folder of scanned documents is exactly where
         // auto-filing earns its keep.
@@ -2911,7 +2896,7 @@ pub(crate) async fn reingest(
 /// phase 5) — and the generic `updated` diff would be the same arrival
 /// twice: the parent rule below, made explicit for the one caller that
 /// knows more than the diff does. Everything else about the refresh (the
-/// row, the chunks, the weave, the registry match) is unchanged.
+/// row, the chunks, the registry match) is unchanged.
 pub(crate) async fn reingest_with(
     state: &AppState,
     existing: &Source,
@@ -3072,17 +3057,6 @@ async fn reingest_inner(
     } else {
         format!("{verb} \u{00b7} {stats}")
     };
-    // Judgment on arrival (commands/weave.rs): the changed lines are weighed
-    // against this notebook's ledger. Fire-and-forget, capped, gated.
-    if !diff.is_empty() {
-        weave::spawn_weave(
-            state.db.clone(),
-            state.ai.read().await.clone(),
-            existing.notebook_id.clone(),
-            updated.title.clone(),
-            diff.clone(),
-        );
-    }
     // Re-file on change against the WHOLE updated document, not the diff: a
     // card minted after this source landed should still pick it up, and
     // already-attached pairs skip, so re-running costs nothing.
@@ -10355,80 +10329,6 @@ async fn auto_evidence(
         note
     };
 
-    // The same conclusion lands on the ledger as an anchored assertion —
-    // the passive fill (RFC-v12-steward pillar 2): ordinary chat use builds
-    // the record, no ceremony. Same discipline as the note: dedup by title
-    // overlap against AUTO assertions only, merge instead of siblings, and
-    // a failure here never fails the pass.
-    let claim = note.title.clone();
-    let anchors: Vec<crate::models::LedgerAnchor> = {
-        let mut seen = HashSet::new();
-        sources
-            .iter()
-            // Gist rows are distilled, not verbatim — no anchor material.
-            .filter(|c| !c.gist && seen.insert(c.source_id.clone()))
-            .take(4)
-            .map(|c| crate::models::LedgerAnchor {
-                source_id: c.source_id.clone(),
-                quote: c.snippet.chars().take(220).collect(),
-            })
-            .collect()
-    };
-    let prior_entry = state
-        .db
-        .list_ledger(notebook_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|entry| entry.kind == "assertion" && entry.origin == "auto")
-        .find(|entry| title_overlap(&entry.text, &claim) >= 0.6);
-    let ledger_result = match prior_entry {
-        Some(mut prior) => {
-            prior.text = claim;
-            // Fresh evidence revives a stale row; a contradicted one stays
-            // contradicted — only the user (or, later, the Weave) clears it.
-            if prior.status == "stale" {
-                prior.status = "asserted".into();
-            }
-            for anchor in anchors {
-                if !prior
-                    .anchors
-                    .iter()
-                    .any(|a| a.source_id == anchor.source_id)
-                {
-                    prior.anchors.push(anchor);
-                }
-            }
-            prior.anchors.truncate(6);
-            prior.updated_at = now();
-            state.db.update_ledger_entry(&prior).await
-        }
-        None => {
-            let ts = now();
-            state
-                .db
-                .add_ledger_entry(&crate::models::LedgerEntry {
-                    id: new_id(),
-                    notebook_id: notebook_id.to_string(),
-                    kind: "assertion".into(),
-                    text: claim,
-                    why: format!(
-                        "From chat: {}",
-                        question.chars().take(160).collect::<String>()
-                    ),
-                    status: "asserted".into(),
-                    origin: "auto".into(),
-                    anchors,
-                    created_at: ts,
-                    updated_at: ts,
-                })
-                .await
-        }
-    };
-    if let Err(err) = ledger_result {
-        crate::note!("auto evidence: ledger write failed: {err:#}");
-    }
-
     // Same event the MCP server emits — open windows refresh their notes
     // list live, with the arrival chime announcing the new record.
     #[derive(serde::Serialize, Clone)]
@@ -10441,13 +10341,6 @@ async fn auto_evidence(
         "mcp://changed",
         Changed {
             scope: "notes",
-            notebook_id: Some(&note.notebook_id),
-        },
-    );
-    let _ = app.emit(
-        "mcp://changed",
-        Changed {
-            scope: "ledger",
             notebook_id: Some(&note.notebook_id),
         },
     );
@@ -12139,35 +12032,6 @@ pub async fn growth_proposals(
 /// advertised, what its host's shape implies, and — only when those come
 /// up empty — what sits at the conventional paths on its origin (the one
 /// tier that fetches; docs/RFC-events.md §2). Nothing is followed here.
-/// The Arrivals watermark (docs/RFC-events.md §6): when this notebook's
-/// arrivals were last dismissed. One `app_state` row per notebook — the
-/// database is single-tenant by design, so UI state lives there too, not
-/// in a webview's localStorage that a second window or a reinstall forgets.
-#[tauri::command]
-pub async fn arrivals_seen_at(
-    state: State<'_, AppState>,
-    notebook_id: String,
-) -> Result<i64, String> {
-    Ok(e(state
-        .db
-        .kv_get(&format!("arrivals.seen.{notebook_id}"))
-        .await)?
-    .and_then(|raw| raw.parse::<i64>().ok())
-    .unwrap_or(0))
-}
-
-#[tauri::command]
-pub async fn mark_arrivals_seen(
-    state: State<'_, AppState>,
-    notebook_id: String,
-    at: i64,
-) -> Result<(), String> {
-    e(state
-        .db
-        .kv_set(&format!("arrivals.seen.{notebook_id}"), &at.to_string())
-        .await)
-}
-
 #[tauri::command]
 pub async fn discover_feeds(
     state: State<'_, AppState>,
@@ -13115,7 +12979,6 @@ pub struct CorpusStats {
     pub sources: i64,
     pub chars: i64,
     pub notes: i64,
-    pub ledger: i64,
 }
 
 #[derive(serde::Serialize)]
@@ -13134,7 +12997,7 @@ pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, S
     let db = state.db.clone();
     let (schedules, activity) = tokio::join!(db.all_report_schedules(), db.home_activity(5, 50));
     let schedules = e(schedules)?;
-    let (recent_notes, reports, sources, chars, notes, ledger) = e(activity)?;
+    let (recent_notes, reports, sources, chars, notes) = e(activity)?;
     Ok(HomeActivity {
         schedules,
         recent_notes,
@@ -13143,7 +13006,6 @@ pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, S
             sources,
             chars,
             notes,
-            ledger,
         },
     })
 }
@@ -14936,30 +14798,6 @@ pub async fn search_everything(
                 }
             ),
         });
-    }
-
-    // Ledger rows, across every notebook. The palette opens the notebook's
-    // Ledger tab, which is where a row can actually be acted on.
-    let mut ledger_hits = 0;
-    for nb in e(state.db.list_notebooks().await)? {
-        if ledger_hits >= 4 {
-            break;
-        }
-        for entry in e(state.db.list_ledger(&nb.id).await)? {
-            if ledger_hits >= 4 {
-                break;
-            }
-            if entry.text.to_lowercase().contains(&q) || entry.why.to_lowercase().contains(&q) {
-                ledger_hits += 1;
-                hits.push(SearchHit {
-                    kind: "ledger".into(),
-                    notebook_id: nb.id.clone(),
-                    id: entry.id.clone(),
-                    title: entry.text.clone(),
-                    snippet: format!("{} \u{00b7} {}", entry.kind, entry.status),
-                });
-            }
-        }
     }
 
     let notes = e(state.db.recent_notes(usize::MAX).await)?;

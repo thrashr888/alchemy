@@ -38,8 +38,6 @@ import type {
   ModelHealth,
   ModelStat,
   CardFact,
-  LedgerAnchor,
-  LedgerEntry,
   RegistryCard,
   NightShiftStatus,
   Note,
@@ -619,10 +617,6 @@ export const api = {
   /** Source ids ever cited in retrieval traces — the "uncited" facet. */
   citedSourceIds: () => run(query<string[]>("cited_source_ids", {})),
   /** The Grow surface: standing queries + the free tiers' proposals. */
-  arrivalsSeenAt: (notebookId: string) =>
-    run(query<number>("arrivals_seen_at", { notebookId })),
-  markArrivalsSeen: (notebookId: string, at: number) =>
-    run(cmd<void>("mark_arrivals_seen", { notebookId, at })),
   discoverFeeds: (sourceId: string) =>
     run(query<FeedCandidate[]>("discover_feeds", { sourceId })),
   /** Every free tier in one call. The Grow pane loads section by section
@@ -713,32 +707,6 @@ export const api = {
   saveTemplate: (id: string | null, name: string, description: string, prompt: string) =>
     run(cmd<Template>("save_template", { id, name, description, prompt })),
   deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
-
-  // The Ledger
-  listLedger: (notebookId: string) =>
-    run(query<LedgerEntry[]>("list_ledger", { notebookId })),
-  addLedgerEntry: (
-    notebookId: string,
-    kind: string,
-    text: string,
-    why?: string,
-    anchors?: LedgerAnchor[],
-  ) =>
-    run(
-      cmd<LedgerEntry>("add_ledger_entry", {
-        notebookId,
-        kind,
-        text,
-        why,
-        anchors,
-      }),
-    ),
-  updateLedgerEntry: (
-    id: string,
-    patch: { text?: string; why?: string; status?: string },
-  ) => run(cmd<LedgerEntry>("update_ledger_entry", { id, ...patch })),
-  deleteLedgerEntry: (id: string) =>
-    run(cmd<void>("delete_ledger_entry", { id })),
 
   // The Registry — corpus-scoped, so no notebookId anywhere here.
   listRegistry: () => run(query<RegistryCard[]>("list_registry", {})),

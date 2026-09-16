@@ -23,7 +23,6 @@ use crate::models::{Note, Notebook, Source};
 mod diagnostics;
 mod growth;
 mod homechat;
-mod ledger;
 mod mac;
 mod notebooks;
 mod notes;
@@ -377,7 +376,6 @@ impl AlchemyMcp {
     + Self::search_router()
     + Self::notes_router()
     + Self::studio_router()
-    + Self::ledger_router()
     + Self::registry_router()
     + Self::settings_router()
     + Self::homechat_router()

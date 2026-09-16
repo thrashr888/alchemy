@@ -2,7 +2,7 @@ You have the tour; here is what people actually do with Alchemy, and the shortcu
 
 ## Use cases
 
-**Research a decision.** Buying a car, choosing a vendor, picking a grad program: paste the contender pages as URL sources, add your own notes, then ask comparative questions — "what do these disagree on about maintenance costs?" Generate a Data table for the spec-by-spec view and record the final call in the Ledger.
+**Research a decision.** Buying a car, choosing a vendor, picking a grad program: paste the contender pages as URL sources, add your own notes, then ask comparative questions — "what do these disagree on about maintenance costs?" Generate a Data table for the spec-by-spec view and write the final call up as a note.
 
 **Study a subject.** Import the readings, generate a Study guide, then drill with Flashcards (Leitner spaced repetition keeps returning the cards you miss) and a Quiz. The Audio Overview turns the notebook into a two-host podcast for the commute.
 
@@ -26,7 +26,7 @@ You have the tour; here is what people actually do with Alchemy, and the shortcu
 
 ## For the agent-inclined
 
-Alchemy ships an embedded MCP server (localhost-only). One click in Settings → Agents connects Claude Code, Codex, Gemini CLI, GitHub Copilot, and friends. After that, an agent can create notebooks, add sources, run the same search you use, write notes, and update Ledger entries, with changes appearing live in the app. Anything you can do in the UI, an agent can do for you: "collect the reviews for these three products into a notebook and write up a comparison" is a one-line request.
+Alchemy ships an embedded MCP server (localhost-only). One click in Settings → Agents connects Claude Code, Codex, Gemini CLI, GitHub Copilot, and friends. After that, an agent can create notebooks, add sources, run the same search you use, and write notes, with changes appearing live in the app. Anything you can do in the UI, an agent can do for you: "collect the reviews for these three products into a notebook and write up a comparison" is a one-line request.
 
 ## Housekeeping
 

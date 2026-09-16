@@ -151,7 +151,7 @@ export function BriefSidebar({
   );
 }
 
-/** Staff as a left sidebar: the Night Shift's ledger, side-card idiom. */
+/** Staff as a left sidebar: the Night Shift's roster, side-card idiom. */
 export function StaffSidebar({
   schedules,
   reports,

@@ -129,11 +129,6 @@ const INTRO_SOURCES: &[ExampleSource] = &[
         include_str!("../examples/intro/content-generation-studio.md"),
     ),
     (
-        "The Ledger",
-        "",
-        include_str!("../examples/intro/ledger-memory.md"),
-    ),
-    (
         "Tips and examples",
         "",
         include_str!("../examples/intro/use-cases-and-power-tips.md"),
@@ -1661,12 +1656,12 @@ mod tests {
     }
 
     /// Content sanity: this ships to every new user, so hold it to the spec —
-    /// six intro sources of real length, fifty earnings sources each carrying
+    /// five intro sources of real length, fifty earnings sources each carrying
     /// the "example data" disclaimer and stable latest-reports links, no
     /// blanks, no duplicate titles.
     #[test]
     fn example_content_is_sane() {
-        assert_eq!(INTRO_SOURCES.len(), 6);
+        assert_eq!(INTRO_SOURCES.len(), 5);
         assert_eq!(EARNINGS_SOURCES.len(), 50);
 
         let mut titles = std::collections::HashSet::new();

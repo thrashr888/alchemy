@@ -5,12 +5,11 @@
 //! Light, Standard, Generous - and a priority order the user never sees:
 //!
 //!   1. Freshness      keep the corpus current (re-fetch, re-distill)
-//!   2. Verification   judge what arrived against what the user concluded
-//!   3. Hygiene        janitorial work with no model behind it
+//!   2. Hygiene        janitorial work with no model behind it
 //!
 //! The queue spends until its ceiling or until morning, whichever comes
-//! first, and reports in *findings*. A token count is a footnote; "2
-//! contradictions" is the headline. A night that finds nothing says nothing:
+//! first, and reports in *findings*. A token count is a footnote; "refreshed
+//! 12 sources" is the headline. A night that finds nothing says nothing:
 //! silence is the correct output of a healthy night.
 
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -160,8 +159,6 @@ pub fn has_budget(budget: &str) -> bool {
 pub struct Findings {
     /// Sources whose content actually changed.
     pub refreshed: u32,
-    /// Ledger rows the Weave moved to contradicted or superseded.
-    pub contradictions: u32,
     /// Scheduled work that could not run, or ran and failed.
     pub problems: u32,
     pub tokens: i64,
@@ -171,7 +168,7 @@ impl Findings {
     /// Did the night produce anything a person would want to hear about?
     /// Tokens alone do not count - spending without finding is not news.
     pub fn worth_reporting(&self) -> bool {
-        self.refreshed + self.contradictions + self.problems > 0
+        self.refreshed + self.problems > 0
     }
 
     /// One line for the Morning Brief, denominated in findings. Returns None
@@ -182,13 +179,6 @@ impl Findings {
             return None;
         }
         let mut parts: Vec<String> = Vec::new();
-        if self.contradictions > 0 {
-            parts.push(format!(
-                "found {} {}",
-                self.contradictions,
-                plural(self.contradictions, "contradiction", "contradictions")
-            ));
-        }
         if self.refreshed > 0 {
             parts.push(format!(
                 "refreshed {} {}",
@@ -214,13 +204,12 @@ impl Findings {
 }
 
 /// What the night produced, read back out of persisted state rather than
-/// tallied as it went. Source events, ledger status changes, and receipts
-/// are all written anyway, so the report cannot drift from what happened -
+/// tallied as it went. Source events and receipts are written anyway, so
+/// the report cannot drift from what happened -
 /// and a crash mid-night loses no accounting.
 pub async fn collect_findings(db: &crate::db::Db, since: i64) -> Findings {
     let events = db.source_events_since(since).await.unwrap_or_default();
     let receipts = db.list_receipts(since, 500).await.unwrap_or_default();
-    let contradictions = db.ledger_upsets_since(since).await.unwrap_or(0);
 
     // One source that changed three times is one refreshed source, not three.
     let mut changed: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -230,7 +219,6 @@ pub async fn collect_findings(db: &crate::db::Db, since: i64) -> Findings {
 
     Findings {
         refreshed: changed.len() as u32,
-        contradictions,
         problems: receipts.iter().filter(|r| r.status == "failed").count() as u32,
         tokens: spent_tonight(),
     }
@@ -299,30 +287,25 @@ mod tests {
     fn findings_lead_and_tokens_trail() {
         let night = Findings {
             refreshed: 12,
-            contradictions: 2,
             problems: 0,
             tokens: 740_000,
         };
         let line = night.brief_line().expect("worth reporting");
-        assert_eq!(
-            line,
-            "Last night: found 2 contradictions and refreshed 12 sources (740K tokens)."
-        );
+        assert_eq!(line, "Last night: refreshed 12 sources (740K tokens).");
         // The finding comes before the price.
-        assert!(line.find("contradiction").unwrap() < line.find("tokens").unwrap());
+        assert!(line.find("refreshed").unwrap() < line.find("tokens").unwrap());
     }
 
     #[test]
     fn singulars_read_like_english() {
         let one = Findings {
             refreshed: 1,
-            contradictions: 1,
             problems: 1,
             ..Default::default()
         };
         assert_eq!(
             one.brief_line().unwrap(),
-            "Last night: found 1 contradiction, refreshed 1 source, and 1 item needs you."
+            "Last night: refreshed 1 source and 1 item needs you."
         );
     }
 
