@@ -8,6 +8,7 @@ import {
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { initializeOnce } from "./startup";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
@@ -1419,7 +1420,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: loadSourceSel(id),
         okfLifecycle: {},
         okfBinding: null,
-        picked: null,
+            picked: null,
         hygiene: [],
         growthDismissed: loadGrowthDismissed(id),
         messages: [],
@@ -1488,7 +1489,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: null,
         okfLifecycle: {},
         okfBinding: null,
-        growthDismissed: {},
+            growthDismissed: {},
         messages: [],
         messagesHasMore: false,
         messagesLoadingOlder: false,
@@ -3196,6 +3197,32 @@ export const useStore = create<AppState>((rawSet, get) => {
       try {
         const path = await api.exportNotebookOkfZip(id, dest);
         get().pushToast("success", `Saved ${path.split("/").pop() ?? "the bundle"}`);
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+    },
+
+    // "Share with someone…" (docs/RFC-shared-notebook.md §1). The move and
+    // the mark are the backend's; what is left here is the sheet, and the
+    // Finder fallback for the Macs where macOS won't raise it.
+    shareNotebookWithSomeone: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) {
+        get().pushToast("info", "Open a notebook to share it");
+        return;
+      }
+      try {
+        const folder = await api.shareNotebook(id);
+        await get().refreshOkfBinding(id);
+        if (folder.sheet) {
+          get().pushToast("success", "Pick who to share it with.");
+          return;
+        }
+        await revealItemInDir(folder.path).catch(() => {});
+        get().pushToast(
+          "info",
+          "In Finder, click Share \u2192 Collaborate and add them.",
+        );
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));
       }

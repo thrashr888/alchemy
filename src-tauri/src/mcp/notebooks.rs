@@ -131,6 +131,22 @@ impl AlchemyMcp {
     }
 
     #[tool(
+        description = "Put a notebook where another person can be invited into it (docs/RFC-shared-notebook.md): its folder moves into iCloud Drive/Alchemy Shared, keeping its files, its sync record and its history, and the notebook is marked shared — which is what makes another person's deletions arrive as proposals rather than removals. Returns the folder's path. It cannot show the macOS share sheet, so tell the user to open that folder in Finder and use Share to invite whoever they meant."
+    )]
+    async fn share_notebook(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let app = self.app.clone();
+        let state = self.state();
+        let path = crate::okf::share_notebook(&app, &state, &notebook_id)
+            .await
+            .map_err(invalid)?;
+        self.changed("notebooks", None);
+        json_result(&serde_json::json!({ "notebookId": notebook_id, "sharedPath": path }))
+    }
+
+    #[tool(
         description = "Stop keeping a notebook on disk. The bundle folder and everything in it stays exactly where it is; Alchemy simply stops writing to it and reading from it."
     )]
     async fn unbind_notebook_okf(

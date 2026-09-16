@@ -61,6 +61,16 @@ export interface OkfBinding {
   path: string;
   /** Epoch ms of the last write; 0 until the seed pass lands. */
   lastWriteAt: number;
+  /** The folder is shared with another person (docs/RFC-shared-notebook.md).
+   *  Their deletions arrive as proposals rather than removals. */
+  shared?: boolean;
+}
+
+/** Where "Share with someone…" put a notebook, and whether macOS took it from
+ *  there (docs/RFC-shared-notebook.md §1). `sheet: false` means Finder. */
+export interface SharedNotebookFolder {
+  path: string;
+  sheet: boolean;
 }
 
 /** Whether the Notebooks folder can move into the app's own iCloud container,

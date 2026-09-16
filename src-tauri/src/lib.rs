@@ -557,6 +557,7 @@ pub fn run() {
             okf::shared_bundle_offers_cmd,
             okf::open_shared_bundle_cmd,
             okf::dismiss_shared_bundle_cmd,
+            okf::share_notebook_cmd,
             commands::home_activity,
             commands::source_thumbnail,
             commands::source_image,

@@ -432,6 +432,9 @@ export interface AppState {
 
   /** Omit the id to export the currently open notebook (palette/menu). */
   exportNotebookOkf: (notebookId?: string) => Promise<void>;
+  /** Move a notebook into iCloud Drive's shared folder, mark it shared, and
+   *  offer macOS's Share sheet on it (docs/RFC-shared-notebook.md §1). */
+  shareNotebookWithSomeone: (notebookId?: string) => Promise<void>;
   /** Bumped by Edit > Find; whichever find-capable surface is mounted
    *  (reader, gallery, home) opens its find bar. */
   findBump: number;

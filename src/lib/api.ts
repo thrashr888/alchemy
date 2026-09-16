@@ -3,6 +3,7 @@ import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import { report } from "./diagnostics";
 import type {
   SharedBundleOffer,
+  SharedNotebookFolder,
   CorpusTimeline,
   ProviderModels,
   AcpAgentInfo,
@@ -513,6 +514,8 @@ export const api = {
     run(slow<string>("open_shared_bundle_cmd", { path })),
   dismissSharedBundle: (path: string) =>
     run(cmd<null>("dismiss_shared_bundle_cmd", { path })),
+  shareNotebook: (notebookId: string) =>
+    run(slow<SharedNotebookFolder>("share_notebook_cmd", { notebookId })),
   bindNotebookOkf: (notebookId: string, path: string) =>
     run(slow<string>("bind_notebook_okf", { notebookId, path })),
   unbindNotebookOkf: (notebookId: string) =>

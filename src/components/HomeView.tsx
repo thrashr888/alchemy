@@ -41,6 +41,7 @@ import {
   Archive,
   ArchiveRestore,
   FileDown,
+  Share,
   ChevronRight,
   MessagesSquare,
   ChartNoAxesGantt,
@@ -588,6 +589,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       label: "Export Notebook…",
       icon: <FileDown className="h-3.5 w-3.5" />,
       onClick: () => void useStore.getState().exportNotebookOkf(nb.id),
+    },
+    {
+      // docs/RFC-shared-notebook.md §1: the notebook's folder moves into
+      // iCloud Drive, where a folder can be shared with another Apple ID at
+      // all, and macOS's own sheet picks the person.
+      // No `symbol`: this group of plain verbs wears none, and DESIGN.md's
+      // menu rule is all or none per group.
+      label: "Share with Someone…",
+      icon: <Share className="h-3.5 w-3.5" />,
+      onClick: () => void useStore.getState().shareNotebookWithSomeone(nb.id),
     },
     { label: "", separator: true, onClick: () => {} },
     {

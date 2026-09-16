@@ -2014,6 +2014,7 @@ fn okf_heals_the_duplicates_it_finds() {
         id: format!("binding-{path}"),
         last_write_at: 0,
         lost: false,
+        shared: false,
     };
 
     // Two notebooks over one folder: the older keeps it, the newer is
@@ -2205,6 +2206,7 @@ fn okf_a_write_never_resurrects_a_binding() {
             id: "binding-1".into(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         }),
     );
     // A write that started before the unbind, finishing after it.
@@ -2224,6 +2226,7 @@ fn okf_a_write_never_resurrects_a_binding() {
             id: "binding-2".into(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         }),
     );
     touch_last_write(&data, "nb-open", "binding-1", 1_788_457_384_142);
@@ -2555,6 +2558,7 @@ fn okf_bindings_round_trip() {
             id: "bind-one".into(),
             last_write_at: 42,
             lost: false,
+            shared: false,
         }),
     );
     set_binding(
@@ -2565,6 +2569,7 @@ fn okf_bindings_round_trip() {
             id: "bind-two".into(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         }),
     );
     assert_eq!(binding_for(&dir, "nb1").expect("nb1").path, "/tmp/one");
@@ -3963,6 +3968,7 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
                 id: "b1".into(),
                 last_write_at: 1,
                 lost: false,
+                shared: false,
             },
         );
         map.insert(
@@ -3972,6 +3978,7 @@ fn okf_icloud_move_offer_only_for_stage_one_bundles() {
                 id: "b2".into(),
                 last_write_at: 1,
                 lost: false,
+                shared: false,
             },
         );
         map
@@ -4035,6 +4042,7 @@ fn okf_icloud_move_rewrites_binding_paths() {
                 id: format!("b-{nb}"),
                 last_write_at: 7,
                 lost: false,
+                shared: false,
             },
         );
     }
@@ -4046,6 +4054,7 @@ fn okf_icloud_move_rewrites_binding_paths() {
             id: "b-nb3".into(),
             last_write_at: 7,
             lost: false,
+            shared: false,
         },
     );
 
@@ -4165,6 +4174,7 @@ fn okf_icloud_move_adopts_a_bundle_already_in_the_container() {
                 id: format!("b-{nb}"),
                 last_write_at: 7,
                 lost: false,
+                shared: false,
             },
         );
     }
@@ -4212,6 +4222,7 @@ fn okf_the_move_takes_every_bundle_in_the_old_folder() {
             id: "b-nb1".into(),
             last_write_at: 1,
             lost: false,
+            shared: false,
         },
     );
     // What is actually in the folder: the bound bundle, two starters nothing
@@ -4419,6 +4430,7 @@ fn okf_the_old_folder_is_tidied_by_identity_not_by_name() {
             id: "b-nb1".into(),
             last_write_at: 7,
             lost: false,
+            shared: false,
         },
     );
     // What the two-Mac run actually left there: a starter the container
@@ -4548,6 +4560,7 @@ fn okf_the_twin_the_shared_folder_names_is_the_one_that_comes_back() {
         id: "b-x".into(),
         last_write_at: 3,
         lost: false,
+        shared: false,
     };
     // `ferrari` is the folder both Macs agree on and it names the archived
     // twin; the active one is off in a `-2` of its own.
