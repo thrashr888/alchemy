@@ -102,7 +102,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   onClick: () => setEditing(notebook),
                 },
                 {
-                  label: "Export notebook…",
+                  label: "Export Notebook…",
                   icon: <FileDown className="h-3.5 w-3.5" />,
                   onClick: () =>
                     void useStore.getState().exportNotebookOkf(notebook.id),
@@ -112,7 +112,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                 ...(binding
                   ? [
                       {
-                        label: "Show bundle in Finder",
+                        label: "Show Bundle in Finder",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void revealItemInDir(binding.path).catch(() => {}),
@@ -122,7 +122,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         // Dropbox already share any folder, so the useful
                         // thing to do is put the user in front of the right
                         // one and say what to do there.
-                        label: "Share folder…",
+                        label: "Share Folder…",
                         icon: <Users className="h-3.5 w-3.5" />,
                         onClick: () => {
                           void revealItemInDir(binding.path).catch(() => {});
@@ -135,7 +135,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         },
                       },
                       {
-                        label: "Stop keeping on disk",
+                        label: "Stop Keeping on Disk",
                         icon: <FolderOpen className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void useStore.getState().unbindNotebookOkf(),
@@ -143,7 +143,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                     ]
                   : [
                       {
-                        label: "Keep on disk as OKF…",
+                        label: "Keep on Disk as OKF…",
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: async () => {
                           const picked = await open({
@@ -155,6 +155,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         },
                       },
                     ]),
+                // HIG: the destructive pair sits last, behind its own divider.
+                { label: "", separator: true, onClick: () => {} },
                 {
                   // The store leaves the notebook when its current one is
                   // archived or deleted — no extra navigation here.
@@ -224,10 +226,13 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
             );
           })()}
-          {/* One menu off the name: the notebook's verbs, then "Switch to"
-              — the other notebooks, most recently touched first, and the
-              Library for the rest. Archived and system notebooks stay out of
-              the list; they are not places someone jumps to mid-thought. */}
+          {/* One menu off the name, shaped the way the HIG shapes a pop-up:
+              the choices are the body — the other notebooks, most recently
+              touched first, the current one ticked — with the notebook's own
+              verbs folded into a "Notebook" submenu (the menu bar has the
+              same menu) and the Library behind a divider at the end.
+              Archived and system notebooks stay out of the list; they are
+              not places someone jumps to mid-thought. */}
           <RowMenu
             alwaysVisible
             label={notebook ? `Options for ${notebook.title}` : "Switch notebook"}
@@ -246,8 +251,12 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             menuClassName="w-64"
             align="left"
             items={[
-              ...notebookVerbs,
-              { label: "Switch to", hint: true, onClick: () => {} },
+              ...(notebook
+                ? [
+                    { label: "Notebook", items: notebookVerbs, onClick: () => {} },
+                    { label: "", separator: true, onClick: () => {} },
+                  ]
+                : []),
               ...[...notebooks]
                 .filter((n) => n.status === "")
                 .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -264,8 +273,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                     },
                   };
                 }),
+              { label: "", separator: true, onClick: () => {} },
               {
-                label: "All notebooks…",
+                label: "All Notebooks…",
                 icon: <Library className="h-3.5 w-3.5" />,
                 onClick: close,
               },

@@ -1,5 +1,15 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
+import {
+  CheckMenuItem,
+  IconMenuItem,
+  Menu,
+  MenuItem,
+  PredefinedMenuItem,
+  Submenu,
+} from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Image as TauriImage } from "@tauri-apps/api/image";
 import { cn } from "@/lib/utils";
 import {
   Check,
@@ -1152,8 +1162,141 @@ export interface RowMenuItem {
   checked?: boolean;
   /** Not a verb — a line of explanation standing where verbs were removed
    *  ("Lives on Paul's MacBook Pro; the text is here."). Renders as plain
-   *  muted text: no focus, no click, no place in the arrow-key ring. */
+   *  muted text: no focus, no click, no place in the arrow-key ring. In a
+   *  native menu it is a disabled row, and a separator precedes it. */
   hint?: boolean;
+  /** Key equivalent shown beside the label in a native menu ("CmdOrCtrl+R").
+   *  Display only — the app's own key handling still fires the verb. */
+  accelerator?: string;
+  /** A divider between groups; the label and onClick are ignored. */
+  separator?: boolean;
+  /** A submenu: the label is its title, these are its rows. The custom
+   *  panel (fallback only) flattens it under a header. */
+  items?: RowMenuItem[];
+}
+
+/** Native menus need the Tauri bridge; a plain browser (the harnesses,
+ *  vitest) falls back to the custom panel. Flipped off for the session the
+ *  first time the bridge refuses, so one failure never repeats per click. */
+let nativeMenusAvailable =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** Menu icons are Lucide React elements; a native row wants pixels. The
+ *  PNGs in src/assets/menu-icons are those elements rasterized once
+ *  (scripts/menu-icons.mjs — rerun when a menu gains a new icon), 32 px in
+ *  the menu ink of each appearance: NSMenu gets no template flag through
+ *  this API, so light and dark are two files. Bytes are fetched once per
+ *  session and handed to Tauri as an Image. */
+const MENU_ICON_URLS = import.meta.glob("../assets/menu-icons/*.png", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+const iconCache = new Map<string, Promise<TauriImage | undefined>>();
+function menuIconImage(
+  icon: React.ReactNode,
+  appearance: "light" | "dark",
+): Promise<TauriImage | undefined> {
+  const name =
+    React.isValidElement(icon) && typeof icon.type !== "string"
+      ? (icon.type as { displayName?: string }).displayName
+      : undefined;
+  if (!name) return Promise.resolve(undefined);
+  const url = MENU_ICON_URLS[`../assets/menu-icons/${name}-${appearance}.png`];
+  if (!url) return Promise.resolve(undefined);
+  const hit = iconCache.get(url);
+  if (hit) return hit;
+  const job = (async () => {
+    const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    return TauriImage.fromBytes(bytes);
+  })().catch((e) => {
+    console.error("[menu-icon] failed", url, e);
+    return undefined;
+  });
+  iconCache.set(url, job);
+  return job;
+}
+
+/** Which of the two icon inks the native menu will sit on. */
+function menuAppearance(): "light" | "dark" {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+/** Build and pop a native menu from RowMenu items at a window-relative
+ *  point. Hints become disabled rows behind a separator, ticks become check
+ *  items, icons become icon items. Resolves when the menu has been shown;
+ *  actions fire later. */
+async function popupNativeMenu(
+  items: RowMenuItem[],
+  at: { x: number; y: number },
+): Promise<void> {
+  const appearance = menuAppearance();
+  // Real item objects rather than option bags: Tauri's JS converts an
+  // icon image only on top-level option bags, so a submenu's rows would
+  // lose theirs. Each constructor converts its own.
+  type Row = MenuItem | IconMenuItem | CheckMenuItem | PredefinedMenuItem | Submenu;
+  // Every item object is a resource on the Rust side; they are freed with
+  // the menu once the popup is over.
+  const created: Row[] = [];
+  const build = async (list: RowMenuItem[]): Promise<Row[]> => {
+    const rows: Row[] = [];
+    for (const [i, it] of list.entries()) {
+      if (it.separator) {
+        rows.push(await PredefinedMenuItem.new({ item: "Separator" }));
+        continue;
+      }
+      if (it.items) {
+        rows.push(await Submenu.new({ text: it.label, items: await build(it.items) }));
+        continue;
+      }
+      if (it.hint) {
+        if (i > 0) rows.push(await PredefinedMenuItem.new({ item: "Separator" }));
+        rows.push(await MenuItem.new({ text: it.label, enabled: false }));
+        continue;
+      }
+      if (it.checked !== undefined) {
+        rows.push(
+          await CheckMenuItem.new({
+            text: it.label,
+            checked: it.checked,
+            accelerator: it.accelerator,
+            action: () => it.onClick(),
+          }),
+        );
+        continue;
+      }
+      const icon = it.icon
+        ? await menuIconImage(it.icon, appearance)
+        : undefined;
+      rows.push(
+        icon
+          ? await IconMenuItem.new({
+              text: it.label,
+              icon,
+              accelerator: it.accelerator,
+              action: () => it.onClick(),
+            })
+          : await MenuItem.new({
+              text: it.label,
+              accelerator: it.accelerator,
+              action: () => it.onClick(),
+            }),
+      );
+    }
+    created.push(...rows);
+    return rows;
+  };
+  const menu = await Menu.new({ items: await build(items) });
+  try {
+    await menu.popup(new LogicalPosition(at.x, at.y));
+  } finally {
+    // The popup is modal on macOS; by the time it resolves the choice has
+    // been made and the item's action queued. Free the native objects.
+    for (const row of created) void row.close().catch(() => {});
+    void menu.close().catch(() => {});
+  }
 }
 
 /**
@@ -1174,6 +1317,7 @@ export function RowMenu({
   triggerClassName,
   menuClassName,
   align = "right",
+  native = true,
   contextAt,
   rowContext,
 }: {
@@ -1204,6 +1348,12 @@ export function RowMenu({
   /** Which trigger edge the panel lines up with. Right for a ⋯ at the end
    *  of a row (the default); left for a menu hanging off a title. */
   align?: "left" | "right";
+  /** Open as a native macOS menu (NSMenu via Tauri) — the default: system
+   *  look, keyboard, key equivalents, icons rasterized from the same Lucide
+   *  elements. Native rows are text, icon, tick, disabled, separator,
+   *  submenu; pass false for a menu whose items need richer HTML than
+   *  that. Falls back to the panel when the bridge is absent. */
+  native?: boolean;
   /** Open at these viewport coordinates whenever a new `nonce` arrives —
    *  for hosts whose rows aren't DOM rows (graph nodes in an SVG) and so
    *  can't use the `.group` right-click path. */
@@ -1231,6 +1381,34 @@ export function RowMenu({
   // per-render state (the current selection), so it rides a ref.
   const contextItemsRef = React.useRef(contextItems);
   contextItemsRef.current = contextItems;
+  const nativeRef = React.useRef(native);
+  nativeRef.current = native;
+  const onOpenRef = React.useRef(onOpen);
+  onOpenRef.current = onOpen;
+  const itemsRef = React.useRef(items);
+  itemsRef.current = items;
+
+  /** Try the native menu at a point; true when it took the open. */
+  const openNativeAt = React.useCallback(
+    (list: RowMenuItem[], at: { x: number; y: number }): boolean => {
+      if (!nativeRef.current || !nativeMenusAvailable) return false;
+      onOpenRef.current?.();
+      void popupNativeMenu(list, at).catch(() => {
+        nativeMenusAvailable = false;
+        setOpen(true);
+      });
+      return true;
+    },
+    [],
+  );
+  /** The ⋯ trigger's native anchor: its bottom-left corner. */
+  const openNativeFromTrigger = (): boolean => {
+    let t = triggerRef.current?.getBoundingClientRect();
+    if (t && t.width === 0 && t.height === 0 && ref.current)
+      t = ref.current.getBoundingClientRect();
+    if (!t) return false;
+    return openNativeAt(itemsRef.current, { x: t.left, y: t.bottom + 2 });
+  };
 
   React.useLayoutEffect(() => {
     if (!open || !menuRef.current) {
@@ -1295,7 +1473,10 @@ export function RowMenu({
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      setSwapItems(contextItemsRef.current?.() ?? null);
+      const swapped = contextItemsRef.current?.() ?? null;
+      if (openNativeAt(swapped ?? itemsRef.current, { x: e.clientX, y: e.clientY }))
+        return;
+      setSwapItems(swapped);
       setCtxPos({ x: e.clientX, y: e.clientY });
       setOpen(true);
     };
@@ -1307,10 +1488,12 @@ export function RowMenu({
   // right-click, even at the same spot.
   React.useEffect(() => {
     if (!contextAt) return;
+    if (openNativeAt(itemsRef.current, { x: contextAt.x, y: contextAt.y }))
+      return;
     setSwapItems(null);
     setCtxPos({ x: contextAt.x, y: contextAt.y });
     setOpen(true);
-  }, [contextAt]);
+  }, [contextAt, openNativeAt]);
 
   // One notification point for every way the menu opens (button, context
   // menu, keyboard).
@@ -1404,10 +1587,14 @@ export function RowMenu({
     >
       <button
         ref={triggerRef}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open && openNativeFromTrigger()) return;
+          setOpen((o) => !o);
+        }}
         onKeyDown={(e) => {
           if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
             e.preventDefault();
+            if (openNativeFromTrigger()) return;
             setOpen(true);
           }
         }}
@@ -1435,8 +1622,16 @@ export function RowMenu({
               menuClassName,
             )}
           >
-          {(swapItems ?? items).map((it) =>
-            it.hint ? (
+          {(swapItems ?? items)
+            .flatMap((it) =>
+              it.items
+                ? [{ ...it, items: undefined, hint: true }, ...it.items]
+                : [it],
+            )
+            .map((it, i) =>
+            it.separator ? (
+              <div key={`sep-${i}`} className="my-1 h-px bg-border" />
+            ) : it.hint ? (
               <div
                 key={it.label}
                 className="flex items-start gap-2.5 px-3 py-1.5 text-left text-caption leading-snug text-muted-foreground"

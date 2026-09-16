@@ -37,6 +37,7 @@ mod mac;
 mod macwatch;
 mod mcp;
 mod menu;
+mod menuicons;
 mod models;
 mod note_index;
 mod notion;
@@ -371,6 +372,8 @@ pub fn run() {
             // Spotlight needs AppState (it reads the db to build the index).
             #[cfg(target_os = "macos")]
             spotlight::setup(app);
+            // Native menu rows keep their icons on macOS 26+ (menuicons.rs).
+            menuicons::install();
 
             // Agent access: embedded MCP server (see docs/RFC-mcp-server.md).
             app.manage(mcp::McpState::default());
