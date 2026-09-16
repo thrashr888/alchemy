@@ -207,10 +207,12 @@ fn render_tree(files: &[MapFile]) -> String {
     let mut out = String::new();
     let mut printed_dirs: Vec<String> = Vec::new();
     let mut lines = 0usize;
-    for f in &sorted {
+    for (i, f) in sorted.iter().enumerate() {
         let rel = f.rel.as_str();
         if lines >= MAP_TREE_MAX {
-            out.push_str(&format!("… and {} more files\n", sorted.len() - lines));
+            // `lines` counts directory rows too, so it can exceed the file
+            // count; the remainder is files not yet reached, by index.
+            out.push_str(&format!("… and {} more files\n", sorted.len() - i));
             break;
         }
         let parts: Vec<&str> = rel.split('/').collect();
@@ -1156,6 +1158,21 @@ mod tests {
             tree.contains("  db.rs — Db, search_chunks_trace\n"),
             "{tree}"
         );
+    }
+
+    #[test]
+    fn tree_cap_counts_files_not_rows() {
+        // Every file three directories deep: rows run at four times the
+        // file count, so the cap trips with more rows printed than there
+        // are files — the tail line once subtracted rows from files and
+        // underflowed (a panic in 0.61.1).
+        let files: Vec<MapFile> = (0..MAP_TREE_MAX / 2)
+            .map(|i| mf(&format!("a{i:04}/b/c/f.rs")))
+            .collect();
+        let tree = render_tree(&files);
+        let tail = tree.lines().last().unwrap_or("");
+        assert!(tail.starts_with("… and "), "{tail}");
+        assert!(tail.ends_with(" more files"), "{tail}");
     }
 
     #[test]
