@@ -1207,7 +1207,7 @@ const symbolCache = new Map<string, Promise<TauriImage | undefined>>();
 /** A native row's image from a Lucide element, drawn in a color: 18 pt at
  *  2×, once per (icon, color) per session. Kept for the notebook switcher
  *  only — every other native row is an SF Symbol. Sized 18×18 pt on
- *  purpose: menuicons.rs tells these apart from the 20×16 pt symbol
+ *  purpose: menuicons.rs tells these apart from the 20×18 pt symbol
  *  canvases and leaves them untemplated, so the color survives. */
 const MENU_ICON_PT = 18;
 const iconCache = new Map<string, Promise<TauriImage | undefined>>();
@@ -1233,13 +1233,17 @@ function menuIconImage(
       img.onerror = () => reject(new Error("icon svg failed to load"));
       img.src = `data:image/svg+xml;utf8,${encodeURIComponent(tinted)}`;
     });
+    // muda draws every menu image 18 pt tall, so the canvas is 18 pt and
+    // the glyph sits inset at 14 pt — the height a Lucide stroke icon
+    // needs to read at the same weight as a 13 pt SF Symbol beside it.
     const px = MENU_ICON_PT * 2;
+    const glyph = 14 * 2;
     const canvas = document.createElement("canvas");
     canvas.width = px;
     canvas.height = px;
     const ctx = canvas.getContext("2d");
     if (!ctx) return undefined;
-    ctx.drawImage(img, 0, 0, px, px);
+    ctx.drawImage(img, (px - glyph) / 2, (px - glyph) / 2, glyph, glyph);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/png"),
     );

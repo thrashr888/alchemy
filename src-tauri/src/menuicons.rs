@@ -69,13 +69,13 @@ unsafe extern "C-unwind" fn set_image(
     }
     if !image.is_null() {
         // Two kinds of image reach a row. SF Symbol glyphs
-        // (src/assets/menu-symbols, a 20×16 pt canvas at 2×) want to be
+        // (src/assets/menu-symbols, a 20×18 pt canvas at 2×) want to be
         // template images — AppKit draws them in the menu's text color,
         // white on dark and black on light, and inverts them under the
         // highlight. A notebook's own icon in its own color (the switcher,
         // 18 pt at 2×) must keep its color.
         // The point size is unreliable (muda rescales to an 18 pt height),
-        // so tell them apart by the bitmap: symbols are 40×32 px, notebook
+        // so tell them apart by the bitmap: symbols are 40×36 px, notebook
         // icons 36×36 px.
         let reps: *mut objc2_foundation::NSArray<objc2::runtime::AnyObject> =
             msg_send![image, representations];
@@ -84,7 +84,7 @@ unsafe extern "C-unwind" fn set_image(
             if let Some(rep) = (*reps).firstObject() {
                 let w: isize = msg_send![&*rep, pixelsWide];
                 let h: isize = msg_send![&*rep, pixelsHigh];
-                symbol = w == 40 && h == 32;
+                symbol = w == 40 && h == 36;
             }
         }
         if symbol {

@@ -315,7 +315,7 @@ those rows. The rules, from the HIG's menu chapter and macOS 26's menus:
   images (the menu's text color, inverted under the highlight). If you
   can't find a symbol that clearly represents the row, don't show one.
 - **Symbols are rasterized once.** `scripts/menu-symbols.swift` draws the
-  named symbols with the menu's own configuration onto a 20×16 pt canvas
+  named symbols with the menu's own configuration onto a 20×18 pt canvas (muda draws every menu image 18 pt tall, so this is 1:1)
   (so labels share a column) into `src/assets/menu-symbols/`; a row names
   one by `symbol`. `menuicons.rs` marks them template and sets
   `preferredImageVisibility` — macOS 26+ hides every menu image without

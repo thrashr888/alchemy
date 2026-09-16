@@ -6,8 +6,9 @@
 //   swift scripts/menu-symbols.swift trash link # just these
 //
 // Black glyph on clear at 2×, drawn with the menu's own symbol
-// configuration (13 pt, regular, medium scale), centered on a 20×16 pt
-// canvas so every row's label starts on the same column. The app marks each image
+// configuration (13 pt, regular, medium scale), centered on a 20×18 pt
+// canvas so every row's label starts on the same column and muda's
+// fixed 18 pt row height draws it 1:1. The app marks each image
 // as a template (src-tauri/src/menuicons.rs), so AppKit tints it for the
 // appearance and inverts it under the highlight — one file per symbol.
 import AppKit
@@ -31,9 +32,13 @@ for name in names {
         let image = base.withSymbolConfiguration(config)
   else { missing.append(name); continue }
   // Every glyph on one canvas size, centered: NSMenu sets the text column
-  // by each row's image width, so natural sizes would jog the labels.
+  // by each row's image width, so natural sizes would jog the labels. The
+  // canvas is 18 pt tall on purpose — muda (Tauri's menu crate) forces
+  // every menu image to an 18 pt height and scales the width to match, so
+  // an 18 pt canvas is drawn 1:1 and the 13 pt glyph stays 13 pt, the size
+  // Apple's own menus draw symbols at.
   let glyph = image.size
-  let canvas = NSSize(width: 20, height: 16)
+  let canvas = NSSize(width: 20, height: 18)
   let scale: CGFloat = 2
   let rep = NSBitmapImageRep(
     bitmapDataPlanes: nil, pixelsWide: Int(canvas.width * scale), pixelsHigh: Int(canvas.height * scale),
