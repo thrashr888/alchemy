@@ -359,13 +359,19 @@ fn simultaneous_identical_deletion_publications_are_idempotent() {
             worker.join().unwrap().unwrap();
         }
     });
-    assert_eq!(read_deleted(dir.path()).unwrap(), HashSet::from([id]));
     assert_eq!(
-        std::fs::read_dir(dir.path().join("sync/deletions"))
-            .unwrap()
-            .count(),
-        1
+        read_deleted(dir.path()).unwrap(),
+        HashSet::from([id.clone()])
     );
+    // The record, and the by-line beside it saying who ended that lifetime
+    // (docs/RFC-shared-notebook.md §3) — one of each, however many writers.
+    let mut names: Vec<String> = std::fs::read_dir(dir.path().join("sync/deletions"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec![format!("{id}.by"), format!("{id}.json")]);
+    assert_eq!(read_actors(dir.path()).get(&id), Some(&okf_human()));
 }
 
 #[tokio::test]

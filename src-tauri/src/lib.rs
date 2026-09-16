@@ -558,6 +558,8 @@ pub fn run() {
             okf::open_shared_bundle_cmd,
             okf::dismiss_shared_bundle_cmd,
             okf::share_notebook_cmd,
+            okf::deletion_proposals_cmd,
+            okf::resolve_deletion_proposal_cmd,
             commands::home_activity,
             commands::source_thumbnail,
             commands::source_image,

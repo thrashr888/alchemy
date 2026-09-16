@@ -4,6 +4,7 @@ import { report } from "./diagnostics";
 import type {
   SharedBundleOffer,
   SharedNotebookFolder,
+  DeletionProposal,
   CorpusTimeline,
   ProviderModels,
   AcpAgentInfo,
@@ -516,6 +517,20 @@ export const api = {
     run(cmd<null>("dismiss_shared_bundle_cmd", { path })),
   shareNotebook: (notebookId: string) =>
     run(slow<SharedNotebookFolder>("share_notebook_cmd", { notebookId })),
+  deletionProposals: (notebookId: string) =>
+    run(query<DeletionProposal[]>("deletion_proposals_cmd", { notebookId })),
+  resolveDeletionProposal: (
+    notebookId: string,
+    entityId: string,
+    restore: boolean,
+  ) =>
+    run(
+      slow<null>("resolve_deletion_proposal_cmd", {
+        notebookId,
+        entityId,
+        restore,
+      }),
+    ),
   bindNotebookOkf: (notebookId: string, path: string) =>
     run(slow<string>("bind_notebook_okf", { notebookId, path })),
   unbindNotebookOkf: (notebookId: string) =>

@@ -40,6 +40,16 @@ struct SharedPathReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ResolveDeletionReq {
+    /// Notebook id.
+    notebook_id: String,
+    /// The source or note id, from deletion_proposals.
+    entity_id: String,
+    /// True puts it back for both people; false accepts the deletion.
+    restore: bool,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct NotebookIdReq {
     /// Notebook id.
     notebook_id: String,
@@ -144,6 +154,39 @@ impl AlchemyMcp {
             .map_err(invalid)?;
         self.changed("notebooks", None);
         json_result(&serde_json::json!({ "notebookId": notebook_id, "sharedPath": path }))
+    }
+
+    #[tool(
+        description = "Deletions the other person in a shared notebook made that this Mac has not answered yet (docs/RFC-shared-notebook.md §3). In a shared folder another person's deletion record is a proposal, not an instruction: the source or note is still here and still readable until someone answers. Empty for a notebook that is not shared."
+    )]
+    async fn deletion_proposals(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let proposals = crate::okf::deletion_proposals(&state, &notebook_id)
+            .await
+            .map_err(invalid)?;
+        json_result(&proposals)
+    }
+
+    #[tool(
+        description = "Answer one of those proposals. restore=true puts the source or note back for both people (it goes out under a new sync id, so their deletion record cannot take it again); restore=false accepts the deletion and removes it here. Only on the user's say-so — this is their corpus and the other person's, not yours."
+    )]
+    async fn resolve_deletion_proposal(
+        &self,
+        Parameters(ResolveDeletionReq {
+            notebook_id,
+            entity_id,
+            restore,
+        }): Parameters<ResolveDeletionReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        crate::okf::resolve_deletion_proposal(&state, &notebook_id, &entity_id, restore)
+            .await
+            .map_err(invalid)?;
+        self.changed("sources", Some(&notebook_id));
+        json_result(&serde_json::json!({ "id": entity_id, "restored": restore }))
     }
 
     #[tool(

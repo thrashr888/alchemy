@@ -433,6 +433,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       set({ sources });
       void get().refreshHygiene();
       void get().refreshOkfLifecycle(id);
+      void get().refreshDeletionProposals(id);
     }
   }, () => { /* api.run has already recorded the error. */ });
   const refreshNotes = coalescedRefresh(async (isCurrent) => {
@@ -479,6 +480,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     selectedSourceIds: null,
     okfLifecycle: {},
     okfBinding: null,
+    deletionProposals: {},
     picked: null,
     hygiene: [],
     growthDismissed: {},
@@ -1420,7 +1422,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: loadSourceSel(id),
         okfLifecycle: {},
         okfBinding: null,
-            picked: null,
+        deletionProposals: {},
+        picked: null,
         hygiene: [],
         growthDismissed: loadGrowthDismissed(id),
         messages: [],
@@ -1478,6 +1481,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Changes come back via sources://changed.
       void api.resyncSources(id).catch(() => {});
       void get().refreshOkfLifecycle(id);
+      void get().refreshDeletionProposals(id);
       void get().refreshOkfBinding(id);
     },
 
@@ -1489,7 +1493,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: null,
         okfLifecycle: {},
         okfBinding: null,
-            growthDismissed: {},
+        deletionProposals: {},
+        growthDismissed: {},
         messages: [],
         messagesHasMore: false,
         messagesLoadingOlder: false,
@@ -2596,6 +2601,40 @@ export const useStore = create<AppState>((rawSet, get) => {
         }
       }
       set({ okfLifecycle: life, selectedSourceIds: sel });
+    },
+
+    // What the other person in a shared notebook deleted, and this Mac has
+    // not answered (docs/RFC-shared-notebook.md §3). Read on the same beat as
+    // the lifecycle: a proposal arrives with a reconcile pass, like anything
+    // else the folder says. Empty for every notebook that is not shared.
+    refreshDeletionProposals: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      const open = await api.deletionProposals(id).catch(() => []);
+      if (get().currentId !== id) return;
+      set({
+        deletionProposals: Object.fromEntries(open.map((p) => [p.id, p])),
+      });
+    },
+
+    resolveDeletionProposal: async (entityId, restore) => {
+      const id = get().currentId;
+      if (!id) return;
+      const proposal = get().deletionProposals[entityId];
+      try {
+        await api.resolveDeletionProposal(id, entityId, restore);
+        get().pushToast(
+          "success",
+          restore
+            ? `Put “${proposal?.title ?? "it"}” back.`
+            : `Removed “${proposal?.title ?? "it"}” here too.`,
+        );
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+      await get().refreshDeletionProposals(id);
+      if (proposal?.kind === "note") refreshNotes.request();
+      else refreshSources.request();
     },
 
     toggleSourceSelected: (id) => {

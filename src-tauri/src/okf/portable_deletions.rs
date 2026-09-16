@@ -47,6 +47,71 @@ fn read_record(path: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Who wrote a deletion record: `sync/deletions/<uuid>.by`, holding one
+/// actor line — `human:<account>` for a person (§5.6's by-line grammar).
+///
+/// A file beside the record rather than a field inside it. The record is
+/// `deny_unknown_fields`, so an extra key would make every Alchemy already
+/// installed call it invalid — and an invalid record stops that notebook's
+/// whole pass, on the other person's Mac, over a by-line. Older clients skip
+/// any name in this folder that is not `<uuid>.json` without looking, so a
+/// by-line is invisible to them. A record with none is read as ours, which is
+/// what every record written before this one is.
+fn actor_path(directory: &Path, id: &str) -> PathBuf {
+    directory.join(format!("{id}.by"))
+}
+
+/// One line, trimmed and capped: this ends up in a sentence in somebody's
+/// sidebar, and a file in a shared folder is not a place to trust length.
+fn clean_actor(raw: &str) -> String {
+    raw.lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// Every deletion record's by-line in this bundle, by the entity it ends.
+pub(super) fn read_actors(bundle: &Path) -> std::collections::HashMap<String, String> {
+    let directory = bundle.join("sync/deletions");
+    let mut out = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(id) = name.strip_suffix(".by") else {
+            continue;
+        };
+        if validate_id(id).is_err() || is_evicted_stub(&entry.path()) {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let actor = clean_actor(&raw);
+        if !actor.is_empty() {
+            out.insert(id.to_string(), actor);
+        }
+    }
+    out
+}
+
+/// Sign a deletion record. Best-effort on purpose: the record is the delete,
+/// and a by-line that could not be written is a delete that reads as ours —
+/// which is exactly how every record before this one reads.
+fn record_actor(directory: &Path, id: &str) {
+    let path = actor_path(directory, id);
+    if path.exists() {
+        return;
+    }
+    if let Err(err) = std::fs::write(&path, format!("{}\n", okf_human())) {
+        crate::note!("okf: could not sign deletion record {id}: {err}");
+    }
+}
+
 pub(super) fn read_deleted(bundle: &Path) -> Result<HashSet<String>, String> {
     let directory = bundle.join("sync/deletions");
     for path in [bundle.join("sync"), directory.clone()] {
@@ -133,6 +198,7 @@ pub(super) fn record_deleted(bundle: &Path, id: &str) -> Result<(), String> {
                 .and_then(|file| file.sync_all())
                 .map_err(|err| format!("Could not persist existing deletion record: {err}"))?;
         }
+        record_actor(&directory, id);
         return Ok(());
     }
     let save = || -> std::io::Result<()> {
@@ -154,7 +220,68 @@ pub(super) fn record_deleted(bundle: &Path, id: &str) -> Result<(), String> {
         Ok(())
     };
     save().map_err(|err| format!("Could not publish deletion record {id}: {err}"))?;
+    record_actor(&directory, id);
     read_record(&path, id)
+}
+
+/// Hold another person's deletions as proposals (docs/RFC-shared-notebook.md
+/// §3), and say who asked.
+///
+/// Only ever called for a binding the user marked shared. Within one person's
+/// Macs a deletion record is authoritative and this never runs; between two
+/// people it is a question, because the corpus is not only the deleter's. The
+/// row stays, the claim stays (so the writer neither rewrites the file nor
+/// reads its absence as our own delete), and the sidebar offers Restore or
+/// Remove. Returns whether the manifest changed.
+pub(super) fn hold_foreign(
+    bundle: &Path,
+    manifest: &mut OkfManifest,
+    deleted: &mut HashSet<String>,
+) -> bool {
+    let actors = read_actors(bundle);
+    let mut open: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (id, entry) in &manifest.concepts {
+        if entry.portable_id.is_empty() || !deleted.contains(&entry.portable_id) {
+            continue;
+        }
+        // A deletion this Mac already agreed to is finished business.
+        if manifest.deleted_entities.contains(&entry.portable_id) {
+            continue;
+        }
+        // No by-line is ours: every record written before by-lines existed,
+        // and every record this app writes when it cannot sign one.
+        let Some(actor) = actors.get(&entry.portable_id) else {
+            continue;
+        };
+        if okf_is_ours(actor) {
+            continue;
+        }
+        open.insert(id.clone(), actor.clone());
+    }
+    for id in open.keys() {
+        if let Some(entry) = manifest.concepts.get(id) {
+            deleted.remove(&entry.portable_id);
+        }
+    }
+    for (id, actor) in &open {
+        if manifest.proposed_deletions.contains_key(id) {
+            continue;
+        }
+        let path = manifest
+            .concepts
+            .get(id)
+            .map(|entry| entry.path.clone())
+            .unwrap_or_default();
+        okf_notice(format!(
+            "{path} was deleted by {} in this shared folder. It is still here: Restore puts it back for both of you, Remove accepts the deletion.",
+            okf_person(actor)
+        ));
+    }
+    if manifest.proposed_deletions == open {
+        return false;
+    }
+    manifest.proposed_deletions = open;
+    true
 }
 
 /// A removed pending import has no final claim for the ordinary writer to

@@ -84,3 +84,50 @@ export function OkfBadges({ sourceId }: { sourceId: string }) {
     </>
   );
 }
+
+/**
+ * A deletion the other person in a shared notebook made, still unanswered
+ * (docs/RFC-shared-notebook.md §3). Between two people a deletion is a
+ * proposal: the source or note is still here, still readable, and the row
+ * says who asked and offers both answers. Renders nothing — for every
+ * notebook that is not shared, and every row nobody deleted.
+ *
+ * No confirmation on Remove (DESIGN.md §9): the deletion already happened on
+ * their Mac, this only agrees with it, and Restore is the way back.
+ */
+export function DeletionProposalMark({ id }: { id: string }) {
+  const proposal = useStore((s) => s.deletionProposals[id]);
+  const resolve = useStore((s) => s.resolveDeletionProposal);
+  if (!proposal) return null;
+  return (
+    <span className="pointer-events-auto relative z-20 flex flex-wrap items-center gap-1.5 text-micro text-muted-foreground">
+      <Chip
+        tone="muted"
+        label={`Deleted by ${proposal.by}`}
+        title={`${proposal.by} deleted this in the shared folder. It stays here until you answer.`}
+      />
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void resolve(id, true);
+        }}
+        className="rounded px-1 py-0.5 text-subtle-foreground hover:text-foreground"
+        title="Put it back for both of you"
+      >
+        Restore
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void resolve(id, false);
+        }}
+        className="rounded px-1 py-0.5 text-subtle-foreground hover:text-foreground"
+        title="Agree, and remove it here too"
+      >
+        Remove
+      </button>
+    </span>
+  );
+}

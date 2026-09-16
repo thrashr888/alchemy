@@ -66,6 +66,17 @@ export interface OkfBinding {
   shared?: boolean;
 }
 
+/** One deletion the other person in a shared notebook made, waiting on an
+ *  answer here (docs/RFC-shared-notebook.md §3). The source or note is still
+ *  present and readable until somebody answers. */
+export interface DeletionProposal {
+  id: string;
+  kind: "source" | "note";
+  title: string;
+  /** Who deleted it, as their by-line names them ("kim"). */
+  by: string;
+}
+
 /** Where "Share with someone…" put a notebook, and whether macOS took it from
  *  there (docs/RFC-shared-notebook.md §1). `sheet: false` means Finder. */
 export interface SharedNotebookFolder {

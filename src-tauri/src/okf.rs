@@ -56,6 +56,8 @@ mod import_claims;
 #[cfg(test)]
 mod manifest_tests;
 #[cfg(test)]
+mod shared_deletion_tests;
+#[cfg(test)]
 mod sync_index_tests;
 #[cfg(test)]
 mod sync_tests;
@@ -211,6 +213,12 @@ pub(crate) fn okf_client_actor(name: &str, version: &str) -> String {
         version
     };
     format!("{producer}/{version}")
+}
+
+/// The person inside a `human:<account>` by-line, for a sentence that names
+/// them. Anything else — an agent, another app — reads as itself.
+pub(crate) fn okf_person(actor: &str) -> &str {
+    actor.strip_prefix("human:").unwrap_or(actor)
 }
 
 /// Does this actor read as a machine? `name/version` is the shape both
@@ -698,6 +706,16 @@ fn write_bundle_with(
             let Some(place) = placements.get(&concept.id) else {
                 continue;
             };
+            // A deletion the other person proposed, still unanswered
+            // (docs/RFC-shared-notebook.md §3). The file stays gone — writing
+            // it back would answer for them — and the claim stays ours, so
+            // the sweep below does not read the absence as our own delete.
+            // Restore re-publishes it under a new sync identity; Remove
+            // applies their record.
+            if manifest.proposed_deletions.contains_key(&concept.id) {
+                still_ours.insert(concept.id.clone());
+                continue;
+            }
             // One block per file (§5.3). A source's text is peeled to its
             // body, and the document's own keys — the block at the head of
             // the row's content, and the bundle file as last read (the
@@ -3943,6 +3961,146 @@ pub async fn share_notebook_cmd(
     Ok(SharedNotebookFolder { path, sheet })
 }
 
+// ---- Deletions as proposals (docs/RFC-shared-notebook.md §3) ---------------
+
+/// One deletion another person made in the shared folder, waiting on an
+/// answer here.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionProposal {
+    /// The source or note this is about — still here, still readable.
+    pub id: String,
+    /// "source" or "note".
+    pub kind: String,
+    pub title: String,
+    /// Who deleted it, as their by-line names them ("kim").
+    pub by: String,
+}
+
+/// What this notebook is waiting on an answer about. Empty for every notebook
+/// that is not shared, which is nearly all of them.
+pub(crate) async fn deletion_proposals(
+    state: &AppState,
+    notebook_id: &str,
+) -> Result<Vec<DeletionProposal>, String> {
+    let data_dir = app_data_dir(state);
+    let Some(binding) = binding_for_checked(&data_dir, notebook_id)? else {
+        return Ok(Vec::new());
+    };
+    if !binding.shared {
+        return Ok(Vec::new());
+    }
+    let manifest = load_manifest_checked(&manifest_path(&data_dir, &binding.id))?;
+    let mut out = Vec::new();
+    for (id, actor) in &manifest.proposed_deletions {
+        let note = manifest
+            .concepts
+            .get(id)
+            .is_some_and(|entry| entry.path.starts_with("notes/"));
+        let title = if note {
+            e(state.db.get_note(id).await)?.map(|note| note.title)
+        } else {
+            e(state.db.get_source(id).await)?.map(|source| source.title)
+        };
+        // A row that is gone already answered the question by other means.
+        let Some(title) = title else {
+            continue;
+        };
+        out.push(DeletionProposal {
+            id: id.clone(),
+            kind: if note { "note" } else { "source" }.to_string(),
+            title,
+            by: okf_person(actor).to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Answer one of them.
+///
+/// **Restore** drops the claim and writes the notebook again: the file comes
+/// back under a *new* sync identity, because the old lifetime ended and a
+/// tombstone is immutable (`portable_deletions`) — reusing the id would hand
+/// the other side a file their own record says is deleted, and it would
+/// vanish again on their next pass. **Remove** applies their record here, the
+/// same removal an unshared binding would have done without asking.
+pub(crate) async fn resolve_deletion_proposal(
+    state: &AppState,
+    notebook_id: &str,
+    entity_id: &str,
+    restore: bool,
+) -> Result<(), String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let guard = lock.lock().await;
+    let data_dir = app_data_dir(state);
+    let binding = binding_for_checked(&data_dir, notebook_id)?
+        .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
+    let bundle = PathBuf::from(&binding.path);
+    let manifest_at = manifest_path(&data_dir, &binding.id);
+    let mut manifest = load_manifest_checked(&manifest_at)?;
+    let Some(actor) = manifest.proposed_deletions.remove(entity_id) else {
+        return Err("That deletion isn't waiting on an answer any more.".into());
+    };
+    let entry = manifest.concepts.get(entity_id).cloned();
+    let rel = entry
+        .as_ref()
+        .map(|entry| entry.path.clone())
+        .unwrap_or_default();
+    if restore {
+        manifest.concepts.remove(entity_id);
+        save_manifest_checked(&manifest_at, &manifest)?;
+        drop(guard);
+        write_bound(state, notebook_id).await?;
+        okf_notice(format!(
+            "{rel} was put back after {} deleted it. It goes out under a new sync id, so their record can't take it again.",
+            okf_person(&actor)
+        ));
+    } else {
+        save_manifest_checked(&manifest_at, &manifest)?;
+        if let Some(portable_id) = entry
+            .map(|entry| entry.portable_id)
+            .filter(|id| !id.is_empty())
+        {
+            let agreed: std::collections::HashSet<String> = [portable_id].into();
+            portable_deletions::apply_deleted(
+                state,
+                notebook_id,
+                &bundle,
+                &mut manifest,
+                &manifest_at,
+                &agreed,
+            )
+            .await?;
+            save_manifest_checked(&manifest_at, &manifest)?;
+        }
+        drop(guard);
+        okf_notice(format!(
+            "{rel} is gone here too: {} deleted it and the deletion was accepted.",
+            okf_person(&actor)
+        ));
+    }
+    crate::commands::notify_changed("sources", Some(notebook_id));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn deletion_proposals_cmd(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<DeletionProposal>, String> {
+    deletion_proposals(&state, &notebook_id).await
+}
+
+#[tauri::command]
+pub async fn resolve_deletion_proposal_cmd(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    entity_id: String,
+    restore: bool,
+) -> Result<(), String> {
+    resolve_deletion_proposal(&state, &notebook_id, &entity_id, restore).await
+}
+
 /// Ask macOS for the Share sheet on a folder, through the Swift sidecar
 /// (`alchemy-fm --share`), which is the only AppKit this app owns.
 ///
@@ -4522,6 +4680,15 @@ pub struct OkfManifest {
     /// `portable::prepare`, never persisted.
     #[serde(skip)]
     pub(crate) held: std::collections::BTreeSet<String>,
+    /// Deletions another person proposed and nobody here has answered yet
+    /// (docs/RFC-shared-notebook.md §3): entity id → their by-line. Only ever
+    /// filled for a binding marked `shared`. While an entry is here the row
+    /// stays, the writer leaves the file alone, and the vanish rule keeps its
+    /// hands off the claim — the question is the user's to answer, not this
+    /// pass's. Persisted, because the question outlives the pass; local, like
+    /// the rest of the manifest, because the answer is this person's.
+    #[serde(default)]
+    pub(crate) proposed_deletions: std::collections::BTreeMap<String, String>,
 }
 
 /// Where a binding's manifest lives: `<app-data>/okf/<binding-id>.json`,
@@ -5487,6 +5654,12 @@ pub(crate) fn vanish_verdict(
     let mut out = VanishVerdict::default();
     let mut absent: Vec<(&String, &OkfManifestEntry)> = Vec::new();
     for (id, entry) in &manifest.concepts {
+        // A deletion somebody else proposed is already accounted for: the
+        // file is gone because they deleted it, and the row waits for an
+        // answer rather than for this rule (docs/RFC-shared-notebook.md §3).
+        if manifest.proposed_deletions.contains_key(id) {
+            continue;
+        }
         if seen.contains(id) || present(&entry.path) {
             if entry.missing_since != 0 {
                 out.clear.push(id.clone());
@@ -5562,6 +5735,18 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         save_manifest_checked(&manifest_at, &manifest)?;
     }
     let mut deleted = portable_deletions::read_deleted(&bundle)?;
+    // Between two people a deletion record is a proposal, not an instruction
+    // (docs/RFC-shared-notebook.md §3). Only for a folder the user shared:
+    // their own second Mac is still a machine, and a delete made there is
+    // theirs and stands.
+    if binding.shared && portable_deletions::hold_foreign(&bundle, &mut manifest, &mut deleted) {
+        save_manifest_checked(&manifest_at, &manifest)?;
+    } else if !binding.shared && !manifest.proposed_deletions.is_empty() {
+        // Sharing was turned off, or the folder was moved back: the questions
+        // go with it, and the ordinary rule applies from here.
+        manifest.proposed_deletions.clear();
+        save_manifest_checked(&manifest_at, &manifest)?;
+    }
     deleted.extend(manifest.deleted_entities.iter().cloned());
     if portable::prepare(&bundle, &mut manifest, &deleted, portable::Duplicates::Hold)? {
         save_manifest_checked(&manifest_at, &manifest)?;
