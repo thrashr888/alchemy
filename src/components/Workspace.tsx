@@ -21,6 +21,7 @@ import {
   FileDown,
   FolderOpen,
   HardDrive,
+  ChevronDown,
   Library,
   Pencil,
   Search,
@@ -119,21 +120,63 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             The ⋯ stays visible (hover-reveal reflowed the tabs beside it)
             and the name is chrome, not copy — no text selection. */}
         <div className="group relative flex select-none items-center gap-1.5 min-w-0">
+          {/* The icon wears the notebook's color; a separate color dot read
+              as a status light next to Home's green ones. */}
           {(() => {
             const Icon = notebookIcon(notebook?.icon);
-            return <Icon className="h-3.5 w-3.5 shrink-0 text-primary" />;
+            return (
+              <Icon
+                className="h-3.5 w-3.5 shrink-0 text-primary"
+                style={notebook?.color ? { color: notebook.color } : undefined}
+              />
+            );
           })()}
-          <span
-            className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full border border-background"
-            style={{ backgroundColor: notebook?.color }}
-            aria-hidden="true"
+          {/* The name is also the switcher: click it for the other
+              notebooks, most recently touched first, and the Library for
+              the rest. Archived and system notebooks stay out of the list —
+              they are not places someone jumps to mid-thought. */}
+          <RowMenu
+            alwaysVisible
+            rowContext={false}
+            label="Switch notebook"
+            trigger={
+              <span className="flex min-w-0 items-center gap-1">
+                <span
+                  className="truncate text-body font-semibold"
+                  title={notebook?.title}
+                >
+                  {notebook?.title ?? "Notebook"}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+              </span>
+            }
+            triggerClassName="flex min-w-0 items-center rounded-md px-1 py-0.5 transition-colors hover:bg-surface-2"
+            menuClassName="w-64"
+            align="left"
+            items={[
+              ...[...notebooks]
+                .filter((n) => n.status === "")
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .slice(0, 12)
+                .map((n) => {
+                  const Icon = notebookIcon(n.icon);
+                  return {
+                    label: n.title,
+                    icon: <Icon className="h-3.5 w-3.5" />,
+                    checked: n.id === currentId,
+                    onClick: () => {
+                      if (n.id !== currentId)
+                        void useStore.getState().selectNotebook(n.id);
+                    },
+                  };
+                }),
+              {
+                label: "All notebooks…",
+                icon: <Library className="h-3.5 w-3.5" />,
+                onClick: close,
+              },
+            ]}
           />
-          <span
-            className="truncate text-body font-semibold"
-            title={notebook?.title}
-          >
-            {notebook?.title ?? "Notebook"}
-          </span>
           <OkfChip />
           {notebook && (
             <RowMenu

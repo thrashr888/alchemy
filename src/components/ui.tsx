@@ -1172,6 +1172,8 @@ export function RowMenu({
   alwaysVisible = false,
   trigger,
   triggerClassName,
+  menuClassName,
+  align = "right",
   contextAt,
   rowContext,
 }: {
@@ -1197,6 +1199,11 @@ export function RowMenu({
   trigger?: React.ReactNode;
   /** Classes for the trigger button when `trigger` supplies its own look. */
   triggerClassName?: string;
+  /** Extra classes on the menu panel — a wider panel for long labels. */
+  menuClassName?: string;
+  /** Which trigger edge the panel lines up with. Right for a ⋯ at the end
+   *  of a row (the default); left for a menu hanging off a title. */
+  align?: "left" | "right";
   /** Open at these viewport coordinates whenever a new `nonce` arrives —
    *  for hosts whose rows aren't DOM rows (graph nodes in an SVG) and so
    *  can't use the `.group` right-click path. */
@@ -1253,12 +1260,13 @@ export function RowMenu({
     const style: React.CSSProperties = up
       ? { bottom: window.innerHeight - t.top + 4 }
       : { top: t.bottom + 4 };
-    // Right-align to the trigger; open rightwards when that would clip.
-    const left = t.right - m.width;
+    // Align to the trigger's chosen edge; fall back to whatever fits.
+    const fromLeft = Math.min(t.left, window.innerWidth - m.width - 8);
+    const fromRight = t.right - m.width;
     style.left =
-      left < 8 ? Math.min(t.left, window.innerWidth - m.width - 8) : left;
+      align === "left" ? fromLeft : fromRight < 8 ? fromLeft : fromRight;
     setPos(style);
-  }, [open, ctxPos]);
+  }, [open, ctxPos, align]);
 
   // Closing forgets the right-click context — the ⋯ trigger reopens the
   // normal menu at the trigger.
@@ -1422,7 +1430,10 @@ export function RowMenu({
             data-overlay=""
             aria-label={label}
             style={pos ?? { top: 0, left: 0, visibility: "hidden" }}
-            className="menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]"
+            className={cn(
+              "menu-glass fixed z-50 w-44 overflow-hidden rounded-md py-1 shadow-[0_0_0_0.5px_var(--border-strong),0_8px_24px_-6px_rgba(0,0,0,0.4)]",
+              menuClassName,
+            )}
           >
           {(swapItems ?? items).map((it) =>
             it.hint ? (
@@ -1468,7 +1479,7 @@ export function RowMenu({
                   </span>
                 )
               )}
-              {it.label}
+              <span className="min-w-0 flex-1 truncate">{it.label}</span>
             </button>
             ),
           )}
