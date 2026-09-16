@@ -158,16 +158,27 @@ const touched = (c: RegistryCard) => Math.max(c.updatedAt, c.createdAt);
 
 /** The index's columns. Notebooks and Identifiers stay unsortable: both are
     multi-valued cells, and ordering a list by its first comma-separated
-    entry looks like a sort without being one. */
+    entry looks like a sort without being one.
+    Fixed layout (see `HomeTable`): the short columns take set widths, the
+    two lists take a share, and Name takes what is left and truncates. */
 const CARD_COLUMNS = [
   { key: "name", label: "Name", sort: "asc" },
-  { key: "kind", label: "Kind", sort: "asc" },
-  { key: "docs", label: "Documents", className: "text-right", sort: "desc" },
-  { key: "nb", label: "Notebooks" },
-  { key: "id", label: "Identifiers" },
-  { key: "updated", label: "Updated", sort: "desc" },
-  { key: "menu", label: "" },
+  { key: "kind", label: "Kind", className: "w-24", sort: "asc" },
+  {
+    key: "docs",
+    label: "Documents",
+    className: "w-[6.5rem] text-right",
+    sort: "desc",
+  },
+  { key: "nb", label: "Notebooks", className: "w-[20%]" },
+  { key: "id", label: "Identifiers", className: "w-[13%]" },
+  { key: "updated", label: "Updated", className: "w-24", sort: "desc" },
+  { key: "menu", label: "", className: "w-8" },
 ] as const satisfies TableColumn[];
+
+/** Notebook names shown in a row before the cell folds the rest into a
+    count — the FilterBar's "+N more" idiom, one line per row. */
+const ROW_NOTEBOOKS_SHOWN = 2;
 
 const CARD_SORT_KEYS = CARD_COLUMNS.filter((c) => "sort" in c).map(
   (c) => c.key,
@@ -886,7 +897,7 @@ function CardTable({
   return (
     <>
       {/* No "New card" button here — the header's covers both views. */}
-      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }}>
+      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }} fixed>
         {cards.map((c) => {
           const notebooks = [
             ...new Set(
@@ -917,10 +928,12 @@ function CardTable({
             >
               <td className="px-3 py-2">
                 <span className="flex items-center gap-2">
-                  <span className="text-muted-foreground">
+                  <span className="shrink-0 text-muted-foreground">
                     {kindIcon(c.kind)}
                   </span>
-                  <span className="truncate font-medium">{c.name}</span>
+                  <span className="min-w-0 truncate font-medium" title={c.name}>
+                    {c.name}
+                  </span>
                   {pending > 0 && (
                     <span
                       className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
@@ -943,18 +956,36 @@ function CardTable({
               <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                 {confirmed(c).length}
               </td>
-              <td className="px-3 py-2 text-caption text-muted-foreground">
-                {notebooks.join(", ")}
+              {/* One line per row: the first names, then "+N" for the rest.
+                  The full list rides the tooltip — a cell that wraps to nine
+                  lines makes the row taller than the card it describes. */}
+              <td
+                className="px-3 py-2 text-caption text-muted-foreground"
+                title={notebooks.length > 0 ? notebooks.join("\n") : undefined}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="min-w-0 truncate">
+                    {notebooks.slice(0, ROW_NOTEBOOKS_SHOWN).join(", ")}
+                  </span>
+                  {notebooks.length > ROW_NOTEBOOKS_SHOWN && (
+                    <span className="shrink-0 text-subtle-foreground">
+                      +{notebooks.length - ROW_NOTEBOOKS_SHOWN}
+                    </span>
+                  )}
+                </span>
               </td>
-              <td className="px-3 py-2 text-caption text-subtle-foreground">
+              <td
+                className="truncate px-3 py-2 text-caption text-subtle-foreground"
+                title={c.identifiers || undefined}
+              >
                 {c.identifiers}
               </td>
               {/* The index had no recency anywhere: the grid could order by
                   "Latest" but the table couldn't even show it. */}
-              <td className="px-3 py-2 text-caption text-muted-foreground">
+              <td className="truncate px-3 py-2 text-caption text-muted-foreground">
                 {relativeTime(touched(c))}
               </td>
-              <td className="w-8 px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
                   contextItems={onContextItems(c.id)}
                   items={[
