@@ -48,6 +48,26 @@ const GENERATORS: SlashCommandMeta[] = [AUDIO_OVERVIEW, ...ARTIFACTS].map((a) =>
   argHint: "[instructions]",
 }));
 
+/** How people name a generator in a sentence, beyond its Studio label —
+ *  "make me a deck", "write a podcast about". Longest phrase wins, so
+ *  "study guide" beats "guide" never (there is no bare "guide"). */
+const SPOKEN_NAMES: Record<string, string[]> = {
+  slide_deck: ["slides", "deck", "presentation", "slideshow"],
+  audio_overview: ["podcast", "audio summary", "audio"],
+  faq: ["faqs", "frequently asked questions"],
+  study_guide: ["studyguide"],
+  timeline: ["chronology"],
+  mind_map: ["mindmap"],
+};
+
+/** A leading verb that means "produce one of the generators' documents". */
+const INTENT_VERB =
+  /^(?:please\s+)?(?:can you\s+|could you\s+)?(?:generate|create|make|write|build|produce|draft|give me|prepare)\s+(?:me\s+)?(?:(?:a new|another|some|an|the|a)\s+)?/i;
+
+/** Words a person puts between the generator and what it's about; dropped
+ *  from the instructions since the generator already knows its own name. */
+const INTENT_JOIN = /^(?:based on|about|from|of|on|using|for|covering|over|with|:|—|-)\s*/i;
+
 const ACTIONS: SlashCommandMeta[] = [
   {
     name: "add",
@@ -132,6 +152,40 @@ export function slashFilter(query: string): SlashCommandMeta[] {
   const norm = slashNorm(query);
   if (!norm) return SLASH_COMMANDS;
   return SLASH_COMMANDS.filter((c) => commandMatches(c, query, norm));
+}
+
+/** Read a plain sentence as a generator request: "generate a slide deck
+ *  based on TEC-4577" runs the Slide deck generator with "TEC-4577" as its
+ *  instructions, exactly as "/slide_deck TEC-4577" would. Only the leading
+ *  verb + a generator's name qualifies — "what would a slide deck need?"
+ *  is a question and stays a chat message. Returns null when it isn't one. */
+export function parseGenerateIntent(text: string): ParsedSlash | null {
+  const trimmed = text.trim();
+  const m = INTENT_VERB.exec(trimmed);
+  if (!m) return null;
+  const rest = trimmed.slice(m[0].length);
+  const restNorm = rest.toLowerCase();
+  let best: { cmd: SlashCommandMeta; phrase: string } | null = null;
+  for (const a of [AUDIO_OVERVIEW, ...ARTIFACTS]) {
+    const cmd = SLASH_COMMANDS.find((c) => c.name === a.kind);
+    if (!cmd) continue;
+    const phrases = [
+      a.label.toLowerCase(),
+      a.kind.replace(/_/g, " "),
+      ...(SPOKEN_NAMES[a.kind] ?? []),
+    ];
+    for (const phrase of phrases) {
+      if (!restNorm.startsWith(phrase)) continue;
+      // Whole words only: "deck" must not match "decking".
+      const after = rest.slice(phrase.length);
+      if (after && /^[\p{L}\p{N}]/u.test(after)) continue;
+      if (!best || phrase.length > best.phrase.length) best = { cmd, phrase };
+    }
+  }
+  if (!best) return null;
+  let arg = rest.slice(best.phrase.length).trim();
+  arg = arg.replace(INTENT_JOIN, "").trim();
+  return { cmd: best.cmd, arg };
 }
 
 export interface ParsedSlash {

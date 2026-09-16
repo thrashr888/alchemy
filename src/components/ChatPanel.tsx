@@ -27,6 +27,7 @@ import { AlchemySymbol } from "./AlchemyHero";
 import { DEFAULT_VERBS, THEMES, resolveThemeId } from "@/lib/themes";
 import { FALLBACK_EPIGRAPHS, generatedEpigraph } from "@/lib/epigraph";
 import {
+  parseGenerateIntent,
   parseSlash,
   slashFilter,
   slashNorm,
@@ -400,6 +401,14 @@ export function ChatPanel() {
         void runSlash(parsed.cmd, parsed.arg);
         return;
       }
+    }
+    // A plain "generate a slide deck based on …" is the same request in
+    // English; the rest of the sentence rides along as the instructions.
+    const intent = parseGenerateIntent(text);
+    if (intent) {
+      resetComposer();
+      void runSlash(intent.cmd, intent.arg);
+      return;
     }
     // @ mentions narrow retrieval to exactly what was named: mentioned
     // sources by id, folders as their ready children, notes via their
