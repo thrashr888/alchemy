@@ -236,8 +236,8 @@ function App() {
         const s = useStore.getState();
         if (e.key === "ArrowLeft" || e.key === "[") s.navBack();
         else s.navForward();
-      } else if (e.key >= "1" && e.key <= "5" && !e.shiftKey && !e.altKey) {
-        // ⌘1–5 run down whichever set of sidebars is on screen: a notebook's
+      } else if (e.key >= "1" && e.key <= "4" && !e.shiftKey && !e.altKey) {
+        // ⌘1–4 run down whichever set of sidebars is on screen: a notebook's
         // Sources/Studio/Gallery/Grow, or Home's Chats/Staff/Brief/Latest
         // Reports — in the order the rails read, which is the View menu's
         // order too. Context-dependent, so it can't be a native menu key
@@ -263,6 +263,28 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openSettings]);
+
+  // WKWebView's stock context menu (Reload, Share, AutoFill, Services…) is
+  // browser chrome, not app verbs. Where a surface has its own menu (a
+  // RowMenu-bearing row, the reader's selection actions) that handler runs
+  // first and has already claimed the event; everywhere else the stock menu
+  // is suppressed. Two exceptions keep the platform's own text verbs: an
+  // editable field (Cut/Copy/Paste/Look Up/spelling) and a live text
+  // selection (Copy/Look Up/Translate).
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (t.isContentEditable || t.closest("input, textarea, [contenteditable=\"true\"]"))
+        return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, []);
 
   // Home's chat surface, from the native menu (menu.rs). The store owns the
   // rest of `menu://action`; these ride the same broadcast — it reaches every
