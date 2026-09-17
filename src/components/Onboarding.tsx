@@ -6,7 +6,7 @@ import { AlchemySymbol } from "./AlchemyHero";
 import { MacConnect } from "./MacConnect";
 import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
-import type { ModelStatus } from "@/lib/types";
+import type { ModelStatus, ProviderEntry } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
 
 /** One copyable shell command. */
@@ -87,6 +87,13 @@ function Step({
   );
 }
 
+/** The subscription CLIs the first-run doors offer, when installed. Ids are
+ *  the backend's `AgentKind::id`; the same entries Settings → Models adds. */
+const AGENT_DOORS: Record<string, { label: string; note: string; vendor: string }> = {
+  "claude-code": { label: "Claude Code", note: "Your Claude subscription", vendor: "Claude" },
+  codex: { label: "Codex", note: "Your ChatGPT subscription", vendor: "ChatGPT" },
+};
+
 /** First-run / broken-setup guide: Ollama + required models, with live rechecks. */
 export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const health = useStore((s) => s.modelHealth);
@@ -102,6 +109,23 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [gwSaving, setGwSaving] = useState(false);
   const [gwModels, setGwModels] = useState<string[]>([]);
   const [gwStatus, setGwStatus] = useState<string | null>(null);
+  // Installed subscription CLIs, probed once: a Mac with Claude Code and no
+  // Ollama, no Apple Intelligence, and no API key still has a chat model.
+  // Hiding that door behind "Settings → Models…" blocked exactly that Mac.
+  const [agentDoors, setAgentDoors] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .agentCliStatus()
+      .then((clis) => {
+        if (cancelled) return;
+        setAgentDoors(clis.filter((c) => c.installed && c.id in AGENT_DOORS).map((c) => c.id));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Seed gateway drafts from config once it loads.
   useEffect(() => {
@@ -114,11 +138,16 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, [aiConfig]);
 
   const provider = aiConfig?.provider ?? "ollama";
-  // Which setup path the tiles show. Apple Intelligence rides the modern
-  // chatProvider field; the flat provider string still drives the two
-  // original paths (normalize mirrors them either way).
-  const mode =
-    aiConfig?.chatProvider === "on-device"
+  // Which setup path the tiles show. Apple Intelligence and the subscription
+  // CLIs ride the modern chatProvider field; the flat provider string still
+  // drives the two original paths (normalize mirrors them either way).
+  const chosenKind = aiConfig?.providers.find(
+    (p) => p.id === aiConfig.chatProvider,
+  )?.kind;
+  const agentMode = chosenKind && chosenKind in AGENT_DOORS ? chosenKind : null;
+  const mode: "fm" | "ollama" | "openai" | "agent" = agentMode
+    ? "agent"
+    : aiConfig?.chatProvider === "on-device"
       ? "fm"
       : provider === "openai"
         ? "openai"
@@ -130,6 +159,32 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     else if (m === "ollama")
       await save({ ...aiConfig, provider: "ollama", chatProvider: "ollama" });
     else await save({ ...aiConfig, provider: "openai", chatProvider: "" });
+    await refresh();
+  }
+
+  /** Answer with an installed subscription CLI — the same entry Settings →
+   *  Models adds — and index with the built-in embedder, since this is the
+   *  path for a Mac with no Ollama. */
+  async function useAgent(id: string) {
+    if (!aiConfig) return;
+    const entry: ProviderEntry = {
+      id,
+      kind: id,
+      label: AGENT_DOORS[id]?.label ?? id,
+      baseUrl: "",
+      apiKey: "",
+      chatModel: "",
+      effort: "",
+    };
+    const providers = aiConfig.providers.some((p) => p.id === id)
+      ? aiConfig.providers
+      : [...aiConfig.providers, entry];
+    await save({
+      ...aiConfig,
+      providers,
+      chatProvider: id,
+      embedder: health?.reachable ? aiConfig.embedder : "builtin",
+    });
     await refresh();
   }
 
@@ -211,6 +266,12 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 Answers come from Apple Intelligence, on this Mac. Nothing to
                 install; nothing leaves your computer.
               </>
+            ) : mode === "agent" ? (
+              <>
+                Answers come from {AGENT_DOORS[agentMode!]?.label}, already
+                signed in on this Mac. Your sources are indexed locally; only
+                your questions go to {AGENT_DOORS[agentMode!]?.vendor}.
+              </>
             ) : (
               <>
                 Alchemy runs entirely on your machine. It needs{" "}
@@ -226,22 +287,29 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-1.5">
-          {(
-            [
-              { id: "fm", label: "Apple Intelligence", note: "On-device · zero setup" },
-              { id: "ollama", label: "Ollama", note: "Local models · private" },
-              { id: "openai", label: "OpenAI-compatible", note: "Your API key · 30+ services" },
-            ] as const
-          ).map((pv) => (
+        {/* The three broadest doors, plus one per subscription CLI this Mac
+            already has — a fourth door only when it is actually open. */}
+        <div className={cn("grid gap-1.5", agentDoors.length > 0 ? "grid-cols-2" : "grid-cols-3")}>
+          {[
+            { id: "fm", label: "Apple Intelligence", note: "On-device · zero setup", pressed: mode === "fm", pick: () => setMode("fm") },
+            { id: "ollama", label: "Ollama", note: "Local models · private", pressed: mode === "ollama", pick: () => setMode("ollama") },
+            { id: "openai", label: "OpenAI-compatible", note: "Your API key · 30+ services", pressed: mode === "openai", pick: () => setMode("openai") },
+            ...agentDoors.map((id) => ({
+              id,
+              label: AGENT_DOORS[id].label,
+              note: `${AGENT_DOORS[id].note} · installed`,
+              pressed: agentMode === id,
+              pick: () => useAgent(id),
+            })),
+          ].map((pv) => (
             <button
               key={pv.id}
               type="button"
-              aria-pressed={mode === pv.id}
-              onClick={() => void setMode(pv.id)}
+              aria-pressed={pv.pressed}
+              onClick={() => void pv.pick()}
               className={cn(
                 "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                mode === pv.id
+                pv.pressed
                   ? "border-primary/60 bg-primary/10 text-foreground"
                   : "border-border bg-surface text-muted-foreground hover:text-foreground",
               )}
@@ -369,12 +437,16 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                   : "Connect a gateway"
                 : mode === "fm"
                   ? "Apple Intelligence"
-                  : chat.working
-                    ? "Chat model ready"
-                    : "Get a chat model"
+                  : mode === "agent"
+                    ? chat.working
+                      ? `${AGENT_DOORS[agentMode!]?.label} is signed in`
+                      : `Sign in to ${AGENT_DOORS[agentMode!]?.label}`
+                    : chat.working
+                      ? "Chat model ready"
+                      : "Get a chat model"
             }
             detail={
-              mode === "openai" || mode === "fm"
+              mode === "openai" || mode === "fm" || mode === "agent"
                 ? chat.detail
                 : health.reachable
                   ? `Answers questions and generates documents. ${chat.detail}`
