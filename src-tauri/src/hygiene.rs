@@ -31,7 +31,10 @@ use crate::models::{Note, Source, SourceEvent};
 /// Consecutive background-probe failures before a url source stops being
 /// retried and is proposed for removal instead.
 pub const UNREACHABLE_AFTER: i64 = 3;
-/// An errored, contentless source older than this is a husk worth clearing.
+/// An empty note older than this is a husk worth clearing. Sources are not
+/// on this clock: an errored row is broken the moment it lands, and waiting
+/// a week to say so left the user staring at a red source the review called
+/// "all clean".
 const HUSK_AFTER_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// Url refreshes per sweep pass — a full re-fetch plus re-embed is the
 /// expensive end of background work, so the budget is smaller than the gist
@@ -195,6 +198,18 @@ fn duplicate_key(s: &Source) -> Option<String> {
     (!url.is_empty()).then(|| format!("url:{url}"))
 }
 
+/// What to say about an errored row: its own reason, already translated for
+/// the user by `friendly_error` at the point of failure. Rows that errored
+/// before reasons were stored fall back to the old wording.
+fn broken_detail(s: &Source) -> String {
+    let reason = s.error.trim();
+    if reason.is_empty() {
+        "failed import with no content".to_string()
+    } else {
+        reason.to_string()
+    }
+}
+
 /// Bucket a notebook's sources. Pure classification over the rows (plus
 /// cheap fs stats for loose files) — no network, no mutation; callers decide
 /// what to do with the result. One issue per source, most actionable bucket
@@ -256,7 +271,21 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
     let mut issues = Vec::new();
     for s in by_age {
         if is_folder_like(s) {
-            continue; // rescan owns parents; their children are below
+            // Rescan owns parents; their children are below. An errored
+            // parent is the exception — no rescan reconciles a folder whose
+            // root is gone or a feed whose document stopped parsing, and
+            // that row is exactly what the user sees flagged in the sidebar.
+            if s.status == "error" && !s.remote {
+                issues.push(HygieneIssue {
+                    kind: "source".into(),
+                    source_id: s.id.clone(),
+                    title: s.title.clone(),
+                    bucket: "husk".into(),
+                    detail: broken_detail(s),
+                    keeper_id: String::new(),
+                });
+            }
+            continue;
         }
         let issue = |bucket: &str, detail: String| HygieneIssue {
             kind: "source".into(),
@@ -301,8 +330,15 @@ pub fn classify(sources: &[Source], cadence_days: u32, now: i64) -> Vec<HygieneI
                 continue;
             }
         }
-        if s.status == "error" && s.char_count == 0 && now - s.created_at > HUSK_AFTER_MS {
-            issues.push(issue("husk", "failed import with no content".into()));
+        // Any errored source, at once. The bucket used to ask for an empty
+        // row a week old, which is one shape of breakage among several: a
+        // feed with no entries, a page that came back as a login wall, a
+        // folder whose drive was unplugged. The row already carries the
+        // reason in user terms, so the review repeats it rather than
+        // guessing. A remote source's error belongs to the Mac that holds
+        // it (§5.8) — there is nothing to retry or remove here.
+        if s.status == "error" && !s.remote {
+            issues.push(issue("husk", broken_detail(s)));
             continue;
         }
         let fetched_at = effective_fetched_at(s);
@@ -843,38 +879,85 @@ mod tests {
         assert_eq!(issues[0].keeper_id, "ours");
     }
 
-    /// An old errored import with no content is a husk; a recent one is not
-    /// (the user may still be looking at the error).
+    /// An errored row is flagged the moment it lands, whatever went wrong
+    /// and whatever it managed to store, and the review repeats the row's
+    /// own reason. A feed with no entries used to wait a week for this.
     #[test]
-    fn husks_need_age_and_emptiness() {
+    fn errored_sources_are_flagged_at_once() {
+        let now = 100 * DAY;
+        let mut empty_feed = src("empty-feed", "url");
+        empty_feed.status = "error".into();
+        empty_feed.error = "https://a.test/feed/ is a feed with no entries".into();
+        empty_feed.char_count = 0;
+        empty_feed.created_at = now - 120_000; // two minutes old
+        empty_feed.fetched_at = now;
+        // Errored with content: a login wall the extractor stored. Broken
+        // all the same, and it was invisible under the old emptiness test.
+        let mut wall = src("wall", "url");
+        wall.status = "error".into();
+        wall.error = "the page asked for a login".into();
+        wall.char_count = 400;
+        wall.created_at = now - 60_000; // one minute old
+        wall.fetched_at = now;
+        let mut fine = src("fine", "url");
+        fine.url = "https://a.test/ok".into();
+        fine.fetched_at = now;
+
+        let issues = classify(&[empty_feed, wall, fine], 30, now);
+        assert_eq!(
+            buckets(&issues),
+            vec![("empty-feed", "husk"), ("wall", "husk")]
+        );
+        assert_eq!(
+            issues[0].detail,
+            "https://a.test/feed/ is a feed with no entries"
+        );
+    }
+
+    /// A reason the row never stored still gets a sentence.
+    #[test]
+    fn errored_source_without_a_reason_keeps_the_old_wording() {
         let now = 100 * DAY;
         let mut old_husk = src("old-husk", "url");
         old_husk.status = "error".into();
-        old_husk.char_count = 0;
         old_husk.created_at = now - 30 * DAY;
         old_husk.fetched_at = now;
-        let mut fresh_error = src("fresh-error", "url");
-        fresh_error.status = "error".into();
-        fresh_error.char_count = 0;
-        fresh_error.created_at = now - DAY;
-        fresh_error.fetched_at = now;
-
-        let issues = classify(&[old_husk, fresh_error], 30, now);
-        assert_eq!(buckets(&issues), vec![("old-husk", "husk")]);
+        let issues = classify(&[old_husk], 30, now);
+        assert_eq!(issues[0].detail, "failed import with no content");
     }
 
-    /// Folder-like parents are the rescan's business, never hygiene's.
+    /// An error that belongs to another Mac is that Mac's to fix.
     #[test]
-    fn folder_parents_are_never_flagged() {
+    fn remote_errors_are_not_ours_to_flag() {
         let now = 100 * DAY;
-        for kind in ["folder", "git", "notion", "obsidian"] {
+        let mut theirs = src("theirs", "url");
+        theirs.status = "error".into();
+        theirs.error = "could not fetch".into();
+        theirs.remote = true;
+        theirs.fetched_at = now;
+        assert!(classify(&[theirs], 30, now).is_empty());
+    }
+
+    /// Folder-like parents are the rescan's business — unless the parent
+    /// itself errored, which no rescan reconciles.
+    #[test]
+    fn folder_parents_are_flagged_only_when_they_error() {
+        let now = 100 * DAY;
+        for kind in ["folder", "git", "notion", "obsidian", "feed"] {
             let mut parent = src(kind, kind);
             parent.url = "/some/path".into();
             parent.fetched_at = now - 400 * DAY;
             parent.fetch_failures = 99;
             assert!(
-                classify(&[parent], 30, now).is_empty(),
+                classify(&[parent.clone()], 30, now).is_empty(),
                 "{kind} parent must not be flagged"
+            );
+            parent.status = "error".into();
+            parent.error = "Folder no longer exists at /some/path".into();
+            assert_eq!(
+                buckets(&classify(&[parent], 30, now)),
+                vec![(kind, "husk")],
+                "an errored {kind} parent is the user's to see"
             );
         }
     }

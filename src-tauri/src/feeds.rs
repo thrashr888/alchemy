@@ -48,6 +48,20 @@ const UNREACHABLE_AFTER: i64 = 3;
 const PROBE_BYTES: usize = 4 * 1024;
 /// Entry text handed to the child source, capped.
 const ENTRY_TEXT_CAP: usize = 40_000;
+/// Discovered feeds probed per Grow open (docs/RFC-events.md §2). A probe is
+/// one GET, so the gate is budgeted like every other tier: what the budget
+/// doesn't reach stays unproposed and is checked on the next open.
+const MAX_PROBES_PER_PASS: usize = 4;
+/// How long a "this feed is empty" verdict stands before it is re-probed. A
+/// blog that published nothing yet is not dead forever, but it is also not
+/// worth a fetch every time the pane opens.
+const PROBE_RECHECK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// How Alchemy names itself to a feed host, on a poll and on a gate probe.
+const USER_AGENT: &str = "Alchemy/0.5 (+https://thrashr888.github.io/alchemy/; feed reader)";
+/// A gate probe waits less than a poll does. The poll is background work
+/// with a whole feed riding on it; this one is holding a pane section open,
+/// and a host that needs more than this can answer on the next visit.
+const PROBE_TIMEOUT_SECS: u64 = 8;
 
 const WELL_KNOWN: [&str; 8] = [
     "/feed",
@@ -689,6 +703,14 @@ struct Discovered {
     source_id: String,
     source_title: String,
     seen_at: i64,
+    /// When the gate last probed this URL, or 0 for never. Rows written
+    /// before the gate existed come back zeroed and are probed once.
+    #[serde(default)]
+    checked_at: i64,
+    /// Entries the probe parsed out of it. Zero is a verdict, not a gap:
+    /// with `checked_at` set it means the document parsed and held nothing.
+    #[serde(default)]
+    entries: i64,
 }
 
 fn state_key(source_id: &str) -> String {
@@ -747,20 +769,145 @@ pub async fn remember_discovered(
     let now = commands::now();
     let mut map = load_discovered(&state.db, notebook_id).await;
     for url in feeds {
+        // A re-imported page re-advertises the same feeds; the gate's
+        // verdict on them is still good, so re-seeing a URL must not buy it
+        // another fetch.
+        let prior = map.get(url).map(|d| (d.checked_at, d.entries));
+        let (checked_at, entries) = prior.unwrap_or((0, 0));
         map.insert(
             url.clone(),
             Discovered {
                 source_id: source.id.clone(),
                 source_title: source.title.clone(),
                 seen_at: now,
+                checked_at,
+                entries,
             },
         );
     }
     save_discovered(&state.db, notebook_id, &map).await;
 }
 
+/// Feeds nobody wants offered, whatever the page advertised. WordPress
+/// puts `<link rel="alternate">` on its comment feed of every post, so a
+/// single blog import advertises a comment stream beside its real feed;
+/// following one subscribes the notebook to argument, not to writing.
+pub fn unwanted_feed_url(url: &str) -> bool {
+    let path = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let path = path.trim_end_matches('/');
+    path.ends_with("/comments/feed")
+        || path.ends_with("/comments/feed.xml")
+        || path.ends_with("/comments/default")
+}
+
+/// How many entries this document parses out to, and zero for anything that
+/// is not a feed at all. The gate's whole question, kept pure so it is
+/// tested without a network: `connect` refuses an entry-less feed, so
+/// proposing one is proposing a source the app will then refuse to make.
+pub fn entry_count(body: &str, url: &str) -> usize {
+    parse(body, url).map(|p| p.entries.len()).unwrap_or(0)
+}
+
+/// One probe: fetch a discovered feed and count what it holds. `Some(n)` is
+/// a verdict worth remembering — including `Some(0)` for a document that
+/// came back and parsed to nothing. `None` means the network could not say,
+/// which is not the feed's fault and is never cached.
+async fn probe_entries(url: &str) -> Option<usize> {
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .build()
+        .ok()?;
+    let resp = match client.get(url).send().await {
+        Ok(resp) => resp,
+        Err(err) => {
+            crate::note!("feeds: probe of {url} failed: {err}");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        return Some(0);
+    }
+    let body = resp.text().await.ok()?;
+    Some(entry_count(&body, url))
+}
+
+/// Probe the discovered feeds this notebook has no verdict on yet, within a
+/// budget, and write the verdicts back. Returns the map with whatever the
+/// pass learned — a feed the budget didn't reach stays unjudged, so it is
+/// simply not proposed until the next open.
+async fn gate_discovered(
+    db: &Db,
+    notebook_id: &str,
+    mut found: HashMap<String, Discovered>,
+) -> HashMap<String, Discovered> {
+    let now = commands::now();
+    let stale = |d: &Discovered| {
+        d.checked_at == 0 || (d.entries == 0 && now - d.checked_at > PROBE_RECHECK_MS)
+    };
+    let due: Vec<String> = found
+        .iter()
+        .filter(|(url, d)| stale(d) && !unwanted_feed_url(url))
+        .map(|(url, _)| url.clone())
+        .take(MAX_PROBES_PER_PASS)
+        .collect();
+    if due.is_empty() {
+        return found;
+    }
+    // Together, not one after another: the pane's Feeds section waits on
+    // the slowest probe rather than on the sum of four.
+    let verdicts = futures::future::join_all(
+        due.iter()
+            .map(|url| async move { (url.clone(), probe_entries(url).await) }),
+    )
+    .await;
+    let mut learned = false;
+    for (url, verdict) in verdicts {
+        let Some(entries) = verdict else { continue };
+        if entries == 0 {
+            crate::note!("feeds: {url} has no entries, not proposing it");
+        }
+        if let Some(d) = found.get_mut(&url) {
+            d.checked_at = now;
+            d.entries = entries as i64;
+            learned = true;
+        }
+    }
+    if learned {
+        save_discovered(db, notebook_id, &found).await;
+    }
+    found
+}
+
+/// Every discovered feed URL, judged or not, as canonical keys. The link
+/// tier subtracts these: a feed the gate turned down is no better as a bare
+/// link, and a feed it is still judging should not appear in the other
+/// section meanwhile.
+pub async fn discovered_keys(db: &Db, notebook_id: &str) -> std::collections::HashSet<String> {
+    load_discovered(db, notebook_id)
+        .await
+        .keys()
+        .map(|url| crate::growth::canonical_key(url))
+        .collect()
+}
+
 /// Discovered feeds as growth proposals of kind `feed`, minus the ones the
-/// notebook already follows and the ones whose page is gone.
+/// notebook already follows, the ones whose page is gone, and the ones that
+/// are not worth following: comment streams, and anything that does not
+/// come back as a feed with at least one entry (docs/RFC-events.md §2).
+///
+/// The gate costs one GET per candidate, once — the verdict is remembered
+/// beside the discovery, so a dead feed is refetched at most weekly and a
+/// live one never again. Before it existed the pane offered whatever a page
+/// advertised, and following one of those could only ever produce the
+/// errored row `connect` bails with.
 pub async fn discovered_proposals(
     db: &Db,
     notebook_id: &str,
@@ -777,11 +924,16 @@ pub async fn discovered_proposals(
         .collect();
     let live: std::collections::HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
     let found = load_discovered(db, notebook_id).await;
+    let found = gate_discovered(db, notebook_id, found).await;
     let mut out: Vec<crate::growth::GrowthProposal> = found
         .into_iter()
         .filter(|(url, d)| {
             !held.contains(&crate::growth::canonical_key(url))
                 && live.contains(d.source_id.as_str())
+                // The gate: proposed only once a probe has seen entries in
+                // it, and never if it is a comment stream.
+                && d.entries > 0
+                && !unwanted_feed_url(url)
         })
         .map(|(url, d)| crate::growth::GrowthProposal {
             kind: "feed".into(),
@@ -865,7 +1017,7 @@ pub async fn discover_for_source(state: &AppState, source: &Source) -> Vec<FeedC
 
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent("Alchemy/0.5 (+https://thrashr888.github.io/alchemy/; feed reader)")
+        .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .context("failed to build HTTP client")
@@ -1637,5 +1789,51 @@ mod tests {
         );
         // Ordering does not matter; duplicates do not count as gaps.
         assert_eq!(cadence_ms(&[6 * h, 0, 6 * h, 3 * h]), 3 * h);
+    }
+
+    /// The Grow gate, on the three cases one blog import produced: a real
+    /// feed is offered, an empty one never is, and a WordPress comment
+    /// stream is dropped before anything is fetched at all.
+    #[test]
+    fn grow_only_proposes_a_feed_with_something_in_it() {
+        let live = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+<title>Shaffers Offroad</title><link>https://shaffersoffroad.test/</link>
+<item><title>Trail day</title><link>https://shaffersoffroad.test/trail-day</link></item>
+</channel></rss>"#;
+        assert_eq!(entry_count(live, "https://shaffersoffroad.test/feed/"), 1);
+
+        let empty = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+<title>Shaffers Offroad</title><link>https://shaffersoffroad.test/</link>
+</channel></rss>"#;
+        assert_eq!(
+            entry_count(empty, "https://shaffersoffroad.test/feed/"),
+            0,
+            "an entry-less feed is what connect() refuses, so it is never offered"
+        );
+
+        // Not a feed at all: the conventional path answered with the page.
+        assert_eq!(
+            entry_count(
+                "<html><body><p>Not found</p></body></html>",
+                "https://shaffersoffroad.test/feed/"
+            ),
+            0
+        );
+
+        // Comment streams are dropped on the URL, before any fetch.
+        for url in [
+            "https://shaffersoffroad.test/comments/feed/",
+            "https://shaffersoffroad.test/comments/feed",
+            "http://www.a.test/comments/feed/?x=1",
+        ] {
+            assert!(unwanted_feed_url(url), "{url}");
+        }
+        for url in [
+            "https://shaffersoffroad.test/feed/",
+            "https://a.test/blog/comments-policy/feed/",
+            "https://a.test/atom.xml",
+        ] {
+            assert!(!unwanted_feed_url(url), "{url}");
+        }
     }
 }

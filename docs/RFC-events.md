@@ -148,6 +148,15 @@ doubled on each failure, reset on success. Conditional requests
    rel="alternate" type="application/rss+xml|atom+xml|feed+json">` costs
    nothing extra. Found feeds land as a growth proposal of kind `feed`
    ("*Tauri blog* has a feed — follow it?"), never auto-subscribed.
+   **A feed is proposed only once it has been seen to work.** Before
+   offering one, Grow fetches it once and requires a document that parses
+   with at least one entry — `connect` refuses an entry-less feed, so
+   offering one could only ever produce an errored source. The verdict is
+   stored beside the discovery: a live feed is never re-probed, a dead one
+   at most weekly, and at most four candidates are probed per Grow open.
+   WordPress comment feeds (`…/comments/feed/`) are dropped on the URL,
+   before any fetch — every post advertises one, and following it
+   subscribes the notebook to argument rather than to writing.
 2. *Well-known paths.* `/feed`, `/rss`, `/rss.xml`, `/atom.xml`,
    `/feed.xml`, `/index.xml`, `/feed.json`, and last `/sitemap.xml`. One
    probe per domain, run only from the explicit **Follow updates…** menu

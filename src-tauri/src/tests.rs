@@ -5053,12 +5053,13 @@ async fn grow_sections_union_matches_aggregator() {
     .await
     .expect("seed sources");
     // One feed the notebook's own page advertised, as `remember_discovered`
-    // would have stored it at import.
+    // would have stored it at import — already probed, with entries in it,
+    // so the gate proposes it without this test touching the network.
     db.kv_set(
         &format!("feed.discovered.{nb}"),
         &format!(
-            r#"{{"https://example.com/feed.xml":{{"source_id":"s1","source_title":"Field notes","seen_at":{}}}}}"#,
-            now()
+            r#"{{"https://example.com/feed.xml":{{"source_id":"s1","source_title":"Field notes","seen_at":{now},"checked_at":{now},"entries":7}}}}"#,
+            now = now()
         ),
     )
     .await
