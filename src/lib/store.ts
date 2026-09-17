@@ -1358,6 +1358,37 @@ export const useStore = create<AppState>((rawSet, get) => {
           await get().selectNotebook(nb);
           // The just-created hook opens the note card (and marks it read).
           set({ studioOpen: true, justCreatedNoteId: tail });
+        } else if (kind === "source" && tail) {
+          // The Brief's "Needs you" items point here: a source in an error
+          // state, or one the other person proposed deleting. Both are
+          // answered on the document itself, so land on it.
+          const nb = await api.locateSource(tail);
+          if (!nb) {
+            get().pushToast("error", "That source no longer exists");
+            return;
+          }
+          await get().selectNotebook(nb);
+          get().openInReader({ type: "source", id: tail });
+        } else if (kind === "home") {
+          // Home and one of its sections. Registry takes a card id, which is
+          // the difference between "your Registry" and the card that is
+          // actually waiting on an answer.
+          const wanted = tail as HomeSection;
+          const section: HomeSection = (
+            ["notebooks", "registry", "chat", "timeline"] as const
+          ).includes(wanted)
+            ? wanted
+            : "notebooks";
+          if (get().currentId) get().closeNotebook();
+          if (section === "chat") {
+            await get().openHomeThread(null);
+          } else {
+            set({
+              homeSection: section,
+              openCardId:
+                section === "registry" ? u.searchParams.get("card") : null,
+            });
+          }
         } else if (kind === "ask") {
           // The tray item and ⌥Space reach the palette over the
           // `integrations://ask` event, which no URL could trigger — so a

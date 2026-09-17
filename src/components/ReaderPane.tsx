@@ -227,6 +227,13 @@ function resolveInCorpus(
 function routeDocLink(rawHref: string, origin: string | undefined): boolean {
   if (!rawHref || rawHref.startsWith("#")) return true; // anchors: no-op for now
   const state = useStore.getState();
+  // The app's own deep links, written into documents the app writes — the
+  // Brief's "Needs you" items are links now, and each one has to arrive
+  // somewhere. One router knows what every target means; this hands over.
+  if (/^alchemy:/i.test(rawHref)) {
+    void state.handleIntegrationUrl(rawHref);
+    return true;
+  }
   const hit = resolveInCorpus(rawHref, origin);
   if (hit) {
     state.openInReader({ type: "source", id: hit.id });

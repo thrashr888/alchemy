@@ -88,6 +88,49 @@ pub(crate) async fn ensure_default_brief(state: &AppState) {
     }
 }
 
+/// One "Needs you" item's title, as a link to the place in Alchemy where it
+/// is answered.
+///
+/// A brief that says a source is broken and leaves the reader to find it is
+/// a to-do list, not an arrival point. Brackets in a title are escaped rather
+/// than dropped: the brief names things exactly as the user named them.
+fn link(title: &str, href: &str) -> String {
+    let safe = title.replace('[', "\\[").replace(']', "\\]");
+    format!("[\u{201c}{safe}\u{201d}]({href})")
+}
+
+/// `[text](href)` -> `text`. A deep link is for the eye; the audio edition
+/// would otherwise read a URL out loud.
+fn unlink(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let (before, tail) = rest.split_at(open);
+        out.push_str(before);
+        let inner = &tail[1..];
+        let Some(close) = inner.find(']') else {
+            out.push_str(tail);
+            return out;
+        };
+        let after = &inner[close + 1..];
+        match after.strip_prefix('(').and_then(|a| a.find(')')) {
+            Some(href_end) => {
+                out.push_str(&inner[..close]);
+                rest = &after[href_end + 2..];
+            }
+            // A plain `[Notebook]` tag, which the brief uses for real.
+            None => {
+                out.push('[');
+                out.push_str(&inner[..close]);
+                out.push(']');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Everything collected for one brief window, already in rank order.
 struct Collected {
     context: String,
@@ -130,8 +173,10 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
                     s.error.chars().take(200).collect::<String>()
                 };
                 attention.push_str(&format!(
-                    "- [{}] source \u{201c}{}\u{201d} is in an error state: {}\n",
-                    nb.title, s.title, reason
+                    "- [{}] source {} is in an error state: {}\n",
+                    nb.title,
+                    link(&s.title, &format!("alchemy://source/{}", s.id)),
+                    reason
                 ));
                 items += 1;
             } else if s.created_at > since {
@@ -168,6 +213,24 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
             ));
             items += 1;
         }
+        // The other person deleted something here and this Mac is holding it
+        // (docs/RFC-shared-notebook.md §3). Nothing moves until somebody
+        // answers, so it ranks with the errors and links to the row itself.
+        for proposal in crate::okf::deletion_proposals(state, &nb.id)
+            .await
+            .unwrap_or_default()
+        {
+            attention.push_str(&format!(
+                "- [{}] {} was deleted by {} in the shared folder: restore it here or agree and let it go\n",
+                nb.title,
+                link(
+                    &proposal.title,
+                    &format!("alchemy://{}/{}", proposal.kind, proposal.id)
+                ),
+                proposal.by
+            ));
+            items += 1;
+        }
         if nb_changed.is_empty() {
             quiet.push(nb.title.clone());
         } else {
@@ -187,13 +250,27 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
             .count();
         if n > 0 {
             attention.push_str(&format!(
-                "- registry card \u{201c}{}\u{201d} ({}) has {n} document{} waiting to be confirmed or turned down\n",
-                card.name,
+                "- registry card {} ({}) has {n} document{} waiting to be confirmed or turned down\n",
+                link(
+                    &card.name,
+                    &format!("alchemy://home/registry?card={}", card.id)
+                ),
                 card.kind,
                 if n == 1 { "" } else { "s" }
             ));
             items += 1;
         }
+    }
+
+    // A notebook another person shared into iCloud Drive that this Mac has
+    // not opened. The banner on Home offers it; the brief is where somebody
+    // who was not looking at Home finds out it is waiting.
+    for offer in crate::okf::shared_bundle_offers(state).await {
+        attention.push_str(&format!(
+            "- {} is shared with you in iCloud Drive and has not been opened on this Mac\n",
+            link(&offer.title, "alchemy://home")
+        ));
+        items += 1;
     }
     let filed: Vec<&crate::models::RegistryCard> = cards
         .iter()
@@ -266,7 +343,9 @@ markdown sections, omitting any that would be empty: \"## Needs you\" (errors an
 wanting a decision, each with one line on what happens if ignored), \"## What changed\" (new and \
 updated sources, scheduled report findings — summarize the findings, don't repeat whole \
 reports), and \"## For the record\" (everything quiet, at most a sentence). Name notebooks and \
-sources exactly as given. If a previous brief is provided, open with a single italic line noting \
+sources exactly as given. Some items arrive with a markdown link on their title: that link is how \
+the reader opens the thing in Alchemy, so reproduce it exactly, keep it on the title, and never \
+invent one for an item that came without. If a previous brief is provided, open with a single italic line noting \
 what's new since it, and do not repeat items it already covered. No preamble, no sign-off, \
 under 500 words.";
 
@@ -348,7 +427,8 @@ fn brief_script(content: &str) -> String {
             lines.push(format!("HOST: {header}."));
             continue;
         }
-        let body = trimmed.trim_start_matches(['-', '*', ' ']).trim();
+        let body = unlink(trimmed.trim_start_matches(['-', '*', ' ']).trim());
+        let body = body.trim();
         if body.is_empty() {
             continue;
         }
@@ -385,6 +465,34 @@ async fn synthesize_brief_audio(app: &AppHandle, note: &Note) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A "Needs you" item is a link, and the link survives the trip: the
+    /// reader follows it, the audio edition drops it.
+    #[test]
+    fn brief_items_link_to_where_they_are_answered_and_speak_without_the_link() {
+        assert_eq!(
+            link("Lease.pdf", "alchemy://source/s-1"),
+            "[\u{201c}Lease.pdf\u{201d}](alchemy://source/s-1)"
+        );
+        // A bracket in a title would end the link text early.
+        assert_eq!(
+            link("Q3 [draft]", "alchemy://home"),
+            "[\u{201c}Q3 \\[draft\\]\u{201d}](alchemy://home)"
+        );
+        // The `[Notebook]` tag is not a link and stays.
+        assert_eq!(
+            unlink("[Household] source [\u{201c}Lease\u{201d}](alchemy://source/s-1) failed"),
+            "[Household] source \u{201c}Lease\u{201d} failed"
+        );
+        assert_eq!(unlink("nothing to do here"), "nothing to do here");
+        assert_eq!(unlink("[unclosed"), "[unclosed");
+        assert_eq!(
+            brief_script(
+                "## Needs you\n- [Household] [\u{201c}Lease\u{201d}](alchemy://source/s-1) failed"
+            ),
+            "HOST: Needs you.\nHOST: In Household: \u{201c}Lease\u{201d} failed"
+        );
+    }
 
     #[test]
     fn brief_report_excerpt_skips_stamp_and_caps_unicode_content() {
