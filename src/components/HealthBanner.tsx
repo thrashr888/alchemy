@@ -96,13 +96,36 @@ export function HealthBanner({
   // Notebooks sitting in iCloud Drive (docs/RFC-shared-notebook.md): read
   // at mount and every few minutes — a share accepted in Finder lands
   // there without any event this app sees.
+  //
+  // And read again whenever the window comes forward. Accepting a share
+  // happens in Finder or Messages, which means leaving Alchemy and coming
+  // back; a five-minute timer is the wrong clock for that, and waiting out
+  // one is how the second of two shares looked like it never arrived.
   const [sharedOffers, setSharedOffers] = useState<SharedBundleOffer[]>([]);
+  const [rechecking, setRechecking] = useState(false);
   const reloadSharedOffers = () =>
     api.sharedBundleOffers().then(setSharedOffers, () => setSharedOffers([]));
+  const recheckShared = async () => {
+    setRechecking(true);
+    try {
+      await reloadSharedOffers();
+    } finally {
+      setRechecking(false);
+    }
+  };
   useEffect(() => {
     void reloadSharedOffers();
     const timer = window.setInterval(() => void reloadSharedOffers(), 5 * 60_000);
-    return () => window.clearInterval(timer);
+    const onForeground = () => {
+      if (document.visibilityState === "visible") void reloadSharedOffers();
+    };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
+    };
   }, []);
   useEffect(() => {
     let alive = true;
@@ -170,37 +193,45 @@ export function HealthBanner({
   // (docs/RFC-shared-notebook.md): a folder someone shared, or one the
   // other Mac put there. Offered, never opened on its own — iCloud Drive's
   // root is the user's, and a bundle there may be an experiment.
-  for (const offer of sharedOffers) {
+  // Every one of them gets a row: two folders shared at once are two
+  // decisions, and answering one says nothing about the other.
+  sharedOffers.forEach((offer, i) => {
+    const fixes: Fix[] = [
+      {
+        label: "Open",
+        primary: true,
+        run: async () => {
+          try {
+            const name = await api.openSharedBundle(offer.path);
+            pushToast("success", `Opened ${name}.`);
+          } catch (err) {
+            pushToast("error", err instanceof Error ? err.message : String(err));
+          } finally {
+            void reloadSharedOffers();
+          }
+        },
+      },
+      {
+        label: "Not now",
+        run: async () => {
+          await api.dismissSharedBundle(offer.path).catch(() => {});
+          void reloadSharedOffers();
+        },
+      },
+    ];
+    // One "Check now" for the whole group, on the last row, for the share
+    // that is still on its way down.
+    if (i === sharedOffers.length - 1) {
+      fixes.push({ label: "Check now", run: recheckShared });
+    }
     rows.push({
       key: `shared:${offer.path}`,
       tone: "offer",
       title: `“${offer.title}” is in your iCloud Drive.`,
       detail: "Open it here to read and edit it in step with whoever shares the folder.",
-      fixes: [
-        {
-          label: "Open",
-          primary: true,
-          run: async () => {
-            try {
-              const name = await api.openSharedBundle(offer.path);
-              pushToast("success", `Opened ${name}.`);
-            } catch (err) {
-              pushToast("error", err instanceof Error ? err.message : String(err));
-            } finally {
-              void reloadSharedOffers();
-            }
-          },
-        },
-        {
-          label: "Not now",
-          run: async () => {
-            await api.dismissSharedBundle(offer.path).catch(() => {});
-            void reloadSharedOffers();
-          },
-        },
-      ],
+      fixes,
     });
-  }
+  });
 
   // The one-time offer (docs/RFC-okf-live.md §5.7). Existing notebooks
   // predate the folder, so they get asked once — either button answers it,
@@ -329,7 +360,25 @@ export function HealthBanner({
     // Ollama down takes the whole banner: naming each broken role separately
     // would say the same thing twice with one cause.
     const broken = !health.chat.working || !health.embed.working;
-    if (broken && !health.reachable) {
+    if (broken && !health.reachable && aiConfig && !aiConfig.setupSeen) {
+      // Nobody has chosen how Alchemy answers yet. That is not an Ollama
+      // outage — a fresh Mac may never have heard of Ollama — so the banner
+      // names the choice, not one of its options.
+      rows.push({
+        key: "no-model",
+        tone: "offer",
+        title: "No model set up yet.",
+        detail:
+          "Pick how Alchemy answers — on this Mac, a subscription you already pay for, or a key.",
+        fixes: [
+          {
+            label: "Choose a model",
+            primary: true,
+            run: () => useStore.getState().openSettings("models"),
+          },
+        ],
+      });
+    } else if (broken && !health.reachable) {
       rows.push({
         key: "ollama",
         tone: "error",
@@ -473,6 +522,7 @@ export function HealthBanner({
               variant={fix.primary ? "secondary" : "ghost"}
               loading={
               (fix.label === "Check again" && checking) ||
+              (fix.label === "Check now" && rechecking) ||
               (fix.label === "Keep on disk" && binding) ||
               (fix.label === "Move them" && moving)
             }

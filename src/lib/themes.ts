@@ -50,7 +50,6 @@ export const DEFAULT_VERBS = [
   "Fermenting",
   "Coagulating",
   "Circulating",
-  "Macerating",
 ];
 
 export const DEFAULT_THEME = "midnight";
@@ -490,10 +489,44 @@ export const THEMES: Record<string, Theme> = {
     vars: {
       background: "#faf4ed", surface: "#fffaf3", "surface-2": "#f2e9e1", elevated: "#fffaf3",
       foreground: "#575279", muted: "#f2e9e1", "muted-foreground": "#67647f",
-      "subtle-foreground": "#6a6478", ring: "#d7827e", primary: "#c44741",
-      "primary-hover": "#bc524d", "primary-foreground": "#fffaf3", accent: "#f2e9e1",
+      // Links and the accent read pale on cream: iris sat at 5.2:1 and the
+      // rose primary under 4.5:1 on the raised surfaces, and a first-time
+      // user could not find the web-clipper link. Deepened to 7+:1 and
+      // 5+:1 on every surface, still Rosé Pine's iris and love.
+      "subtle-foreground": "#6a6478", ring: "#d7827e", primary: "#ad3a3a",
+      "primary-hover": "#963131", "primary-foreground": "#fffaf3", accent: "#f2e9e1",
       "accent-foreground": "#575279", destructive: "#a44f67", success: "#286983",
-      citation: "#745d8f", selection: "rgba(215,130,126,0.25)", ...lightBorder,
+      citation: "#5c4680", selection: "rgba(215,130,126,0.25)", ...lightBorder,
+    },
+  },
+  sakura: {
+    id: "sakura",
+    label: "Sakura",
+    dark: false,
+    shader: "snow", // petals, not flakes: the same three-layer parallax drift
+    sigil: 2, // pentagram — the blossom's five petals
+    mood: "a hanami afternoon under falling petals, pale pink on still water, tea gone cold",
+    verbs: [
+      "Waiting for full bloom",
+      "Watching the petals fall",
+      "Spreading the mat",
+      "Warming the tea",
+      "Counting the blossoms",
+      "Drifting downstream",
+    ],
+    vars: {
+      // Blossom over paper: near-white canvas with a pink cast, petal-pink
+      // surfaces, and dark plum for every word. The accent is the deeper
+      // pink at the base of the petal; the link is a plum-rose a full step
+      // off the body text, so a link never reads as prose.
+      background: "#fff7f9", surface: "#fbeef2", "surface-2": "#f6e1e8", elevated: "#fffbfc",
+      foreground: "#3b2231", muted: "#f6e1e8", "muted-foreground": "#6d4a5e",
+      "subtle-foreground": "#7d5a6d", ring: "#b8406c", primary: "#b8406c",
+      "primary-hover": "#a2355d", "primary-foreground": "#ffffff", accent: "#f6e1e8",
+      "accent-foreground": "#3b2231", destructive: "#b3243c", success: "#3f7d4f",
+      citation: "#a03368", selection: "rgba(184,64,108,0.18)",
+      border: "rgba(59,34,49,0.10)", "border-strong": "rgba(59,34,49,0.18)",
+      input: "rgba(59,34,49,0.13)", scrollbar: "rgba(59,34,49,0.22)",
     },
   },
   carrera: {
@@ -525,6 +558,38 @@ export const THEMES: Record<string, Theme> = {
       citation: "#4d3c0b", selection: "rgba(179,0,24,0.22)",
       border: "rgba(46,33,16,0.14)", "border-strong": "rgba(46,33,16,0.24)",
       input: "rgba(46,33,16,0.18)", scrollbar: "rgba(46,33,16,0.26)",
+    },
+  },
+  "carrera-dark": {
+    id: "carrera-dark",
+    label: "Carrera Dark",
+    dark: true,
+    shader: "grain", // hide grain: anisotropic fibers, the same field vellum uses
+    sigil: 3, // transmutation array — the four-spoke wheel, as Carrera
+    mood: "black leather and Guards Red under sodium light, a night drive on an empty pass",
+    verbs: [
+      "Warming the flat-six",
+      "Dipping the headlights",
+      "Reading the camber",
+      "Trimming the apex",
+      "Heeling and toeing",
+      "Settling the rear",
+    ],
+    vars: {
+      // Carrera at night: the hide goes black, the Cashmere stays — it is
+      // the text and the warm cast under every surface, never a fill.
+      // Guards Red carries the accent; the crest's brass reads as the link.
+      background: "#13110e", surface: "#1a1713", "surface-2": "#221e19", elevated: "#2b2620",
+      foreground: "#e8dcc4", muted: "#221e19", "muted-foreground": "#b9ab90",
+      "subtle-foreground": "#9c8e76", ring: "#e8203a", primary: "#d5001c",
+      "primary-hover": "#e8203a", "primary-foreground": "#ffffff", accent: "#2b2620",
+      "accent-foreground": "#e8dcc4", destructive: "#f2635e", success: "#8dc06a",
+      citation: "#e0bd74", selection: "rgba(213,0,28,0.32)",
+      // The hide is lit cashmere, not red: Guards Red is the accent, but a
+      // red-tinted grain field reads as oxblood vinyl rather than leather.
+      backdrop: "#c0ad8c",
+      border: "rgba(232,220,196,0.09)", "border-strong": "rgba(232,220,196,0.16)",
+      input: "rgba(232,220,196,0.12)", scrollbar: "rgba(232,220,196,0.14)",
     },
   },
   italia: {

@@ -3705,44 +3705,165 @@ fn load_shared_dismissals(data_dir: &Path) -> std::collections::HashSet<String> 
 /// Drive, where a folder can be shared with another Apple ID at all (§1).
 pub(crate) const SHARED_FOLDER: &str = "Alchemy Shared";
 
-/// Bundles under `root` (one level, as iCloud lays shared folders out) that
-/// are not bound, not the Notebooks folder or inside it, and not dismissed.
+/// Is this folder an Alchemy bundle, counting what iCloud has not downloaded
+/// yet?
 ///
-/// Two roots, not one: a folder someone shared lands at the top of iCloud
-/// Drive, and this Mac's own `Alchemy Shared/` holds what was shared *from*
-/// here — which is one level further down, and is exactly what the other Mac
-/// of the same person needs offered.
+/// `find_bundle_root` asks whether `index.md` *exists*, which is the right
+/// question for a folder on this Mac and the wrong one for a share that
+/// arrived as placeholders: the legacy layout leaves `.index.md.icloud`
+/// where the file goes, and `exists()` is false for it. A bundle nobody can
+/// see is a bundle nobody is offered, so the stub counts — Open is where it
+/// has to become files (`hydrate_bundle`).
+pub(crate) fn looks_like_bundle(folder: &Path) -> bool {
+    folder.is_dir()
+        && (folder.join("index.md").exists()
+            || is_evicted_stub(&folder.join("index.md"))
+            || folder.join("sources").is_dir()
+            || folder.join("notes").is_dir())
+}
+
+/// How many levels under a root the offer pass looks. One is where a share
+/// sent to this Apple ID lands; two is `Alchemy Shared/`, and any folder the
+/// sender wrapped the bundle in before sharing it.
+const SHARED_SCAN_DEPTH: usize = 2;
+
+/// How many folders one pass will open. iCloud Drive is the user's whole
+/// drive, and a 5-minute poll has no business walking all of it.
+const SHARED_SCAN_BUDGET: usize = 400;
+
+/// Bundles under `root`, down to `SHARED_SCAN_DEPTH`, skipping the Notebooks
+/// folder and anything inside it.
+fn collect_shared_bundles(
+    dir: &Path,
+    depth: usize,
+    notebooks_dir: Option<&PathBuf>,
+    budget: &mut usize,
+    out: &mut Vec<PathBuf>,
+) {
+    if depth == 0 || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| !n.starts_with('.') && n != DUPLICATES_DIR)
+        })
+        .collect();
+    children.sort();
+    for child in children {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let here = same_folder(&child);
+        // The Notebooks folder is the other pass's; it opens what it finds
+        // there on its own, and offering the same folder twice would race it.
+        if notebooks_dir.is_some_and(|d| here == *d || here.starts_with(d)) {
+            continue;
+        }
+        if looks_like_bundle(&child) {
+            out.push(child);
+        } else {
+            collect_shared_bundles(&child, depth - 1, notebooks_dir, budget, out);
+        }
+    }
+}
+
+/// Bundles under `root` that are not bound, not the Notebooks folder or
+/// inside it, and not dismissed.
+///
+/// Every one of them, every pass. Two shares accepted in Finder within a
+/// minute of each other are two offers, and the pass that finds only the
+/// first is the pass that lost the second: a folder someone shared lands at
+/// the top of iCloud Drive, this Mac's own `Alchemy Shared/` holds what was
+/// shared *from* here, and a sender who shared the folder the bundle sits in
+/// puts it one level below either. All three are the same arrival, so the
+/// scan reads two levels rather than naming the layouts it knows.
 pub(crate) fn shared_offers_in(
     root: &Path,
     notebooks_dir: &Path,
     bound: &std::collections::HashSet<String>,
     dismissed: &std::collections::HashSet<String>,
 ) -> Vec<SharedBundleOffer> {
-    let notebooks_dir = same_folder(notebooks_dir);
-    let mut found = unopened_bundles(root, bound);
-    found.extend(unopened_bundles(&root.join(SHARED_FOLDER), bound));
-    found
+    // An unset Notebooks folder is not "every folder". `starts_with("")` is
+    // true of every path, so filtering on an empty one silently swallowed
+    // every offer this Mac had.
+    let notebooks_dir = (!notebooks_dir.as_os_str().is_empty()).then(|| same_folder(notebooks_dir));
+    let mut found = Vec::new();
+    let mut budget = SHARED_SCAN_BUDGET;
+    collect_shared_bundles(
+        root,
+        SHARED_SCAN_DEPTH,
+        notebooks_dir.as_ref(),
+        &mut budget,
+        &mut found,
+    );
+    let bound_here: std::collections::HashSet<PathBuf> = bound.iter().map(same_folder).collect();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut offers: Vec<SharedBundleOffer> = found
         .into_iter()
-        .filter(|p| {
-            let p = same_folder(p);
-            p != notebooks_dir && !p.starts_with(&notebooks_dir)
+        .map(|p| (same_folder(&p), p))
+        .filter(|(here, _)| seen.insert(here.clone()))
+        .filter(|(here, p)| {
+            !bound_here.contains(here) && !bound.contains(&p.to_string_lossy().to_string())
         })
-        .filter(|p| !dismissed.contains(&p.to_string_lossy().to_string()))
-        .map(|p| {
-            let index = std::fs::read_to_string(p.join("index.md")).unwrap_or_default();
+        .filter(|(here, p)| {
+            let path = here.to_string_lossy().to_string();
+            !dismissed.contains(&path) && !dismissed.contains(&p.to_string_lossy().to_string())
+        })
+        .map(|(here, _)| {
+            // An index nobody downloaded reads as empty, which is a title
+            // missing, not a bundle missing: the folder's own name is what
+            // Finder shows and what the person accepted.
+            let index = std::fs::read_to_string(here.join("index.md")).unwrap_or_default();
             let doc = parse_okf_doc(&index);
-            let title = doc.str("title").unwrap_or_else(|| {
-                p.file_name()
+            let name = || {
+                here.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default()
-            });
+            };
+            let title = doc.str("title").filter(|t| !t.trim().is_empty());
             SharedBundleOffer {
-                path: p.to_string_lossy().to_string(),
-                title,
+                path: here.to_string_lossy().to_string(),
+                title: title.unwrap_or_else(name),
                 notebook_id: doc.nested("alchemy", "id").unwrap_or_default(),
             }
         })
-        .collect()
+        .collect();
+    offers.sort_by(|a, b| a.path.cmp(&b.path));
+    offers
+}
+
+/// Ask iCloud for a bundle that arrived as placeholders, and wait for the one
+/// file the import cannot start without.
+///
+/// `brctl download` is recursive and asynchronous, so this asks for the
+/// folder and then watches the root `index.md`. Ten seconds, then an honest
+/// error: a download that is still running is not a folder that failed.
+async fn hydrate_bundle(folder: &Path) -> Result<(), String> {
+    let index = folder.join("index.md");
+    if index.exists() && !is_dataless(&index) {
+        return Ok(());
+    }
+    crate::note!("okf: asking iCloud for {folder:?} before opening it");
+    #[cfg(target_os = "macos")]
+    if icloud_can_hydrate(folder) {
+        crate::commands::hydrate_icloud_stubs(vec![folder.to_string_lossy().to_string()]);
+    }
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if index.exists() && !is_dataless(&index) {
+            return Ok(());
+        }
+    }
+    Err("That notebook is still downloading from iCloud. Open it again in a moment.".into())
 }
 
 /// What iCloud Drive holds that could be opened here.
@@ -3779,6 +3900,12 @@ pub(crate) async fn open_shared_bundle(
     if !same_folder(&folder).starts_with(same_folder(&root)) || !folder.is_dir() {
         return Err("That folder isn't in iCloud Drive".into());
     }
+    if !looks_like_bundle(&folder) {
+        return Err("That folder isn't an Alchemy notebook".into());
+    }
+    // The offer is made for a share that arrived as placeholders; this is
+    // where it has to become files, because the import reads them.
+    hydrate_bundle(&folder).await?;
     if crate::commands::find_bundle_root(folder.clone()).as_deref() != Ok(folder.as_path()) {
         return Err("That folder isn't an Alchemy notebook".into());
     }
@@ -7481,6 +7608,97 @@ mod shared_notebook_tests {
         // folder is somebody else's. What's left is the share.
         assert_eq!(titles, vec!["Household"], "{offers:?}");
         assert_eq!(offers[0].notebook_id, "nb-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two shares accepted in Finder, one opened. The other is still an
+    /// offer — the bug Paul's wife hit on 0.63.0, where the second notebook
+    /// she accepted never appeared and had to be imported by hand.
+    #[test]
+    fn two_accepted_shares_are_both_offered_and_opening_one_keeps_the_other() {
+        let dir = std::env::temp_dir().join(format!("shared-two-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        let bundle = |at: PathBuf, title: &str, id: &str| {
+            std::fs::create_dir_all(at.join("sources")).unwrap();
+            std::fs::write(
+                at.join("index.md"),
+                format!("---\ntitle: \"{title}\"\nalchemy:\n  id: \"{id}\"\n---\n"),
+            )
+            .unwrap();
+            at
+        };
+        // Where the two of them can land: one at the root, one wrapped in the
+        // folder the sender shared. Both are the same arrival.
+        let first = bundle(root.join("Household"), "Household", "nb-1");
+        let second = bundle(root.join("Shared/Trip"), "Trip", "nb-2");
+        std::fs::create_dir_all(root.join("Notebooks")).unwrap();
+        let none = std::collections::HashSet::new();
+        let offers = shared_offers_in(&root, &root.join("Notebooks"), &none, &none);
+        let mut titles: Vec<&str> = offers.iter().map(|o| o.title.as_str()).collect();
+        titles.sort();
+        assert_eq!(titles, vec!["Household", "Trip"], "{offers:?}");
+
+        // Open the first: binding it must not take the second down with it.
+        let bound: std::collections::HashSet<String> =
+            [same_folder(&first).to_string_lossy().to_string()].into();
+        let after = shared_offers_in(&root, &root.join("Notebooks"), &bound, &none);
+        assert_eq!(
+            after.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
+            vec!["Trip"],
+            "{after:?}"
+        );
+
+        // "Not now" on the second is the second's answer alone.
+        let dismissed: std::collections::HashSet<String> =
+            [same_folder(&second).to_string_lossy().to_string()].into();
+        assert!(
+            shared_offers_in(&root, &root.join("Notebooks"), &bound, &dismissed).is_empty(),
+            "one dismissal, one folder"
+        );
+        assert_eq!(
+            shared_offers_in(&root, &root.join("Notebooks"), &none, &dismissed).len(),
+            1,
+            "dismissing the second must not swallow the first"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A share whose files iCloud has not downloaded is still a share. The
+    /// legacy placeholder leaves `.index.md.icloud` where the index goes, and
+    /// `exists()` says no to it.
+    #[test]
+    fn a_share_that_is_still_a_placeholder_is_offered_anyway() {
+        let dir = std::env::temp_dir().join(format!("shared-stub-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        let folder = root.join("Recipes");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".index.md.icloud"), b"").unwrap();
+        let none = std::collections::HashSet::new();
+        let offers = shared_offers_in(&root, &root.join("Notebooks"), &none, &none);
+        assert_eq!(
+            offers.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
+            vec!["Recipes"],
+            "the folder's own name stands in until the index lands: {offers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Mac that never answered "keep notebooks on disk" has no Notebooks
+    /// folder, and `Path::new("x").starts_with("")` is true — which filtered
+    /// every offer away.
+    #[test]
+    fn an_unset_notebooks_folder_does_not_swallow_every_offer() {
+        let dir = std::env::temp_dir().join(format!("shared-unset-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        std::fs::create_dir_all(root.join("Household/sources")).unwrap();
+        std::fs::write(
+            root.join("Household/index.md"),
+            "---\ntitle: \"Household\"\n---\n",
+        )
+        .unwrap();
+        let none = std::collections::HashSet::new();
+        let offers = shared_offers_in(&root, Path::new(""), &none, &none);
+        assert_eq!(offers.len(), 1, "{offers:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

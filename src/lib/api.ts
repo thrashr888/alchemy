@@ -361,6 +361,8 @@ export const api = {
   integrationsReady: () => run(cmd<string[]>("integrations_ready")),
   locateNote: (noteId: string) =>
     run(query<string | null>("locate_note", { noteId })),
+  locateSource: (sourceId: string) =>
+    run(query<string | null>("locate_source", { sourceId })),
 
   // Chat
   listMessagesPage: (

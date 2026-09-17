@@ -347,18 +347,57 @@ export function ChatPanel() {
   // `atBottom` also drives the "jump to latest" pill when content arrives
   // off-screen.
   const [atBottom, setAtBottom] = useState(true);
+  // Where the reader WAS, kept from the last scroll event. Measuring after
+  // the DOM grew lied: an answer that lands whole (a CLI provider, not a
+  // stream) pushed the bottom a screen away before the check ran, so the
+  // reader who was sitting at the bottom never moved and never saw it.
+  const wasAtBottom = useRef(true);
   const updateAtBottom = () => {
     const el = scrollRef.current;
     if (!el) return;
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120);
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    wasAtBottom.current = near;
+    setAtBottom(near);
   };
+  // Streaming text follows to the bottom while the reader stays there.
+  // Only while something IS streaming: this effect also fires when the
+  // stream clears as the answer lands, and that last run used to drag the
+  // view back to the bottom right after the new-answer effect below had
+  // brought the top into view.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTo({ top: el.scrollHeight });
-    setAtBottom(nearBottom);
-  }, [messages, streamingText, steps]);
+    if (!el || (!streamingText && steps.length === 0)) return;
+    if (wasAtBottom.current) el.scrollTo({ top: el.scrollHeight });
+    setAtBottom(wasAtBottom.current);
+  }, [streamingText, steps]);
+  // A new answer brings its TOP into view rather than its end: a long
+  // answer read from the start, not from its last line.
+  const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !lastMessageId) return;
+    const last = messages[messages.length - 1];
+    if (!wasAtBottom.current) return;
+    if (last.role === "assistant") {
+      const node = el.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(lastMessageId)}"]`,
+      );
+      if (node) {
+        // Only when the answer is taller than the view; a short one still
+        // sits at the bottom where the eye already is.
+        if (node.offsetHeight > el.clientHeight - 80) {
+          el.scrollTo({ top: node.offsetTop - 8, behavior: "smooth" });
+        } else {
+          el.scrollTo({ top: el.scrollHeight });
+        }
+        setAtBottom(true);
+        return;
+      }
+    }
+    el.scrollTo({ top: el.scrollHeight });
+    setAtBottom(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastMessageId]);
 
   // Sending your own message always jumps to it, even from deep in history —
   // the near-bottom guard is for incoming content, not your own action.
@@ -868,7 +907,9 @@ export function ChatPanel() {
           )}
 
           {messages.map((m) => (
-            <ChatMessage key={m.id} message={m} />
+            <div key={m.id} data-message-id={m.id}>
+              <ChatMessage message={m} />
+            </div>
           ))}
 
           {sending && !streamingHere && (

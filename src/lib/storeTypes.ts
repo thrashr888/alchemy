@@ -238,7 +238,6 @@ export interface AppState {
   generatingKind: NoteKind | null;
   /** Notebook the in-flight generation belongs to (see sendingFor). */
   generatingFor: string | null;
-  generatingTemplateId: string | null;
   ingestQueue: QueueItem[];
   migration: Migration | null;
   draggingFiles: boolean;
