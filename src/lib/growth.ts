@@ -72,7 +72,7 @@ export const HYGIENE_LABEL: Record<string, string> = {
   unreachable: "unreachable",
   "missing-file": "missing",
   duplicate: "duplicate",
-  husk: "failed import",
+  husk: "broken",
   "empty-note": "empty note",
   stale: "stale",
 };

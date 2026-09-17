@@ -41,7 +41,7 @@ Two columns on `sources`: `fetched_at` (i64 ms, set by `reingest` on every succe
 | `unreachable` | `fetch_failures >= 3` (distinct sweep passes) | propose remove |
 | `missing-file` | local file path no longer exists (after iCloud hydration check) | propose remove |
 | `duplicate` | same normalized URL in the notebook (content-hash dupes deferred — gist hashes cover only distilled sources, so they'd flag unevenly) | propose remove (keep oldest) |
-| `husk` | `status == "error"` with no content, older than 7 days | propose remove |
+| `husk` | `status == "error"` (any reason, at once; the row's own message is the detail) | propose remove |
 
 ### The clean
 

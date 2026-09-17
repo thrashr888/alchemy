@@ -14,6 +14,7 @@ import { CloudMark } from "./CloudMarks";
 import { FdaHint } from "./MacConnect";
 import { ingestPaths } from "./FileDrop";
 import {
+  Blocks,
   Calendar,
   Check,
   ChevronLeft,
@@ -40,7 +41,7 @@ const MAC_PROVIDERS = [
 
 type MacProvider = (typeof MAC_PROVIDERS)[number];
 
-type Step = "hub" | "url" | "text" | "mac" | "find";
+type Step = "hub" | "url" | "text" | "mac" | "find" | "notion";
 
 /** Client-side mirror of the backend's git URL grammar (RFC-git-sources §1)
  *  — just enough shape detection to show the include ladder before import.
@@ -129,6 +130,12 @@ export function AddSourceModal() {
   const addText = useStore((s) => s.addSourceText);
   const addMac = useStore((s) => s.addSourceMac);
 
+  // A saved Notion token is what turns a notion.so URL into a living page
+  // tree instead of a page capture, so the tile leads to Settings until
+  // there is one. The webview only ever sees a redacted placeholder here —
+  // "is there one" is all it needs.
+  const notionToken = useStore((s) => s.aiConfig?.notionToken ?? "");
+  const openSettings = useStore((s) => s.openSettings);
   const [step, setStep] = useState<Step>("hub");
   const [cloudFolders, setCloudFolders] = useState<CloudFolder[]>([]);
   const [url, setUrl] = useState("");
@@ -207,6 +214,7 @@ export function AddSourceModal() {
     text: "Paste text",
     mac: `Add from ${provider.label}`,
     find: "Search your Mac",
+    notion: "Add a Notion page",
   };
 
   return (
@@ -340,6 +348,26 @@ export function AddSourceModal() {
             </span>
           </button>
 
+          {/* Notion: a row, not a tile, because the state of the connection
+              is the thing worth saying here. */}
+          <button
+            type="button"
+            onClick={() => setStep("notion")}
+            className={cn(
+              "flex items-center gap-2.5 rounded-md border border-border bg-surface-2/60 px-3 py-2.5 text-left",
+              "transition-colors hover:border-border-strong hover:bg-surface-2",
+              "outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            )}
+          >
+            <Blocks className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="text-body font-medium text-foreground">
+              Notion page
+            </span>
+            <span className="ml-auto text-micro text-subtle-foreground">
+              {notionToken ? "Page tree" : "Needs a token"}
+            </span>
+          </button>
+
           {macAvailable === true && (
             <div className="grid grid-cols-4 gap-2">
               {MAC_PROVIDERS.map((p) => (
@@ -460,6 +488,72 @@ export function AddSourceModal() {
               Add source
             </Button>
           </div>
+        </form>
+      )}
+
+      {/* Notion (docs/RFC-obsidian-notion.md §4). The same URL import the
+          backend already routes on a page id — given its own door, because
+          a feature reachable only by knowing to paste the right link is a
+          feature nobody finds. */}
+      {step === "notion" && (
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            closeAddSource();
+            await addUrl(url);
+          }}
+          className="flex flex-col gap-3"
+        >
+          {back}
+          {notionToken ? (
+            <>
+              <Input
+                autoFocus
+                placeholder="https://www.notion.so/Your-page-1a2b3c…"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+              <p className="text-micro leading-relaxed text-subtle-foreground">
+                The page and everything under it import as one living source
+                and re-sync as you edit in Notion. Share the page with your
+                integration first (••• → Connections).
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={closeAddSource}>
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={!url.trim()}
+                >
+                  Import page
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-body leading-relaxed text-muted-foreground">
+                Notion needs an integration token before it can read your
+                pages. Paste one in Settings, then come back here.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={closeAddSource}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => {
+                    closeAddSource();
+                    openSettings("sources");
+                  }}
+                >
+                  Open Settings
+                </Button>
+              </div>
+            </>
+          )}
         </form>
       )}
 

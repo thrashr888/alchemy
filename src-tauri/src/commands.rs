@@ -11967,13 +11967,17 @@ pub(crate) async fn growth_feeds_impl(
 /// Outbound links the notebook's own sources keep pointing at, ranked
 /// against what it has lately been asked and answered thinly.
 ///
-/// Minus anything the Feeds section already offers. The two tiers overlap —
-/// a page that advertises a feed is often also a link its siblings cite —
-/// and "Follow this feed" is the better of the two offers for the same URL.
+/// Minus anything the Feeds section knows about. The two tiers overlap — a
+/// page that advertises a feed is often also a link its siblings cite — and
+/// "Follow this feed" is the better of the two offers for the same URL.
 /// Subtracting here rather than in the pane keeps that judgment next to
 /// `canonical_key`, which knows that `http://www.a.test/feed/` and
 /// `https://a.test/feed` are one page; it also makes the sections disjoint,
 /// so their union is the aggregator without any further deduping.
+///
+/// It subtracts every discovered feed, not only the ones the Feeds section
+/// proposes: one the gate turned down is no better as a bare link, and this
+/// way the link tier costs no probes at all.
 pub(crate) async fn growth_links_impl(
     db: &crate::db::Db,
     trace_dir: &std::path::Path,
@@ -11981,11 +11985,7 @@ pub(crate) async fn growth_links_impl(
 ) -> anyhow::Result<Vec<crate::growth::GrowthProposal>> {
     let sources = db.sources_with_content_shared(notebook_id).await?;
     let queries = crate::growth::standing_queries(trace_dir, notebook_id, now());
-    let offered: std::collections::HashSet<String> = growth_feeds_impl(db, notebook_id)
-        .await?
-        .iter()
-        .map(|p| crate::growth::canonical_key(&p.url))
-        .collect();
+    let offered = crate::feeds::discovered_keys(db, notebook_id).await;
     Ok(crate::growth::proposals(&sources, &queries)
         .into_iter()
         .filter(|p| !offered.contains(&crate::growth::canonical_key(&p.url)))
@@ -12031,9 +12031,11 @@ pub async fn growth_links(
 /// phase 2): the notebook's standing queries, plus proposals from the
 /// tiers that cost nothing — Spotlight matches on this Mac and outbound
 /// links the notebook's own sources keep pointing at. Computed on demand
-/// from stored content and local traces — no model call, no network;
-/// fetching happens only when the user accepts a proposal. The open-web
-/// tier is a separate, explicit call (growth_web_search).
+/// from stored content and local traces — no model call, and the only
+/// network is the feed gate's one-GET-per-candidate probe, whose verdict is
+/// remembered so it is not paid twice. Ingest happens only when the user
+/// accepts a proposal. The open-web tier is a separate, explicit call
+/// (growth_web_search).
 ///
 /// The Grow pane no longer calls this — it fetches each section on its own
 /// clock, so a slow tier holds nothing else back. This stays as the

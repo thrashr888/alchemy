@@ -45,6 +45,10 @@ export function AwayDigest({
   );
 }
 
+/** Read reports revealed per press of "Load older reports", and the number
+ *  a caught-up feed opens with. */
+const PAGE = 5;
+
 /** Unread reports first, followed by already-read reports on demand. */
 export function ReportsFeed({
   reports,
@@ -76,7 +80,14 @@ export function ReportsFeed({
   const unread = reports.filter(wasUnread);
   const read = reports.filter((note) => !wasUnread(note));
 
-  const [readShown, setReadShown] = useState(0);
+  // Caught up is not the same as empty. With nothing unread the feed used
+  // to render no cards at all and put "Load older reports" under the
+  // all-caught-up line — a panel of eight reports showing none of them, over
+  // a button offering something older than nothing. A feed that holds
+  // reports shows reports; the button then means what it says.
+  const [readShown, setReadShown] = useState(() =>
+    unread.length === 0 ? Math.min(read.length, PAGE) : 0,
+  );
   const visibleRead = read.slice(0, readShown);
   const remaining = read.length - visibleRead.length;
 
@@ -210,9 +221,17 @@ export function ReportsFeed({
         </div>
       </div>
       <div ref={scrollRef} onScroll={syncCurrent} className="min-h-0 flex-1 overflow-y-auto">
-        {/* Once older reports are loaded, the space belongs to them. */}
-        {unread.length === 0 && readShown === 0 && (
-          <div className="px-6 py-6 text-center text-caption text-subtle-foreground">
+        {/* Nothing new to read, said once at the top. It stands alone when
+            the feed is empty and sits over the recent reports otherwise —
+            either way it answers "is there anything for me" before the
+            cards do. */}
+        {unread.length === 0 && (
+          <div
+            className={cn(
+              "px-6 text-center text-caption text-subtle-foreground",
+              rendered.length > 0 ? "border-b border-border py-3" : "py-6",
+            )}
+          >
             You’re all caught up.
           </div>
         )}
@@ -237,12 +256,12 @@ export function ReportsFeed({
             />
           </div>
         ))}
-        {remaining > 0 && (
+        {rendered.length > 0 && remaining > 0 && (
           <div className="flex justify-center px-6 py-5">
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setReadShown((shown) => shown + 5)}
+              onClick={() => setReadShown((shown) => shown + PAGE)}
             >
               Load older reports
             </Button>
