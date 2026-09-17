@@ -713,6 +713,13 @@ function SourcesTab() {
 const CLIPPER_URL =
   "https://chromewebstore.google.com/detail/alchemy-web-clipper/bdiidbpifneigmcknjbgolbclbbgjheh";
 
+/** The AMO listing does not exist yet. Replace this with the real
+ *  addons.mozilla.org URL when Paul publishes (extension/README.md has the
+ *  submission steps); until then the button below stays disabled rather than
+ *  sending anyone to a 404. */
+const FIREFOX_CLIPPER_URL = "https://addons.mozilla.org/PENDING-LISTING";
+const FIREFOX_CLIPPER_LIVE = !FIREFOX_CLIPPER_URL.endsWith("PENDING-LISTING");
+
 /** Where to get the browser extension. The receiver is always on: it only
  *  acts when the user has installed the clipper and clicked it, so a switch
  *  in front of it gated nothing. */
@@ -722,10 +729,12 @@ function WebClipperLink() {
       <div className="text-body">Web clipper</div>
       <p className="text-micro leading-relaxed text-subtle-foreground">
         The Alchemy Web Clipper sends the page you are viewing, including
-        login-walled pages, to Alchemy over a local endpoint.
+        login-walled pages, to Alchemy over a local endpoint. The Firefox
+        build clips links and selections; Alchemy fetches the page itself.
       </p>
-      {/* A button, not a link buried in the sentence — the sentence explains,
-          the button acts. Firefox joins this row when its build ships. */}
+      {/* Buttons, not links buried in the sentence — the sentence explains,
+          the buttons act. The span carries the tooltip because a disabled
+          button takes no pointer events, so its own title never shows. */}
       <div className="flex flex-wrap items-center gap-1.5">
         <Button
           variant="secondary"
@@ -734,6 +743,16 @@ function WebClipperLink() {
         >
           Get it for Chrome
         </Button>
+        <span title={FIREFOX_CLIPPER_LIVE ? undefined : "Coming soon"}>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!FIREFOX_CLIPPER_LIVE}
+            onClick={() => void openUrl(FIREFOX_CLIPPER_URL)}
+          >
+            Get it for Firefox
+          </Button>
+        </span>
       </div>
     </div>
   );

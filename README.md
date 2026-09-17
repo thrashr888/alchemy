@@ -116,8 +116,8 @@ two-host podcast voiced on-device.*
   Alchemy the rendered DOM from your logged-in tab — so private and
   login-walled pages the app could never fetch itself still capture — over a
   local `127.0.0.1` endpoint (Settings → Sources → Web clipper); nothing
-  leaves your Mac. The same folder loads in Firefox and Safari (see
-  [extension/chrome/](extension/chrome/README.md)).
+  leaves your Mac. Firefox and Safari builds come out of the same source and
+  clip URLs, links, and selections (see [extension/](extension/README.md)).
 - **OCR** — image sources and scanned/image-only PDFs are transcribed by a local
   vision model (dedicated OCR models like `glm-ocr` / `deepseek-ocr` recommended).
 - **Grounded chat** — streamed answers that cite the exact source passages they drew

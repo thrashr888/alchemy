@@ -1,5 +1,8 @@
-// Alchemy Web Clipper. Two paths funnel into the app's alchemy://add deep
-// link (see src-tauri/src/integrations.rs):
+// Alchemy Web Clipper. One source file, one manifest per browser
+// (extension/chrome, extension/firefox) -- see extension/README.md.
+//
+// Two paths funnel into the app's alchemy://add deep link (see
+// src-tauri/src/integrations.rs):
 //
 //   - Links and selections: metadata-only, straight into the deep link.
 //   - Whole pages: scrape the rendered DOM from THIS logged-in tab and POST
@@ -9,6 +12,19 @@
 //
 // The extension still holds no state and no credentials. It reads the active
 // tab's DOM only on your click (activeTab), and only talks to 127.0.0.1.
+
+// Firefox exposes both namespaces but only promisifies `browser`; Chrome has
+// only `chrome`, promise-based under MV3. Prefer whichever returns promises
+// so the awaits below mean the same thing in both.
+const api = globalThis.browser ?? globalThis.chrome;
+
+// Only the published Chrome build may stage rendered DOM: the app allowlists
+// exactly one fixed `chrome-extension://...` origin, because an extension
+// scheme alone is not an identity (src-tauri/src/clip.rs). Firefox mints a
+// per-install `moz-extension://` UUID the app cannot know in advance, so that
+// build clips URLs only -- and asks for neither `scripting` nor the localhost
+// host permission, which is why installing it prompts for nothing.
+const CAN_STAGE_DOM = location.protocol === "chrome-extension:";
 
 // The app's clip receiver default port, plus the dev-build +1 offset — the
 // extension can't read the app's discovery file, so it probes both.
@@ -25,7 +41,7 @@ function deepLink(params) {
 // Navigating the current tab to a custom protocol pops Chrome's
 // "Open Alchemy.app?" confirmation without leaving the page.
 function send(tabId, params) {
-  chrome.tabs.update(tabId, { url: deepLink(params) });
+  api.tabs.update(tabId, { url: deepLink(params) });
 }
 
 // Runs IN the page (via scripting.executeScript). Mirrors capture.rs's
@@ -108,14 +124,16 @@ async function postClip(payload) {
 }
 
 // Scrape the active tab and hand the DOM to the app, then fire the deep link.
-// On any failure (non-web page, no scripting access, receiver off) fall back
-// to the plain URL clip the app fetches itself.
+// On any failure -- a non-web page, no scripting access, the receiver off, or
+// a build the receiver will not trust (Firefox) -- fall back to the plain URL
+// clip the app fetches itself.
 async function clipPage(tab) {
   const fallback = () => send(tab.id, { url: tab.url, title: tab.title || "" });
+  if (!CAN_STAGE_DOM) return fallback();
   if (!/^https?:/i.test(tab.url || "")) return fallback();
   let payload;
   try {
-    const [res] = await chrome.scripting.executeScript({
+    const [res] = await api.scripting.executeScript({
       target: { tabId: tab.id },
       func: scrapePage,
     });
@@ -131,30 +149,30 @@ async function clipPage(tab) {
   send(tab.id, { url: payload.url, title: payload.title });
 }
 
-chrome.action.onClicked.addListener((tab) => {
+api.action.onClicked.addListener((tab) => {
   if (!tab || !tab.id || !tab.url) return;
   void clipPage(tab);
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
+api.runtime.onInstalled.addListener(() => {
+  api.contextMenus.create({
     id: "alchemy-add-page",
     title: "Add page to Alchemy",
     contexts: ["page"],
   });
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "alchemy-add-link",
     title: "Add link to Alchemy",
     contexts: ["link"],
   });
-  chrome.contextMenus.create({
+  api.contextMenus.create({
     id: "alchemy-add-selection",
     title: "Add selection to Alchemy",
     contexts: ["selection"],
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+api.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab || !tab.id) return;
   if (info.menuItemId === "alchemy-add-page") {
     // Same rendered-DOM capture as the toolbar click.
