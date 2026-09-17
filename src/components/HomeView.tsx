@@ -322,7 +322,12 @@ function HomeSectionTabs() {
     { id: "timeline", label: "Timeline", icon: ChartNoAxesGantt },
   ] as const;
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+    // data-unread: readable by the tauri-browser checks — which tabs wear
+    // the dot.
+    <div
+      className="flex items-center gap-0.5 rounded-lg border border-border p-0.5"
+      data-unread={JSON.stringify({ chat: chatUnread, registry: registryUnread })}
+    >
       {tabs.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
