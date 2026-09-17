@@ -19,16 +19,13 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ClipboardPaste,
   File,
   Folder,
-  Link2,
   ListChecks,
   NotebookText,
   Search,
   TrendingUp,
   Upload,
-  FolderOpen,
 } from "lucide-react";
 
 /** The Mac provider tiles (backed by cider); id doubles as the IPC provider key. */
@@ -82,6 +79,15 @@ function includeOptions(shape: GitShape) {
       { v: "docs", label: "Docs" },
     ];
   return [];
+}
+
+/** A pasted value that is a single web address, not prose: one token,
+ *  scheme or www or a bare host with a dot and no spaces. */
+export function looksLikeUrl(value: string): boolean {
+  const v = value.trim();
+  if (!v || /\s/.test(v)) return false;
+  if (/^https?:\/\/\S+$/i.test(v) || /^www\.\S+$/i.test(v)) return true;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(v);
 }
 
 /** One tile on the hub: icon over label, same visual weight as the old menu rows. */
@@ -226,6 +232,68 @@ export function AddSourceModal() {
     >
       {step === "hub" && (
         <div className="flex flex-col gap-3">
+          {/* One field for the two things people paste: a link, or the text
+              itself. It tells them apart — a lone URL becomes a URL source,
+              anything else a text source titled from its first line — so
+              there is no "which button" to answer first. A git-shaped link
+              still hops to the import options. */}
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const trimmed = url.trim();
+              if (!trimmed) return;
+              if (looksLikeUrl(trimmed)) {
+                if (includeOptions(gitShape(trimmed)).length > 0) {
+                  setUrl(trimmed);
+                  setStep("url");
+                  return;
+                }
+                closeAddSource();
+                await addUrl(trimmed, undefined);
+                return;
+              }
+              closeAddSource();
+              await addText("", trimmed);
+            }}
+            className="flex flex-col gap-1.5"
+          >
+            <div className="flex items-start gap-1.5">
+              <Textarea
+                autoFocus
+                rows={1}
+                placeholder="Paste a link or some text…"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setInclude(null);
+                }}
+                onKeyDown={(e) => {
+                  // Enter submits a link; text keeps Enter for newlines and
+                  // submits with ⌘↩, as a composer would.
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    (looksLikeUrl(url.trim()) || e.metaKey)
+                  ) {
+                    e.preventDefault();
+                    e.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                className="min-h-9 max-h-40 flex-1 resize-none"
+                aria-label="Link or text to add"
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                className="shrink-0"
+                disabled={!url.trim()}
+              >
+                {url.trim() && !looksLikeUrl(url.trim()) ? "Add text" : "Add link"}
+              </Button>
+            </div>
+          </form>
+
           {/* The OS drop already works anywhere on the window (FileDrop.tsx);
               this zone is the affordance, and a click browses instead. */}
           <button
@@ -254,11 +322,22 @@ export function AddSourceModal() {
               PDF · Office · images · text — or click to browse
             </span>
           </button>
+          {/* Folders arrive by drop like anything else; this line is for the
+              person who would rather point at one. It used to be a tile. */}
+          <button
+            type="button"
+            onClick={() => {
+              closeAddSource();
+              void pickAndAddFolder();
+            }}
+            className="-mt-2 self-center text-caption text-subtle-foreground hover:text-muted-foreground"
+          >
+            or choose a folder to watch
+          </button>
 
           {/* Files on this Mac, right under the drop zone: the two are the
               same job — one for a file you have, one for a file you half
-              remember. (The old "Upload files" tile duplicated the drop
-              zone's click, so it is gone.) */}
+              remember. */}
           <button
             type="button"
             onClick={() => setStep("find")}
@@ -276,61 +355,6 @@ export function AddSourceModal() {
               Spotlight
             </span>
           </button>
-
-          {/* The URL field lives on the hub itself — a link is the most
-              common thing to add, and a tile in front of it was one click
-              of ceremony. A git-shaped URL still gets its import options:
-              submitting one hops to the URL step with the draft carried. */}
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const trimmed = url.trim();
-              if (!trimmed) return;
-              if (includeOptions(gitShape(trimmed)).length > 0) {
-                setStep("url");
-                return;
-              }
-              closeAddSource();
-              await addUrl(trimmed, undefined);
-            }}
-            className="flex items-center gap-1.5"
-          >
-            <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <Input
-              placeholder="Paste a link — an article, a video, a repo…"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                setInclude(null);
-              }}
-              aria-label="URL to add"
-            />
-            <Button
-              type="submit"
-              variant="secondary"
-              size="sm"
-              className="shrink-0"
-              disabled={!url.trim()}
-            >
-              Add
-            </Button>
-          </form>
-
-          <div className="grid grid-cols-2 gap-2">
-            <Tile
-              icon={<FolderOpen className="h-4 w-4" />}
-              label="Add folder"
-              onClick={() => {
-                closeAddSource();
-                void pickAndAddFolder();
-              }}
-            />
-            <Tile
-              icon={<ClipboardPaste className="h-4 w-4" />}
-              label="Paste text"
-              onClick={() => setStep("text")}
-            />
-          </div>
 
           {cloudFolders.length > 0 && (
             <div className="flex flex-col gap-1">
