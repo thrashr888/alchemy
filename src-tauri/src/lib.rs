@@ -503,6 +503,7 @@ pub fn run() {
             commands::add_source_mac,
             integrations::integrations_ready,
             integrations::locate_note,
+            integrations::locate_source,
             commands::mac_note_body,
             commands::update_mac_note,
             commands::add_mac_reminder,

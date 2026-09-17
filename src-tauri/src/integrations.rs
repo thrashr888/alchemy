@@ -109,6 +109,20 @@ pub async fn locate_note(
         .map(|n| n.notebook_id))
 }
 
+/// Source id -> owning notebook id, for alchemy://source/<id> routing.
+#[tauri::command]
+pub async fn locate_source(
+    state: tauri::State<'_, crate::commands::AppState>,
+    source_id: String,
+) -> Result<Option<String>, String> {
+    Ok(state
+        .db
+        .get_source(&source_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|s| s.notebook_id))
+}
+
 pub fn encode(s: &str) -> String {
     use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
