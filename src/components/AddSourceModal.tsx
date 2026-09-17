@@ -255,15 +255,68 @@ export function AddSourceModal() {
             </span>
           </button>
 
-          <div className="grid grid-cols-4 gap-2">
-            <Tile
-              icon={<Upload className="h-4 w-4" />}
-              label="Upload files"
-              onClick={() => {
-                closeAddSource();
-                void pickAndAddFiles();
+          {/* Files on this Mac, right under the drop zone: the two are the
+              same job — one for a file you have, one for a file you half
+              remember. (The old "Upload files" tile duplicated the drop
+              zone's click, so it is gone.) */}
+          <button
+            type="button"
+            onClick={() => setStep("find")}
+            className={cn(
+              "flex items-center gap-2.5 rounded-md border border-border bg-surface-2/60 px-3 py-2.5 text-left",
+              "transition-colors hover:border-border-strong hover:bg-surface-2",
+              "outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            )}
+          >
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="text-body font-medium text-foreground">
+              Search your Mac
+            </span>
+            <span className="ml-auto text-micro text-subtle-foreground">
+              Spotlight
+            </span>
+          </button>
+
+          {/* The URL field lives on the hub itself — a link is the most
+              common thing to add, and a tile in front of it was one click
+              of ceremony. A git-shaped URL still gets its import options:
+              submitting one hops to the URL step with the draft carried. */}
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const trimmed = url.trim();
+              if (!trimmed) return;
+              if (includeOptions(gitShape(trimmed)).length > 0) {
+                setStep("url");
+                return;
+              }
+              closeAddSource();
+              await addUrl(trimmed, undefined);
+            }}
+            className="flex items-center gap-1.5"
+          >
+            <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Input
+              placeholder="Paste a link — an article, a video, a repo…"
+              value={url}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setInclude(null);
               }}
+              aria-label="URL to add"
             />
+            <Button
+              type="submit"
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              disabled={!url.trim()}
+            >
+              Add
+            </Button>
+          </form>
+
+          <div className="grid grid-cols-2 gap-2">
             <Tile
               icon={<FolderOpen className="h-4 w-4" />}
               label="Add folder"
@@ -271,11 +324,6 @@ export function AddSourceModal() {
                 closeAddSource();
                 void pickAndAddFolder();
               }}
-            />
-            <Tile
-              icon={<Link2 className="h-4 w-4" />}
-              label="From URL"
-              onClick={() => setStep("url")}
             />
             <Tile
               icon={<ClipboardPaste className="h-4 w-4" />}
@@ -328,25 +376,6 @@ export function AddSourceModal() {
               </div>
             </div>
           )}
-
-          {/* Local-file search — always available (Spotlight, no cider). */}
-          <button
-            type="button"
-            onClick={() => setStep("find")}
-            className={cn(
-              "flex items-center gap-2.5 rounded-md border border-border bg-surface-2/60 px-3 py-2.5 text-left",
-              "transition-colors hover:border-border-strong hover:bg-surface-2",
-              "outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-            )}
-          >
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="text-body font-medium text-foreground">
-              Search your Mac
-            </span>
-            <span className="ml-auto text-micro text-subtle-foreground">
-              Spotlight
-            </span>
-          </button>
 
           {/* Notion: a row, not a tile, because the state of the connection
               is the thing worth saying here. */}
