@@ -1,12 +1,14 @@
 # Store listing copy
 
-Paste-ready text for the Chrome Web Store (and AMO) listing forms.
+Paste-ready text for the Chrome Web Store and AMO listing forms. The name,
+summary, description, URLs, and art are shared; the two stores differ only in
+the permission questions at the end.
 
 ## Name
 
 Alchemy Web Clipper
 
-## Summary (Chrome "short description", ≤132 chars)
+## Summary (Chrome "short description" ≤132 chars; AMO summary ≤250)
 
 Clip pages, links, and selections into Alchemy — the local-first research
 notebook for macOS. One click, no account.
@@ -30,12 +32,12 @@ git-source machinery takes over — README-only by default, or the whole repo
 if you choose.
 
 Private by construction: the extension collects nothing, stores nothing, and
-talks to no remote server. When you clip a whole page it reads that page and
-sends it to the Alchemy app on your own machine (`127.0.0.1`) so private and
-login-walled pages capture too; otherwise it just composes an alchemy:// link
-and hands it to the app. Everything stays on your Mac. The first click shows
-the browser's standard "Open Alchemy.app?" confirmation; check "Always allow"
-to skip it in future.
+talks to no remote server. In Chrome, clipping a whole page reads that page
+and sends it to the Alchemy app on your own machine (`127.0.0.1`), so private
+and login-walled pages capture too; every other clip composes an alchemy://
+link and hands it to the app. Everything stays on your Mac. The first click
+shows the browser's standard "Open Alchemy.app?" confirmation; tick the
+remember box to skip it in future.
 
 Requires the Alchemy app for macOS (free, open source, MPL-2.0):
 https://thrashr888.github.io/alchemy/
@@ -50,7 +52,7 @@ Productivity · English
 - Support: https://github.com/thrashr888/alchemy/issues
 - Privacy policy: https://thrashr888.github.io/alchemy/privacy.html
 
-## Privacy questionnaire answers
+## Chrome privacy questionnaire answers
 
 - Single purpose: send the current page (its rendered content, or just the
   URL), a link URL, or selected text to the Alchemy app on the user's Mac.
@@ -65,12 +67,38 @@ Productivity · English
   page to the local Alchemy app's receiver; no other host is contacted.
 - Remote code: none. No analytics, no external (non-localhost) requests.
 
-## AMO (Firefox) notes
+## AMO (Firefox) submission
 
-Same copy applies. The manifest carries
-`browser_specific_settings.gecko.id = clipper@alchemy.thrasher.dev`
-(strict_min_version 121.0), and `background.scripts` alongside
-`service_worker` so the same folder loads in both browsers. Firefox clips
-URLs, links, and selections; rendered-DOM handoff is Chrome-only because
-Firefox does not expose a stable extension origin the app can allowlist.
-Submit the identical zip at https://addons.mozilla.org/developers/.
+Upload `extension/dist/firefox.zip` at
+https://addons.mozilla.org/developers/. The account is free; signing is
+required either way, because release Firefox refuses unsigned add-ons even
+when you distribute them yourself. Listing steps are in `README.md`.
+
+Listing fields beyond the shared copy above:
+
+- Category: Productivity (under Extensions).
+- License: MPL-2.0, matching the app.
+- Data collection: none. The manifest says the same thing in
+  `browser_specific_settings.gecko.data_collection_permissions`.
+- Screenshots: both files in `store/` apply unchanged.
+
+Note to reviewers (paste into the reviewer-notes field):
+
+> The add-on is one file, `background.js`, with no build step, no bundler,
+> and no remote code. It contacts no remote host. `alchemy://add?url=…` is
+> the deep link of Alchemy, a free open-source macOS app
+> (https://github.com/thrashr888/alchemy); clicking the button navigates the
+> current tab to that link, which Firefox confirms with its usual external-
+> application prompt. The Firefox build requests only `contextMenus` and
+> `activeTab`, and it sends page content nowhere: the Chrome build's
+> localhost handoff is gated on a fixed `chrome-extension://` origin the app
+> allowlists, which a `moz-extension://` UUID cannot match.
+
+Two Firefox-specific differences from the Chrome listing, if asked:
+
+- Permissions are narrower. No `scripting`, no host permissions, so the
+  install prompts for nothing.
+- No rendered-DOM capture. Firefox assigns each install its own
+  `moz-extension://` origin, which the app cannot allowlist in advance
+  without trusting every extension on the machine; the Firefox build clips
+  URLs, links, and selections, and Alchemy fetches the page itself.
