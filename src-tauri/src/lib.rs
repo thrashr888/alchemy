@@ -36,6 +36,7 @@ mod integrations;
 mod mac;
 mod macwatch;
 mod mcp;
+mod mcpb;
 mod menu;
 mod menuicons;
 mod models;

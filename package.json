@@ -20,6 +20,7 @@
     "build": "pnpm run typecheck && pnpm run bundle",
     "test": "vitest run",
     "test:cli": "node --test cli/alchemy.test.mjs",
+    "test:mcpb": "node --test skills/alchemy-mcpb/server/index.test.mjs",
     "cli": "node ./cli/alchemy.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "diagram:validators": "node scripts/diagram-validators.mjs",
