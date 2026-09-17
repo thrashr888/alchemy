@@ -83,6 +83,21 @@ enum Strategy {
         path: &'static str,
         content: fn(u16, &str) -> String,
     },
+    /// Build a Desktop Extension bundle and hand it to the client's own
+    /// installer (Claude Desktop). The line RFC-mcp-server drew against
+    /// editing someone else's config stands: a GUI app has an install sheet
+    /// for exactly this, and the user is the one who says yes. The client
+    /// mints the extension id, so `configured` reads its installation
+    /// registry for an extension whose manifest name is ours.
+    Mcpb {
+        /// The client's installation registry (JSON), home-relative.
+        registry: &'static str,
+        /// Where Alchemy writes the bundle, home-relative. This is the app
+        /// data dir spelled out, because the strategy table is static and
+        /// has no `AppHandle`; the CLI hardcodes the same path to find
+        /// mcp.json beside it.
+        bundle: &'static str,
+    },
 }
 
 struct Target {
@@ -106,6 +121,12 @@ fn json_snippet(key: &str, entry: &serde_json::Value) -> String {
     serde_json::to_string_pretty(&serde_json::json!({ key: { "alchemy": entry } }))
         .unwrap_or_default()
 }
+
+/// What Connect leaves the user to do when the client installs the
+/// connection itself. Shown as the toast, because "connected" isn't true
+/// until they accept the sheet.
+const MCPB_NOTE: &str = "Claude Desktop will ask to install the Alchemy extension. \
+     After that, ask Claude about any notebook.";
 
 static TARGETS: &[Target] = &[
     Target {
@@ -427,6 +448,25 @@ static TARGETS: &[Target] = &[
         },
     },
     Target {
+        id: "claude-desktop",
+        name: "Claude Desktop",
+        detect: &["/Applications/Claude.app", "Applications/Claude.app"],
+        // No skill: Claude Desktop reads no skills directory of ours, and
+        // the extension's manifest already tells it what the tools do.
+        strategies: &[Strategy::Mcpb {
+            registry: "Library/Application Support/Claude/extensions-installations.json",
+            bundle: "Library/Application Support/com.thrashr888.alchemy/connectors/alchemy.mcpb",
+        }],
+        skills_dirs: &[],
+        skill_files: STD_SKILL,
+        snippet: |_port, _token| {
+            format!(
+                "Connect builds ~/Library/Application Support/com.thrashr888.alchemy/\
+                 connectors/alchemy.mcpb and opens it. {MCPB_NOTE}"
+            )
+        },
+    },
+    Target {
         id: "pi",
         name: "Pi",
         detect: &[".pi"],
@@ -465,6 +505,9 @@ pub struct ConnectorStatus {
     pub skill_installed: bool,
     /// CLI one-liner or JSON snippet for manual setup / verification.
     pub snippet: String,
+    /// What is still left to the user after Connect, when the client
+    /// finishes the job itself. `None` when Connect wrote the config.
+    pub connect_note: Option<String>,
     /// Human-readable config location ("~/.codex/config.toml").
     pub config_path: String,
 }
@@ -542,7 +585,30 @@ fn strategy_path(s: &Strategy) -> Option<&'static str> {
         Strategy::TomlAppend { path, .. } => Some(path),
         Strategy::Manual { path, .. } => Some(path),
         Strategy::WriteFile { path, .. } => Some(path),
+        Strategy::Mcpb { registry, .. } => Some(registry),
     }
+}
+
+/// Is one of the client's installed extensions ours? The client mints the
+/// extension id (`local.dxt.<author>.<name>`), so the manifest name inside
+/// each installation is the only stable thing to match on.
+fn mcpb_installed(home: &std::path::Path, registry: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(resolve(home, registry)) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    root.get("extensions")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|installations| {
+            installations.values().any(|installation| {
+                installation
+                    .pointer("/manifest/name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(crate::mcpb::EXTENSION_NAME))
+            })
+        })
 }
 
 /// Does this config already contain an Alchemy entry from an earlier release?
@@ -573,6 +639,7 @@ fn strategy_present(home: &std::path::Path, s: &Strategy) -> bool {
             }),
         Strategy::Manual { .. } => false,
         Strategy::WriteFile { path, .. } => resolve(home, path).exists(),
+        Strategy::Mcpb { registry, .. } => mcpb_installed(home, registry),
     }
 }
 
@@ -614,6 +681,9 @@ fn strategy_configured(home: &std::path::Path, s: &Strategy, port: u16, token: &
             .unwrap_or(false),
         Strategy::WriteFile { path, content } => std::fs::read_to_string(resolve(home, path))
             .is_ok_and(|existing| existing == content(port, token)),
+        // The bundle carries no port and no token — the proxy reads both at
+        // runtime — so "already installed" is the whole question.
+        Strategy::Mcpb { registry, .. } => mcpb_installed(home, registry),
     }
 }
 
@@ -673,6 +743,19 @@ fn strategy_apply(
                 std::fs::create_dir_all(parent)?;
             }
             write_connector_config(&file, &content(port, token))?;
+            Ok(())
+        }
+        Strategy::Mcpb { bundle, .. } => {
+            let file = resolve(home, bundle);
+            crate::mcpb::write_bundle(&file, &crate::mcp::tool_catalog())?;
+            // `open` hands the bundle to whichever app registered .mcpb —
+            // Claude Desktop — which raises its own install sheet. That
+            // sheet, not us, is what turns this row green.
+            std::process::Command::new("open")
+                .arg(&file)
+                .status()
+                .map_err(|e| anyhow::anyhow!("could not open {}: {e}", file.display()))?;
+            crate::note!("connectors: handed {} to its installer", file.display());
             Ok(())
         }
     }
@@ -807,6 +890,13 @@ fn status_of(home: &std::path::Path, target: &Target, port: u16, token: &str) ->
         supports_skill: !target.skills_dirs.is_empty(),
         skill_installed: skill_installed(home, target),
         snippet: (target.snippet)(port, token),
+        // Connect finishes the job for every strategy but this one, where
+        // the client's own install sheet gets the last word.
+        connect_note: target
+            .strategies
+            .iter()
+            .any(|s| matches!(s, Strategy::Mcpb { .. }))
+            .then(|| MCPB_NOTE.to_string()),
         config_path: target
             .strategies
             .iter()
@@ -1100,6 +1190,54 @@ mod tests {
         assert!(home.join(".pi/agent/skills/alchemy/SKILL.md").exists());
         assert!(status_of(&home, t, 5150, TEST_TOKEN).configured);
         assert!(status_of(&home, t, 5150, TEST_TOKEN).can_auto);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Claude Desktop is the one client we never configure: `configured`
+    /// comes from its own installation registry, matched on the manifest
+    /// name, because it mints the extension id itself.
+    #[test]
+    fn claude_desktop_reads_configured_from_its_installation_registry() {
+        let home = tmp_home();
+        let t = target("claude-desktop");
+        assert!(t.skills_dirs.is_empty(), "no skills dir of ours to write");
+        assert!(status_of(&home, t, 41414, TEST_TOKEN).can_auto);
+        assert!(!status_of(&home, t, 41414, TEST_TOKEN).configured);
+
+        let registry =
+            home.join("Library/Application Support/Claude/extensions-installations.json");
+        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        // Someone else's extension is not ours.
+        std::fs::write(
+            &registry,
+            r#"{"extensions":{"local.dxt.someone.mac":{"manifest":{"name":"Control your Mac"}}}}"#,
+        )
+        .unwrap();
+        assert!(!status_of(&home, t, 41414, TEST_TOKEN).configured);
+
+        std::fs::write(
+            &registry,
+            r#"{"extensions":{"local.dxt.paul-thrasher.alchemy":{"version":"0.63.0","manifest":{"name":"Alchemy"}}}}"#,
+        )
+        .unwrap();
+        let status = status_of(&home, t, 41414, TEST_TOKEN);
+        assert!(status.configured);
+        // Connect hands the bundle to a sheet, so the toast has to say so
+        // rather than claim the connection is already live.
+        assert!(status.connect_note.unwrap().contains("ask to install"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Present == configured for the bundle, which is what keeps the
+    /// launch-time refresh from ever re-opening the install sheet.
+    #[test]
+    fn an_uninstalled_extension_is_never_refreshed_behind_the_user() {
+        let home = tmp_home();
+        let t = target("claude-desktop");
+        for s in t.strategies {
+            assert!(!strategy_present(&home, s));
+            assert!(!strategy_configured(&home, s, 41414, TEST_TOKEN));
+        }
         let _ = std::fs::remove_dir_all(home);
     }
 
