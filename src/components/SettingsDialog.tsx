@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
@@ -757,12 +757,19 @@ function NotionTokenField() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Clicking Check blurs the field first, and blur on an edited token
+  // verifies it too: without this the same token would go to Notion twice
+  // on one click.
+  const inFlight = useRef("");
+
   async function verify(token: string) {
     const t = token.trim();
     if (!t) {
       setCheck({ state: "idle" });
       return;
     }
+    if (inFlight.current === t) return;
+    inFlight.current = t;
     setCheck({ state: "checking" });
     try {
       const workspace = await api.notionCheck(t);
@@ -772,32 +779,59 @@ function NotionTokenField() {
         state: "error",
         message: e instanceof Error ? e.message : String(e),
       });
+    } finally {
+      inFlight.current = "";
     }
   }
 
   if (!aiConfig) return null;
   const value = draft ?? aiConfig.notionToken;
+  // Save first, then check: the blur handler is what persists an edit, and
+  // clicking the button takes focus out of the field, so by the time this
+  // runs the draft is already stored.
+  const checkNow = () => void verify(value);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-body">Notion</div>
-      <Input
-        type="password"
-        aria-label="Notion integration token"
-        placeholder="ntn_… integration token"
-        value={value}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setCheck({ state: "idle" });
-        }}
-        onFocus={(e) => e.currentTarget.select()}
-        onBlur={() => {
-          if (draft !== null && draft.trim() !== aiConfig.notionToken) {
-            void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
-            void verify(draft);
-          }
-          setDraft(null);
-        }}
-      />
+      <div className="flex items-center gap-2">
+        <Input
+          type="password"
+          aria-label="Notion integration token"
+          placeholder="ntn_… integration token"
+          value={value}
+          className="min-w-0 flex-1"
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setCheck({ state: "idle" });
+          }}
+          onFocus={(e) => e.currentTarget.select()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          onBlur={() => {
+            if (draft !== null && draft.trim() !== aiConfig.notionToken) {
+              void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
+              void verify(draft);
+            }
+            setDraft(null);
+          }}
+        />
+        {/* The field checks itself on entry, but a check you cannot ask for
+            is a check the user has no reason to believe. */}
+        <Button
+          variant="secondary"
+          className="shrink-0"
+          loading={check.state === "checking"}
+          disabled={!value.trim()}
+          onClick={checkNow}
+          title="Ask Notion whether this token works"
+        >
+          Check
+        </Button>
+      </div>
       {check.state === "checking" && (
         <span className="flex items-center gap-1.5 text-caption text-subtle-foreground">
           <Spinner className="h-3 w-3" /> Checking the token…
