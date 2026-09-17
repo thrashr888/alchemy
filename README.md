@@ -34,7 +34,7 @@ citations lead back to the evidence, and notebooks remain portable as files.
 Night Shift writes notes and reports. It will not act outward.
 
 > Built with **Tauri 2 + React** front-end, a **Rust** backend, **LanceDB** for
-> embedded vector + relational storage, and a **Linear-inspired** UI with 23 themes.
+> embedded vector + relational storage, and a **Linear-inspired** UI with 33 themes.
 
 [![CI](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml/badge.svg)](https://github.com/thrashr888/alchemy/actions/workflows/ci.yml)
 
@@ -245,10 +245,11 @@ two-host podcast voiced on-device.*
   calls out what changed since.
 - **Model tooling** — live chat/embed **health check**, per-model **tokens/sec**
   tracking, MLX-accelerated model suggestions, and safe **re-embed-on-model-switch**.
-- **23 themes** — Midnight, Light, Slate, Dracula, Monokai, One Dark, Nord,
-  Gruvbox, GitHub, GitHub Light, Solarized, Solarized Light, Tokyo Night,
-  Matrix, Synthwave '84, Claude, OpenAI, Catppuccin Latte, Rosé Pine Dawn,
-  Sepia, Carrera, Italia, Panigale.
+- **33 themes** — Acid Garage, Blueprint, Carrera, Carrera Dark, Catppuccin
+  Latte, Claude, Dracula, Durandal, GitHub, GitHub Light, Gruvbox, IBM Carbon,
+  IBM Carbon Light, Italia, Light, Matrix, Midnight, Monokai, Night City,
+  Nord, One Dark, OpenAI, Paddock, Panigale, QDOS, Rosé Pine Dawn, Sakura,
+  Sepia, Slate, Solarized, Solarized Light, Synthwave '84, Tokyo Night.
 - **Themed design elements** — themes with strong iconography restyle the
   dithered backdrop to match (Matrix code rain, Synthwave '84 a striped sun
   over a perspective grid, Sepia static paper grain, Carrera a sweeping
