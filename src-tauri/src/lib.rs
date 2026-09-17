@@ -670,6 +670,7 @@ pub fn run() {
             commands::toggle_night_shift_pause,
             commands::list_registry,
             commands::desktop_apps,
+            examples::seed_examples_now,
             commands::handoff_prompt,
             commands::open_desktop_app,
             commands::add_registry_card,

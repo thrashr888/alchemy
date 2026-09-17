@@ -334,6 +334,9 @@ export const api = {
   macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
   // Handoff to a desktop AI app (docs/RFC-desktop-apps.md)
   desktopApps: () => run(query<DesktopApp[]>("desktop_apps", {})),
+  /** Seed the starter notebooks if they are still owed (fresh install whose
+   *  embedder wasn't up at launch). Cheap once the marker exists. */
+  seedExamplesNow: () => run(ai<boolean>("seed_examples_now", {})),
   handoffPrompt: (notebookId: string, app: string) =>
     run(query<string>("handoff_prompt", { notebookId, app })),
   openDesktopApp: (app: string, prompt?: string) =>
