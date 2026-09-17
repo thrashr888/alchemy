@@ -12,6 +12,7 @@ import {
   useConfirm,
 } from "./ui";
 import { useSourceActions } from "./SourceMenu";
+import { Favicon } from "./SourcesPanel";
 import { Markdown } from "./Markdown";
 import { LiveCards } from "./LiveCards";
 import {
@@ -41,6 +42,7 @@ import type {
   ProviderEntry,
   ProviderModels,
   Source,
+  SuggestedSource,
 } from "@/lib/types";
 import {
   Bot,
@@ -66,6 +68,7 @@ import {
   ChevronRight,
   AlertTriangle,
   Share,
+  X,
 } from "lucide-react";
 
 /** Composer autosize ceiling — past this the textarea scrolls instead. */
@@ -1587,6 +1590,9 @@ const ChatMessage = memo(function ChatMessage({
           render time, so nothing here is persisted or re-asked. */}
       {message.citations.length > 0 && <LiveCards citations={message.citations} />}
       {message.citations.length > 0 && <Citations citations={message.citations} />}
+      {/* The notebook had little to answer from, so it says where it could
+          look next. Only on answers the thin gate caught; never a fetch. */}
+      <SuggestedSources items={message.suggestedSources ?? []} />
       <MessageActions
         content={message.content}
         citations={message.citations}
@@ -1959,6 +1965,71 @@ export function CitationsToggle({
         className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
       />
     </button>
+  );
+}
+
+/** Pages the notebook's own sources link to, offered under an answer the
+ *  retrieval came back thin for. Add imports through the same path as the
+ *  Grow pane and Add Source; dismiss is for this session only, because a
+ *  suggestion the reader waved off is not a preference worth storing.
+ *  A chip whose URL is already a source reads "Added" and stops offering. */
+function SuggestedSources({ items }: { items: SuggestedSource[] }) {
+  const addSourceUrl = useStore((s) => s.addSourceUrl);
+  const sources = useStore((s) => s.sources);
+  const [dismissed, setDismissed] = useState<Record<string, true>>({});
+  const [adding, setAdding] = useState<Record<string, true>>({});
+  const held = useMemo(
+    () => new Set(sources.map((s) => s.url).filter(Boolean)),
+    [sources],
+  );
+  const shown = items.filter((s) => !dismissed[s.url]);
+  if (shown.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-col gap-1.5">
+      <span className="text-micro text-subtle-foreground">
+        Might help: pages your sources link to
+      </span>
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((s) => {
+          const added = held.has(s.url) || adding[s.url];
+          return (
+            <span
+              key={s.url}
+              title={`${s.url}\n${s.reason}`}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-caption text-muted-foreground"
+            >
+              <Favicon url={s.url} />
+              <span className="min-w-0 truncate">{s.title || s.url}</span>
+              {added ? (
+                <span className="shrink-0 text-micro text-subtle-foreground">
+                  Added
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1 text-micro font-medium text-foreground hover:text-citation"
+                  aria-label={`Add ${s.title || s.url} as a source`}
+                  onClick={() => {
+                    setAdding((a) => ({ ...a, [s.url]: true }));
+                    void addSourceUrl(s.url);
+                  }}
+                >
+                  Add
+                </button>
+              )}
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-subtle-foreground hover:text-foreground"
+                aria-label={`Dismiss ${s.title || s.url}`}
+                onClick={() => setDismissed((d) => ({ ...d, [s.url]: true }))}
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

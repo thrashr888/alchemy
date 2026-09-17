@@ -282,6 +282,17 @@ export interface Citation {
   distance: number;
 }
 
+/** A page the notebook's own sources link to, offered under an answer that
+ *  came back thin (docs/RFC-events.md §2 link tier). A proposal only:
+ *  nothing is fetched until the reader clicks Add. */
+export interface SuggestedSource {
+  url: string;
+  /** Anchor text where the linking page gave one, else host and path. */
+  title: string;
+  /** Why it is under this answer, in the reader's terms. */
+  reason: string;
+}
+
 export interface Message {
   id: string;
   notebookId: string;
@@ -293,6 +304,9 @@ export interface Message {
   /** Provider attribution caption ("Claude Code · $0.04"); empty for user
    *  turns and pre-existing rows. */
   model: string;
+  /** Up to five links to offer; absent on answers that weren't thin, and on
+   *  rows stored before the field existed. */
+  suggestedSources?: SuggestedSource[];
   createdAt: number;
 }
 

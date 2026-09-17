@@ -498,6 +498,14 @@ pub struct Message {
     /// $0.04" — display caption, empty for user/tool turns and old rows.
     #[serde(default)]
     pub model: String,
+    /// Pages the notebook's own sources link to that might answer what this
+    /// turn could not (docs/RFC-events.md §2 link tier). Present only on
+    /// answers the thin gate caught; a proposal, never a fetch. Stored
+    /// beside the transcript rather than on it — see
+    /// `Db::set_suggested_sources` — so old binaries sharing the store keep
+    /// appending messages unchanged.
+    #[serde(default)]
+    pub suggested_sources: Vec<crate::growth::SuggestedSource>,
     pub created_at: i64,
 }
 
