@@ -65,6 +65,7 @@ impl Lab {
                 id: name.into(),
                 last_write_at: 0,
                 lost: false,
+                shared: false,
             }),
         );
         state

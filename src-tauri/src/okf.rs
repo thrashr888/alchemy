@@ -56,6 +56,8 @@ mod import_claims;
 #[cfg(test)]
 mod manifest_tests;
 #[cfg(test)]
+mod shared_deletion_tests;
+#[cfg(test)]
 mod sync_index_tests;
 #[cfg(test)]
 mod sync_tests;
@@ -211,6 +213,12 @@ pub(crate) fn okf_client_actor(name: &str, version: &str) -> String {
         version
     };
     format!("{producer}/{version}")
+}
+
+/// The person inside a `human:<account>` by-line, for a sentence that names
+/// them. Anything else — an agent, another app — reads as itself.
+pub(crate) fn okf_person(actor: &str) -> &str {
+    actor.strip_prefix("human:").unwrap_or(actor)
 }
 
 /// Does this actor read as a machine? `name/version` is the shape both
@@ -698,6 +706,16 @@ fn write_bundle_with(
             let Some(place) = placements.get(&concept.id) else {
                 continue;
             };
+            // A deletion the other person proposed, still unanswered
+            // (docs/RFC-shared-notebook.md §3). The file stays gone — writing
+            // it back would answer for them — and the claim stays ours, so
+            // the sweep below does not read the absence as our own delete.
+            // Restore re-publishes it under a new sync identity; Remove
+            // applies their record.
+            if manifest.proposed_deletions.contains_key(&concept.id) {
+                still_ours.insert(concept.id.clone());
+                continue;
+            }
             // One block per file (§5.3). A source's text is peeled to its
             // body, and the document's own keys — the block at the head of
             // the row's content, and the bundle file as last read (the
@@ -2400,6 +2418,7 @@ pub(crate) async fn bind_new_notebook_checked(
             id: new_id(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         }),
     )?;
     drop(guard);
@@ -2746,6 +2765,7 @@ async fn apply_twin_swaps(state: &AppState, data_dir: &Path) -> Result<(), Strin
             id: new_id(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         };
         adopt_imported_files(
             state,
@@ -2849,6 +2869,7 @@ pub(crate) async fn consolidate_duplicate_bundles_checked(
             Some(OkfBinding {
                 path: keeper.to_string_lossy().to_string(),
                 lost: false,
+                shared: false,
                 ..binding.clone()
             }),
         )?;
@@ -3538,86 +3559,16 @@ async fn open_found_bundles_inner(
     }
     let mut opened = Vec::new();
     for folder in found {
-        let path = folder.to_string_lossy().to_string();
-        // Re-read the bindings for every folder: a bind may have landed
-        // since the listing was taken, and acting on a stale map is how one
-        // folder ended up with two notebooks writing into it.
-        let notebooks = e(state.db.list_notebooks().await)?;
-        let known = known_notebooks(&data_dir, &notebooks)?;
-        let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
-        let doc = parse_okf_doc(&index);
-        if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), &folder)?
-        {
-            continue;
-        }
-        let decision = if discovery::has_reservation(&data_dir, &folder)? {
-            FoundBundle::Import
-        } else {
-            decide_bundle(
-                &folder,
-                doc.nested("alchemy", "id").as_deref(),
-                doc.str("title").as_deref(),
-                &known,
-            )
-        };
-        let outcome = match decision {
-            FoundBundle::Skip(why) => {
-                crate::note!("okf: left {path} alone: {why}");
-                continue;
-            }
-            // The same notebook by another route — the other Mac's copy, a
-            // share, a folder moved — rebinds rather than duplicating.
-            FoundBundle::Rebind(id) => {
-                let existing = binding_for_checked(&data_dir, &id)?;
-                let binding_id = existing
-                    .as_ref()
-                    .map(|binding| binding.id.clone())
-                    .unwrap_or_else(new_id);
-                let manifest_at = manifest_path(&data_dir, &binding_id);
-                let claims = if existing.is_some() {
-                    load_manifest_checked(&manifest_at).map(|_| ())
-                } else {
-                    adopt_imported_files(state, &id, &folder, &manifest_at).await
-                };
-                if let Err(error) = claims {
-                    crate::diagnostics::error("okf", format!("could not bind {path}: {error}"));
-                    continue;
-                }
-                let published = bindings::update_discovered(&data_dir, &id, &folder, |bindings| {
-                    if bindings.get(&id) != existing.as_ref() {
-                        return Err("The notebook binding changed during discovery".into());
-                    }
-                    bindings.insert(
-                        id.clone(),
-                        OkfBinding {
-                            path: path.clone(),
-                            id: binding_id,
-                            last_write_at: 0,
-                            lost: false,
-                        },
-                    );
-                    Ok(())
-                })?;
-                if published.is_none() {
-                    continue;
-                }
-                write_bound(state, &id).await.map(|_| id)
-            }
-            FoundBundle::Import => match discover_bundle(state, &folder).await {
-                Ok(id) => write_bound(state, &id).await.map(|_| id),
-                Err(error) => Err(error),
-            },
-        };
-        match outcome {
-            Ok(_) => {
-                let name = folder
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+        match open_found_folder(state, &folder).await {
+            Ok(Some(name)) => {
                 crate::note!("okf: opened {name} from the Notebooks folder");
                 opened.push(name);
             }
-            Err(err) => crate::diagnostics::error("okf", format!("could not open {path}: {err}")),
+            Ok(None) => {}
+            Err(err) => crate::diagnostics::error(
+                "okf",
+                format!("could not open {}: {err}", folder.display()),
+            ),
         }
     }
     if !opened.is_empty() {
@@ -3632,6 +3583,676 @@ async fn open_found_bundles_inner(
         crate::commands::notify_changed("notebooks", None);
     }
     Ok(opened.len())
+}
+
+/// Open one found bundle: rebind when its `alchemy.id` is a notebook this
+/// machine has, import when it is new, skip when the decision says so.
+/// `Ok(Some(name))` when it opened; `Ok(None)` when it was left alone.
+/// Shared by the Notebooks-folder pass and the iCloud Drive offer.
+async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<String>, String> {
+    let data_dir = app_data_dir(state);
+    let path = folder.to_string_lossy().to_string();
+    // Re-read the bindings for every folder: a bind may have landed since
+    // the listing was taken, and acting on a stale map is how one folder
+    // ended up with two notebooks writing into it.
+    let notebooks = e(state.db.list_notebooks().await)?;
+    let known = known_notebooks(&data_dir, &notebooks)?;
+    let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
+    let doc = parse_okf_doc(&index);
+    if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), folder)? {
+        return Ok(None);
+    }
+    let decision = if discovery::has_reservation(&data_dir, folder)? {
+        FoundBundle::Import
+    } else {
+        decide_bundle(
+            folder,
+            doc.nested("alchemy", "id").as_deref(),
+            doc.str("title").as_deref(),
+            &known,
+        )
+    };
+    let outcome = match decision {
+        FoundBundle::Skip(why) => {
+            crate::note!("okf: left {path} alone: {why}");
+            return Ok(None);
+        }
+        // The same notebook by another route — the other Mac's copy, a
+        // share, a folder moved — rebinds rather than duplicating.
+        FoundBundle::Rebind(id) => {
+            let existing = binding_for_checked(&data_dir, &id)?;
+            let binding_id = existing
+                .as_ref()
+                .map(|binding| binding.id.clone())
+                .unwrap_or_else(new_id);
+            let manifest_at = manifest_path(&data_dir, &binding_id);
+            let claims = if existing.is_some() {
+                load_manifest_checked(&manifest_at).map(|_| ())
+            } else {
+                adopt_imported_files(state, &id, folder, &manifest_at).await
+            };
+            if let Err(error) = claims {
+                return Err(format!("could not bind {path}: {error}"));
+            }
+            let published = bindings::update_discovered(&data_dir, &id, folder, |bindings| {
+                if bindings.get(&id) != existing.as_ref() {
+                    return Err("The notebook binding changed during discovery".into());
+                }
+                bindings.insert(
+                    id.clone(),
+                    OkfBinding {
+                        path: path.clone(),
+                        id: binding_id,
+                        last_write_at: 0,
+                        lost: false,
+                        shared: false,
+                    },
+                );
+                Ok(())
+            })?;
+            if published.is_none() {
+                return Ok(None);
+            }
+            write_bound(state, &id).await.map(|_| id)
+        }
+        FoundBundle::Import => match discover_bundle(state, folder).await {
+            Ok(id) => write_bound(state, &id).await.map(|_| id),
+            Err(error) => Err(error),
+        },
+    };
+    outcome.map(|_| {
+        Some(
+            folder
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+    })
+}
+
+// ---- Shared notebooks (docs/RFC-shared-notebook.md) -------------------------
+
+/// A bundle at the root of iCloud Drive that this Mac has not opened. That
+/// root is where a folder shared with this Apple ID lands, and where
+/// "Share with someone…" puts one; it is also the user's own space, so a
+/// bundle there is offered, never opened on its own.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedBundleOffer {
+    pub path: String,
+    pub title: String,
+    /// The bundle's own `alchemy.id`, empty when its index carries none.
+    pub notebook_id: String,
+}
+
+fn icloud_drive_root() -> Option<PathBuf> {
+    let root = home_dir().join("Library/Mobile Documents/com~apple~CloudDocs");
+    root.is_dir().then_some(root)
+}
+
+fn shared_dismissals_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("okf").join("shared-dismissed.json")
+}
+
+fn load_shared_dismissals(data_dir: &Path) -> std::collections::HashSet<String> {
+    std::fs::read_to_string(shared_dismissals_path(data_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// The folder "Share with someone…" moves a notebook into: plain iCloud
+/// Drive, where a folder can be shared with another Apple ID at all (§1).
+pub(crate) const SHARED_FOLDER: &str = "Alchemy Shared";
+
+/// Bundles under `root` (one level, as iCloud lays shared folders out) that
+/// are not bound, not the Notebooks folder or inside it, and not dismissed.
+///
+/// Two roots, not one: a folder someone shared lands at the top of iCloud
+/// Drive, and this Mac's own `Alchemy Shared/` holds what was shared *from*
+/// here — which is one level further down, and is exactly what the other Mac
+/// of the same person needs offered.
+pub(crate) fn shared_offers_in(
+    root: &Path,
+    notebooks_dir: &Path,
+    bound: &std::collections::HashSet<String>,
+    dismissed: &std::collections::HashSet<String>,
+) -> Vec<SharedBundleOffer> {
+    let notebooks_dir = same_folder(notebooks_dir);
+    let mut found = unopened_bundles(root, bound);
+    found.extend(unopened_bundles(&root.join(SHARED_FOLDER), bound));
+    found
+        .into_iter()
+        .filter(|p| {
+            let p = same_folder(p);
+            p != notebooks_dir && !p.starts_with(&notebooks_dir)
+        })
+        .filter(|p| !dismissed.contains(&p.to_string_lossy().to_string()))
+        .map(|p| {
+            let index = std::fs::read_to_string(p.join("index.md")).unwrap_or_default();
+            let doc = parse_okf_doc(&index);
+            let title = doc.str("title").unwrap_or_else(|| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+            SharedBundleOffer {
+                path: p.to_string_lossy().to_string(),
+                title,
+                notebook_id: doc.nested("alchemy", "id").unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+/// What iCloud Drive holds that could be opened here.
+pub(crate) async fn shared_bundle_offers(state: &AppState) -> Vec<SharedBundleOffer> {
+    let Some(root) = icloud_drive_root() else {
+        return Vec::new();
+    };
+    let data_dir = app_data_dir(state);
+    let bound: std::collections::HashSet<String> = load_bindings_checked(&data_dir)
+        .unwrap_or_default()
+        .values()
+        .map(|b| b.path.clone())
+        .collect();
+    let (notebooks_dir, _) = notebooks_home(state).await;
+    shared_offers_in(
+        &root,
+        &notebooks_dir,
+        &bound,
+        &load_shared_dismissals(&data_dir),
+    )
+}
+
+/// Open one offered bundle: the same import-or-rebind path the Notebooks
+/// folder uses, for one folder the person chose.
+pub(crate) async fn open_shared_bundle(
+    app: &AppHandle,
+    state: &AppState,
+    path: &str,
+) -> Result<String, String> {
+    let folder = PathBuf::from(path);
+    let Some(root) = icloud_drive_root() else {
+        return Err("iCloud Drive isn't available on this Mac".into());
+    };
+    if !same_folder(&folder).starts_with(same_folder(&root)) || !folder.is_dir() {
+        return Err("That folder isn't in iCloud Drive".into());
+    }
+    if crate::commands::find_bundle_root(folder.clone()).as_deref() != Ok(folder.as_path()) {
+        return Err("That folder isn't an Alchemy notebook".into());
+    }
+    let name = open_found_folder(state, &folder)
+        .await?
+        .ok_or_else(|| "That notebook couldn't be opened here — see the log".to_string())?;
+    crate::fswatch::rearm(app).await;
+    let _ = app.emit(
+        "okf://opened",
+        serde_json::json!({ "count": 1, "titles": [name.clone()] }),
+    );
+    crate::commands::notify_changed("notebooks", None);
+    Ok(name)
+}
+
+/// "Not now" for one offered folder: remembered by path, so the banner
+/// stays quiet about it until it moves or is asked for by the ⋯ verb.
+pub(crate) fn dismiss_shared_bundle(data_dir: &Path, path: &str) -> Result<(), String> {
+    let mut set = load_shared_dismissals(data_dir);
+    set.insert(path.to_string());
+    let at = shared_dismissals_path(data_dir);
+    if let Some(parent) = at.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(
+        &at,
+        serde_json::to_string_pretty(&set).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn shared_bundle_offers_cmd(
+    state: State<'_, AppState>,
+) -> Result<Vec<SharedBundleOffer>, String> {
+    Ok(shared_bundle_offers(&state).await)
+}
+
+#[tauri::command]
+pub async fn open_shared_bundle_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    open_shared_bundle(&app, &state, &path).await
+}
+
+#[tauri::command]
+pub fn dismiss_shared_bundle_cmd(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    dismiss_shared_bundle(&app_data_dir(&state), &path)
+}
+
+/// Where a shared notebook lives: `iCloud Drive/Alchemy Shared/`.
+///
+/// Not the app's container. A container is private to one Apple ID — Finder
+/// offers no Share inside it — so sharing a notebook means moving it out of
+/// there and into iCloud Drive proper (§1). `None` when this Mac has no
+/// iCloud Drive at all.
+pub(crate) fn shared_notebooks_dir() -> Option<PathBuf> {
+    icloud_drive_root().map(|root| root.join(SHARED_FOLDER))
+}
+
+/// Where a bound bundle already is, as far as sharing is concerned (§1, §4).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SharePlacement {
+    /// Nowhere a person can be invited: the app's own iCloud container, a
+    /// plain local folder, a second drive. The bundle moves into
+    /// `Alchemy Shared/`.
+    Move,
+    /// Already in iCloud Drive proper — a Notebooks folder the user put
+    /// there, or a notebook shared once before. Shareable exactly where it
+    /// sits, so nothing moves and the sheet opens on it as it is.
+    InPlaceIcloud,
+    /// Dropbox, Google Drive, OneDrive, Box: a folder that syncs, that its
+    /// own client shares, and that the user chose (RFC-okf-live §5.7 — a
+    /// Notebooks folder pointed somewhere else is their decision). Marked
+    /// shared, never moved; the invitation is made in that service.
+    OtherCloud(String),
+}
+
+/// The File Provider mount every non-Apple cloud client lands under.
+const CLOUD_STORAGE: &str = "/Library/CloudStorage/";
+
+/// The service behind a `~/Library/CloudStorage/` path, named the way a
+/// person would say it. The mount is `Dropbox`, `GoogleDrive-me@gmail.com`,
+/// `OneDrive-Personal`, `Box-Box`: the provider, then the account.
+fn cloud_storage_service(bundle: &Path) -> Option<String> {
+    let path = bundle.to_string_lossy().to_string();
+    let mount = path.split(CLOUD_STORAGE).nth(1)?.split('/').next()?;
+    let provider = mount.split('-').next().unwrap_or(mount).trim();
+    if provider.is_empty() {
+        return None;
+    }
+    Some(match provider {
+        "GoogleDrive" => "Google Drive".to_string(),
+        other => other.to_string(),
+    })
+}
+
+/// What sharing should do with a bundle at this path — the whole rule, pure
+/// over the path so it can be read and tested without a disk.
+///
+/// `icloud_drive` is iCloud Drive proper (`com~apple~CloudDocs`), not the
+/// app's container: a container is private to one Apple ID, which is the
+/// reason any of this moves at all.
+pub(crate) fn share_placement(bundle: &Path, icloud_drive: Option<&Path>) -> SharePlacement {
+    if let Some(service) = cloud_storage_service(bundle) {
+        return SharePlacement::OtherCloud(service);
+    }
+    match icloud_drive {
+        Some(root) if bundle.starts_with(root) => SharePlacement::InPlaceIcloud,
+        _ => SharePlacement::Move,
+    }
+}
+
+/// Put a notebook where it can be shared, and mark it so (§1).
+///
+/// A bundle that is nowhere shareable — the app's container, a plain local
+/// folder — is *renamed* into `Alchemy Shared/`: same folder, same binding
+/// id, same manifest, the way the container migration moves one
+/// (`rebind_moved`); nothing is copied and nothing is deleted, so moving it
+/// back later is the same move in the other direction. A bundle already in
+/// iCloud Drive, or in a Dropbox/Drive/OneDrive folder the user chose, is
+/// marked and left exactly where it is (`share_placement`). A notebook that
+/// was never on disk is bound into the shared folder and seeded through the
+/// ordinary bind. The share sheet is the caller's next step; this half is
+/// what an agent can do too.
+///
+/// Returns the folder, and the service to make the invitation in when that
+/// is not macOS's own sheet — empty for iCloud.
+pub(crate) async fn share_notebook(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+) -> Result<(String, String), String> {
+    let data_dir = app_data_dir(state);
+    // Where it already is decides everything, and is asked before iCloud
+    // Drive is: a notebook in somebody's Dropbox is shareable on a Mac with
+    // no iCloud account at all.
+    if let Some(binding) = binding_for_checked(&data_dir, notebook_id)? {
+        match share_placement(
+            &same_folder(Path::new(&binding.path)),
+            icloud_drive_root().as_deref(),
+        ) {
+            SharePlacement::Move => {}
+            SharePlacement::InPlaceIcloud => {
+                // Already somewhere a person can be invited: the shared
+                // folder from an earlier share, or a Notebooks folder the
+                // user put in iCloud Drive. Moving it would be rearranging
+                // their filing for no gain.
+                mark_binding_shared(&data_dir, notebook_id)?;
+                return Ok((binding.path, String::new()));
+            }
+            SharePlacement::OtherCloud(service) => {
+                // Dropbox and the rest share folders perfectly well, from
+                // their own client. Hauling somebody's notebook out of the
+                // service they chose and into iCloud is not ours to do — and
+                // the rule that makes the other person's deletes proposals is
+                // worth just as much there, so the mark still goes on.
+                mark_binding_shared(&data_dir, notebook_id)?;
+                crate::note!(
+                    "okf: {} is in {service}; marked shared where it is",
+                    binding.path
+                );
+                return Ok((binding.path, service));
+            }
+        }
+    }
+    let Some(root) = shared_notebooks_dir() else {
+        return Err(
+            "iCloud Drive isn't switched on for this Mac, so there's nowhere to share a notebook from."
+                .into(),
+        );
+    };
+    std::fs::create_dir_all(&root)
+        .map_err(|err| format!("Couldn't make {}: {err}", root.display()))?;
+    let Some(binding) = binding_for_checked(&data_dir, notebook_id)? else {
+        // Never kept on disk. It gets its folder in the shared root and the
+        // ordinary seed pass — the same bind the ⋯ menu's Keep verb runs.
+        let title = e(state.db.list_notebooks().await)?
+            .into_iter()
+            .find(|notebook| notebook.id == notebook_id)
+            .map(|notebook| notebook.title)
+            .ok_or_else(|| "Notebook not found".to_string())?;
+        let folder = claim_notebook_folder(&root, &title, &names_in(&root));
+        let path = bind_impl(app, state, notebook_id, &folder.to_string_lossy()).await?;
+        mark_binding_shared(&data_dir, notebook_id)?;
+        crate::note!("okf: {title} is bound in {} to be shared", root.display());
+        return Ok((path, String::new()));
+    };
+    let from = PathBuf::from(&binding.path);
+    if !from.is_dir() {
+        return Err(
+            "This notebook's folder isn't where Alchemy left it. Open it again before sharing it."
+                .into(),
+        );
+    }
+    // Nothing new is scheduled while the folder moves; what is already in
+    // flight lands first and the rest resumes when the guard drops.
+    let _moving = begin_move();
+    if !wait_for_own_write(notebook_id, MOVE_WAIT_MS).await {
+        return Err("Alchemy is still saving this notebook to disk. Try again in a moment.".into());
+    }
+    let name = from
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| "This notebook's folder has no name to move".to_string())?;
+    let to = root.join(free_name(&name, &mut names_in(&root)));
+    if !move_folder(&from, &to) {
+        return Err(format!(
+            "Couldn't move {} into {}. The log says why.",
+            from.display(),
+            root.display()
+        ));
+    }
+    let placement = IcloudPlacement::Move {
+        notebook: notebook_id.to_string(),
+        from: from.clone(),
+        to: to.clone(),
+    };
+    let mut bindings = load_bindings_checked(&data_dir)?;
+    let before = bindings.clone();
+    rebind_moved(&mut bindings, std::slice::from_ref(&placement));
+    merge_binding_moves(&data_dir, &before, &bindings)?;
+    mark_binding_shared(&data_dir, notebook_id)?;
+    crate::fswatch::rearm(app).await;
+    okf_notice(format!(
+        "{} moved to {} so it can be shared. Everything in it came along; nothing was copied or deleted.",
+        from.display(),
+        to.display()
+    ));
+    Ok((to.to_string_lossy().to_string(), String::new()))
+}
+
+/// Record that this binding's folder is shared with somebody. Merged into
+/// whatever the bindings file holds now: a concurrent unbind owns its answer.
+fn mark_binding_shared(data_dir: &Path, notebook_id: &str) -> Result<(), String> {
+    update_bindings_checked(data_dir, |current| {
+        if let Some(binding) = current.get_mut(notebook_id) {
+            binding.shared = true;
+        }
+        Ok(())
+    })
+}
+
+/// A folder put where it can be shared, and whether macOS took it from there.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedNotebookFolder {
+    pub path: String,
+    /// The share sheet is on screen. False means the caller should reveal the
+    /// folder in Finder and say which menu to use.
+    pub sheet: bool,
+    /// The service the invitation is made in when it isn't macOS's own sheet
+    /// — "Dropbox", "Google Drive" — so the fallback can name it. Empty for
+    /// an iCloud folder, where Finder's Share menu is the answer.
+    pub service: String,
+}
+
+#[tauri::command]
+pub async fn share_notebook_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<SharedNotebookFolder, String> {
+    let (path, service) = share_notebook(&app, &state, &notebook_id).await?;
+    // CloudSharing is Apple's, and only for Apple's items. Asking it about a
+    // Dropbox folder raises nothing and teaches the user nothing.
+    let sheet = service.is_empty() && show_share_sheet(&app, Path::new(&path)).await;
+    crate::commands::notify_changed("notebooks", None);
+    Ok(SharedNotebookFolder {
+        path,
+        sheet,
+        service,
+    })
+}
+
+// ---- Deletions as proposals (docs/RFC-shared-notebook.md §3) ---------------
+
+/// One deletion another person made in the shared folder, waiting on an
+/// answer here.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionProposal {
+    /// The source or note this is about — still here, still readable.
+    pub id: String,
+    /// "source" or "note".
+    pub kind: String,
+    pub title: String,
+    /// Who deleted it, as their by-line names them ("kim").
+    pub by: String,
+}
+
+/// What this notebook is waiting on an answer about. Empty for every notebook
+/// that is not shared, which is nearly all of them.
+pub(crate) async fn deletion_proposals(
+    state: &AppState,
+    notebook_id: &str,
+) -> Result<Vec<DeletionProposal>, String> {
+    let data_dir = app_data_dir(state);
+    let Some(binding) = binding_for_checked(&data_dir, notebook_id)? else {
+        return Ok(Vec::new());
+    };
+    if !binding.shared {
+        return Ok(Vec::new());
+    }
+    let manifest = load_manifest_checked(&manifest_path(&data_dir, &binding.id))?;
+    let mut out = Vec::new();
+    for (id, actor) in &manifest.proposed_deletions {
+        let note = manifest
+            .concepts
+            .get(id)
+            .is_some_and(|entry| entry.path.starts_with("notes/"));
+        let title = if note {
+            e(state.db.get_note(id).await)?.map(|note| note.title)
+        } else {
+            e(state.db.get_source(id).await)?.map(|source| source.title)
+        };
+        // A row that is gone already answered the question by other means.
+        let Some(title) = title else {
+            continue;
+        };
+        out.push(DeletionProposal {
+            id: id.clone(),
+            kind: if note { "note" } else { "source" }.to_string(),
+            title,
+            by: okf_person(actor).to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Answer one of them.
+///
+/// **Restore** drops the claim and writes the notebook again: the file comes
+/// back under a *new* sync identity, because the old lifetime ended and a
+/// tombstone is immutable (`portable_deletions`) — reusing the id would hand
+/// the other side a file their own record says is deleted, and it would
+/// vanish again on their next pass. **Remove** applies their record here, the
+/// same removal an unshared binding would have done without asking.
+pub(crate) async fn resolve_deletion_proposal(
+    state: &AppState,
+    notebook_id: &str,
+    entity_id: &str,
+    restore: bool,
+) -> Result<(), String> {
+    let lock = notebook_sync_lock(state, notebook_id);
+    let guard = lock.lock().await;
+    let data_dir = app_data_dir(state);
+    let binding = binding_for_checked(&data_dir, notebook_id)?
+        .ok_or_else(|| "This notebook isn't kept on disk".to_string())?;
+    let bundle = PathBuf::from(&binding.path);
+    let manifest_at = manifest_path(&data_dir, &binding.id);
+    let mut manifest = load_manifest_checked(&manifest_at)?;
+    let Some(actor) = manifest.proposed_deletions.remove(entity_id) else {
+        return Err("That deletion isn't waiting on an answer any more.".into());
+    };
+    let entry = manifest.concepts.get(entity_id).cloned();
+    let rel = entry
+        .as_ref()
+        .map(|entry| entry.path.clone())
+        .unwrap_or_default();
+    if restore {
+        manifest.concepts.remove(entity_id);
+        save_manifest_checked(&manifest_at, &manifest)?;
+        drop(guard);
+        write_bound(state, notebook_id).await?;
+        okf_notice(format!(
+            "{rel} was put back after {} deleted it. It goes out under a new sync id, so their record can't take it again.",
+            okf_person(&actor)
+        ));
+    } else {
+        save_manifest_checked(&manifest_at, &manifest)?;
+        if let Some(portable_id) = entry
+            .map(|entry| entry.portable_id)
+            .filter(|id| !id.is_empty())
+        {
+            let agreed: std::collections::HashSet<String> = [portable_id].into();
+            portable_deletions::apply_deleted(
+                state,
+                notebook_id,
+                &bundle,
+                &mut manifest,
+                &manifest_at,
+                &agreed,
+            )
+            .await?;
+            save_manifest_checked(&manifest_at, &manifest)?;
+        }
+        drop(guard);
+        okf_notice(format!(
+            "{rel} is gone here too: {} deleted it and the deletion was accepted.",
+            okf_person(&actor)
+        ));
+    }
+    crate::commands::notify_changed("sources", Some(notebook_id));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn deletion_proposals_cmd(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Vec<DeletionProposal>, String> {
+    deletion_proposals(&state, &notebook_id).await
+}
+
+#[tauri::command]
+pub async fn resolve_deletion_proposal_cmd(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    entity_id: String,
+    restore: bool,
+) -> Result<(), String> {
+    resolve_deletion_proposal(&state, &notebook_id, &entity_id, restore).await
+}
+
+/// Ask macOS for the Share sheet on a folder, through the Swift sidecar
+/// (`alchemy-fm --share`), which is the only AppKit this app owns.
+///
+/// True once the sheet is up: the sidecar prints `{"type":"presented"}` and
+/// then outlives this call, because the person is in front of it choosing
+/// who to invite. Anything else — no sidecar, an older one that doesn't know
+/// the verb, a Mac where CloudSharing refuses — is false, and the caller
+/// falls back to Finder. Never an error: a share sheet that didn't open is
+/// not a failed share, it is a share that happens in Finder instead.
+async fn show_share_sheet(app: &AppHandle, folder: &Path) -> bool {
+    use tokio::io::AsyncBufReadExt;
+    let Some(binary) = crate::commands::find_fm_sidecar(app) else {
+        return false;
+    };
+    let mut child = match tokio::process::Command::new(&binary)
+        .arg("--share")
+        .arg(folder)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            crate::note!("okf: could not ask for the share sheet: {err}");
+            return false;
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.start_kill();
+        return false;
+    };
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(20), lines.next_line()).await;
+    let presented = match first {
+        Ok(Ok(Some(line))) => {
+            let event: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            if event["type"] == "presented" {
+                true
+            } else {
+                crate::note!(
+                    "okf: the share sheet didn't open: {}",
+                    event["message"].as_str().unwrap_or(line.as_str())
+                );
+                false
+            }
+        }
+        Ok(Ok(None)) | Ok(Err(_)) => false,
+        Err(_) => {
+            crate::note!("okf: the share sheet didn't answer in time");
+            false
+        }
+    };
+    if !presented {
+        let _ = child.start_kill();
+    }
+    presented
 }
 
 // ---- Originals in `references/` (docs/RFC-okf-live.md §6) -------------------
@@ -3968,6 +4589,13 @@ pub struct OkfBinding {
     /// rebind, not a directory to create.
     #[serde(default)]
     pub lost: bool,
+    /// This folder is shared with another person (docs/RFC-shared-notebook.md
+    /// §1). Set by "Share with someone…", and the one thing the reconciler
+    /// reads before treating another actor's deletion record as a proposal
+    /// rather than an instruction: between two Macs of one person a delete is
+    /// authoritative, between two people it is a question.
+    #[serde(default)]
+    pub shared: bool,
 }
 
 fn bindings_path(data_dir: &Path) -> PathBuf {
@@ -4147,6 +4775,15 @@ pub struct OkfManifest {
     /// `portable::prepare`, never persisted.
     #[serde(skip)]
     pub(crate) held: std::collections::BTreeSet<String>,
+    /// Deletions another person proposed and nobody here has answered yet
+    /// (docs/RFC-shared-notebook.md §3): entity id → their by-line. Only ever
+    /// filled for a binding marked `shared`. While an entry is here the row
+    /// stays, the writer leaves the file alone, and the vanish rule keeps its
+    /// hands off the claim — the question is the user's to answer, not this
+    /// pass's. Persisted, because the question outlives the pass; local, like
+    /// the rest of the manifest, because the answer is this person's.
+    #[serde(default)]
+    pub(crate) proposed_deletions: std::collections::BTreeMap<String, String>,
 }
 
 /// Where a binding's manifest lives: `<app-data>/okf/<binding-id>.json`,
@@ -4577,6 +5214,7 @@ async fn recover_binding(
         let moved = OkfBinding {
             path: found.to_string_lossy().to_string(),
             lost: false,
+            shared: false,
             ..binding.clone()
         };
         restat_manifest(&manifest_path(&data_dir, &binding.id), &found)?;
@@ -4596,6 +5234,7 @@ async fn recover_binding(
                 Some(binding),
                 Some(OkfBinding {
                     lost: true,
+                    shared: false,
                     ..binding.clone()
                 }),
             )?;
@@ -4634,6 +5273,7 @@ async fn recover_binding(
         id: new_id(),
         last_write_at: 0,
         lost: false,
+        shared: false,
     };
     replace_binding_checked(&data_dir, notebook_id, Some(binding), Some(fresh.clone()))?;
     okf_notice(format!(
@@ -5109,6 +5749,12 @@ pub(crate) fn vanish_verdict(
     let mut out = VanishVerdict::default();
     let mut absent: Vec<(&String, &OkfManifestEntry)> = Vec::new();
     for (id, entry) in &manifest.concepts {
+        // A deletion somebody else proposed is already accounted for: the
+        // file is gone because they deleted it, and the row waits for an
+        // answer rather than for this rule (docs/RFC-shared-notebook.md §3).
+        if manifest.proposed_deletions.contains_key(id) {
+            continue;
+        }
         if seen.contains(id) || present(&entry.path) {
             if entry.missing_since != 0 {
                 out.clear.push(id.clone());
@@ -5184,6 +5830,18 @@ async fn reconcile_locked(state: &AppState, notebook_id: &str) -> Result<OkfReco
         save_manifest_checked(&manifest_at, &manifest)?;
     }
     let mut deleted = portable_deletions::read_deleted(&bundle)?;
+    // Between two people a deletion record is a proposal, not an instruction
+    // (docs/RFC-shared-notebook.md §3). Only for a folder the user shared:
+    // their own second Mac is still a machine, and a delete made there is
+    // theirs and stands.
+    if binding.shared && portable_deletions::hold_foreign(&bundle, &mut manifest, &mut deleted) {
+        save_manifest_checked(&manifest_at, &manifest)?;
+    } else if !binding.shared && !manifest.proposed_deletions.is_empty() {
+        // Sharing was turned off, or the folder was moved back: the questions
+        // go with it, and the ordinary rule applies from here.
+        manifest.proposed_deletions.clear();
+        save_manifest_checked(&manifest_at, &manifest)?;
+    }
     deleted.extend(manifest.deleted_entities.iter().cloned());
     if portable::prepare(&bundle, &mut manifest, &deleted, portable::Duplicates::Hold)? {
         save_manifest_checked(&manifest_at, &manifest)?;
@@ -5962,7 +6620,7 @@ pub fn is_evicted_stub(path: &Path) -> bool {
 /// file there is left alone until its own client brings it back — which is
 /// safe, because every caller already treats a stub as absent.
 fn icloud_can_hydrate(path: &Path) -> bool {
-    !path.to_string_lossy().contains("/Library/CloudStorage/")
+    !path.to_string_lossy().contains(CLOUD_STORAGE)
 }
 
 /// Ask for a file that is not downloaded, and say so. Returns true when the
@@ -6787,4 +7445,133 @@ pub async fn move_notebooks_to_icloud_container(
     }
     crate::note!("okf: moved {} notebooks into {}", done.len(), offer.to);
     Ok(done.len())
+}
+
+#[cfg(test)]
+mod shared_notebook_tests {
+    use super::*;
+
+    #[test]
+    fn shared_offers_are_bundles_at_the_root_that_nobody_here_opened() {
+        let dir = std::env::temp_dir().join(format!("shared-offers-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        std::fs::create_dir_all(root.join("Notebooks/Inside/sources")).unwrap();
+        std::fs::write(
+            root.join("Notebooks/Inside/index.md"),
+            "---\ntitle: \"Inside\"\n---\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("Shared With Me/sources")).unwrap();
+        std::fs::write(
+            root.join("Shared With Me/index.md"),
+            "---\ntitle: \"Household\"\nalchemy:\n  id: \"nb-1\"\n---\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("Bound/notes")).unwrap();
+        std::fs::create_dir_all(root.join("Dismissed/notes")).unwrap();
+        std::fs::create_dir_all(root.join("Just a folder")).unwrap();
+        let bound: std::collections::HashSet<String> =
+            [root.join("Bound").to_string_lossy().to_string()].into();
+        let dismissed: std::collections::HashSet<String> =
+            [root.join("Dismissed").to_string_lossy().to_string()].into();
+        let offers = shared_offers_in(&root, &root.join("Notebooks"), &bound, &dismissed);
+        let titles: Vec<&str> = offers.iter().map(|o| o.title.as_str()).collect();
+        // The Notebooks folder and what's inside it are the other pass's;
+        // a bound bundle is open; a dismissed one was declined; a plain
+        // folder is somebody else's. What's left is the share.
+        assert_eq!(titles, vec!["Household"], "{offers:?}");
+        assert_eq!(offers[0].notebook_id, "nb-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sharing_only_moves_a_bundle_that_is_nowhere_shareable() {
+        let home = Path::new("/Users/someone");
+        let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
+        let at = |path: &str| share_placement(Path::new(path), Some(&icloud));
+        // The app's container is private to one Apple ID, and a plain local
+        // folder is not shared with anybody: both move.
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/iCloud~com~thrashr888~alchemy/Documents/Household"),
+            SharePlacement::Move
+        );
+        assert_eq!(
+            at("/Users/someone/Documents/Alchemy/Household"),
+            SharePlacement::Move
+        );
+        assert_eq!(at("/Volumes/Archive/Household"), SharePlacement::Move);
+        // Already somewhere a person can be invited: nothing to rearrange.
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Alchemy Shared/Household"),
+            SharePlacement::InPlaceIcloud
+        );
+        assert_eq!(
+            at("/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Notebooks/Household"),
+            SharePlacement::InPlaceIcloud
+        );
+        // Somebody else's sync folder, named the way they would say it.
+        for (path, service) in [
+            (
+                "/Users/someone/Library/CloudStorage/Dropbox/Notebooks/Household",
+                "Dropbox",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/GoogleDrive-me@gmail.com/My Drive/Household",
+                "Google Drive",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/OneDrive-Personal/Household",
+                "OneDrive",
+            ),
+            (
+                "/Users/someone/Library/CloudStorage/Box-Box/Household",
+                "Box",
+            ),
+        ] {
+            assert_eq!(
+                at(path),
+                SharePlacement::OtherCloud(service.into()),
+                "{path}"
+            );
+        }
+        // A Mac with iCloud Drive switched off still has a Dropbox.
+        assert_eq!(
+            share_placement(
+                Path::new("/Users/someone/Library/CloudStorage/Dropbox/Household"),
+                None
+            ),
+            SharePlacement::OtherCloud("Dropbox".into())
+        );
+        assert_eq!(
+            share_placement(Path::new("/Users/someone/Documents/Household"), None),
+            SharePlacement::Move
+        );
+    }
+
+    #[test]
+    fn what_this_mac_shared_is_offered_to_the_other_one() {
+        let dir = std::env::temp_dir().join(format!("shared-out-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        std::fs::create_dir_all(root.join(SHARED_FOLDER).join("Household/sources")).unwrap();
+        std::fs::write(
+            root.join(SHARED_FOLDER).join("Household/index.md"),
+            "---\ntitle: \"Household\"\nalchemy:\n  id: \"nb-1\"\n---\n",
+        )
+        .unwrap();
+        // The sharing Mac has it bound; its other Mac does not, and the
+        // folder sits one level deeper than a share somebody sent us.
+        let bound = std::collections::HashSet::new();
+        let offers = shared_offers_in(&root, &root.join("Notebooks"), &bound, &bound);
+        assert_eq!(
+            offers.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
+            vec!["Household"],
+            "{offers:?}"
+        );
+        let mine: std::collections::HashSet<String> = [offers[0].path.clone()].into();
+        assert!(
+            shared_offers_in(&root, &root.join("Notebooks"), &mine, &bound).is_empty(),
+            "the Mac that shared it has it bound already"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

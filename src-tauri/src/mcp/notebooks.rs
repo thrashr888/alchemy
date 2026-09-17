@@ -34,6 +34,22 @@ struct BindOkfReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct SharedPathReq {
+    /// The bundle folder's absolute path, from list_shared_notebooks.
+    path: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ResolveDeletionReq {
+    /// Notebook id.
+    notebook_id: String,
+    /// The source or note id, from deletion_proposals.
+    entity_id: String,
+    /// True puts it back for both people; false accepts the deletion.
+    restore: bool,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct NotebookIdReq {
     /// Notebook id.
     notebook_id: String,
@@ -98,6 +114,85 @@ impl AlchemyMcp {
             .map_err(internal)?;
         self.changed("notebooks", Some(&notebook_id));
         json_result(&serde_json::json!({ "notebookId": notebook_id, "okfPath": bound }))
+    }
+
+    #[tool(
+        description = "Notebooks sitting at the root of iCloud Drive that this Mac hasn't opened — where a folder someone shared with the user lands (docs/RFC-shared-notebook.md). Each is a bundle folder with its title and, when its index carries one, its notebook id. Nothing here is opened on its own; the user (or you, on their say-so) opens one with open_shared_notebook."
+    )]
+    async fn list_shared_notebooks(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        json_result(&crate::okf::shared_bundle_offers(&state).await)
+    }
+
+    #[tool(
+        description = "Open a notebook found in iCloud Drive here: the same import-or-rebind path the Notebooks folder uses, for one folder. Only on the user's say-so — a shared folder is somebody's, and opening it binds this Mac to it."
+    )]
+    async fn open_shared_notebook(
+        &self,
+        Parameters(SharedPathReq { path }): Parameters<SharedPathReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let app = self.app.clone();
+        let state = self.state();
+        let name = crate::okf::open_shared_bundle(&app, &state, &path)
+            .await
+            .map_err(invalid)?;
+        self.changed("notebooks", None);
+        json_result(&serde_json::json!({ "opened": name, "path": path }))
+    }
+
+    #[tool(
+        description = "Put a notebook where another person can be invited into it (docs/RFC-shared-notebook.md) and mark it shared — which is what makes another person's deletions arrive as proposals rather than removals. A notebook in the app's container or a plain local folder moves into iCloud Drive/Alchemy Shared, keeping its files, its sync record and its history; one already in iCloud Drive, or in a Dropbox/Google Drive/OneDrive folder, is marked where it sits and never moved. Returns the folder's path, and shareFrom when the invitation belongs in that service rather than Finder. It cannot show the macOS share sheet, so tell the user where to make the invitation."
+    )]
+    async fn share_notebook(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let app = self.app.clone();
+        let state = self.state();
+        let (path, service) = crate::okf::share_notebook(&app, &state, &notebook_id)
+            .await
+            .map_err(invalid)?;
+        self.changed("notebooks", None);
+        json_result(&serde_json::json!({
+            "notebookId": notebook_id,
+            "sharedPath": path,
+            // Set when the folder is somebody else's cloud and the invitation
+            // is made there rather than in Finder.
+            "shareFrom": service,
+        }))
+    }
+
+    #[tool(
+        description = "Deletions the other person in a shared notebook made that this Mac has not answered yet (docs/RFC-shared-notebook.md §3). In a shared folder another person's deletion record is a proposal, not an instruction: the source or note is still here and still readable until someone answers. Empty for a notebook that is not shared."
+    )]
+    async fn deletion_proposals(
+        &self,
+        Parameters(NotebookIdReq { notebook_id }): Parameters<NotebookIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let proposals = crate::okf::deletion_proposals(&state, &notebook_id)
+            .await
+            .map_err(invalid)?;
+        json_result(&proposals)
+    }
+
+    #[tool(
+        description = "Answer one of those proposals. restore=true puts the source or note back for both people (it goes out under a new sync id, so their deletion record cannot take it again); restore=false accepts the deletion and removes it here. Only on the user's say-so — this is their corpus and the other person's, not yours."
+    )]
+    async fn resolve_deletion_proposal(
+        &self,
+        Parameters(ResolveDeletionReq {
+            notebook_id,
+            entity_id,
+            restore,
+        }): Parameters<ResolveDeletionReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        crate::okf::resolve_deletion_proposal(&state, &notebook_id, &entity_id, restore)
+            .await
+            .map_err(invalid)?;
+        self.changed("sources", Some(&notebook_id));
+        json_result(&serde_json::json!({ "id": entity_id, "restored": restore }))
     }
 
     #[tool(

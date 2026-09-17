@@ -48,7 +48,7 @@ import {
   visibleGrowthProposals,
 } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
-import { OkfBadges } from "./OkfBadges";
+import { DeletionProposalMark, OkfBadges } from "./OkfBadges";
 import type { Source } from "@/lib/types";
 import {
   ChevronRight,
@@ -667,6 +667,10 @@ export function SourcesPanel() {
     () => growthAttention(hygiene, loadHygieneKept(currentId)),
     [hygiene, currentId],
   );
+  // Deletions the other person in a shared notebook made and nobody here has
+  // answered (docs/RFC-shared-notebook.md §3). Empty unless the notebook is
+  // shared, which is nearly always.
+  const proposals = useStore((s) => s.deletionProposals);
   const issueBySource = useMemo(
     () =>
       new Map(
@@ -1292,7 +1296,13 @@ export function SourcesPanel() {
                           />
                         )}
                       </div>
-                      {importing ? (
+                      {/* A deletion the other person proposed outranks every
+                          other thing this line could say: it is the one thing
+                          on the row that is waiting on an answer
+                          (docs/RFC-shared-notebook.md §3). */}
+                      {proposals[s.id] ? (
+                        <DeletionProposalMark id={s.id} />
+                      ) : importing ? (
                         <div className="truncate text-micro text-subtle-foreground">
                           {folderScan
                             ? `Embedding ${Math.min(

@@ -8,6 +8,7 @@ import {
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { restoreRegistryCards } from "./registryRestore";
 import { initializeOnce } from "./startup";
@@ -434,6 +435,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       set({ sources });
       void get().refreshHygiene();
       void get().refreshOkfLifecycle(id);
+      void get().refreshDeletionProposals(id);
     }
   }, () => { /* api.run has already recorded the error. */ });
   const refreshNotes = coalescedRefresh(async (isCurrent) => {
@@ -489,6 +491,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     selectedSourceIds: null,
     okfLifecycle: {},
     okfBinding: null,
+    deletionProposals: {},
     picked: null,
     hygiene: [],
     growthDismissed: {},
@@ -1440,6 +1443,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: loadSourceSel(id),
         okfLifecycle: {},
         okfBinding: null,
+        deletionProposals: {},
         picked: null,
         hygiene: [],
         growthDismissed: loadGrowthDismissed(id),
@@ -1498,6 +1502,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Changes come back via sources://changed.
       void api.resyncSources(id).catch(() => {});
       void get().refreshOkfLifecycle(id);
+      void get().refreshDeletionProposals(id);
       void get().refreshOkfBinding(id);
     },
 
@@ -1509,6 +1514,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         selectedSourceIds: null,
         okfLifecycle: {},
         okfBinding: null,
+        deletionProposals: {},
         growthDismissed: {},
         messages: [],
         messagesHasMore: false,
@@ -2683,6 +2689,40 @@ export const useStore = create<AppState>((rawSet, get) => {
       set({ okfLifecycle: life, selectedSourceIds: sel });
     },
 
+    // What the other person in a shared notebook deleted, and this Mac has
+    // not answered (docs/RFC-shared-notebook.md §3). Read on the same beat as
+    // the lifecycle: a proposal arrives with a reconcile pass, like anything
+    // else the folder says. Empty for every notebook that is not shared.
+    refreshDeletionProposals: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) return;
+      const open = await api.deletionProposals(id).catch(() => []);
+      if (get().currentId !== id) return;
+      set({
+        deletionProposals: Object.fromEntries(open.map((p) => [p.id, p])),
+      });
+    },
+
+    resolveDeletionProposal: async (entityId, restore) => {
+      const id = get().currentId;
+      if (!id) return;
+      const proposal = get().deletionProposals[entityId];
+      try {
+        await api.resolveDeletionProposal(id, entityId, restore);
+        get().pushToast(
+          "success",
+          restore
+            ? `Put “${proposal?.title ?? "it"}” back.`
+            : `Removed “${proposal?.title ?? "it"}” here too.`,
+        );
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+      await get().refreshDeletionProposals(id);
+      if (proposal?.kind === "note") refreshNotes.request();
+      else refreshSources.request();
+    },
+
     toggleSourceSelected: (id) => {
       const next = { ...(get().selectedSourceIds ?? {}) };
       if (next[id] === false) delete next[id];
@@ -3282,6 +3322,36 @@ export const useStore = create<AppState>((rawSet, get) => {
       try {
         const path = await api.exportNotebookOkfZip(id, dest);
         get().pushToast("success", `Saved ${path.split("/").pop() ?? "the bundle"}`);
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
+      }
+    },
+
+    // "Share with someone…" (docs/RFC-shared-notebook.md §1). The move and
+    // the mark are the backend's; what is left here is the sheet, and the
+    // Finder fallback for the Macs where macOS won't raise it.
+    shareNotebookWithSomeone: async (notebookId) => {
+      const id = notebookId ?? get().currentId;
+      if (!id) {
+        get().pushToast("info", "Open a notebook to share it");
+        return;
+      }
+      try {
+        const folder = await api.shareNotebook(id);
+        await get().refreshOkfBinding(id);
+        if (folder.sheet) {
+          get().pushToast("success", "Pick who to share it with.");
+          return;
+        }
+        await revealItemInDir(folder.path).catch(() => {});
+        // A folder in somebody else's cloud is shared from that client, not
+        // from Finder's Share menu (docs/RFC-shared-notebook.md §4).
+        get().pushToast(
+          "info",
+          folder.service
+            ? `This notebook lives in ${folder.service} \u2014 share the folder from there.`
+            : "In Finder, click Share \u2192 Collaborate and add them.",
+        );
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));
       }

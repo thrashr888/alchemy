@@ -1,6 +1,7 @@
 import type {
   AiConfig,
   ChatConfig,
+  DeletionProposal,
   GrowthProposal,
   HygieneIssue,
   KokoroStatus,
@@ -458,6 +459,9 @@ export interface AppState {
 
   /** Omit the id to export the currently open notebook (palette/menu). */
   exportNotebookOkf: (notebookId?: string) => Promise<void>;
+  /** Move a notebook into iCloud Drive's shared folder, mark it shared, and
+   *  offer macOS's Share sheet on it (docs/RFC-shared-notebook.md §1). */
+  shareNotebookWithSomeone: (notebookId?: string) => Promise<void>;
   /** Bumped by Edit > Find; whichever find-capable surface is mounted
    *  (reader, gallery, home) opens its find bar. */
   findBump: number;
@@ -503,6 +507,13 @@ export interface AppState {
   refreshOkfLifecycle: (notebookId?: string) => Promise<void>;
   /** Re-read the binding. Omit the id for the open notebook. */
   refreshOkfBinding: (notebookId?: string) => Promise<void>;
+  /** Deletions the other person in a shared notebook made, by the id of the
+   *  source or note each one is about (docs/RFC-shared-notebook.md §3). */
+  deletionProposals: Record<string, DeletionProposal>;
+  refreshDeletionProposals: (notebookId?: string) => Promise<void>;
+  /** Answer one: `restore` puts it back for both people, otherwise the
+   *  deletion is accepted here too. */
+  resolveDeletionProposal: (entityId: string, restore: boolean) => Promise<void>;
   /** Keep this notebook on disk at `path`, seeding or importing as the
    *  folder requires. */
   bindNotebookOkf: (path: string, notebookId?: string) => Promise<void>;

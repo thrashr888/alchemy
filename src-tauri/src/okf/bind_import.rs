@@ -288,6 +288,7 @@ pub(crate) async fn bind_folder(
             path: target.to_string_lossy().into(),
             last_write_at: 0,
             lost: false,
+            shared: false,
         }),
     )?;
     #[cfg(test)]

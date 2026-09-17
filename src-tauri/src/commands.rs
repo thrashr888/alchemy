@@ -335,7 +335,7 @@ impl AppState {
 /// (`embedder://progress` with {label, done, total}).
 /// Locate the alchemy-fm sidecar: bundled resource first (release), then
 /// the in-repo Swift build (dev). None disables the Foundation Models rung.
-fn find_fm_sidecar(app: &AppHandle) -> Option<std::path::PathBuf> {
+pub(crate) fn find_fm_sidecar(app: &AppHandle) -> Option<std::path::PathBuf> {
     use tauri::path::BaseDirectory;
     use tauri::Manager;
     if let Ok(p) = app

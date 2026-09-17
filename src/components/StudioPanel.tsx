@@ -20,6 +20,7 @@ import {
 } from "./ui";
 import { Reports } from "./Reports";
 import { exportNote, exportTargets } from "@/lib/noteExport";
+import { DeletionProposalMark } from "./OkfBadges";
 import { LazyRichEditor } from "./LazyRichEditor";
 import { StreamingBody } from "./StudioNoteViewer";
 import {
@@ -239,6 +240,9 @@ export function StudioPanel() {
   const generatingKind = useStore((s) => s.generatingKind);
   const genProgress = useStore((s) => s.genProgress);
   const genStatus = useStore((s) => s.genStatus);
+  // Deletions the other person made in a shared folder, unanswered here
+  // (docs/RFC-shared-notebook.md §3).
+  const proposals = useStore((s) => s.deletionProposals);
   const generatingHere = useStore(
     (s) => s.generatingFor === null || s.generatingFor === s.currentId,
   );
@@ -951,7 +955,11 @@ export function StudioPanel() {
                         <Badge>stale</Badge>
                       </span>
                     )}
-                    {n.status === "generating" ? (
+                    {/* The other person deleted this note in the shared folder and
+                        the question is still open (docs/RFC-shared-notebook.md §3). */}
+                    {proposals[n.id] ? (
+                      <DeletionProposalMark id={n.id} />
+                    ) : n.status === "generating" ? (
                       <span className="pointer-events-auto flex items-center gap-1.5 text-micro text-subtle-foreground">
                         {genStatus[n.id]?.status === "waiting"
                           ? genStatus[n.id]?.detail || "Waiting for the model engine…"

@@ -250,6 +250,7 @@ pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<S
                     id: record.binding_id.clone(),
                     last_write_at: 0,
                     lost: false,
+                    shared: false,
                 },
             );
         }

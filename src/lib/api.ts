@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { describe, IpcError, TimeoutError, type AppError } from "./errors";
 import { report } from "./diagnostics";
 import type {
+  SharedBundleOffer,
+  SharedNotebookFolder,
+  DeletionProposal,
   CorpusTimeline,
   ProviderModels,
   AcpAgentInfo,
@@ -507,6 +510,28 @@ export const api = {
     run(query<Record<string, OkfLifecycle>>("okf_lifecycle", { notebookId })),
   notebookOkfBinding: (notebookId: string) =>
     run(query<OkfBinding | null>("notebook_okf_binding", { notebookId })),
+  sharedBundleOffers: () =>
+    run(query<SharedBundleOffer[]>("shared_bundle_offers_cmd")),
+  openSharedBundle: (path: string) =>
+    run(slow<string>("open_shared_bundle_cmd", { path })),
+  dismissSharedBundle: (path: string) =>
+    run(cmd<null>("dismiss_shared_bundle_cmd", { path })),
+  shareNotebook: (notebookId: string) =>
+    run(slow<SharedNotebookFolder>("share_notebook_cmd", { notebookId })),
+  deletionProposals: (notebookId: string) =>
+    run(query<DeletionProposal[]>("deletion_proposals_cmd", { notebookId })),
+  resolveDeletionProposal: (
+    notebookId: string,
+    entityId: string,
+    restore: boolean,
+  ) =>
+    run(
+      slow<null>("resolve_deletion_proposal_cmd", {
+        notebookId,
+        entityId,
+        restore,
+      }),
+    ),
   bindNotebookOkf: (notebookId: string, path: string) =>
     run(slow<string>("bind_notebook_okf", { notebookId, path })),
   unbindNotebookOkf: (notebookId: string) =>

@@ -2,6 +2,10 @@
 //
 // One-shot per invocation, stateless:
 //   --probe             print {"type":"probe","available":bool,"detail":…} and exit
+//   --share <folder>    show the macOS Share sheet on a folder; prints
+//                       {"type":"presented"} once it is up and stays alive
+//                       while the person uses it, or {"type":"error",…}
+//                       (docs/RFC-shared-notebook.md §1)
 //   (default)           read one NDJSON request from stdin:
 //                         {"messages":[{"role":"system"|"user"|"assistant","content":…}]}
 //                       stream NDJSON events to stdout:
@@ -15,6 +19,9 @@
 // through to their chat engine on any error here.
 
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -121,8 +128,83 @@ func respond() async {
     emit(["type": "error", "message": "requires macOS 26 or newer"])
 }
 
-if CommandLine.arguments.contains("--probe") {
+
+// MARK: - The Share sheet (docs/RFC-shared-notebook.md §1)
+//
+// Sharing an iCloud Drive folder with another Apple ID is `NSSharingService`
+// with the CloudSharing name — AppKit, which the Rust side has none of, and
+// this sidecar already is. The caller treats every failure here as "show the
+// folder in Finder and say which menu"; nothing below is load-bearing for
+// the move itself, which has already happened by the time we run.
+
+#if canImport(AppKit)
+@available(macOS 10.12, *)
+final class ShareDelegate: NSObject, NSSharingServiceDelegate, NSCloudSharingServiceDelegate {
+    // The picker has no window to hang off in a process with no UI, so it is
+    // anchored to the middle of the main screen.
+    func sharingService(
+        _ sharingService: NSSharingService, sourceFrameOnScreen forShareItem: Any
+    ) -> NSRect {
+        let frame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSRect(x: frame.midX, y: frame.midY, width: 1, height: 1)
+    }
+
+    func sharingService(
+        _ sharingService: NSSharingService, didCompleteForItems items: [Any], error: Error?
+    ) {
+        if let error { emit(["type": "error", "message": "\(error)"]) } else { emit(["type": "done"]) }
+        exit(0)
+    }
+
+    func sharingService(
+        _ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error
+    ) {
+        emit(["type": "error", "message": "\(error)"])
+        exit(1)
+    }
+}
+#endif
+
+@MainActor
+func share(_ path: String) {
+    var directory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue
+    else {
+        emit(["type": "error", "message": "no folder at \(path)"])
+        return
+    }
+    #if canImport(AppKit)
+    let url = URL(fileURLWithPath: path)
+    guard let service = NSSharingService(named: .cloudSharing),
+        service.canPerform(withItems: [url])
+    else {
+        emit(["type": "error", "message": "this Mac can't share that folder from here"])
+        return
+    }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let delegate = ShareDelegate()
+    service.delegate = delegate
+    app.activate(ignoringOtherApps: true)
+    service.perform(withItems: [url])
+    // The sheet is up; the caller stops waiting on us here and the person
+    // finishes in macOS's own UI. A sheet nobody answers is not left running
+    // forever: ten minutes and this process is gone, share or no share.
+    emit(["type": "presented"])
+    DispatchQueue.main.asyncAfter(deadline: .now() + 600) { exit(0) }
+    app.run()
+    #else
+    emit(["type": "error", "message": "the share sheet needs macOS"])
+    #endif
+}
+
+let arguments = CommandLine.arguments
+if arguments.contains("--probe") {
     probe()
+} else if let flag = arguments.firstIndex(of: "--share"), flag + 1 < arguments.count {
+    share(arguments[flag + 1])
+} else if arguments.contains("--share") {
+    emit(["type": "error", "message": "--share needs a folder"])
 } else {
     await respond()
 }

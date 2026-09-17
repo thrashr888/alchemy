@@ -25,7 +25,7 @@ import {
   Library,
   Pencil,
   Search,
-  Users,
+  Share,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -107,6 +107,21 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   onClick: () =>
                     void useStore.getState().exportNotebookOkf(notebook.id),
                 },
+                {
+                  // docs/RFC-shared-notebook.md §1. This replaces the older
+                  // "Share Folder…", which only revealed the folder: a
+                  // notebook in the app's iCloud container cannot be shared
+                  // with another Apple ID at all, so pointing at it in Finder
+                  // was advice that couldn't be taken. The folder moves into
+                  // iCloud Drive first, and macOS's own sheet picks the
+                  // person; Finder is the fallback, not the plan.
+                  label: "Share with Someone…",
+                  icon: <Share className="h-3.5 w-3.5" />,
+                  onClick: () =>
+                    void useStore
+                      .getState()
+                      .shareNotebookWithSomeone(notebook.id),
+                },
                 // Keeping a notebook on disk (RFC-okf-live §5.5). One verb
                 // while it is off; the two it earns once it is on.
                 ...(binding
@@ -116,23 +131,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                         icon: <HardDrive className="h-3.5 w-3.5" />,
                         onClick: () =>
                           void revealItemInDir(binding.path).catch(() => {}),
-                      },
-                      {
-                        // Sharing is Finder's (RFC-okf-live §5.7): iCloud and
-                        // Dropbox already share any folder, so the useful
-                        // thing to do is put the user in front of the right
-                        // one and say what to do there.
-                        label: "Share Folder…",
-                        icon: <Users className="h-3.5 w-3.5" />,
-                        onClick: () => {
-                          void revealItemInDir(binding.path).catch(() => {});
-                          useStore
-                            .getState()
-                            .pushToast(
-                              "info",
-                              "Right-click the folder in Finder and choose Share to invite someone.",
-                            );
-                        },
                       },
                       {
                         label: "Stop Keeping on Disk",

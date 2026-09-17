@@ -61,6 +61,30 @@ export interface OkfBinding {
   path: string;
   /** Epoch ms of the last write; 0 until the seed pass lands. */
   lastWriteAt: number;
+  /** The folder is shared with another person (docs/RFC-shared-notebook.md).
+   *  Their deletions arrive as proposals rather than removals. */
+  shared?: boolean;
+}
+
+/** One deletion the other person in a shared notebook made, waiting on an
+ *  answer here (docs/RFC-shared-notebook.md §3). The source or note is still
+ *  present and readable until somebody answers. */
+export interface DeletionProposal {
+  id: string;
+  kind: "source" | "note";
+  title: string;
+  /** Who deleted it, as their by-line names them ("kim"). */
+  by: string;
+}
+
+/** Where "Share with someone…" put a notebook, and whether macOS took it from
+ *  there (docs/RFC-shared-notebook.md §1). `sheet: false` means Finder. */
+export interface SharedNotebookFolder {
+  path: string;
+  sheet: boolean;
+  /** The service the invitation is made in when it isn't macOS's own sheet
+   *  ("Dropbox", "Google Drive"); empty for an iCloud folder. */
+  service: string;
 }
 
 /** Whether the Notebooks folder can move into the app's own iCloud container,
@@ -310,6 +334,14 @@ export type NoteKind =
 
 /** Collection rows never carry bodies or generation prompts. */
 export type NoteSummary = Omit<Note, "content" | "prompt">;
+
+/** A notebook found in iCloud Drive that this Mac hasn't opened
+ *  (docs/RFC-shared-notebook.md): where a folder shared with you lands. */
+export interface SharedBundleOffer {
+  path: string;
+  title: string;
+  notebookId: string;
+}
 
 /** One document on the corpus timeline (docs/RFC-timeline.md). */
 export interface TimelineItem {
