@@ -205,17 +205,29 @@ export function useTableSort(
 export function HomeTable({
   columns,
   sort,
+  fixed = false,
   children,
 }: {
   columns: TableColumn[];
   /** Current order plus the click handler, from `useTableSort`. Omit it and
    *  the headers stay plain labels. */
   sort?: TableSort & { onSort: (key: string, natural: SortDir) => void };
+  /** Fixed layout: every column but one carries a width class, and the one
+   *  without takes the rest. Auto layout sizes columns by their widest
+   *  cell, so a long unbreakable name defeats `truncate` and pushes the
+   *  table past its wrapper, where the last column clips. Use fixed for a
+   *  table with multi-valued or free-text cells. */
+  fixed?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-body">
+      <table
+        className={cn(
+          "w-full border-collapse text-body",
+          fixed && "table-fixed",
+        )}
+      >
         <thead>
           <tr className="border-b border-border text-left">
             {columns.map((c) => {

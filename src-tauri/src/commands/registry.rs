@@ -96,6 +96,21 @@ fn canon_sequence_present(doc: &[String], name: &[String]) -> bool {
     !name.is_empty() && doc.len() >= name.len() && doc.windows(name.len()).any(|w| w == name)
 }
 
+/// Whether a card with this name would attach at least one of these
+/// documents — the matcher's own name rule (`match_card`), run before a
+/// suggestion is minted. `doc_seqs` are the documents' canonical word
+/// sequences.
+pub(crate) fn would_file(name: &str, doc_seqs: &[Vec<String>]) -> bool {
+    let name = name.trim();
+    if name.chars().count() < MIN_NAME_LEN {
+        return false;
+    }
+    let words = canon_words(name);
+    doc_seqs
+        .iter()
+        .any(|doc| canon_sequence_present(doc, &words))
+}
+
 /// Why this document belongs to this card, or `None`.
 ///
 /// Returns the receipt that will be stored verbatim: the matched identifier,
@@ -244,6 +259,115 @@ pub(crate) fn live_docs(
         .count()
 }
 
+/// A card of yours whose every standing document sits in an archived
+/// notebook. Not an orphan — its documents exist — but nothing in the
+/// working corpus points at it, and a registry that keeps listing the cast
+/// of shelved notebooks is the clutter the shelf was meant to remove. Yours
+/// only: a dismissed card is refusal memory whatever its documents did
+/// (first cut of this rule took 114 of them with it), and a suggested one
+/// is the queue's. A card with no standing documents at all is the orphan
+/// rule's, not this one's.
+pub(crate) fn only_in_archived(
+    card: &RegistryCard,
+    existing_sources: &std::collections::HashSet<String>,
+    archived_notebooks: &std::collections::HashSet<String>,
+) -> bool {
+    if !card.origin.is_empty() {
+        return false;
+    }
+    let mut standing = card
+        .attachments
+        .iter()
+        .filter(|a| {
+            (a.status == "confirmed" || a.status == "proposed")
+                && existing_sources.contains(&a.source_id)
+        })
+        .peekable();
+    standing.peek().is_some() && standing.all(|a| archived_notebooks.contains(&a.notebook_id))
+}
+
+/// Remove the cards that only archived notebooks still point at, returning
+/// them so the caller can offer the undo (the archive toast recreates them
+/// alongside un-archiving). Runs on the archive click ONLY — the one moment
+/// the removal is on screen with its undo. Cards that already met the rule
+/// before it existed are badged "archived" in the index and go with the
+/// Clean up button, which names them first; a background sweep deleting a
+/// person's cards with nobody watching is the silent change the invariant
+/// forbids. Un-archiving does not bring a removed card back by itself: it
+/// clears the notebook's suggest stamp and re-matches it, so the cards it
+/// implies are proposed again and any surviving card picks its documents
+/// back up.
+pub(crate) async fn retire_archived_cards(
+    db: &crate::db::Db,
+    archived_now: &str,
+) -> anyhow::Result<Vec<RegistryCard>> {
+    let archived: std::collections::HashSet<String> = db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .filter(|n| n.status == "archived")
+        .map(|n| n.id)
+        .collect();
+    if archived.is_empty() {
+        return Ok(Vec::new());
+    }
+    let existing: std::collections::HashSet<String> = db
+        .all_source_meta()
+        .await?
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect();
+    let mut retired = Vec::new();
+    for card in db.list_registry().await? {
+        // Only what THIS archive stranded: a card the notebook holds a
+        // document of. Cards stranded by earlier archives keep their badge
+        // and their Clean up button — the toast says "only pointed there",
+        // and its count has to mean that.
+        if !holds_document_in(&card, archived_now) {
+            continue;
+        }
+        if only_in_archived(&card, &existing, &archived) {
+            db.delete_registry_card(&card.id).await?;
+            crate::note!(
+                "registry: removed \u{201c}{}\u{201d} — its documents are all in archived notebooks",
+                card.name
+            );
+            retired.push(card);
+        }
+    }
+    if !retired.is_empty() {
+        super::notify_changed("registry", None);
+    }
+    Ok(retired)
+}
+
+/// Whether a card has a standing document in this notebook.
+pub(crate) fn holds_document_in(card: &RegistryCard, notebook_id: &str) -> bool {
+    card.attachments.iter().any(|a| {
+        a.notebook_id == notebook_id && (a.status == "confirmed" || a.status == "proposed")
+    })
+}
+
+/// What un-archiving owes the registry: forget that the notebook was asked
+/// for suggestions (its cast may have been retired while it was shelved)
+/// and re-match its documents against the cards that remain.
+pub(crate) fn spawn_unarchive_rematch(
+    db: std::sync::Arc<crate::db::Db>,
+    data_dir: std::path::PathBuf,
+    notebook_id: String,
+) {
+    let mut asked = load_suggest_state(&data_dir);
+    if asked.remove(&notebook_id).is_some() {
+        save_suggest_state(&data_dir, &asked);
+    }
+    tauri::async_runtime::spawn(async move {
+        let filed = rematch_notebook(&db, &notebook_id).await;
+        if filed > 0 {
+            super::notify_changed("registry", None);
+        }
+    });
+}
+
 /// Drop attachment rows whose source no longer exists (their notebook was
 /// deleted). Every status goes, including `rejected` — a source id that no
 /// longer exists can never be re-proposed, so the refusal memory it carried
@@ -308,6 +432,7 @@ pub(crate) async fn sweep_orphan_cards(
         .collect();
     let mut promoted = 0usize;
     let mut pruned = 0usize;
+    let mut removed = 0usize;
     let mut cards = db.list_registry().await?;
     for card in &mut cards {
         let p = promote_name_proposals(card, ts);
@@ -320,7 +445,6 @@ pub(crate) async fn sweep_orphan_cards(
         }
     }
 
-    let mut removed = 0usize;
     let any_orphan = cards
         .iter()
         .any(|c| orphan_verdict(c, &existing) != OrphanVerdict::Alive);
@@ -732,8 +856,17 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
     let dir = ai.data_dir().to_path_buf();
     let mut asked = load_suggest_state(&dir);
     let mut asked_dirty = false;
+    let mut pending = pending_suggestions(&db.list_registry().await.unwrap_or_default());
 
+    // Notebooks arrive most recently updated first, so when there is room
+    // for only a few, they come from what the person is working on now.
     for nb in db.list_notebooks().await? {
+        // Room first, before the per-run marker and the stamp: a notebook
+        // skipped for want of room was never asked, and gets asked once a
+        // ruling frees a slot — this run, not the next launch.
+        if pending >= BACKLOG_CAP {
+            break;
+        }
         {
             let mut guard = SUGGESTED.lock().unwrap();
             let seen = guard.get_or_insert_with(Default::default);
@@ -758,10 +891,12 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
         // the previous notebook must block the same name here, or every
         // notebook that shares a dependency mints its own copy of it.
         let existing = db.list_registry().await.unwrap_or_default();
-        proposed += suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
+        let made = suggest_for_notebook(db, ai, &nb.id, &gists, &existing, None)
             .await
             .unwrap_or_default()
             .len();
+        proposed += made;
+        pending += made;
     }
     if asked_dirty {
         save_suggest_state(&dir, &asked);
@@ -795,6 +930,61 @@ pub async fn suggest_cards(db: &crate::db::Db, ai: &crate::ai::Ai) -> anyhow::Re
 const MIN_QUEUE_TO_TRIAGE: usize = 4;
 /// Suggestions weighed per pass — one batched call, never one per card.
 const MAX_TRIAGE_BATCH: usize = 40;
+
+// ---- The queue's ceiling ---------------------------------------------------
+//
+// Eight proposals per notebook is a short list; eight across thirty-five
+// notebooks is an inbox of three hundred, and the strip that showed every
+// one of them as a chip was unreadable. So the queue has two ceilings. The
+// SURFACED cap is how many the strip shows: the ones most likely to be
+// kept — the triage pass's picks first, then by how many documents mention
+// them — and the rest wait, unseen, until a ruling frees a slot. The
+// BACKLOG cap is how many the store holds in all; once it is reached the
+// sweep stops asking notebooks for more, without recording that it asked,
+// so the trickle resumes from the most recently updated notebook the
+// moment there is room. Bounded, visible (the strip says how many wait),
+// and stoppable by the same ruling it always was.
+
+/// Suggestions the strip shows at once.
+pub(crate) const SURFACED_CAP: usize = 10;
+/// Suggestions held in all (shown + waiting) before the sweep stops asking.
+/// The triage batch size, so everything held gets weighed.
+const BACKLOG_CAP: usize = MAX_TRIAGE_BATCH;
+
+/// Mark which suggested cards (`origin: "auto"`) are shown right now: the
+/// top `SURFACED_CAP` by triage verdict, then mentions, then age (older
+/// first, so nothing waits forever), then name. Computed on every list,
+/// never stored — a ruling changes the answer, and stale state here would
+/// show eleven or hide the one you just freed a slot for. Cards of any
+/// other origin are left `false`.
+pub(crate) fn surface_suggestions(cards: &mut [RegistryCard]) {
+    let mut queue: Vec<usize> = cards
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.origin == "auto")
+        .map(|(i, _)| i)
+        .collect();
+    queue.sort_by(|&a, &b| {
+        let (a, b) = (&cards[a], &cards[b]);
+        (b.triage == "recommended")
+            .cmp(&(a.triage == "recommended"))
+            .then(b.mentions.cmp(&a.mentions))
+            .then(a.created_at.cmp(&b.created_at))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    for c in cards.iter_mut() {
+        c.surfaced = false;
+    }
+    for i in queue.into_iter().take(SURFACED_CAP) {
+        cards[i].surfaced = true;
+    }
+}
+
+/// How many suggestions the store holds — the number the backlog cap
+/// bounds.
+fn pending_suggestions(cards: &[RegistryCard]) -> usize {
+    cards.iter().filter(|c| c.origin == "auto").count()
+}
 /// Characters of context shown on each side of a candidate's first mention.
 const TRIAGE_SNIPPET_RADIUS: usize = 70;
 
@@ -817,12 +1007,11 @@ pub(crate) async fn triage_suggested_cards(
     static RETRIAGED_THIS_RUN: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
     let refresh = !RETRIAGED_THIS_RUN.load(SeqCst);
-    let queue: Vec<RegistryCard> = cards
-        .into_iter()
-        .filter(|c| c.origin == "auto" && (refresh || c.triage.is_empty()))
-        .take(MAX_TRIAGE_BATCH)
-        .collect();
-    if queue.len() < MIN_QUEUE_TO_TRIAGE {
+    // Every pending suggestion is counted, judged or not: the count is what
+    // orders the queue (`surface_suggestions`), so a card the model has not
+    // weighed yet still needs its number to take its place in line.
+    let mut queue: Vec<RegistryCard> = cards.into_iter().filter(|c| c.origin == "auto").collect();
+    if queue.is_empty() {
         return Ok(0);
     }
     // Frequency across the corpus's SOURCES, not its gists. A fresh import
@@ -867,11 +1056,42 @@ pub(crate) async fn triage_suggested_cards(
         // the person using it.
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+    // Persist the counts that moved, without touching `updated_at` — a
+    // recount is the queue learning, not the card changing. The bump
+    // re-orders the strip.
+    let mut recounted = 0usize;
+    for (i, card) in queue.iter_mut().enumerate() {
+        let n = mentions[i] as i64;
+        if card.mentions != n {
+            card.mentions = n;
+            if db.update_registry_card(card).await.is_ok() {
+                recounted += 1;
+            }
+        }
+    }
+    if recounted > 0 {
+        super::notify_changed("registry", None);
+    }
+    // The model weighs the most-mentioned candidates awaiting a verdict —
+    // one batch, and the ones that will surface first are in it.
+    let mut batch: Vec<usize> = (0..queue.len())
+        .filter(|&i| refresh || queue[i].triage.is_empty())
+        .collect();
+    batch.sort_by(|&a, &b| {
+        mentions[b]
+            .cmp(&mentions[a])
+            .then(queue[a].created_at.cmp(&queue[b].created_at))
+    });
+    batch.truncate(MAX_TRIAGE_BATCH);
+    if batch.len() < MIN_QUEUE_TO_TRIAGE {
+        return Ok(0);
+    }
     let mut lines = String::new();
-    for (i, c) in queue.iter().enumerate() {
+    for (k, &i) in batch.iter().enumerate() {
+        let c = &queue[i];
         lines.push_str(&format!(
             "{}. {}|{} — in {} document{}{}\n",
-            i + 1,
+            k + 1,
             c.kind,
             c.name,
             mentions[i],
@@ -888,18 +1108,19 @@ pub(crate) async fn triage_suggested_cards(
         .await
         .map_err(|e| anyhow::anyhow!("{e:#}"))?
         .text;
-    let picked = parse_triage_reply(&reply, queue.len());
+    let picked = parse_triage_reply(&reply, batch.len());
     let ts = now();
     let mut marked = 0usize;
-    for (i, mut card) in queue.into_iter().enumerate() {
-        card.triage = if picked.contains(&(i + 1)) {
+    for (k, &i) in batch.iter().enumerate() {
+        let card = &mut queue[i];
+        card.triage = if picked.contains(&(k + 1)) {
             "recommended"
         } else {
             "routine"
         }
         .into();
         card.updated_at = ts;
-        if db.update_registry_card(&card).await.is_ok() {
+        if db.update_registry_card(card).await.is_ok() {
             marked += 1;
         }
     }
@@ -1142,7 +1363,33 @@ async fn suggest_for_notebook(
                     .collect::<String>()
             );
         }
+        // The documents themselves, canonicalized the way the matcher reads
+        // them. The verbatim gate above proves the model did not invent the
+        // name; this proves the name would FILE something. A gist can carry
+        // a phrasing no document contains word-for-word ("Delta" for a
+        // paper titled "delta rule"), and a suggestion the matcher can
+        // never attach is an orphan the moment it is kept.
+        let doc_seqs: Vec<Vec<String>> = if gated.is_empty() {
+            Vec::new()
+        } else {
+            db.sources_with_content(notebook_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.source_type != "folder")
+                .map(|s| {
+                    let head: String = s.content.chars().take(SCAN_CAP).collect();
+                    canon_words(&head.to_lowercase())
+                })
+                .collect()
+        };
         for (kind, name, facts) in gated {
+            if !would_file(&name, &doc_seqs) {
+                crate::note!(
+                    "registry: skipped \u{201c}{name}\u{201d} — no document in the notebook would file under it"
+                );
+                continue;
+            }
             // Anything already in the cast — yours, pending, or turned down
             // — is settled. Never re-propose it. `made` guards within this
             // reply: a model can restate one thing twice in one answer.
@@ -1166,6 +1413,8 @@ async fn suggest_for_notebook(
                 name: name.clone(),
                 origin: "auto".into(),
                 triage: String::new(),
+                mentions: 0,
+                surfaced: false,
                 identifiers: String::new(),
                 note: String::new(),
                 facts,
@@ -1198,6 +1447,7 @@ pub(crate) async fn suggest_now(
             created: Vec::new(),
             reply: String::new(),
             already_running: true,
+            queue_full: false,
         });
     };
     // Heal what an earlier race left behind before proposing more.
@@ -1205,6 +1455,12 @@ pub(crate) async fn suggest_now(
         super::notify_changed("registry", None);
     }
     let gists = db.list_gists().await.map_err(|e| e.to_string())?;
+    // A whole-corpus ask keeps the same ceiling as the sweep: more
+    // proposals than the queue can show would only wait unseen. The
+    // notebook-scoped ask (from inside a notebook, or an agent naming one)
+    // bypasses it — that is a question about one notebook, and eight rows
+    // is its answer.
+    let bounded = notebook_id.is_none();
     let nbs: Vec<String> = match notebook_id {
         Some(id) => vec![id],
         None => db
@@ -1215,12 +1471,17 @@ pub(crate) async fn suggest_now(
             .map(|n| n.id)
             .collect(),
     };
+    let mut queue_full = false;
     let mut reply = String::new();
     let mut made: Vec<String> = Vec::new();
     for nb in nbs {
         // Refetched per notebook, like the sweep: a card minted for the
         // previous notebook must block the same name here.
         let existing = db.list_registry().await.unwrap_or_default();
+        if bounded && pending_suggestions(&existing) >= BACKLOG_CAP {
+            queue_full = true;
+            break;
+        }
         made.extend(
             suggest_for_notebook(db, &ai, &nb, &gists, &existing, Some(&mut reply))
                 .await
@@ -1250,6 +1511,7 @@ pub(crate) async fn suggest_now(
         created: made,
         reply,
         already_running: false,
+        queue_full,
     })
 }
 
@@ -1276,6 +1538,10 @@ pub struct SuggestOutcome {
     /// ask did nothing — surfaced so the caller can say "already running"
     /// instead of "nothing new".
     pub already_running: bool,
+    /// True when a whole-corpus ask stopped at the queue's ceiling
+    /// (`BACKLOG_CAP`) — the caller can say "rule on these first" instead
+    /// of "nothing new". Never set on a notebook-scoped ask.
+    pub queue_full: bool,
 }
 
 fn build_suggest_messages(material: &str) -> Vec<crate::ai::ChatTurn> {
@@ -1522,7 +1788,9 @@ fn gate_suggestions(reply: &str, haystack: &str) -> Vec<(String, String, Vec<Car
 
 #[tauri::command]
 pub async fn list_registry(state: State<'_, AppState>) -> Result<Vec<RegistryCard>, String> {
-    e(state.db.list_registry().await)
+    let mut cards = e(state.db.list_registry().await)?;
+    surface_suggestions(&mut cards);
+    Ok(cards)
 }
 
 /// Rule on a suggested card: "" confirms it (it becomes yours, and its
@@ -1558,21 +1826,24 @@ pub async fn set_card_origin(
 }
 
 /// Rule on suggested cards in bulk — the strip's "Keep recommended" /
-/// "Keep all" / "Dismiss all". Shared with the MCP tool. With
-/// `only_recommended`, only the cards the triage pass marked are ruled; the
-/// rest stay in the queue. One rematch sweep at the end instead of one per
-/// card, so keeping a dozen suggestions doesn't read the corpus a dozen
-/// times over.
+/// "Keep all" / "Dismiss all". Shared with the MCP tool. Only the SURFACED
+/// suggestions are ruled: the waiting ones were never shown, and a sweep
+/// verdict over things nobody has read is exactly the machine judgment the
+/// closed cast exists to refuse. With `only_recommended`, only the shown
+/// cards the triage pass marked are ruled; the rest stay in the queue. One
+/// rematch sweep at the end instead of one per card, so keeping a dozen
+/// suggestions doesn't read the corpus a dozen times over.
 pub(crate) async fn rule_all_suggested_cards(
     db: &std::sync::Arc<crate::db::Db>,
     origin: &str,
     only_recommended: bool,
 ) -> Result<usize, String> {
-    let cards = db.list_registry().await.map_err(|e| e.to_string())?;
+    let mut cards = db.list_registry().await.map_err(|e| e.to_string())?;
+    surface_suggestions(&mut cards);
     let ts = now();
     let mut ruled = 0usize;
     for mut card in cards {
-        if card.origin != "auto" {
+        if card.origin != "auto" || !card.surfaced {
             continue;
         }
         if only_recommended && card.triage != "recommended" {
@@ -1687,6 +1958,8 @@ pub async fn add_registry_card(
         name,
         origin: String::new(),
         triage: String::new(),
+        mentions: 0,
+        surfaced: false,
         identifiers: normalize_tags(&identifiers.unwrap_or_default()),
         note: note.unwrap_or_default().trim().to_string(),
         facts: facts.unwrap_or_default(),
@@ -1838,16 +2111,24 @@ pub async fn rematch_registry(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<usize, String> {
-    // One content scan for the notebook instead of one per source.
-    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    Ok(rematch_notebook(&state.db, &notebook_id).await)
+}
+
+/// Match every document in one notebook against the cast — one content scan
+/// for the notebook instead of one per source. Best-effort: a notebook that
+/// cannot be read files nothing.
+pub(crate) async fn rematch_notebook(db: &crate::db::Db, notebook_id: &str) -> usize {
+    let Ok(sources) = db.sources_with_content(notebook_id).await else {
+        return 0;
+    };
     let mut filed = 0;
     for s in sources {
         if s.source_type == "folder" {
             continue;
         }
-        filed += match_source_to_cards(&state.db, &notebook_id, &s.id, &s.content).await;
+        filed += match_source_to_cards(db, notebook_id, &s.id, &s.content).await;
     }
-    Ok(filed)
+    filed
 }
 
 #[cfg(test)]
@@ -1888,6 +2169,8 @@ mod tests {
             name: name.into(),
             origin: String::new(),
             triage: String::new(),
+            mentions: 0,
+            surfaced: false,
             identifiers: identifiers.into(),
             note: String::new(),
             facts: vec![],
@@ -2180,6 +2463,104 @@ mod tests {
             hay,
         );
         assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn a_card_only_archived_notebooks_point_at_retires() {
+        let existing = sources(&["s1", "s2"]);
+        let archived: std::collections::HashSet<String> = ["nbA".to_string()].into();
+        let in_nb = |c: RegistryCard, source: &str, nb: &str| {
+            let mut c = with_attachment(c, source, "confirmed", "name");
+            c.attachments.last_mut().unwrap().notebook_id = nb.into();
+            c
+        };
+        // Every standing document in the archived notebook: retire.
+        let shelved = in_nb(card("Shelved", ""), "s1", "nbA");
+        assert!(only_in_archived(&shelved, &existing, &archived));
+        // One document still in a working notebook: stays.
+        let mixed = in_nb(in_nb(card("Mixed", ""), "s1", "nbA"), "s2", "nbB");
+        assert!(!only_in_archived(&mixed, &existing, &archived));
+        // No standing documents at all is the orphan rule's case, not this one.
+        let orphan = card("Orphan", "");
+        assert!(!only_in_archived(&orphan, &existing, &archived));
+        // A deleted source in the archived notebook does not count as standing.
+        let gone = in_nb(card("Gone", ""), "s9", "nbA");
+        assert!(!only_in_archived(&gone, &existing, &archived));
+        // A rejected row does not keep a card alive either way.
+        let mut rejected = in_nb(card("Rejected", ""), "s2", "nbB");
+        rejected.attachments[0].status = "rejected".into();
+        let rejected = in_nb(rejected, "s1", "nbA");
+        assert!(only_in_archived(&rejected, &existing, &archived));
+        // Never a dismissed card (refusal memory) or a suggested one (the
+        // queue's), whatever their documents did.
+        let mut dismissed = in_nb(card("Dismissed", ""), "s1", "nbA");
+        dismissed.origin = "dismissed".into();
+        assert!(!only_in_archived(&dismissed, &existing, &archived));
+        let mut suggested = in_nb(card("Suggested", ""), "s1", "nbA");
+        suggested.origin = "auto".into();
+        assert!(!only_in_archived(&suggested, &existing, &archived));
+        // The archive click retires only what that notebook holds.
+        assert!(holds_document_in(&shelved, "nbA"));
+        assert!(!holds_document_in(&shelved, "nbB"));
+        let mut rejected_only = in_nb(card("Rejected only", ""), "s1", "nbA");
+        rejected_only.attachments[0].status = "rejected".into();
+        assert!(!holds_document_in(&rejected_only, "nbA"));
+    }
+
+    #[test]
+    fn a_suggestion_the_matcher_cannot_attach_is_not_proposed() {
+        let doc = |t: &str| canon_words(&t.to_lowercase());
+        let docs = vec![
+            doc("The 2019 Toyota 4Runner SR5 service history"),
+            doc("Bayside Mutual Insurance renewal notice"),
+        ];
+        assert!(would_file("Toyota 4Runner", &docs));
+        assert!(would_file("Bayside Mutual", &docs));
+        // Named in a gist's words, never in a document's: would file nothing.
+        assert!(!would_file("Bayside Insurance", &docs));
+        assert!(!would_file("Delta", &docs));
+        // Too short for the name rule, whatever the documents say.
+        assert!(!would_file("SR5", &docs));
+    }
+
+    #[test]
+    fn the_strip_shows_the_likeliest_keeps_and_holds_the_rest() {
+        let mut cards: Vec<RegistryCard> = (0..(SURFACED_CAP + 3))
+            .map(|i| {
+                let mut c = card(&format!("thing {i:02}"), "");
+                c.id = format!("c{i}");
+                c.origin = "auto".into();
+                c.mentions = i as i64; // later cards are mentioned more
+                c.created_at = i as i64;
+                c
+            })
+            .collect();
+        // The least-mentioned card carries the triage pick; a kept card
+        // sits among them with a huge count and must never surface.
+        cards[0].triage = "recommended".into();
+        let mut mine = card("mine", "");
+        mine.mentions = 999;
+        cards.push(mine);
+
+        surface_suggestions(&mut cards);
+
+        let shown: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.surfaced)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(shown.len(), SURFACED_CAP);
+        assert!(shown.contains(&"c0"), "the triage pick surfaces first");
+        assert!(!cards.iter().find(|c| c.name == "mine").unwrap().surfaced);
+        // The waiting ones are the least-mentioned untriaged: c1, c2, c3.
+        for held in ["c1", "c2", "c3"] {
+            assert!(!shown.contains(&held), "{held} should wait");
+        }
+        // Ruling on one frees a slot for the next in line.
+        cards.iter_mut().find(|c| c.id == "c0").unwrap().origin = String::new();
+        surface_suggestions(&mut cards);
+        assert!(cards.iter().find(|c| c.id == "c3").unwrap().surfaced);
+        assert!(!cards.iter().find(|c| c.id == "c0").unwrap().surfaced);
     }
 
     #[test]

@@ -289,6 +289,31 @@ function NotebookTable({
  *  so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
+  const currentId = useStore((s) => s.currentId);
+  const chatUnread = useStore((s) => s.homeChatUnread);
+  const registryBump = useStore((s) => s.registryBump);
+  const registrySignal = useStore((s) => s.registrySignal);
+  const registrySeenAt = useStore((s) => s.registrySeenAt);
+  // The Registry's dot works from any tab, so the signal is read here — at
+  // mount and on every registry bump — not by the section that shows it.
+  useEffect(() => {
+    void useStore.getState().refreshRegistrySignal();
+  }, [registryBump]);
+  // On screen means seen. Chat's flag drops the moment the tab shows; the
+  // Registry's baseline moves to now while it shows, so what arrives while
+  // you're reading it never dots after you leave.
+  useEffect(() => {
+    if (currentId) return;
+    if (section === "chat" && chatUnread)
+      useStore.setState({ homeChatUnread: false });
+    if (section === "registry") useStore.getState().markRegistrySeen();
+  }, [section, currentId, chatUnread, registrySignal]);
+  const registryUnread =
+    !!registrySignal &&
+    registrySignal.shown > 0 &&
+    registrySignal.newest > registrySeenAt;
+  const unread = (id: string) =>
+    id === "chat" ? chatUnread : id === "registry" ? registryUnread : false;
 
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: Library },
@@ -297,7 +322,12 @@ function HomeSectionTabs() {
     { id: "timeline", label: "Timeline", icon: ChartNoAxesGantt },
   ] as const;
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+    // data-unread: readable by the tauri-browser checks — which tabs wear
+    // the dot.
+    <div
+      className="flex items-center gap-0.5 rounded-lg border border-border p-0.5"
+      data-unread={JSON.stringify({ chat: chatUnread, registry: registryUnread })}
+    >
       {tabs.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -332,6 +362,17 @@ function HomeSectionTabs() {
         >
           <Icon className="h-3.5 w-3.5" />
           {label}
+          {/* The notebook cards' activity dot, on a tab: something is
+              waiting here that you haven't seen. */}
+          {unread(id) && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+              aria-label={
+                id === "chat" ? "New answer" : "New suggestions"
+              }
+              title={id === "chat" ? "An answer landed" : "New suggestions"}
+            />
+          )}
         </button>
       ))}
     </div>
@@ -345,6 +386,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const create = useStore((s) => s.createNotebook);
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
+  const registryCounts = useStore((s) => s.registryCounts);
   const theme = useStore((s) => s.theme);
   const homeSection = useStore((s) => s.homeSection);
   const homeView = useStore((s) => s.homeView);
@@ -594,7 +636,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       label: "Archive",
       symbol: "archivebox",
       icon: <Archive className="h-3.5 w-3.5" />,
-      onClick: () => void setStatus(nb.id, "archived"),
+      onClick: () => void useStore.getState().archiveNotebooks([nb.id]),
     },
     {
       label: "Delete…",
@@ -626,11 +668,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       icon: <Archive className="h-3.5 w-3.5" />,
       onClick: () =>
         void (async () => {
-          for (const id of ids) await setStatus(id, "archived");
+          await useStore.getState().archiveNotebooks(ids);
           useStore.getState().clearPicked();
-          useStore
-            .getState()
-            .pushToast("success", `Archived ${ids.length} notebooks`);
         })(),
     },
     {
@@ -1159,8 +1198,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </h1>
                   {homeSection === "registry" ? (
                     <p className="mt-1 text-body text-muted-foreground">
-                      The things your documents are about: assets, people,
-                      projects.
+                      {/* Counted like the shelf's sources: the total, then
+                          each kind that has any. The tagline until the
+                          index has loaded, and while the cast is empty. */}
+                      {registryCounts && registryCounts.total > 0
+                        ? [
+                            `${registryCounts.total} ${registryCounts.total === 1 ? "card" : "cards"}`,
+                            ...registryCounts.kinds.map(
+                              (k) => `${k.count} ${k.label.toLowerCase()}`,
+                            ),
+                          ].join(" · ")
+                        : "The things your documents are about: assets, people, projects."}
                     </p>
                   ) : homeSection === "timeline" ? (
                     <p className="mt-1 text-body text-muted-foreground">

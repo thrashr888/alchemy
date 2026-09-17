@@ -10,6 +10,7 @@
    mistake. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { restoreRegistryCards } from "@/lib/registryRestore";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import type {
@@ -57,10 +58,8 @@ import {
 } from "lucide-react";
 
 /** The one card-delete path (DESIGN.md §9: undo beats confirm). Deletes
- *  immediately; the toast's undo recreates each card — identifiers, note,
- *  facts — and re-files its attachments. Ruling metadata (origin/triage)
- *  doesn't survive, which only matters for suggested cards, and those are
- *  dismissed rather than deleted. */
+ *  immediately; the toast's undo recreates each card through
+ *  `restoreRegistryCards`, the same half the archive toast uses. */
 async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   if (cards.length === 0) return;
   for (const c of cards) await api.deleteRegistryCard(c.id);
@@ -72,18 +71,7 @@ async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   useStore.getState().pushToast("success", label, () =>
     void (async () => {
       try {
-        for (const c of cards) {
-          const restored = await api.addRegistryCard(
-            c.kind,
-            c.name,
-            c.identifiers,
-            c.note,
-            c.facts,
-          );
-          for (const a of c.attachments) {
-            await api.attachSourceToCard(restored.id, a.sourceId, a.status);
-          }
-        }
+        await restoreRegistryCards(cards);
       } catch (e) {
         useStore
           .getState()
@@ -142,9 +130,33 @@ const proposed = (c: RegistryCard) =>
 const isOrphan = (c: RegistryCard) =>
   !c.origin && confirmed(c).length === 0 && proposed(c).length === 0;
 
+/** A user-owned card whose every standing document is in an archived
+ *  notebook. Archiving removes such cards on the click (with the undo);
+ *  this catches the ones that met the rule before it existed, and badges
+ *  them so the Clean up button can name them. */
+const isShelved = (c: RegistryCard, archived: Set<string>) => {
+  if (c.origin) return false;
+  const standing = [...confirmed(c), ...proposed(c)];
+  return standing.length > 0 && standing.every((a) => archived.has(a.notebookId));
+};
+
+/** Why a card is in the clean-up list, for its badge: "orphaned" (no
+ *  documents left) or "archived" (documents only in archived notebooks). */
+const staleBadge = (c: RegistryCard, archived: Set<string>) =>
+  isOrphan(c) ? "orphaned" : isShelved(c, archived) ? "archived" : null;
+
+/** Ids of archived notebooks — what `isShelved` judges against. */
+function useArchivedIds() {
+  const notebooks = useStore((s) => s.notebooks);
+  return useMemo(
+    () => new Set(notebooks.filter((n) => n.status === "archived").map((n) => n.id)),
+    [notebooks],
+  );
+}
+
 const ORPHAN_HINT =
-  "No documents left; its sources may have been deleted with their notebook. " +
-  "Alchemy retried the match and found nothing.";
+  "No documents left, or none outside archived notebooks. Its sources may have " +
+  "been deleted with their notebook; Alchemy retried the match and found nothing.";
 
 type RegistrySort = "latest" | "docs" | "title";
 const SORTS: { value: RegistrySort; label: string }[] = [
@@ -158,16 +170,27 @@ const touched = (c: RegistryCard) => Math.max(c.updatedAt, c.createdAt);
 
 /** The index's columns. Notebooks and Identifiers stay unsortable: both are
     multi-valued cells, and ordering a list by its first comma-separated
-    entry looks like a sort without being one. */
+    entry looks like a sort without being one.
+    Fixed layout (see `HomeTable`): the short columns take set widths, the
+    two lists take a share, and Name takes what is left and truncates. */
 const CARD_COLUMNS = [
   { key: "name", label: "Name", sort: "asc" },
-  { key: "kind", label: "Kind", sort: "asc" },
-  { key: "docs", label: "Documents", className: "text-right", sort: "desc" },
-  { key: "nb", label: "Notebooks" },
-  { key: "id", label: "Identifiers" },
-  { key: "updated", label: "Updated", sort: "desc" },
-  { key: "menu", label: "" },
+  { key: "kind", label: "Kind", className: "w-24", sort: "asc" },
+  {
+    key: "docs",
+    label: "Documents",
+    className: "w-[6.5rem] text-right",
+    sort: "desc",
+  },
+  { key: "nb", label: "Notebooks", className: "w-[20%]" },
+  { key: "id", label: "Identifiers", className: "w-[13%]" },
+  { key: "updated", label: "Updated", className: "w-24", sort: "desc" },
+  { key: "menu", label: "", className: "w-8" },
 ] as const satisfies TableColumn[];
+
+/** Notebook names shown in a row before the cell folds the rest into a
+    count — the FilterBar's "+N more" idiom, one line per row. */
+const ROW_NOTEBOOKS_SHOWN = 2;
 
 const CARD_SORT_KEYS = CARD_COLUMNS.filter((c) => "sort" in c).map(
   (c) => c.key,
@@ -285,11 +308,30 @@ export function RegistrySection() {
   // Suggested cards are proposals, not cast members: they get their own
   // group above the grid, and dismissed ones never render at all (the row
   // survives only as the suggester's refusal memory).
+  // The backend surfaces the few most likely to be kept; the rest wait
+  // unseen until a ruling frees a slot, and the strip says how many.
   const suggested = useMemo(
-    () => cards.filter((c) => c.origin === "auto"),
+    () => cards.filter((c) => c.origin === "auto" && c.surfaced),
+    [cards],
+  );
+  const waiting = useMemo(
+    () => cards.filter((c) => c.origin === "auto" && !c.surfaced).length,
     [cards],
   );
   const mine = useMemo(() => cards.filter((c) => !c.origin), [cards]);
+  // The header's subtitle counts the cast by kind, the way the notebook
+  // shelf's counts its sources. Yours only — suggestions are not cast yet.
+  useEffect(() => {
+    useStore.setState({
+      registryCounts: {
+        total: mine.length,
+        kinds: KINDS.map((k) => ({
+          label: k.label,
+          count: mine.filter((c) => c.kind === k.id).length,
+        })).filter((k) => k.count > 0),
+      },
+    });
+  }, [mine]);
 
   // Both axes are computed from what's actually present, so an empty option
   // never renders (the gallery's rule).
@@ -373,12 +415,16 @@ export function RegistrySection() {
 
   // User-owned orphans (see isOrphan): badged in the list, removed only by
   // this explicit bulk action — one confirm, then they go together.
-  const orphans = useMemo(() => mine.filter(isOrphan), [mine]);
+  const archivedIds = useArchivedIds();
+  const orphans = useMemo(
+    () => mine.filter((c) => staleBadge(c, archivedIds) !== null),
+    [mine, archivedIds],
+  );
   const cleanUpOrphans = async () => {
     const ok = await confirm({
       title: `Remove ${orphans.length} orphaned card${orphans.length === 1 ? "" : "s"}?`,
       message:
-        "These cards have no documents left — their sources were deleted and " +
+        "These cards have no documents left, or none outside archived notebooks — " +
         "rematching found nothing. Identifiers and facts on them go too.",
       // Named, not just counted: "4 orphaned cards" is impossible to check
       // against, and this is the one screen where the user can still say no.
@@ -407,7 +453,9 @@ export function RegistrySection() {
             ? "A suggest pass is already running"
             : out.created.length > 0
               ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
-              : "Nothing new to suggest",
+              : out.queueFull
+                ? "The queue is full — rule on the suggestions shown and more will follow"
+                : "Nothing new to suggest",
         );
       void load();
     } catch (e) {
@@ -457,7 +505,7 @@ export function RegistrySection() {
         className="relative z-10 min-h-0 flex-1 select-none overflow-y-auto"
       >
         <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
-          <SuggestionStrip cards={suggested} onChanged={load} />
+          <SuggestionStrip cards={suggested} waiting={waiting} onChanged={load} />
           {/* Unconditional, like the notebook shelf's: gating this on
               "are there confirmed cards" made the whole row — filter AND
               view toggle — vanish whenever the cast was empty or held only
@@ -883,10 +931,11 @@ function CardTable({
   sort: TableSort;
   onSort: (key: string, natural: SortDir) => void;
 }) {
+  const archivedIds = useArchivedIds();
   return (
     <>
       {/* No "New card" button here — the header's covers both views. */}
-      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }}>
+      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }} fixed>
         {cards.map((c) => {
           const notebooks = [
             ...new Set(
@@ -917,22 +966,24 @@ function CardTable({
             >
               <td className="px-3 py-2">
                 <span className="flex items-center gap-2">
-                  <span className="text-muted-foreground">
+                  <span className="shrink-0 text-muted-foreground">
                     {kindIcon(c.kind)}
                   </span>
-                  <span className="truncate font-medium">{c.name}</span>
+                  <span className="min-w-0 truncate font-medium" title={c.name}>
+                    {c.name}
+                  </span>
                   {pending > 0 && (
                     <span
                       className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
                       title={`${pending} waiting`}
                     />
                   )}
-                  {isOrphan(c) && (
+                  {staleBadge(c, archivedIds) && (
                     <span
                       className="shrink-0 rounded border border-border px-1 text-micro text-subtle-foreground"
                       title={ORPHAN_HINT}
                     >
-                      orphaned
+                      {staleBadge(c, archivedIds)}
                     </span>
                   )}
                 </span>
@@ -943,18 +994,36 @@ function CardTable({
               <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                 {confirmed(c).length}
               </td>
-              <td className="px-3 py-2 text-caption text-muted-foreground">
-                {notebooks.join(", ")}
+              {/* One line per row: the first names, then "+N" for the rest.
+                  The full list rides the tooltip — a cell that wraps to nine
+                  lines makes the row taller than the card it describes. */}
+              <td
+                className="px-3 py-2 text-caption text-muted-foreground"
+                title={notebooks.length > 0 ? notebooks.join("\n") : undefined}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className="min-w-0 truncate">
+                    {notebooks.slice(0, ROW_NOTEBOOKS_SHOWN).join(", ")}
+                  </span>
+                  {notebooks.length > ROW_NOTEBOOKS_SHOWN && (
+                    <span className="shrink-0 text-subtle-foreground">
+                      +{notebooks.length - ROW_NOTEBOOKS_SHOWN}
+                    </span>
+                  )}
+                </span>
               </td>
-              <td className="px-3 py-2 text-caption text-subtle-foreground">
+              <td
+                className="truncate px-3 py-2 text-caption text-subtle-foreground"
+                title={c.identifiers || undefined}
+              >
                 {c.identifiers}
               </td>
               {/* The index had no recency anywhere: the grid could order by
                   "Latest" but the table couldn't even show it. */}
-              <td className="px-3 py-2 text-caption text-muted-foreground">
+              <td className="truncate px-3 py-2 text-caption text-muted-foreground">
                 {relativeTime(touched(c))}
               </td>
-              <td className="w-8 px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
                   contextItems={onContextItems(c.id)}
                   items={[
@@ -987,19 +1056,26 @@ function CardTable({
     guess never comes back. */
 function SuggestionStrip({
   cards,
+  waiting,
   onChanged,
 }: {
+  /** The surfaced suggestions — the backend's pick of the likeliest keeps. */
   cards: RegistryCard[];
+  /** How many more wait unseen for a slot. */
+  waiting: number;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
 
-  // Recommended first — the triage pass exists so the ones worth keeping
-  // are the first ones you read.
+  // The queue's own order (the backend's `surface_suggestions` rank):
+  // recommended first — the triage pass exists so the ones worth keeping
+  // are the first ones you read — then the most-mentioned, then oldest.
   const ordered = [...cards].sort(
     (a, b) =>
-      Number(b.triage === "recommended") - Number(a.triage === "recommended"),
+      Number(b.triage === "recommended") - Number(a.triage === "recommended") ||
+      b.mentions - a.mentions ||
+      a.createdAt - b.createdAt,
   );
   const recommended = cards.filter((c) => c.triage === "recommended").length;
 
@@ -1101,6 +1177,10 @@ function SuggestionStrip({
         Things that recur across your documents. Keeping one adds it to your
         registry and files its documents under it. Filing changes nothing in
         the documents themselves.
+        {/* The queue's ceiling, said out loud: bounded work is only
+            trustworthy when you can see the bound. */}
+        {waiting > 0 &&
+          ` ${waiting} more ${waiting === 1 ? "waits" : "wait"} behind these and ${waiting === 1 ? "surfaces" : "surface"} as you rule.`}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {ordered.map((c) => (
@@ -1116,8 +1196,13 @@ function SuggestionStrip({
             )}
             <span className="text-muted-foreground">{kindIcon(c.kind)}</span>
             <span className="text-body" title={c.triage === "recommended" ? "Recommended — recurs across your documents" : undefined}>{c.name}</span>
+            {/* The receipt: why this one is in front of you — how many
+                documents name it. A suggestion with no reason showing is a
+                guess; with the count it is a claim you can check. */}
             <span className="text-micro text-subtle-foreground">
               {kindLabel(c.kind)}
+              {c.mentions > 0 &&
+                ` · ${c.mentions} doc${c.mentions === 1 ? "" : "s"}`}
             </span>
             {/* Every chip repeats the same two verbs, so the name has to say
                 which suggestion it acts on. */}
@@ -1163,6 +1248,7 @@ function CardTile({
   onActivate?: (e: React.MouseEvent) => true | undefined;
   onContextItems?: () => RowMenuItem[] | null;
 }) {
+  const archivedIds = useArchivedIds();
   const docs = confirmed(card).length;
   const pending = proposed(card).length;
   return (
@@ -1201,12 +1287,12 @@ function CardTile({
         </Badge>
         <span>·</span>
         <span className="truncate">{kindLabel(card.kind)}</span>
-        {isOrphan(card) && (
+        {staleBadge(card, archivedIds) && (
           <span
             className="pointer-events-auto shrink-0 rounded border border-border px-1"
             title={ORPHAN_HINT}
           >
-            orphaned
+            {staleBadge(card, archivedIds)}
           </span>
         )}
       </div>

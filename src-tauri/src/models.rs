@@ -240,6 +240,18 @@ pub struct RegistryCard {
     /// card is ruled on — it is queue metadata, not a property of the thing.
     #[serde(default)]
     pub triage: String,
+    /// How many documents across the corpus mention this card by name —
+    /// counted by the triage scan (canonical-word matching, see `CanonDoc`)
+    /// and kept current while the card is still suggested. The strongest
+    /// "likely to be kept" signal the queue has, so it orders what surfaces.
+    #[serde(default)]
+    pub mentions: i64,
+    /// Whether a suggested card is one of the few shown right now. Computed
+    /// on every list by `surface_suggestions` (never stored): the queue has
+    /// a ceiling, and the rest wait, unseen, until a ruling frees a slot.
+    /// Always false on a card fetched singly.
+    #[serde(default)]
+    pub surfaced: bool,
     /// Space-separated normalized tokens (the `normalize_tags` form): VIN,
     /// policy number, serial, model number. The auto-attach key, and the
     /// only thing that ever attaches a document without asking.

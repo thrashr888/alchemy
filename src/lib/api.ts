@@ -56,6 +56,7 @@ import type {
   SourceEvent,
   SuggestOutcome,
   Template,
+  NotebookStatusOutcome,
 } from "./types";
 
 /** One API operation plus the command name diagnostics reports on failure. */
@@ -188,7 +189,7 @@ export const api = {
     run(cmd<void>("set_notebook_icon", { id, icon })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
   setNotebookStatus: (id: string, status: "" | "archived") =>
-    run(cmd<void>("set_notebook_status", { id, status })),
+    run(cmd<NotebookStatusOutcome>("set_notebook_status", { id, status })),
 
   // Sources
   listSources: (notebookId: string) =>

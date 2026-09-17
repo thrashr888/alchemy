@@ -1230,22 +1230,33 @@ async fn sync_links_inner(state: &AppState) -> anyhow::Result<()> {
     if items.is_empty() {
         anyhow::bail!("the feed had no items");
     }
-    // url → (id, created_at): what the notebook holds, so an item already
-    // here is skipped — and one captured before backdating existed gets its
-    // publish date now.
-    let have: std::collections::HashMap<String, (String, i64)> = db
+    // url → (id, created_at, title): what the notebook holds, so an item
+    // already here is skipped — and one captured before backdating existed
+    // gets its publish date now, and one whose title the catalog has since
+    // corrected (Slack exports wrote emoji as :shortcodes:) gets the
+    // corrected title. The catalog owns these rows' titles: there is no
+    // in-app rename to trample.
+    let have: std::collections::HashMap<String, (String, i64, String)> = db
         .list_sources(&nb.id)
         .await?
         .iter()
-        .map(|s| (link_key(&s.url), (s.id.clone(), s.created_at)))
+        .map(|s| {
+            (
+                link_key(&s.url),
+                (s.id.clone(), s.created_at, s.title.clone()),
+            )
+        })
         .collect();
     let mut landed = 0usize;
     let mut failed = 0usize;
     for item in items {
         let key = link_key(&item.url);
-        if let Some((id, created_at)) = have.get(&key) {
+        if let Some((id, created_at, title)) = have.get(&key) {
             if item.published_ms > 0 && *created_at != item.published_ms {
                 let _ = db.set_source_created_at(id, item.published_ms).await;
+            }
+            if !item.title.trim().is_empty() && *title != item.title {
+                let _ = db.set_source_title(id, &item.title).await;
             }
             continue;
         }
@@ -1438,6 +1449,8 @@ async fn seed_registry_cards(db: &Db) -> anyhow::Result<()> {
             name: (*name).to_string(),
             origin: String::new(),
             triage: String::new(),
+            mentions: 0,
+            surfaced: false,
             identifiers: String::new(),
             note: String::new(),
             facts: Vec::new(),
