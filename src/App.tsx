@@ -101,6 +101,15 @@ function App() {
   const health = useStore((s) => s.modelHealth);
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
   const answersIn = useStore((s) => s.aiConfig?.answersIn ?? "");
+  // The starter notebooks seed at launch, but only once an embedder is
+  // up — on a fresh Mac that is after the person has picked a path in the
+  // stage below, not before. When indexing turns green, ask again; the
+  // backend answers with a file stat when nothing is owed.
+  const embedWorking = !!health?.embed.working;
+  useEffect(() => {
+    if (!embedWorking) return;
+    void api.seedExamplesNow().catch(() => {});
+  }, [embedWorking]);
   // A person who answers in Claude Desktop has no chat model to set up;
   // only indexing has to work here.
   const needsSetup =

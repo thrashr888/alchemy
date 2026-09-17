@@ -1,10 +1,9 @@
 # RFC: Desktop AI apps — hand a notebook to the app you already use
 
-Status: phase 1 (the handoff) built 2026-09-16; phase 3 (the first-run
-door) built 2026-09-17; phase 2 (the Claude Desktop connector) in
-progress on `cld/wf-mcpb`. Prefill via URL schemes was tried and gated
-off: `claude://new?q=` opened an empty composer and ChatGPT's app took the
-link without the text.
+Status: phase 1 (the handoff) built 2026-09-16; phase 2 (the Claude Desktop
+extension) and phase 3 (the first-run door) built 2026-09-17. Prefill via
+URL schemes was tried and gated off: `claude://new?q=` opened an empty
+composer and ChatGPT's app took the link without the text.
 
 ## Summary
 
@@ -43,26 +42,97 @@ paste that always does. Why not automation: driving another app's UI is
 exactly the "acting outside Alchemy without explicit intent" the product
 invariant forbids, and macOS would prompt for it anyway.
 
-## Phase 2 — connect Claude Desktop to the MCP server (proposed)
+## Phase 2 — connect Claude Desktop to the MCP server (as built)
 
-Claude Desktop reads `~/Library/Application Support/Claude/claude_desktop_config.json`
-and runs each `mcpServers` entry as a stdio child; it ships its own Node
-runtime for Desktop Extensions (`.mcpb`), so a bundle needs no Node on the
-Mac. Alchemy's server is streamable HTTP with a private bearer token
-(`mcp.json`). Two ways in, in order of preference:
+Claude Desktop cannot be pointed at a URL, but it installs Desktop Extension
+bundles (`.mcpb`) through its own sheet and runs their servers as stdio
+children under its own bundled Node — so the Mac needs no Node of its own.
+Alchemy's server is streamable HTTP behind a private bearer token
+(`mcp.json`). The bundle is the bridge, and Alchemy writes it.
 
-1. **An `.mcpb` bundle Alchemy writes and opens.** `manifest.json` plus a
-   dependency-free Node script that proxies stdio JSON-RPC to
-   `http://127.0.0.1:<port>/mcp` with the token from `mcp.json` (re-read on
-   each start, since the token rotates per launch — the app must write the
-   token where the proxy can read it, which `mcp.json` already is). Settings
-   → Agents lists "Claude Desktop" beside the CLIs with the same Connect
-   verb; Connect writes the bundle to app data and opens it, and Claude
-   Desktop's own install sheet finishes the job. RFC-mcp-server §rationale
-   rejected auto-editing editor configs; a bundle the app installs through
-   its own UI keeps that line.
-2. **A `mcpServers` entry running `npx mcp-remote`** — only if a Node is on
-   the PATH; a fallback, shown as a copyable snippet, never written silently.
+The `npx mcp-remote` fallback from the proposal was dropped: it needs a Node
+on the PATH, which is exactly the machine this phase exists for not having.
+
+**The bundle.** `crate::mcpb` zips two files:
+
+- `manifest.json` — `manifest_version: "0.3"` (plus `dxt_version: "0.1"`, so
+  readers from the Desktop Extension era still parse it), `name`/`display_name`
+  `Alchemy`, `version` = the app's `CARGO_PKG_VERSION`, license MPL-2.0 to
+  match the repo, `server.type: "node"` running
+  `node ${__dirname}/server/index.mjs`, and `compatibility` of
+  `platforms: ["darwin"]` + `runtimes: { node: ">=18.0.0" }`. No
+  `claude_desktop` version floor: there is no measured one to name, and an
+  invented number would refuse installs that would have worked.
+- `server/index.mjs` — the proxy (`skills/alchemy-mcpb/server/`), embedded in
+  the binary with `include_str!` rather than shipped as a Tauri resource, so
+  every build can write it whether or not it was bundled.
+
+`.mjs`, not `.js`: the extracted bundle has no `package.json`, so a bare
+`.js` would be read as CommonJS and the proxy's imports would not load.
+
+The manifest's `tools` list is read off the running server's own routers
+(`crate::mcp::tool_catalog`), sorted by name — a hand-kept list would start
+lying one release after someone added a tool.
+
+The bundle lands at
+`~/Library/Application Support/com.thrashr888.alchemy/connectors/alchemy.mcpb`,
+overwritten on every Connect so it always carries this build's version and
+this build's proxy.
+
+**The proxy.** Node 18+ standard library only, no dependencies to vendor or
+audit inside a file the app writes on the user's machine. It reads
+newline-delimited JSON-RPC from stdin, POSTs each message to the endpoint
+with `content-type: application/json`, `accept: application/json,
+text/event-stream` and the bearer token, and writes every JSON-RPC message
+it gets back to stdout, one per line. A reply is either plain JSON or an SSE
+body whose `data:` lines each carry one message; a notification gets 202 and
+no body, and produces no output. stdout belongs to the protocol — everything
+human goes to stderr.
+
+The `initialize` exchange is gated: nothing else goes out until its reply
+lands, because that reply's `mcp-session-id` header is what the rest of the
+conversation carries. After that messages are independent, so a slow search
+cannot hold up a cancellation.
+
+**Nothing secret is in the bundle.** The proxy reads the port and token out
+of `mcp.json` at runtime, and re-reads them on a 401 and retries once — so a
+relaunch that rotates the token or moves the port costs a round trip instead
+of the rest of the conversation. When the socket is refused it answers the
+pending request with a JSON-RPC error saying "Alchemy isn't running — open
+it and try again", rather than leaving Claude waiting; a notification, which
+may not be answered, only reaches the log.
+
+A Node test (`pnpm test:mcpb`, wired into CI) drives the proxy as a child
+process against a throwaway HTTP server: JSON and SSE replies, the session
+id, a silent notification, a 401 that forces the token re-read, and both
+offline paths.
+
+**The connector row.** "Claude Desktop" joins the CLIs in Settings → Agents
+under a new `Strategy::Mcpb`. `installed` is `/Applications/Claude.app` (or
+`~/Applications`); Connect writes the bundle and `open`s it, which raises
+Claude Desktop's install sheet. We never write its config — RFC-mcp-server
+rejected auto-editing a client's config, and an app with an install sheet is
+the case that rule was waiting for.
+
+`configured` is read from
+`~/Library/Application Support/Claude/extensions-installations.json`: an
+entry whose `manifest.name` is ours. Claude Desktop mints the extension id
+itself (`local.dxt.<author>.<name>`), so the name is the only stable thing
+to match on. Because that is also `strategy_present`, the launch-time
+connector refresh can never re-open the install sheet behind the user's
+back: an installed extension is already current, and an uninstalled one
+means the target is skipped.
+
+The row needs no UI special-casing — it renders from `ConnectorStatus` like
+every other. One field is new: `connectNote`, because Connect here does not
+finish the job, and the old toast would have claimed a skill install that
+never happened. It says: "Claude Desktop will ask to install the Alchemy
+extension. After that, ask Claude about any notebook."
+
+**Known edge.** An app upgrade leaves the installed extension at the old
+version. The proxy is version-independent (it discovers everything at
+runtime), so it keeps working; re-clicking Connect re-installs the current
+one. Nothing re-opens the sheet on its own.
 
 ChatGPT's connectors require a public HTTPS MCP endpoint (developer mode);
 a local server does not qualify without a tunnel, which is out of scope.
@@ -102,8 +172,10 @@ for review.
 1. Phase 3's empty chat: handoff only, or also a one-line key prompt?
 2. Should the handoff prompt include the person's profile line (the same
    one woven into system prompts) so the app's tone matches?
-3. `.mcpb` signing: Claude Desktop warns on unsigned bundles; is that
-   acceptable for a bundle the app itself wrote on this Mac?
+3. `.mcpb` signing: Claude Desktop warns on unsigned bundles. Shipped
+   unsigned — the bundle is written by the app on this Mac, seconds before
+   the sheet opens, and the warning is the user's own confirmation. Revisit
+   if the warning reads as scarier than the install is.
 
 ## Non-goals
 

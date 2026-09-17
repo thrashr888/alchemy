@@ -914,6 +914,37 @@ const CURATED_SOURCES: &[CuratedSource] = &[
 /// curated-objects notebook "3", and the alchemy-history notebook "4".
 const EXAMPLES_VERSION: &str = "5";
 
+/// One seeding pass at a time, across the launch tick and the on-demand
+/// command below: two passes reading "no marker" together would seed the
+/// starters twice.
+static SEEDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Seed the starters now if they are still owed. The launch tick does this
+/// once per launch and gives up quietly when no embedder is up — which on
+/// a fresh Mac with no Ollama is every first launch, and the person then
+/// picks a path in the first-run stage and never relaunches. The frontend
+/// calls this the moment indexing comes up; with the marker written it is
+/// one file stat.
+#[tauri::command]
+pub async fn seed_examples_now(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    use std::sync::atomic::Ordering::SeqCst;
+    if SEEDING.swap(true, SeqCst) {
+        return Ok(false);
+    }
+    let seeded = ensure_example_notebooks(&state).await;
+    SEEDING.store(false, SeqCst);
+    if seeded {
+        let _ = app.emit(
+            "mcp://changed",
+            serde_json::json!({ "scope": "notebooks", "notebookId": null }),
+        );
+    }
+    Ok(seeded)
+}
+
 pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
     let marker = app_data_dir(state).join("examples-seeded");
     if let Ok(v) = std::fs::read_to_string(&marker) {
