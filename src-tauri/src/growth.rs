@@ -36,6 +36,15 @@ const THIN_CITATIONS: usize = 3;
 const QUERY_WINDOW_MS: i64 = 45 * 86_400_000;
 const MAX_QUERIES: usize = 8;
 
+/// The one thin-answer gate. Standing queries read it off the retrieval
+/// trace after the fact; chat asks it of the pool it is about to answer
+/// from, which is the same number the trace records. Two detectors would
+/// drift, and then the Grow surface and the chat would disagree about what
+/// the notebook is hungry for.
+pub fn is_thin(citations: usize) -> bool {
+    citations < THIN_CITATIONS
+}
+
 pub fn standing_queries(trace_dir: &Path, notebook_id: &str, now_ms: i64) -> Vec<String> {
     let mut out: Vec<(i64, String)> = Vec::new();
     let mut seen = HashSet::new();
@@ -59,7 +68,7 @@ pub fn standing_queries(trace_dir: &Path, notebook_id: &str, now_ms: i64) -> Vec
                 .and_then(|c| c.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            if cites >= THIN_CITATIONS {
+            if !is_thin(cites) {
                 continue;
             }
             let Some(query) = rec.get("query").and_then(|v| v.as_str()) else {
@@ -341,6 +350,127 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.url.cmp(&b.url)));
     out.truncate(12);
     out
+}
+
+// ---- Suggested sources under a thin answer ---------------------------------
+
+/// One URL offered beneath a chat answer the notebook could not properly
+/// ground: a page its own sources already link to, ranked against the
+/// question that went unanswered. A proposal, never an action — nothing is
+/// fetched until the user clicks Add.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedSource {
+    #[serde(default)]
+    pub url: String,
+    /// The link's anchor text where its own pages gave one, else host/path.
+    #[serde(default)]
+    pub title: String,
+    /// Why this URL is under this answer, in the reader's terms.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// At most five chips. A sixth is a list, and a list under every thin
+/// answer is a second sources panel nobody asked for.
+pub const MAX_SUGGESTED: usize = 5;
+
+/// Host of a URL as `canonical_key` spells it: lowercased, `www.` dropped.
+fn host_of(url: &str) -> String {
+    canonical_key(url)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Every host the notebook already reads from. A link into one of these is
+/// a sibling page of something the user chose, not a stranger.
+pub fn own_hosts(sources: &[Source]) -> HashSet<String> {
+    sources
+        .iter()
+        .filter(|s| !s.url.is_empty())
+        .map(|s| host_of(&s.url))
+        .filter(|h| !h.is_empty())
+        .collect()
+}
+
+/// The words a candidate link offers for matching: its anchor text plus the
+/// readable parts of the URL. The scheme is dropped — every URL has one, so
+/// matching on it would rank noise.
+fn candidate_tokens(anchor: &str, url: &str) -> HashSet<String> {
+    let bare = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    tokens(&format!("{anchor} {bare}"))
+}
+
+/// Rank the notebook's already-mined links against ONE question.
+///
+/// Pure and cheap: term overlap between the question and each link's anchor
+/// text and URL, with the notebook's own hosts taken first. That ordering is
+/// the whole point of the feature — a notebook whose source is a service
+/// centre's front page cannot answer "what do they charge for a timing
+/// belt?", and the answer is a sub-page of a site it already holds, not a
+/// stranger's blog. Links sharing no word with the question are dropped
+/// rather than padded in: five weak guesses read worse than nothing.
+pub fn suggest_sources(
+    question: &str,
+    proposals: &[GrowthProposal],
+    own_hosts: &HashSet<String>,
+) -> Vec<SuggestedSource> {
+    let asked = tokens(question);
+    if asked.is_empty() {
+        return Vec::new();
+    }
+    let mut ranked: Vec<(u8, f32, &GrowthProposal)> = Vec::new();
+    for p in proposals {
+        if p.kind != "web" || p.url.is_empty() {
+            continue;
+        }
+        let overlap = asked
+            .intersection(&candidate_tokens(&p.anchor, &p.url))
+            .count();
+        if overlap == 0 {
+            continue;
+        }
+        let host = host_of(&p.url);
+        // Tier 0 is a deeper page on a host the notebook already reads;
+        // a bare homepage on that host is no better than an outside link.
+        let sub_page = canonical_key(&p.url).contains('/');
+        let tier = u8::from(!(sub_page && own_hosts.contains(&host)));
+        // Overlap decides; how widely the notebook cites the link breaks ties.
+        let score = 4.0 * overlap as f32 + p.source_count as f32 + 0.25 * p.mentions as f32;
+        ranked.push((tier, score, p));
+    }
+    ranked.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(b.1.total_cmp(&a.1))
+            .then(a.2.url.cmp(&b.2.url))
+    });
+    ranked
+        .into_iter()
+        .take(MAX_SUGGESTED)
+        .map(|(tier, _, p)| SuggestedSource {
+            title: if p.anchor.is_empty() {
+                canonical_key(&p.url)
+            } else {
+                p.anchor.clone()
+            },
+            reason: if tier == 0 {
+                format!(
+                    "A page on {}, which this notebook already reads",
+                    host_of(&p.url)
+                )
+            } else if p.source_count > 1 {
+                format!("Linked from {} of your sources", p.source_count)
+            } else {
+                "Linked from one of your sources".to_string()
+            },
+            url: p.url.clone(),
+        })
+        .collect()
 }
 
 /// The local tier (RFC-living-notebook Pillar 2): standing queries swept
@@ -1433,5 +1563,175 @@ mod tests {
             src("b", "http://two.test/b", ""),
         ];
         assert!(proposals(&sources, &[]).is_empty());
+    }
+
+    /// One gate, two readers. Chat asks it of the pool it is about to answer
+    /// from; standing_queries asks it of the number that same pool wrote to
+    /// the trace. If these ever disagree the Grow pane and the chat start
+    /// describing different notebooks.
+    #[test]
+    fn the_thin_gate_is_one_predicate() {
+        assert!(is_thin(0));
+        assert!(is_thin(THIN_CITATIONS - 1));
+        assert!(!is_thin(THIN_CITATIONS));
+        assert!(!is_thin(20));
+
+        // And standing_queries reads it off the trace, not a second rule.
+        let dir = std::env::temp_dir().join(format!("alchemy-thin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = |q: &str, cites: usize| {
+            let citations: Vec<serde_json::Value> =
+                (0..cites).map(|_| serde_json::json!({})).collect();
+            serde_json::json!({ "ts": 1_000_000, "notebookId": "nb", "query": q, "citations": citations })
+                .to_string()
+        };
+        std::fs::write(
+            dir.join("retrieval.jsonl"),
+            format!(
+                "{}\n{}\n",
+                line("what does the timing belt service cost", THIN_CITATIONS - 1),
+                line("what oil weight do they use in winter", THIN_CITATIONS),
+            ),
+        )
+        .unwrap();
+        let queries = standing_queries(&dir, "nb", 1_000_000);
+        assert_eq!(queries, vec!["what does the timing belt service cost"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn prop(url: &str, anchor: &str, mentions: u32, sources: u32) -> GrowthProposal {
+        GrowthProposal {
+            kind: "web".into(),
+            url: url.into(),
+            anchor: anchor.into(),
+            mentions,
+            source_count: sources,
+            matched_query: String::new(),
+            score: 0.0,
+        }
+    }
+
+    /// The case the feature exists for: the notebook holds a service
+    /// centre's front page, which cannot answer what a timing belt costs.
+    /// The answer is a sub-page of that same site, and it must outrank a
+    /// stranger's page that matches the question just as well.
+    #[test]
+    fn own_hosts_sub_pages_come_before_outside_links() {
+        let held = vec![src("a", "https://garage.test", "")];
+        let hosts = own_hosts(&held);
+        let mined = vec![
+            prop(
+                "https://blog.test/timing-belt-costs",
+                "Timing belt costs",
+                9,
+                6,
+            ),
+            prop(
+                "https://garage.test/services/timing-belt",
+                "Timing belt service",
+                1,
+                1,
+            ),
+        ];
+        let out = suggest_sources("what does a timing belt service cost", &mined, &hosts);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0].url, "https://garage.test/services/timing-belt");
+        assert!(out[0].reason.contains("garage.test"), "{:?}", out[0].reason);
+        assert_eq!(out[1].url, "https://blog.test/timing-belt-costs");
+        assert_eq!(out[1].reason, "Linked from 6 of your sources");
+    }
+
+    /// A bare homepage on a host the notebook already reads is not a
+    /// sub-page, so it wins nothing from the tier; and within a tier, term
+    /// overlap decides before how widely the link is cited.
+    #[test]
+    fn overlap_decides_and_a_homepage_earns_no_tier() {
+        let held = vec![src("a", "https://garage.test/about", "")];
+        let hosts = own_hosts(&held);
+        let mined = vec![
+            prop("https://garage.test", "Garage", 40, 30),
+            prop(
+                "https://notes.test/brake-pad-replacement",
+                "Brake pad replacement",
+                1,
+                1,
+            ),
+        ];
+        let out = suggest_sources("brake pad replacement", &mined, &hosts);
+        assert_eq!(out[0].url, "https://notes.test/brake-pad-replacement");
+        assert_eq!(out[0].reason, "Linked from one of your sources");
+    }
+
+    /// Nothing shares a word with the question, so nothing is offered. Five
+    /// weak guesses under an answer read worse than no row at all.
+    #[test]
+    fn links_sharing_no_word_with_the_question_are_not_offered() {
+        let mined = vec![prop(
+            "https://blog.test/sourdough",
+            "Sourdough starter",
+            8,
+            4,
+        )];
+        assert!(
+            suggest_sources("how do I torque the head bolts", &mined, &HashSet::new()).is_empty()
+        );
+        // And an empty question can never match anything.
+        assert!(suggest_sources("", &mined, &HashSet::new()).is_empty());
+    }
+
+    /// At most five chips, however much the notebook links.
+    #[test]
+    fn the_slate_is_capped() {
+        let mined: Vec<GrowthProposal> = (0..12)
+            .map(|i| {
+                prop(
+                    &format!("https://x.test/gearbox-{i}"),
+                    "Gearbox notes",
+                    2,
+                    2,
+                )
+            })
+            .collect();
+        assert_eq!(
+            suggest_sources("gearbox rebuild", &mined, &HashSet::new()).len(),
+            MAX_SUGGESTED
+        );
+    }
+
+    /// The field crosses IPC and comes back off disk, so pin its wire shape:
+    /// camelCase out, and an older row that lacks it decodes to empty rather
+    /// than failing the whole transcript.
+    #[test]
+    fn suggested_sources_round_trip_through_serde() {
+        let item = SuggestedSource {
+            url: "https://garage.test/services/timing-belt".into(),
+            title: "Timing belt service".into(),
+            reason: "A page on garage.test, which this notebook already reads".into(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"url\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<SuggestedSource>(&json).unwrap(),
+            item
+        );
+
+        // Missing fields default; a message stored before the field existed
+        // still decodes.
+        let partial: SuggestedSource = serde_json::from_str("{}").unwrap();
+        assert_eq!(partial, SuggestedSource::default());
+        let msg: crate::models::Message = serde_json::from_str(
+            r#"{"id":"m","notebookId":"nb","role":"assistant","content":"hi","createdAt":1}"#,
+        )
+        .unwrap();
+        assert!(msg.suggested_sources.is_empty());
+
+        // And on a message that has them, the wire name is camelCase.
+        let msg = crate::models::Message {
+            suggested_sources: vec![item],
+            ..msg
+        };
+        let wire = serde_json::to_string(&msg).unwrap();
+        assert!(wire.contains("\"suggestedSources\""), "{wire}");
+        assert!(!wire.contains("suggested_sources"), "{wire}");
     }
 }

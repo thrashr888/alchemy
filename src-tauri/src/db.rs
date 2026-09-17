@@ -21,6 +21,7 @@ use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Connection;
 
+use crate::growth::SuggestedSource;
 use crate::models::{
     Citation, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook, RegistryCard,
     ReportSchedule, RunReceipt, Source, SourceEvent,
@@ -42,6 +43,24 @@ const T_RECEIPTS: &str = "run_receipts";
 /// is single-tenant by design; a second store beside it is a second
 /// source of truth.
 const T_KV: &str = "app_state";
+/// `app_state` key prefix for one notebook's thin-answer suggestions.
+const SUGGESTED_PREFIX: &str = "chat-suggested:";
+/// How many answers' worth of suggestions one notebook keeps. Older slates
+/// fall off: a chip under a months-old answer is clutter, not an offer.
+const SUGGESTED_KEEP: usize = 24;
+
+fn suggested_key(notebook_id: &str) -> String {
+    format!("{SUGGESTED_PREFIX}{notebook_id}")
+}
+
+/// One answer's slate as it is stored. Newest first in the row.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuggestedRow {
+    message_id: String,
+    #[serde(default)]
+    items: Vec<SuggestedSource>,
+}
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
@@ -643,6 +662,7 @@ impl Db {
                         .map(|k| k.value(i).to_string())
                         .unwrap_or_else(|| "chat".to_string()),
                     model: String::new(),
+                    suggested_sources: Vec::new(),
                     created_at: created.value(i),
                 });
             }
@@ -1411,6 +1431,7 @@ impl Db {
         self.delete_where(T_NOTES, &pred).await?;
         self.delete_where(T_NOTEBOOKS, &format!("id = '{}'", esc(id)))
             .await?;
+        self.clear_suggested_sources(id).await?;
         Ok(())
     }
 
@@ -2755,7 +2776,70 @@ impl Db {
 
     pub async fn clear_messages(&self, notebook_id: &str) -> Result<()> {
         self.delete_where(T_MESSAGES, &format!("notebook_id = '{}'", esc(notebook_id)))
+            .await?;
+        self.clear_suggested_sources(notebook_id).await
+    }
+
+    // ---- Suggested sources under thin answers ------------------------------
+
+    /// Thin-answer suggestions ride in `app_state`, not in a `messages`
+    /// column. The dev build and the installed app share one store, and a
+    /// column only one of them knows about has bricked the other's appends
+    /// before (`add_batch`); a key an old binary never reads costs it
+    /// nothing. One row per notebook, holding the newest
+    /// [`SUGGESTED_KEEP`] answers, so the row is bounded and a transcript
+    /// page costs one lookup rather than one per message.
+    async fn suggested_rows(&self, notebook_id: &str) -> Result<Vec<SuggestedRow>> {
+        Ok(self
+            .kv_get(&suggested_key(notebook_id))
+            .await?
+            .and_then(|raw| serde_json::from_str::<Vec<SuggestedRow>>(&raw).ok())
+            .unwrap_or_default())
+    }
+
+    /// Every stored slate for one notebook, keyed by message id.
+    pub async fn suggested_sources(
+        &self,
+        notebook_id: &str,
+    ) -> Result<HashMap<String, Vec<SuggestedSource>>> {
+        Ok(self
+            .suggested_rows(notebook_id)
+            .await?
+            .into_iter()
+            .map(|r| (r.message_id, r.items))
+            .collect())
+    }
+
+    /// Record one answer's slate, newest first, pruned to the keep window.
+    pub async fn set_suggested_sources(
+        &self,
+        notebook_id: &str,
+        message_id: &str,
+        items: &[SuggestedSource],
+    ) -> Result<()> {
+        let mut rows = self.suggested_rows(notebook_id).await?;
+        rows.retain(|r| r.message_id != message_id);
+        rows.insert(
+            0,
+            SuggestedRow {
+                message_id: message_id.to_string(),
+                items: items.to_vec(),
+            },
+        );
+        rows.truncate(SUGGESTED_KEEP);
+        self.kv_set(&suggested_key(notebook_id), &serde_json::to_string(&rows)?)
             .await
+    }
+
+    pub async fn clear_suggested_sources(&self, notebook_id: &str) -> Result<()> {
+        if !self.table_exists(T_KV).await? {
+            return Ok(());
+        }
+        self.delete_where(
+            T_KV,
+            &format!("key = '{}'", esc(&suggested_key(notebook_id))),
+        )
+        .await
     }
 
     // ---- Home chat (docs/RFC-meta-chat.md) --------------------------------
@@ -4904,6 +4988,7 @@ fn messages_from_batches(batches: &[RecordBatch]) -> Result<Vec<Message>> {
                 citations: serde_json::from_str(citations.value(i)).unwrap_or_default(),
                 kind: kind.value(i).to_string(),
                 model: model.map(|m| m.value(i).to_string()).unwrap_or_default(),
+                suggested_sources: Vec::new(),
                 created_at: created.value(i),
             });
         }
@@ -5928,6 +6013,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Thin-answer slates live beside the transcript, not in it: the
+    /// `messages` schema is untouched (which is what keeps an older binary
+    /// sharing this store able to append), the row is capped, and clearing
+    /// the chat clears them with it.
+    #[tokio::test]
+    async fn suggested_sources_ride_beside_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("nbl-suggest-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.expect("open db");
+
+        let item = |url: &str| SuggestedSource {
+            url: url.into(),
+            title: "Timing belt service".into(),
+            reason: "Linked from one of your sources".into(),
+        };
+        db.set_suggested_sources("nb", "m1", &[item("https://garage.test/belt")])
+            .await
+            .expect("store");
+        let back = db.suggested_sources("nb").await.expect("read");
+        assert_eq!(back.get("m1").map(Vec::len), Some(1));
+        assert!(!back.contains_key("m2"));
+        assert!(db
+            .suggested_sources("other-nb")
+            .await
+            .expect("read")
+            .is_empty());
+
+        // The messages table never learned a column for any of this.
+        let schema = db
+            .conn
+            .open_table(T_MESSAGES)
+            .execute()
+            .await
+            .expect("open")
+            .schema()
+            .await
+            .expect("schema");
+        assert!(schema.field_with_name("suggested_sources").is_err());
+
+        // Bounded: only the newest SUGGESTED_KEEP answers survive.
+        for i in 0..SUGGESTED_KEEP + 5 {
+            db.set_suggested_sources("nb", &format!("m{i}"), &[item("https://x.test/a")])
+                .await
+                .expect("store");
+        }
+        let back = db.suggested_sources("nb").await.expect("read");
+        assert_eq!(back.len(), SUGGESTED_KEEP);
+        assert!(back.contains_key(&format!("m{}", SUGGESTED_KEEP + 4)));
+        assert!(!back.contains_key("m0"));
+
+        db.clear_messages("nb").await.expect("clear");
+        assert!(db.suggested_sources("nb").await.expect("read").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A Home thread is nothing but its turns: the list is derived, titled by
     /// the opening question, and ordered by what was used last.
     #[tokio::test]
@@ -6028,6 +6167,7 @@ mod tests {
                 citations: Vec::new(),
                 kind: "chat".into(),
                 model: String::new(),
+                suggested_sources: Vec::new(),
                 created_at: i,
             })
             .await
@@ -6076,6 +6216,7 @@ mod tests {
                 citations: Vec::new(),
                 kind: "chat".into(),
                 model: String::new(),
+                suggested_sources: Vec::new(),
                 created_at: 42,
             })
             .await

@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod brief;
 mod diagnostics;
+mod handoff;
 mod registry;
 pub(crate) mod reports;
 mod second_look;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
+pub use handoff::*;
 pub use registry::*;
 pub use reports::*;
 pub use second_look::*;
@@ -6667,6 +6669,11 @@ pub struct MessagePage {
 /// A bounded transcript page for the webview. Backend generation paths still
 /// use the complete history; this command keeps notebook open and rendering
 /// proportional to what is on screen.
+///
+/// Thin-answer suggestions are attached here rather than in the table read:
+/// they live beside the transcript (`Db::set_suggested_sources`), and the
+/// prompt-building paths that call `list_messages` have no use for them.
+/// One lookup per page, not one per message.
 #[tauri::command]
 pub async fn list_messages_page(
     state: State<'_, AppState>,
@@ -6675,7 +6682,7 @@ pub async fn list_messages_page(
     before_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<MessagePage, String> {
-    let (messages, has_more) = e(state
+    let (mut messages, has_more) = e(state
         .db
         .message_page(
             &notebook_id,
@@ -6684,6 +6691,12 @@ pub async fn list_messages_page(
             limit.unwrap_or(80),
         )
         .await)?;
+    let mut slates = e(state.db.suggested_sources(&notebook_id).await)?;
+    for m in &mut messages {
+        if let Some(items) = slates.remove(&m.id) {
+            m.suggested_sources = items;
+        }
+    }
     Ok(MessagePage { messages, has_more })
 }
 
@@ -6708,6 +6721,7 @@ pub async fn add_note_to_chat(
         citations: Vec::new(),
         kind: "chat".to_string(),
         model: String::new(),
+        suggested_sources: Vec::new(),
         created_at: now(),
     };
     e(state.db.add_message(&msg).await)?;
@@ -7351,6 +7365,7 @@ fn tool_message(notebook_id: &str, content: String) -> Message {
         citations: vec![],
         kind: "tool".into(),
         model: String::new(),
+        suggested_sources: Vec::new(),
         created_at: now(),
     }
 }
@@ -9609,6 +9624,7 @@ async fn send_message_impl(
         citations: vec![],
         kind: "chat".into(),
         model: String::new(),
+        suggested_sources: Vec::new(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
@@ -9727,6 +9743,10 @@ async fn send_message_impl(
             "citations": crate::trace::cite_summaries(&pool),
         }),
     );
+    // The one thin-answer gate, asked of exactly the number the trace above
+    // just recorded — so what the chat calls thin and what the Grow surface
+    // later reads off that line are the same verdict.
+    let thin_retrieval = crate::growth::is_thin(pool.len());
     let pool_cap = pool.len() + grep_hits.len();
     let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
     let t_stage = std::time::Instant::now();
@@ -9920,6 +9940,16 @@ async fn send_message_impl(
         );
     }
 
+    // The notebook had little to answer from, so offer where it could look
+    // next: pages its own sources already link to, ranked against this
+    // question (docs/RFC-events.md §2 link tier). Mined text only — no
+    // network here, and nothing is fetched until the user clicks Add.
+    // Computed after the stream so it can never delay a token.
+    let suggested_sources = if thin_retrieval && kind == "chat" {
+        suggested_from_links(&state, &notebook_id, &content).await
+    } else {
+        Vec::new()
+    };
     let assistant_msg = Message {
         id: new_id(),
         notebook_id: notebook_id.clone(),
@@ -9928,10 +9958,26 @@ async fn send_message_impl(
         citations: if kind == "error" { vec![] } else { citations },
         kind: kind.into(),
         model: model_caption(&model, cost_usd),
+        suggested_sources,
         created_at: now(),
     };
     bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;
     e(state.db.add_message(&assistant_msg).await)?;
+    // Best-effort by contract: a slate that fails to store must never fail
+    // the answer it sits under.
+    if !assistant_msg.suggested_sources.is_empty() {
+        if let Err(err) = state
+            .db
+            .set_suggested_sources(
+                &notebook_id,
+                &assistant_msg.id,
+                &assistant_msg.suggested_sources,
+            )
+            .await
+        {
+            crate::note!("suggested sources: store failed: {err:#}");
+        }
+    }
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
     if assistant_msg.kind != "error" {
@@ -9984,6 +10030,7 @@ pub async fn send_message_agentic(
         citations: vec![],
         kind: "chat".into(),
         model: String::new(),
+        suggested_sources: Vec::new(),
         created_at: now(),
     };
     e(state.db.add_message(&user_msg).await)?;
@@ -10069,6 +10116,7 @@ pub async fn send_message_agentic(
         citations,
         kind: kind.into(),
         model: model_caption(&model, None),
+        suggested_sources: Vec::new(),
         created_at: now(),
     };
     bump_note_usage(&state.db, &assistant_msg.citations, "cited").await;
@@ -12043,6 +12091,36 @@ pub(crate) async fn growth_links_impl(
         .into_iter()
         .filter(|p| !offered.contains(&crate::growth::canonical_key(&p.url)))
         .collect())
+}
+
+/// The slate offered under one thin answer: the notebook's already-mined
+/// link tier, ranked against the question that went unanswered.
+///
+/// Reuses `growth_links_impl` exactly as the Grow pane does, so the chips and
+/// the Grow pane can never disagree about what a link is or whether it is
+/// already in the notebook. Everything it reads is cached or on disk; a
+/// failure returns an empty slate, because an answer is worth more than its
+/// footnote.
+pub(crate) async fn suggested_from_links(
+    state: &AppState,
+    notebook_id: &str,
+    question: &str,
+) -> Vec<crate::growth::SuggestedSource> {
+    let links = match growth_links_impl(&state.db, &state.trace_dir, notebook_id).await {
+        Ok(links) => links,
+        Err(err) => {
+            crate::note!("suggested sources: link tier failed: {err:#}");
+            return Vec::new();
+        }
+    };
+    let sources = match state.db.sources_with_content_shared(notebook_id).await {
+        Ok(sources) => sources,
+        Err(err) => {
+            crate::note!("suggested sources: source read failed: {err:#}");
+            return Vec::new();
+        }
+    };
+    crate::growth::suggest_sources(question, &links, &crate::growth::own_hosts(&sources))
 }
 
 /// What this notebook is hungry for: recent retrievals that came back thin.

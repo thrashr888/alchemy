@@ -21,11 +21,23 @@ struct GrowReq {
     web: bool,
 }
 
+/// One thin question with the slate the chat offers beneath its answer.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuerySuggestions {
+    query: String,
+    suggested_sources: Vec<growth::SuggestedSource>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GrowResult {
     /// Recent questions the notebook answered thinly — what it is hungry for.
     queries: Vec<String>,
+    /// Per question, the same up-to-five links the chat surfaces under a
+    /// thin answer: the notebook's own outbound links ranked against that
+    /// question, its own hosts' sub-pages first.
+    suggestions: Vec<QuerySuggestions>,
     /// Link tier: URLs the notebook's own sources point at but don't contain,
     /// ranked by mentions, spread across sources, and overlap with `queries`.
     proposals: Vec<GrowthProposal>,
@@ -40,7 +52,7 @@ struct GrowResult {
 #[tool_router(router = growth_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
-        description = "What a notebook is hungry for and where to feed it — the Grow pane over MCP. Returns queries (recent questions the notebook answered thinly), proposals (URLs its own sources keep linking to but that aren't in the notebook, ranked), local (files on this Mac Spotlight matched to those questions; their url is a path), and webEnabled. Pass web:true to also run the open-web search tier when the notebook has it switched on — it costs metered credits, so only when the link and local tiers came up empty. Nothing is fetched here: add a proposal with add_source (url for web, file_path for local), and prefer proposals that name a matchedQuery."
+        description = "What a notebook is hungry for and where to feed it — the Grow pane over MCP. Returns queries (recent questions the notebook answered thinly), suggestions (per thin question, the up-to-five links the chat offers under its answer — the notebook's own hosts' sub-pages first), proposals (URLs its own sources keep linking to but that aren't in the notebook, ranked), local (files on this Mac Spotlight matched to those questions; their url is a path), and webEnabled. Pass web:true to also run the open-web search tier when the notebook has it switched on — it costs metered credits, so only when the link and local tiers came up empty. Nothing is fetched here: add a proposal with add_source (url for web, file_path for local), and prefer proposals that name a matchedQuery."
     )]
     async fn grow(
         &self,
@@ -80,8 +92,19 @@ impl AlchemyMcp {
         } else {
             None
         };
+        // Chat parity: what a user sees as chips under a thin answer is what
+        // an agent reads here, from the same ranking over the same links.
+        let hosts = growth::own_hosts(&with_content);
+        let suggestions = queries
+            .iter()
+            .map(|q| QuerySuggestions {
+                suggested_sources: growth::suggest_sources(q, &proposals, &hosts),
+                query: q.clone(),
+            })
+            .collect();
         json_result(&GrowResult {
             queries,
+            suggestions,
             proposals,
             local,
             web_enabled,

@@ -5483,6 +5483,16 @@ pub async fn notebook_okf_binding(
     binding_for_checked(&app_data_dir(&state), &notebook_id)
 }
 
+/// Every binding, keyed by notebook id — one read of the sidecar for the
+/// Home shelf, whose row menus offer the same on-disk verbs the workspace
+/// does and need to know which notebooks are already kept.
+#[tauri::command]
+pub async fn notebook_okf_bindings(
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, OkfBinding>, String> {
+    load_bindings_checked(&app_data_dir(&state))
+}
+
 /// Keep a notebook on disk as an OKF bundle at `path`.
 ///
 /// An empty folder gets the seed pass. A folder that already is a bundle is
