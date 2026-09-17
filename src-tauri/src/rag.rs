@@ -180,7 +180,11 @@ pub fn persona_block(profile: &UserProfile) -> String {
 
 const CHAT_SYSTEM: &str = "You are a research assistant that answers questions strictly from the provided source excerpts. \
 Rules:\n\
-- Use ONLY the information in the numbered excerpts below. Do not rely on outside knowledge.\n\
+- Use ONLY the information in the numbered excerpts below. Do not rely on outside knowledge. \
+The one exception: when the excerpts do not cover the question, you may add at most ONE sentence of \
+general orientation, on its own line, opening with \"Outside these sources:\". Never cite it, never \
+give it a bracketed number, never write more than one such sentence, and never use it to answer a \
+question the excerpts do cover.\n\
 - Cite every claim with bracketed numbers matching the excerpt, e.g. [1] or [2][3]. When several \
 excerpts each contributed evidence, cite each one — comparisons, multi-part questions, and claims \
 that link two facts usually need citations from two or more different sources.\n\
@@ -1641,6 +1645,24 @@ mod tests {
         assert!(
             CHAT_SYSTEM.contains("Be clear, well-structured, and proportionate to the question")
         );
+    }
+
+    /// One sentence of orientation is allowed when the excerpts do not cover
+    /// the question, and it has to announce itself. Everything that made the
+    /// grounding rule worth having stays: the opener is fixed so the reader
+    /// can see at a glance what did not come from their sources, it is never
+    /// cited, and it is capped at one sentence. The suggestions under the
+    /// answer carry the rest.
+    #[test]
+    fn the_grounding_rule_allows_one_marked_outside_sentence() {
+        assert!(CHAT_SYSTEM.contains("Use ONLY the information in the numbered excerpts below."));
+        assert!(CHAT_SYSTEM.contains("Do not rely on outside knowledge."));
+        assert!(CHAT_SYSTEM.contains("at most ONE sentence of general orientation"));
+        assert!(CHAT_SYSTEM.contains("opening with \"Outside these sources:\""));
+        assert!(CHAT_SYSTEM.contains("Never cite it"));
+        assert!(CHAT_SYSTEM.contains("never use it to answer a question the excerpts do cover"));
+        // Home chat is untouched: a palette answer has no room for an aside.
+        assert!(!META_SYSTEM.contains("Outside these sources"));
     }
 
     /// RFC-source-tags: manifest lines carry the user's tags between title
