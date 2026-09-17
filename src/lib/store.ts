@@ -600,6 +600,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     registrySignal: null,
     desktopApps: [],
     okfBindings: {},
+    galleryScope: null,
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
@@ -2133,6 +2134,15 @@ export const useStore = create<AppState>((rawSet, get) => {
       } catch {
         // Per-viewer convenience only.
       }
+    },
+
+    openGalleryScoped: (scope) => {
+      if (!get().currentId) return;
+      set((s) => ({
+        galleryScope: { ...scope, nonce: (s.galleryScope?.nonce ?? 0) + 1 },
+        galleryOpen: true,
+        growOpen: false,
+      }));
     },
 
     refreshOkfBindings: async () => {

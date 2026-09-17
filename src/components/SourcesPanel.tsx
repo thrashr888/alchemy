@@ -1138,15 +1138,24 @@ export function SourcesPanel() {
                             )}
                           />
                         </button>
-                        <span
-                          className="min-w-0 flex-1 truncate text-body text-foreground"
-                          title={`${groupKids.length} sources from ${host}`}
+                        {/* The row is the group: clicking it shows those
+                            pages in the gallery. The caret still folds and
+                            unfolds them here. */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            useStore.getState().openGalleryScoped({ host })
+                          }
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          title={`Show ${groupKids.length} sources from ${host} in the gallery`}
                         >
-                          {host}
-                        </span>
-                        <span className="shrink-0 text-micro text-subtle-foreground">
-                          {groupKids.length}
-                        </span>
+                          <span className="min-w-0 flex-1 truncate text-body text-foreground">
+                            {host}
+                          </span>
+                          <span className="shrink-0 text-micro text-subtle-foreground">
+                            {groupKids.length}
+                          </span>
+                        </button>
                         <SelectBox
                           checked={
                             groupKids.length > 0 &&
@@ -1247,8 +1256,14 @@ export function SourcesPanel() {
                             return;
                           }
                           // Plain click: collapse the selection to this row
-                          // (the shift anchor) and open as before.
+                          // (the shift anchor) and open as before. A folder
+                          // with children opens as a gallery level — the
+                          // caret alone folds it in place.
                           pickOne("sources", s.id);
+                          if (isFolder && kids.length > 0) {
+                            useStore.getState().openGalleryScoped({ folderId: s.id });
+                            return;
+                          }
                           if (readable) openSourceViewer(s.id, s.title);
                         }}
                       />

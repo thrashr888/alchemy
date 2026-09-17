@@ -27,6 +27,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 
 /* The source Gallery (docs/RFC-source-gallery.md): the notebook's sources as
@@ -128,6 +129,16 @@ function Segmented<T extends string>({
   );
 }
 
+/** The host a domain group row named, spelled the way the sources panel
+ *  spells it: lowercase, no leading www. */
+function hostOfUrl(url: string): string {
+  try {
+    return new URL(url).host.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 export function GalleryPane() {
   const currentId = useStore((s) => s.currentId);
   const sources = useStore((s) => s.sources);
@@ -149,6 +160,16 @@ export function GalleryPane() {
   } = useHoverCard("right");
   const [sweeping, setSweeping] = useState(false);
   const [folderId, setFolderId] = useState<string | null>(null);
+  // One host's pages, when a domain group row opened the gallery. Local so
+  // the chip's × widens the view without touching the store's scope.
+  const [hostFilter, setHostFilter] = useState<string | null>(null);
+  const scope = useStore((s) => s.galleryScope);
+  useEffect(() => {
+    if (!scope) return;
+    setFolderId(scope.folderId ?? null);
+    setHostFilter(scope.host ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope?.nonce]);
   const [filter, setFilter] = useState<TypeGroup>("all");
   /** Cards or link graph. Persisted like the sort order: whichever way you
    *  browse is the way you browse, and being dropped back into the grid
@@ -245,9 +266,9 @@ export function GalleryPane() {
 
   // The gallery shows one layer at a time: top-level sources at root,
   // a folder's children inside it.
-  const level = sources.filter((s) =>
-    folderId ? s.parentId === folderId : !s.parentId,
-  );
+  const level = sources
+    .filter((s) => (folderId ? s.parentId === folderId : !s.parentId))
+    .filter((s) => !hostFilter || hostOfUrl(s.url) === hostFilter);
   const present = new Set(level.map((s) => GROUP_OF[s.sourceType]));
   const groups: TypeGroup[] = [
     "all",
@@ -482,6 +503,19 @@ export function GalleryPane() {
         ) : (
           <>
             <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+            {hostFilter && (
+              // The domain group, as a chip: the × widens back to everything.
+              <button
+                type="button"
+                onClick={() => setHostFilter(null)}
+                title={`Showing pages from ${hostFilter} — click to show everything`}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-caption text-foreground transition-colors hover:bg-surface-2"
+              >
+                <Favicon url={`https://${hostFilter}`} />
+                {hostFilter}
+                <X className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
             <span className="text-body font-medium text-foreground">
               Gallery
             </span>
