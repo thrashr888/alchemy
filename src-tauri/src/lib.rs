@@ -510,6 +510,7 @@ pub fn run() {
             mac::mac_available,
             mac::open_privacy_settings,
             mac::mac_connect,
+            mac::mac_status,
             mac::list_mac_collections,
             commands::agent_cli_status,
             commands::provider_readiness,

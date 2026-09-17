@@ -102,6 +102,10 @@ function App() {
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
   const needsSetup =
     !!health && (!health.chat.working || !health.embed.working);
+  // Dev only: `#onboarding` in the URL shows the first-run stage on a
+  // working setup, so it can be looked at without breaking one.
+  const forceOnboarding =
+    import.meta.env.DEV && window.location.hash === "#onboarding";
   const settingsOpen = useStore((s) => s.settingsOpen);
   const paletteOpen = useStore((s) => s.paletteOpen);
   const importOkfOpen = useStore((s) => s.importOkfOpen);
@@ -400,7 +404,7 @@ function App() {
             and Services all raise this with no notebook open. */}
         {pendingExternalAdd && <ExternalAddModal />}
         {migration && <MigrationOverlay />}
-        {needsSetup && !onboardingDismissed && !settingsOpen && (
+        {(forceOnboarding || (needsSetup && !onboardingDismissed)) && !settingsOpen && (
           // Onboarding's buttons are model-setup affordances — take them to Models.
           <Onboarding onOpenSettings={() => openSettings("models")} />
         )}

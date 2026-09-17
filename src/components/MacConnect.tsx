@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import type { MacProviderStatus } from "@/lib/types";
 import { Button, Spinner } from "./ui";
 import {
   Calendar,
+  Check,
   ListChecks,
   NotebookText,
   ShieldAlert,
@@ -23,10 +25,32 @@ const PROVIDERS = [
  * at a predictable moment — clicking Allow here means adding a Mac source
  * later just works.
  */
-export function MacConnect() {
+export function MacConnect({
+  onStatus,
+}: {
+  /** Told which providers count as connected, each time that is read. */
+  onStatus?: (connected: string[]) => void;
+} = {}) {
   const macAvailable = useStore((s) => s.macAvailable);
   const pushToast = useStore((s) => s.pushToast);
   const [busy, setBusy] = useState<string | null>(null);
+  // Connected state is read, not remembered in the button: the store reads
+  // without a prompt, so a Mac that already has Reminders notebooks shows
+  // Reminders as connected instead of asking again.
+  const [status, setStatus] = useState<Record<string, MacProviderStatus>>({});
+  const readStatus = useCallback(async () => {
+    try {
+      const rows = await api.macStatus();
+      setStatus(Object.fromEntries(rows.map((r) => [r.id, r])));
+      onStatus?.(rows.filter((r) => r.connected).map((r) => r.id));
+    } catch {
+      // Without a reading the buttons simply all say Connect, as before.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    void readStatus();
+  }, [readStatus]);
   // A connect failure that Full Disk Access would fix — rendered inline with
   // a button straight to the right Settings pane, not just a toast.
   const [fdaError, setFdaError] = useState<string | null>(null);
@@ -38,7 +62,17 @@ export function MacConnect() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        {PROVIDERS.map(({ id, label, icon: Icon }) => (
+        {PROVIDERS.map(({ id, label, icon: Icon }) =>
+          status[id]?.connected ? (
+            <span
+              key={id}
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-caption text-muted-foreground"
+              title={status[id].detail}
+            >
+              <Check className="h-3.5 w-3.5 text-success" aria-hidden />
+              {label} connected
+            </span>
+          ) : (
           <Button
             key={id}
             variant="secondary"
@@ -50,6 +84,7 @@ export function MacConnect() {
                 await api.macConnect(id);
                 setFdaError(null);
                 pushToast("success", `${label} connected`);
+                void readStatus();
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 if (msg.includes("Full Disk Access")) setFdaError(msg);
@@ -66,7 +101,8 @@ export function MacConnect() {
             )}
             Connect {label}
           </Button>
-        ))}
+          ),
+        )}
       </div>
       {fdaError && <FdaHint message={fdaError} />}
     </div>

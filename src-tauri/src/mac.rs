@@ -99,10 +99,19 @@ pub fn open_privacy_settings() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The Mac providers the Connect buttons offer, in their order.
+const MAC_PROVIDERS: [&str; 4] = ["calendar", "reminders", "notes", "stocks"];
+
 /// Settings/onboarding "Connect" buttons: one benign read per provider so the
 /// macOS consent prompt fires at a predictable moment instead of mid-add.
+/// A read that succeeds is remembered (`mac-connected.json`), which is how
+/// Notes and Stocks — which no prompt-free probe can vouch for — show as
+/// connected afterwards.
 #[tauri::command]
-pub async fn mac_connect(provider: String) -> Result<(), String> {
+pub async fn mac_connect(
+    state: tauri::State<'_, crate::commands::AppState>,
+    provider: String,
+) -> Result<(), String> {
     match provider.as_str() {
         "reminders" => cider(cider_lib::reminders::list(None)).await,
         "calendar" => cider(cider_lib::calendar::list(Some(0), Some(1), None, None)).await,
@@ -110,8 +119,93 @@ pub async fn mac_connect(provider: String) -> Result<(), String> {
         "stocks" => cider(cider_lib::stocks::watchlists()).await,
         other => return Err(format!("Unknown Mac provider: {other}")),
     }
-    .map(|_| ())
-    .map_err(|e| format!("{e:#}"))
+    .map_err(|e| format!("{e:#}"))?;
+    remember_connected(&crate::commands::app_data_dir(&state), &provider);
+    Ok(())
+}
+
+/// One Mac provider's connection, as the Connect buttons show it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacProviderStatus {
+    pub id: String,
+    pub connected: bool,
+    /// Why it counts as connected, in a phrase; empty when it isn't.
+    pub detail: String,
+}
+
+fn connected_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("mac-connected.json")
+}
+
+fn load_connected(data_dir: &std::path::Path) -> std::collections::BTreeMap<String, i64> {
+    std::fs::read_to_string(connected_path(data_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn remember_connected(data_dir: &std::path::Path, provider: &str) {
+    let mut seen = load_connected(data_dir);
+    seen.insert(provider.to_string(), crate::commands::now());
+    if let Ok(json) = serde_json::to_string(&seen) {
+        let _ = std::fs::create_dir_all(data_dir);
+        let _ = std::fs::write(connected_path(data_dir), json);
+    }
+}
+
+/// Which Mac apps are connected, without opening a single permission
+/// dialog. Three witnesses, any one of which counts: cider's prompt-free
+/// read check (Calendar and Reminders — their stores are readable or they
+/// are not); a Mac source of that provider already in the library; or a
+/// Connect click that succeeded here before. The Settings and first-run
+/// buttons used to show "Connect" for everything, forever — a Mac with
+/// three notebooks of Reminders in it was still asked to connect Reminders.
+#[tauri::command]
+pub async fn mac_status(
+    state: tauri::State<'_, crate::commands::AppState>,
+) -> Result<Vec<MacProviderStatus>, String> {
+    use cider::sources::doctor::CheckStatus;
+    let data_dir = crate::commands::app_data_dir(&state);
+    let remembered = load_connected(&data_dir);
+    let in_library: std::collections::HashSet<String> = state
+        .db
+        .all_sources_lean()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| s.source_type == "mac")
+        .filter_map(|s| {
+            s.url
+                .strip_prefix("cider://")
+                .and_then(|rest| rest.split('/').next())
+                .map(str::to_string)
+        })
+        .collect();
+    let report = cider::sources::doctor::auth_status().await;
+    Ok(MAC_PROVIDERS
+        .iter()
+        .map(|&id| {
+            let readable = report
+                .domains
+                .iter()
+                .any(|d| d.source == id && d.read_access == CheckStatus::Ok);
+            let detail = if readable {
+                "Readable now, no prompt needed"
+            } else if in_library.contains(id) {
+                "Sources from it are in your library"
+            } else if remembered.contains_key(id) {
+                "Connected here before"
+            } else {
+                ""
+            };
+            MacProviderStatus {
+                id: id.to_string(),
+                connected: !detail.is_empty(),
+                detail: detail.to_string(),
+            }
+        })
+        .collect())
 }
 
 #[tauri::command]
