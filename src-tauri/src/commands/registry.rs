@@ -96,6 +96,21 @@ fn canon_sequence_present(doc: &[String], name: &[String]) -> bool {
     !name.is_empty() && doc.len() >= name.len() && doc.windows(name.len()).any(|w| w == name)
 }
 
+/// Whether a card with this name would attach at least one of these
+/// documents — the matcher's own name rule (`match_card`), run before a
+/// suggestion is minted. `doc_seqs` are the documents' canonical word
+/// sequences.
+pub(crate) fn would_file(name: &str, doc_seqs: &[Vec<String>]) -> bool {
+    let name = name.trim();
+    if name.chars().count() < MIN_NAME_LEN {
+        return false;
+    }
+    let words = canon_words(name);
+    doc_seqs
+        .iter()
+        .any(|doc| canon_sequence_present(doc, &words))
+}
+
 /// Why this document belongs to this card, or `None`.
 ///
 /// Returns the receipt that will be stored verbatim: the matched identifier,
@@ -244,6 +259,98 @@ pub(crate) fn live_docs(
         .count()
 }
 
+/// A card of yours whose every standing document sits in an archived
+/// notebook. Not an orphan — its documents exist — but nothing in the
+/// working corpus points at it, and a registry that keeps listing the cast
+/// of shelved notebooks is the clutter the shelf was meant to remove. Yours
+/// only: a dismissed card is refusal memory whatever its documents did
+/// (first cut of this rule took 114 of them with it), and a suggested one
+/// is the queue's. A card with no standing documents at all is the orphan
+/// rule's, not this one's.
+pub(crate) fn only_in_archived(
+    card: &RegistryCard,
+    existing_sources: &std::collections::HashSet<String>,
+    archived_notebooks: &std::collections::HashSet<String>,
+) -> bool {
+    if !card.origin.is_empty() {
+        return false;
+    }
+    let mut standing = card
+        .attachments
+        .iter()
+        .filter(|a| {
+            (a.status == "confirmed" || a.status == "proposed")
+                && existing_sources.contains(&a.source_id)
+        })
+        .peekable();
+    standing.peek().is_some() && standing.all(|a| archived_notebooks.contains(&a.notebook_id))
+}
+
+/// Remove the cards that only archived notebooks still point at, returning
+/// them so the caller can offer the undo (the archive toast recreates them
+/// alongside un-archiving). Runs on the archive click ONLY — the one moment
+/// the removal is on screen with its undo. Cards that already met the rule
+/// before it existed are badged "archived" in the index and go with the
+/// Clean up button, which names them first; a background sweep deleting a
+/// person's cards with nobody watching is the silent change the invariant
+/// forbids. Un-archiving does not bring a removed card back by itself: it
+/// clears the notebook's suggest stamp and re-matches it, so the cards it
+/// implies are proposed again and any surviving card picks its documents
+/// back up.
+pub(crate) async fn retire_archived_cards(db: &crate::db::Db) -> anyhow::Result<Vec<RegistryCard>> {
+    let archived: std::collections::HashSet<String> = db
+        .list_notebooks()
+        .await?
+        .into_iter()
+        .filter(|n| n.status == "archived")
+        .map(|n| n.id)
+        .collect();
+    if archived.is_empty() {
+        return Ok(Vec::new());
+    }
+    let existing: std::collections::HashSet<String> = db
+        .all_source_meta()
+        .await?
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect();
+    let mut retired = Vec::new();
+    for card in db.list_registry().await? {
+        if only_in_archived(&card, &existing, &archived) {
+            db.delete_registry_card(&card.id).await?;
+            crate::note!(
+                "registry: removed \u{201c}{}\u{201d} — its documents are all in archived notebooks",
+                card.name
+            );
+            retired.push(card);
+        }
+    }
+    if !retired.is_empty() {
+        super::notify_changed("registry", None);
+    }
+    Ok(retired)
+}
+
+/// What un-archiving owes the registry: forget that the notebook was asked
+/// for suggestions (its cast may have been retired while it was shelved)
+/// and re-match its documents against the cards that remain.
+pub(crate) fn spawn_unarchive_rematch(
+    db: std::sync::Arc<crate::db::Db>,
+    data_dir: std::path::PathBuf,
+    notebook_id: String,
+) {
+    let mut asked = load_suggest_state(&data_dir);
+    if asked.remove(&notebook_id).is_some() {
+        save_suggest_state(&data_dir, &asked);
+    }
+    tauri::async_runtime::spawn(async move {
+        let filed = rematch_notebook(&db, &notebook_id).await;
+        if filed > 0 {
+            super::notify_changed("registry", None);
+        }
+    });
+}
+
 /// Drop attachment rows whose source no longer exists (their notebook was
 /// deleted). Every status goes, including `rejected` — a source id that no
 /// longer exists can never be re-proposed, so the refusal memory it carried
@@ -308,6 +415,7 @@ pub(crate) async fn sweep_orphan_cards(
         .collect();
     let mut promoted = 0usize;
     let mut pruned = 0usize;
+    let mut removed = 0usize;
     let mut cards = db.list_registry().await?;
     for card in &mut cards {
         let p = promote_name_proposals(card, ts);
@@ -320,7 +428,6 @@ pub(crate) async fn sweep_orphan_cards(
         }
     }
 
-    let mut removed = 0usize;
     let any_orphan = cards
         .iter()
         .any(|c| orphan_verdict(c, &existing) != OrphanVerdict::Alive);
@@ -1239,7 +1346,33 @@ async fn suggest_for_notebook(
                     .collect::<String>()
             );
         }
+        // The documents themselves, canonicalized the way the matcher reads
+        // them. The verbatim gate above proves the model did not invent the
+        // name; this proves the name would FILE something. A gist can carry
+        // a phrasing no document contains word-for-word ("Delta" for a
+        // paper titled "delta rule"), and a suggestion the matcher can
+        // never attach is an orphan the moment it is kept.
+        let doc_seqs: Vec<Vec<String>> = if gated.is_empty() {
+            Vec::new()
+        } else {
+            db.sources_with_content(notebook_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.source_type != "folder")
+                .map(|s| {
+                    let head: String = s.content.chars().take(SCAN_CAP).collect();
+                    canon_words(&head.to_lowercase())
+                })
+                .collect()
+        };
         for (kind, name, facts) in gated {
+            if !would_file(&name, &doc_seqs) {
+                crate::note!(
+                    "registry: skipped \u{201c}{name}\u{201d} — no document in the notebook would file under it"
+                );
+                continue;
+            }
             // Anything already in the cast — yours, pending, or turned down
             // — is settled. Never re-propose it. `made` guards within this
             // reply: a model can restate one thing twice in one answer.
@@ -1961,16 +2094,24 @@ pub async fn rematch_registry(
     state: State<'_, AppState>,
     notebook_id: String,
 ) -> Result<usize, String> {
-    // One content scan for the notebook instead of one per source.
-    let sources = e(state.db.sources_with_content(&notebook_id).await)?;
+    Ok(rematch_notebook(&state.db, &notebook_id).await)
+}
+
+/// Match every document in one notebook against the cast — one content scan
+/// for the notebook instead of one per source. Best-effort: a notebook that
+/// cannot be read files nothing.
+pub(crate) async fn rematch_notebook(db: &crate::db::Db, notebook_id: &str) -> usize {
+    let Ok(sources) = db.sources_with_content(notebook_id).await else {
+        return 0;
+    };
     let mut filed = 0;
     for s in sources {
         if s.source_type == "folder" {
             continue;
         }
-        filed += match_source_to_cards(&state.db, &notebook_id, &s.id, &s.content).await;
+        filed += match_source_to_cards(db, notebook_id, &s.id, &s.content).await;
     }
-    Ok(filed)
+    filed
 }
 
 #[cfg(test)]
@@ -2305,6 +2446,58 @@ mod tests {
             hay,
         );
         assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn a_card_only_archived_notebooks_point_at_retires() {
+        let existing = sources(&["s1", "s2"]);
+        let archived: std::collections::HashSet<String> = ["nbA".to_string()].into();
+        let in_nb = |c: RegistryCard, source: &str, nb: &str| {
+            let mut c = with_attachment(c, source, "confirmed", "name");
+            c.attachments.last_mut().unwrap().notebook_id = nb.into();
+            c
+        };
+        // Every standing document in the archived notebook: retire.
+        let shelved = in_nb(card("Shelved", ""), "s1", "nbA");
+        assert!(only_in_archived(&shelved, &existing, &archived));
+        // One document still in a working notebook: stays.
+        let mixed = in_nb(in_nb(card("Mixed", ""), "s1", "nbA"), "s2", "nbB");
+        assert!(!only_in_archived(&mixed, &existing, &archived));
+        // No standing documents at all is the orphan rule's case, not this one.
+        let orphan = card("Orphan", "");
+        assert!(!only_in_archived(&orphan, &existing, &archived));
+        // A deleted source in the archived notebook does not count as standing.
+        let gone = in_nb(card("Gone", ""), "s9", "nbA");
+        assert!(!only_in_archived(&gone, &existing, &archived));
+        // A rejected row does not keep a card alive either way.
+        let mut rejected = in_nb(card("Rejected", ""), "s2", "nbB");
+        rejected.attachments[0].status = "rejected".into();
+        let rejected = in_nb(rejected, "s1", "nbA");
+        assert!(only_in_archived(&rejected, &existing, &archived));
+        // Never a dismissed card (refusal memory) or a suggested one (the
+        // queue's), whatever their documents did.
+        let mut dismissed = in_nb(card("Dismissed", ""), "s1", "nbA");
+        dismissed.origin = "dismissed".into();
+        assert!(!only_in_archived(&dismissed, &existing, &archived));
+        let mut suggested = in_nb(card("Suggested", ""), "s1", "nbA");
+        suggested.origin = "auto".into();
+        assert!(!only_in_archived(&suggested, &existing, &archived));
+    }
+
+    #[test]
+    fn a_suggestion_the_matcher_cannot_attach_is_not_proposed() {
+        let doc = |t: &str| canon_words(&t.to_lowercase());
+        let docs = vec![
+            doc("The 2019 Toyota 4Runner SR5 service history"),
+            doc("Bayside Mutual Insurance renewal notice"),
+        ];
+        assert!(would_file("Toyota 4Runner", &docs));
+        assert!(would_file("Bayside Mutual", &docs));
+        // Named in a gist's words, never in a document's: would file nothing.
+        assert!(!would_file("Bayside Insurance", &docs));
+        assert!(!would_file("Delta", &docs));
+        // Too short for the name rule, whatever the documents say.
+        assert!(!would_file("SR5", &docs));
     }
 
     #[test]

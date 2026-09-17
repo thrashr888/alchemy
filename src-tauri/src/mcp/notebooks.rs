@@ -196,7 +196,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Archive a notebook (archived: true) or restore it (archived: false). Archiving hides the notebook from the main grid but keeps all data — prefer this over delete_notebook unless the user explicitly wants data gone."
+        description = "Archive a notebook (archived: true) or restore it (archived: false). Archiving hides the notebook from the main grid but keeps all data — prefer this over delete_notebook unless the user explicitly wants data gone. Registry cards whose documents are then all in archived notebooks are removed (returned as retiredCards, by name); restoring re-matches the notebook and lets the suggester propose its cast again."
     )]
     async fn archive_notebook(
         &self,
@@ -206,13 +206,12 @@ impl AlchemyMcp {
         }): Parameters<ArchiveNotebookReq>,
     ) -> Result<CallToolResult, McpError> {
         let status = if archived { "archived" } else { "" };
-        self.state()
-            .db
-            .set_notebook_status(&notebook_id, status)
+        let out = commands::set_notebook_status_impl(self.state().inner(), &notebook_id, status)
             .await
             .map_err(internal)?;
         self.changed("notebooks", Some(&notebook_id));
-        json_result(&serde_json::json!({ "ok": true, "status": status }))
+        let retired: Vec<&str> = out.retired_cards.iter().map(|c| c.name.as_str()).collect();
+        json_result(&serde_json::json!({ "ok": true, "status": status, "retiredCards": retired }))
     }
 
     #[tool(

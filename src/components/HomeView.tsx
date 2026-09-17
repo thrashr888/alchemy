@@ -345,6 +345,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const create = useStore((s) => s.createNotebook);
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
+  const registryCounts = useStore((s) => s.registryCounts);
   const theme = useStore((s) => s.theme);
   const homeSection = useStore((s) => s.homeSection);
   const homeView = useStore((s) => s.homeView);
@@ -594,7 +595,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       label: "Archive",
       symbol: "archivebox",
       icon: <Archive className="h-3.5 w-3.5" />,
-      onClick: () => void setStatus(nb.id, "archived"),
+      onClick: () => void useStore.getState().archiveNotebooks([nb.id]),
     },
     {
       label: "Delete…",
@@ -626,11 +627,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       icon: <Archive className="h-3.5 w-3.5" />,
       onClick: () =>
         void (async () => {
-          for (const id of ids) await setStatus(id, "archived");
+          await useStore.getState().archiveNotebooks(ids);
           useStore.getState().clearPicked();
-          useStore
-            .getState()
-            .pushToast("success", `Archived ${ids.length} notebooks`);
         })(),
     },
     {
@@ -1159,8 +1157,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   </h1>
                   {homeSection === "registry" ? (
                     <p className="mt-1 text-body text-muted-foreground">
-                      The things your documents are about: assets, people,
-                      projects.
+                      {/* Counted like the shelf's sources: the total, then
+                          each kind that has any. The tagline until the
+                          index has loaded, and while the cast is empty. */}
+                      {registryCounts && registryCounts.total > 0
+                        ? [
+                            `${registryCounts.total} ${registryCounts.total === 1 ? "card" : "cards"}`,
+                            ...registryCounts.kinds.map(
+                              (k) => `${k.count} ${k.label.toLowerCase()}`,
+                            ),
+                          ].join(" · ")
+                        : "The things your documents are about: assets, people, projects."}
                     </p>
                   ) : homeSection === "timeline" ? (
                     <p className="mt-1 text-body text-muted-foreground">

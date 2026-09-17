@@ -9,6 +9,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
+import { restoreRegistryCards } from "./registryRestore";
 import { initializeOnce } from "./startup";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
@@ -41,6 +42,7 @@ import type {
   Note,
   NoteKind,
   ReadingPrefs,
+  RegistryCard,
   Source,
 } from "./types";
 
@@ -554,6 +556,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     growOpen: false,
     readerEditIntent: null,
     registryBump: 0,
+    registryCounts: null,
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
@@ -1225,7 +1228,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             s.pushToast("info", "Open a notebook to archive it");
             return;
           }
-          void s.setNotebookStatus(id, "archived").then(() => s.closeNotebook());
+          void s.archiveNotebooks([id]).then(() => s.closeNotebook());
         } else if (e.payload.id === "menu-delete-notebook") {
           const id = get().currentId;
           const nb = get().notebooks.find((n) => n.id === id);
@@ -1994,35 +1997,73 @@ export const useStore = create<AppState>((rawSet, get) => {
         }
       }),
 
-    setNotebookStatus: (id, status) =>
-      guard(async () => {
-        const prev = get().notebooks;
-        set({
-          notebooks: prev.map((n) => (n.id === id ? { ...n, status } : n)),
-        });
-        try {
-          await api.setNotebookStatus(id, status);
-        } catch (e) {
-          set({ notebooks: prev });
-          await get().refreshNotebooks();
-          throw e;
-        }
-        // Leave an archived notebook if it was open.
-        if (status === "archived" && get().currentId === id) {
-          const active = get().notebooks.filter(
-            (n) => !n.status && n.id !== id,
-          );
-          if (active.length > 0) await get().selectNotebook(active[0].id);
-          else
-            set({
-              currentId: null,
-              sources: [],
-              messages: [],
-              messagesHasMore: false,
-              notes: [],
-            });
-        }
-      }),
+    setNotebookStatus: async (id, status) => {
+      const prev = get().notebooks;
+      set({
+        notebooks: prev.map((n) => (n.id === id ? { ...n, status } : n)),
+      });
+      let retired: RegistryCard[] = [];
+      try {
+        retired = (await api.setNotebookStatus(id, status)).retiredCards;
+      } catch (e) {
+        set({ notebooks: prev, error: e instanceof Error ? e.message : String(e) });
+        await get().refreshNotebooks();
+        return [];
+      }
+      if (retired.length > 0) {
+        set((s) => ({ registryBump: s.registryBump + 1 }));
+      }
+      // Leave an archived notebook if it was open.
+      if (status === "archived" && get().currentId === id) {
+        const active = get().notebooks.filter(
+          (n) => !n.status && n.id !== id,
+        );
+        if (active.length > 0) await get().selectNotebook(active[0].id);
+        else
+          set({
+            currentId: null,
+            sources: [],
+            messages: [],
+            messagesHasMore: false,
+            notes: [],
+          });
+      }
+      return retired;
+    },
+
+    archiveNotebooks: async (ids) => {
+      const titles = ids.map(
+        (id) => get().notebooks.find((n) => n.id === id)?.title ?? "notebook",
+      );
+      const retired: RegistryCard[] = [];
+      for (const id of ids) {
+        retired.push(...(await get().setNotebookStatus(id, "archived")));
+      }
+      // Say what went with it. Archiving was reversible before; a card that
+      // leaves the registry on the same click has to be, and visibly.
+      const what =
+        ids.length === 1
+          ? `Archived “${titles[0]}”`
+          : `Archived ${ids.length} notebooks`;
+      const tail =
+        retired.length === 0
+          ? ""
+          : ` and removed ${retired.length} registry ${retired.length === 1 ? "card" : "cards"} that only pointed there`;
+      get().pushToast("success", `${what}${tail} — click to undo`, () =>
+        void (async () => {
+          try {
+            for (const id of ids) await get().setNotebookStatus(id, "");
+            await restoreRegistryCards(retired);
+            set((s) => ({ registryBump: s.registryBump + 1 }));
+          } catch (e) {
+            get().pushToast(
+              "error",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        })(),
+      );
+    },
 
     pickAndAddFiles: async () => {
       const picked = await open({

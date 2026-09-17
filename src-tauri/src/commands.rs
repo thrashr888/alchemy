@@ -1344,18 +1344,51 @@ pub async fn delete_notebook(state: State<'_, AppState>, id: String) -> Result<(
     e(state.db.delete_notebook(&id).await)
 }
 
-/// Archive ("archived") or restore ("") a notebook. Data is untouched —
-/// archived notebooks just leave the main grid.
+/// What archiving or restoring a notebook did beyond the status flip.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookStatusOutcome {
+    /// Registry cards removed because, with this notebook shelved, every
+    /// document they held was in an archived notebook. Returned whole so
+    /// the toast's undo can recreate them (docs/RFC-registry.md §2).
+    pub retired_cards: Vec<crate::models::RegistryCard>,
+}
+
+/// Archive ("archived") or restore ("") a notebook. The notebook's data is
+/// untouched — archived notebooks just leave the main grid — but the
+/// registry follows: cards that only archived notebooks point at are
+/// retired on archive, and a restored notebook is re-matched and asked for
+/// suggestions again. Shared with the MCP `archive_notebook` tool.
+pub(crate) async fn set_notebook_status_impl(
+    state: &AppState,
+    id: &str,
+    status: &str,
+) -> Result<NotebookStatusOutcome, String> {
+    if status != "archived" && !status.is_empty() {
+        return Err("status must be \"archived\" or empty".into());
+    }
+    e(state.db.set_notebook_status(id, status).await)?;
+    let mut out = NotebookStatusOutcome {
+        retired_cards: Vec::new(),
+    };
+    if status == "archived" {
+        out.retired_cards = registry::retire_archived_cards(&state.db)
+            .await
+            .map_err(|err| err.to_string())?;
+    } else {
+        let data_dir = state.ai.read().await.data_dir().to_path_buf();
+        registry::spawn_unarchive_rematch(state.db.clone(), data_dir, id.to_string());
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn set_notebook_status(
     state: State<'_, AppState>,
     id: String,
     status: String,
-) -> Result<(), String> {
-    if status != "archived" && !status.is_empty() {
-        return Err("status must be \"archived\" or empty".into());
-    }
-    e(state.db.set_notebook_status(&id, &status).await)
+) -> Result<NotebookStatusOutcome, String> {
+    set_notebook_status_impl(&state, &id, &status).await
 }
 
 // ---- Sources -------------------------------------------------------------

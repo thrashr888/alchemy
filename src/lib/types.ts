@@ -616,6 +616,13 @@ export interface CardFact {
 /** What an explicit "suggest cards" ask produced. `reply` carries the
  *  model's raw answer so "it suggested nothing" can be told apart from
  *  "it said something that didn't survive the grounding gate". */
+/** What archiving or restoring a notebook did beyond the status flip. */
+export interface NotebookStatusOutcome {
+  /** Registry cards removed because every document they held was in an
+   *  archived notebook — whole, so the toast's undo can recreate them. */
+  retiredCards: RegistryCard[];
+}
+
 export interface SuggestOutcome {
   created: string[];
   reply: string;

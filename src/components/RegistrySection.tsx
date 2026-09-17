@@ -10,6 +10,7 @@
    mistake. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { restoreRegistryCards } from "@/lib/registryRestore";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import type {
@@ -57,10 +58,8 @@ import {
 } from "lucide-react";
 
 /** The one card-delete path (DESIGN.md §9: undo beats confirm). Deletes
- *  immediately; the toast's undo recreates each card — identifiers, note,
- *  facts — and re-files its attachments. Ruling metadata (origin/triage)
- *  doesn't survive, which only matters for suggested cards, and those are
- *  dismissed rather than deleted. */
+ *  immediately; the toast's undo recreates each card through
+ *  `restoreRegistryCards`, the same half the archive toast uses. */
 async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   if (cards.length === 0) return;
   for (const c of cards) await api.deleteRegistryCard(c.id);
@@ -72,18 +71,7 @@ async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   useStore.getState().pushToast("success", label, () =>
     void (async () => {
       try {
-        for (const c of cards) {
-          const restored = await api.addRegistryCard(
-            c.kind,
-            c.name,
-            c.identifiers,
-            c.note,
-            c.facts,
-          );
-          for (const a of c.attachments) {
-            await api.attachSourceToCard(restored.id, a.sourceId, a.status);
-          }
-        }
+        await restoreRegistryCards(cards);
       } catch (e) {
         useStore
           .getState()
@@ -142,9 +130,33 @@ const proposed = (c: RegistryCard) =>
 const isOrphan = (c: RegistryCard) =>
   !c.origin && confirmed(c).length === 0 && proposed(c).length === 0;
 
+/** A user-owned card whose every standing document is in an archived
+ *  notebook. Archiving removes such cards on the click (with the undo);
+ *  this catches the ones that met the rule before it existed, and badges
+ *  them so the Clean up button can name them. */
+const isShelved = (c: RegistryCard, archived: Set<string>) => {
+  if (c.origin) return false;
+  const standing = [...confirmed(c), ...proposed(c)];
+  return standing.length > 0 && standing.every((a) => archived.has(a.notebookId));
+};
+
+/** Why a card is in the clean-up list, for its badge: "orphaned" (no
+ *  documents left) or "archived" (documents only in archived notebooks). */
+const staleBadge = (c: RegistryCard, archived: Set<string>) =>
+  isOrphan(c) ? "orphaned" : isShelved(c, archived) ? "archived" : null;
+
+/** Ids of archived notebooks — what `isShelved` judges against. */
+function useArchivedIds() {
+  const notebooks = useStore((s) => s.notebooks);
+  return useMemo(
+    () => new Set(notebooks.filter((n) => n.status === "archived").map((n) => n.id)),
+    [notebooks],
+  );
+}
+
 const ORPHAN_HINT =
-  "No documents left; its sources may have been deleted with their notebook. " +
-  "Alchemy retried the match and found nothing.";
+  "No documents left, or none outside archived notebooks. Its sources may have " +
+  "been deleted with their notebook; Alchemy retried the match and found nothing.";
 
 type RegistrySort = "latest" | "docs" | "title";
 const SORTS: { value: RegistrySort; label: string }[] = [
@@ -307,6 +319,19 @@ export function RegistrySection() {
     [cards],
   );
   const mine = useMemo(() => cards.filter((c) => !c.origin), [cards]);
+  // The header's subtitle counts the cast by kind, the way the notebook
+  // shelf's counts its sources. Yours only — suggestions are not cast yet.
+  useEffect(() => {
+    useStore.setState({
+      registryCounts: {
+        total: mine.length,
+        kinds: KINDS.map((k) => ({
+          label: k.label,
+          count: mine.filter((c) => c.kind === k.id).length,
+        })).filter((k) => k.count > 0),
+      },
+    });
+  }, [mine]);
 
   // Both axes are computed from what's actually present, so an empty option
   // never renders (the gallery's rule).
@@ -390,12 +415,16 @@ export function RegistrySection() {
 
   // User-owned orphans (see isOrphan): badged in the list, removed only by
   // this explicit bulk action — one confirm, then they go together.
-  const orphans = useMemo(() => mine.filter(isOrphan), [mine]);
+  const archivedIds = useArchivedIds();
+  const orphans = useMemo(
+    () => mine.filter((c) => staleBadge(c, archivedIds) !== null),
+    [mine, archivedIds],
+  );
   const cleanUpOrphans = async () => {
     const ok = await confirm({
       title: `Remove ${orphans.length} orphaned card${orphans.length === 1 ? "" : "s"}?`,
       message:
-        "These cards have no documents left — their sources were deleted and " +
+        "These cards have no documents left, or none outside archived notebooks — " +
         "rematching found nothing. Identifiers and facts on them go too.",
       // Named, not just counted: "4 orphaned cards" is impossible to check
       // against, and this is the one screen where the user can still say no.
@@ -902,6 +931,7 @@ function CardTable({
   sort: TableSort;
   onSort: (key: string, natural: SortDir) => void;
 }) {
+  const archivedIds = useArchivedIds();
   return (
     <>
       {/* No "New card" button here — the header's covers both views. */}
@@ -948,12 +978,12 @@ function CardTable({
                       title={`${pending} waiting`}
                     />
                   )}
-                  {isOrphan(c) && (
+                  {staleBadge(c, archivedIds) && (
                     <span
                       className="shrink-0 rounded border border-border px-1 text-micro text-subtle-foreground"
                       title={ORPHAN_HINT}
                     >
-                      orphaned
+                      {staleBadge(c, archivedIds)}
                     </span>
                   )}
                 </span>
@@ -1218,6 +1248,7 @@ function CardTile({
   onActivate?: (e: React.MouseEvent) => true | undefined;
   onContextItems?: () => RowMenuItem[] | null;
 }) {
+  const archivedIds = useArchivedIds();
   const docs = confirmed(card).length;
   const pending = proposed(card).length;
   return (
@@ -1256,12 +1287,12 @@ function CardTile({
         </Badge>
         <span>·</span>
         <span className="truncate">{kindLabel(card.kind)}</span>
-        {isOrphan(card) && (
+        {staleBadge(card, archivedIds) && (
           <span
             className="pointer-events-auto shrink-0 rounded border border-border px-1"
             title={ORPHAN_HINT}
           >
-            orphaned
+            {staleBadge(card, archivedIds)}
           </span>
         )}
       </div>
