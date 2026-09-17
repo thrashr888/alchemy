@@ -179,6 +179,13 @@ pub struct AiConfig {
     /// pane shows until this flips.
     #[serde(default)]
     pub setup_seen: bool,
+    /// Answers happen in a desktop AI app rather than in Alchemy
+    /// (docs/RFC-desktop-apps.md phase 3): a `desktop_apps` id ("claude",
+    /// "chatgpt", "copilot") or empty. Alchemy still indexes and grows the
+    /// notebook; the chat pane hands it over instead of answering, and the
+    /// first-run gate stops asking for a model.
+    #[serde(default)]
+    pub answers_in: String,
     /// Minutes between remote git re-sync probes (docs/RFC-git-sources.md
     /// §8); 0 disables auto-sync (manual Refresh always works). Git sources
     /// themselves have no off switch — the smarter thing is the only thing.
@@ -614,6 +621,7 @@ impl Default for AiConfig {
             source_gists: default_true(),
             vision_provider: String::new(),
             setup_seen: false,
+            answers_in: String::new(),
             git_sync_minutes: default_git_sync_minutes(),
             self_diagnose: default_true(),
             source_hygiene: default_true(),

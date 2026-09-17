@@ -359,7 +359,9 @@ export function HealthBanner({
   if (health) {
     // Ollama down takes the whole banner: naming each broken role separately
     // would say the same thing twice with one cause.
-    const broken = !health.chat.working || !health.embed.working;
+    const chatNeeded = !aiConfig?.answersIn;
+    const broken =
+      (chatNeeded && !health.chat.working) || !health.embed.working;
     if (broken && !health.reachable && aiConfig && !aiConfig.setupSeen) {
       // Nobody has chosen how Alchemy answers yet. That is not an Ollama
       // outage — a fresh Mac may never have heard of Ollama — so the banner

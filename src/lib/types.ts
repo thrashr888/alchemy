@@ -878,6 +878,9 @@ export interface AiConfig {
   curatorConsolidate: boolean;
   visionProvider: string;
   setupSeen: boolean;
+  /** Answers happen in a desktop AI app ("claude" | "chatgpt" | "copilot")
+   *  rather than in Alchemy; empty when Alchemy answers itself. */
+  answersIn: string;
   gitSyncMinutes: number;
   notionToken: string;
   /** Diagnose-and-suggest on unclassified provider errors (RFC-self-resolve

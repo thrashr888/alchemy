@@ -9,7 +9,7 @@ import { currentEpigraph } from "@/lib/epigraph";
 import { MacConnect } from "./MacConnect";
 import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
-import type { ModelStatus, ProviderEntry } from "@/lib/types";
+import type { DesktopApp, ModelStatus, ProviderEntry } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
 
 /** One copyable shell command. */
@@ -159,6 +159,21 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Ollama, no Apple Intelligence, and no API key still has a chat model.
   // Hiding that door behind "Settings → Models…" blocked exactly that Mac.
   const [agentDoors, setAgentDoors] = useState<string[]>([]);
+  // Desktop AI apps on this Mac (docs/RFC-desktop-apps.md phase 3): a door
+  // that says answers happen THERE, and Alchemy indexes here.
+  const [deskDoors, setDeskDoors] = useState<DesktopApp[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .desktopApps()
+      .then((apps) => {
+        if (!cancelled) setDeskDoors(apps.filter((a) => a.installed));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Which Mac apps count as connected — MacConnect reads it, prompt-free.
   const [macConnected, setMacConnected] = useState<string[]>([]);
   useEffect(() => {
@@ -193,9 +208,12 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     (p) => p.id === aiConfig.chatProvider,
   )?.kind;
   const agentMode = chosenKind && chosenKind in AGENT_DOORS ? chosenKind : null;
-  const mode: "fm" | "ollama" | "openai" | "agent" = agentMode
-    ? "agent"
-    : aiConfig?.chatProvider === "on-device"
+  const elsewhere = deskDoors.find((a) => a.id === aiConfig?.answersIn) ?? null;
+  const mode: "fm" | "ollama" | "openai" | "agent" | "elsewhere" = elsewhere
+    ? "elsewhere"
+    : agentMode
+      ? "agent"
+      : aiConfig?.chatProvider === "on-device"
       ? "fm"
       : provider === "openai"
         ? "openai"
@@ -205,12 +223,27 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (!aiConfig) return;
     // Any door but Ollama's indexes with the built-in embedder unless Ollama
     // is already running: a Mac without Ollama should never be told to
-    // start it for a path that doesn't need it.
+    // start it for a path that doesn't need it. Choosing a model here also
+    // means answers happen in Alchemy again.
     const embedder = health?.reachable ? aiConfig.embedder : "builtin";
-    if (m === "fm") await save({ ...aiConfig, chatProvider: "on-device", embedder });
+    const base = { ...aiConfig, answersIn: "" };
+    if (m === "fm") await save({ ...base, chatProvider: "on-device", embedder });
     else if (m === "ollama")
-      await save({ ...aiConfig, provider: "ollama", chatProvider: "ollama" });
-    else await save({ ...aiConfig, provider: "openai", chatProvider: "", embedder });
+      await save({ ...base, provider: "ollama", chatProvider: "ollama" });
+    else await save({ ...base, provider: "openai", chatProvider: "", embedder });
+    await refresh();
+  }
+
+  /** Answers happen in a desktop app; Alchemy indexes here and hands a
+   *  notebook over on request. No model to install, nothing to sign in to. */
+  async function answerElsewhere(id: string) {
+    if (!aiConfig) return;
+    await save({
+      ...aiConfig,
+      answersIn: id,
+      setupSeen: true,
+      embedder: health?.reachable ? aiConfig.embedder : "builtin",
+    });
     await refresh();
   }
 
@@ -246,6 +279,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       ...aiConfig,
       providers,
       chatProvider: existing?.id ?? id,
+      answersIn: "",
       embedder: health?.reachable ? aiConfig.embedder : "builtin",
     });
     await refresh();
@@ -370,6 +404,12 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 signed in on this Mac. Your sources are indexed locally; only
                 your questions go to {AGENT_DOORS[agentMode!]?.vendor}.
               </>
+            ) : mode === "elsewhere" ? (
+              <>
+                Answers happen in {elsewhere!.label}. Alchemy indexes your
+                sources on this Mac and hands a notebook over whenever you
+                ask — nothing to install, nothing to sign in to.
+              </>
             ) : (
               <>
                 Alchemy runs entirely on your machine. It needs{" "}
@@ -407,10 +447,10 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             probe lands a second or two after the overlay, and a fourth tile
             arriving inside the grid above reflowed the three. The full
             roster still lives in Settings → Models. */}
-        {agentDoors.length > 0 ? (
+        {agentDoors.length > 0 || deskDoors.length > 0 ? (
           <div className="-mt-2 flex flex-col gap-1.5">
             <span className="text-caption text-subtle-foreground">
-              Already on this Mac — answer with a subscription you pay for:
+              Already on this Mac:
             </span>
             <div className="grid grid-cols-3 gap-1.5">
               {agentDoors.map((id) => (
@@ -420,6 +460,17 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                   note={AGENT_DOORS[id].note}
                   pressed={agentMode === id}
                   onPick={() => void useAgent(id)}
+                />
+              ))}
+              {/* A desktop app has no local API, so this door is a different
+                  promise: answers happen there, Alchemy keeps the notebook. */}
+              {deskDoors.map((a) => (
+                <Door
+                  key={`desk-${a.id}`}
+                  label={a.id === "claude" ? "Claude Desktop" : a.label}
+                  note="Answers there · notebooks here"
+                  pressed={mode === "elsewhere" && elsewhere?.id === a.id}
+                  onPick={() => void answerElsewhere(a.id)}
                 />
               ))}
             </div>
@@ -534,16 +585,26 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           )}
 
           <Step
-            ok={mode === "ollama" ? health.reachable && chat.working : chat.working}
-            failed={
-              mode === "openai"
-                ? gatewayConfigured && !chat.working
+            ok={
+              mode === "elsewhere"
+                ? true
                 : mode === "ollama"
-                  ? health.reachable && !chat.working
-                  : !chat.working
+                  ? health.reachable && chat.working
+                  : chat.working
+            }
+            failed={
+              mode === "elsewhere"
+                ? false
+                : mode === "openai"
+                  ? gatewayConfigured && !chat.working
+                  : mode === "ollama"
+                    ? health.reachable && !chat.working
+                    : !chat.working
             }
             title={
-              mode === "openai"
+              mode === "elsewhere"
+                ? `Answers in ${elsewhere!.label}`
+                : mode === "openai"
                 ? chat.working
                   ? "Gateway connected"
                   : "Connect a gateway"
@@ -640,7 +701,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                 own once health agrees, but a person who just watched the
                 last step go green wants the button that says so. In dev,
                 `#onboarding` forced the stage; the button clears it. */}
-            {chat.working && embed.working ? (
+            {(chat.working || mode === "elsewhere") && embed.working ? (
               <Button
                 variant="primary"
                 size="sm"
