@@ -449,6 +449,15 @@ export const useStore = create<AppState>((rawSet, get) => {
 
   /** Run an async action, surfacing any failure as the global error instead of
    *  swallowing it (unhandled rejection = the UI silently does nothing). */
+  /** An answer landed in Home's chat. If the Chat tab isn't the thing on
+   *  screen — a notebook is open, or another Home tab — the tab wears a dot
+   *  until it is. */
+  const markHomeChatUnread = () => {
+    const s = get();
+    if (s.homeSection === "chat" && !s.currentId) return;
+    set({ homeChatUnread: true });
+  };
+
   const guard = async (fn: () => Promise<void>) => {
     try {
       await fn();
@@ -557,6 +566,15 @@ export const useStore = create<AppState>((rawSet, get) => {
     readerEditIntent: null,
     registryBump: 0,
     registryCounts: null,
+    homeChatUnread: false,
+    registrySeenAt: (() => {
+      try {
+        return Number(localStorage.getItem("alchemy.registrySeenAt") ?? 0) || 0;
+      } catch {
+        return 0;
+      }
+    })(),
+    registrySignal: null,
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
@@ -1718,6 +1736,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             stopped ? "stopped" : "chat",
             threadId,
           );
+          markHomeChatUnread();
         } catch (e) {
           await get().appendHomeTurn(
             "assistant",
@@ -1726,6 +1745,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             "error",
             threadId,
           );
+          markHomeChatUnread();
         } finally {
           clear();
         }
@@ -2029,6 +2049,31 @@ export const useStore = create<AppState>((rawSet, get) => {
           });
       }
       return retired;
+    },
+
+    refreshRegistrySignal: async () => {
+      try {
+        const cards = await api.listRegistry();
+        const shown = cards.filter((c) => c.origin === "auto" && c.surfaced);
+        set({
+          registrySignal: {
+            shown: shown.length,
+            newest: shown.reduce((m, c) => Math.max(m, c.createdAt), 0),
+          },
+        });
+      } catch {
+        // The dot is a hint; a failed read just leaves the last one.
+      }
+    },
+
+    markRegistrySeen: () => {
+      const now = Date.now();
+      set({ registrySeenAt: now });
+      try {
+        localStorage.setItem("alchemy.registrySeenAt", String(now));
+      } catch {
+        // Per-viewer convenience only.
+      }
     },
 
     archiveNotebooks: async (ids) => {

@@ -292,6 +292,20 @@ export interface AppState {
   /** Bumped when the registry changes (agents, or the arrival sweep filing
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
+  /** Home's Chat tab has an answer you haven't seen: a corpus question
+   *  settled while you were in a notebook or on another tab. Cleared the
+   *  moment the tab is on screen. */
+  homeChatUnread: boolean;
+  /** When the Registry tab was last on screen (epoch ms, persisted) — the
+   *  baseline its unread dot compares suggestions against. */
+  registrySeenAt: number;
+  /** What the Registry tab would show: how many suggestions are surfaced
+   *  and the newest one's arrival, refreshed on the registry bump so the dot
+   *  works from any tab. Null until first read. */
+  registrySignal: { shown: number; newest: number } | null;
+  refreshRegistrySignal: () => Promise<void>;
+  /** The Registry tab is on screen: everything surfaced now counts as seen. */
+  markRegistrySeen: () => void;
   /** The cast by kind, set by the Registry index after each load; the Home
    *  header's subtitle reads it. Null until the index has loaded once. */
   registryCounts: { total: number; kinds: { label: string; count: number }[] } | null;

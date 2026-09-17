@@ -289,6 +289,31 @@ function NotebookTable({
  *  so it lives in the same place and wears the same chrome. */
 function HomeSectionTabs() {
   const section = useStore((s) => s.homeSection);
+  const currentId = useStore((s) => s.currentId);
+  const chatUnread = useStore((s) => s.homeChatUnread);
+  const registryBump = useStore((s) => s.registryBump);
+  const registrySignal = useStore((s) => s.registrySignal);
+  const registrySeenAt = useStore((s) => s.registrySeenAt);
+  // The Registry's dot works from any tab, so the signal is read here — at
+  // mount and on every registry bump — not by the section that shows it.
+  useEffect(() => {
+    void useStore.getState().refreshRegistrySignal();
+  }, [registryBump]);
+  // On screen means seen. Chat's flag drops the moment the tab shows; the
+  // Registry's baseline moves to now while it shows, so what arrives while
+  // you're reading it never dots after you leave.
+  useEffect(() => {
+    if (currentId) return;
+    if (section === "chat" && chatUnread)
+      useStore.setState({ homeChatUnread: false });
+    if (section === "registry") useStore.getState().markRegistrySeen();
+  }, [section, currentId, chatUnread, registrySignal]);
+  const registryUnread =
+    !!registrySignal &&
+    registrySignal.shown > 0 &&
+    registrySignal.newest > registrySeenAt;
+  const unread = (id: string) =>
+    id === "chat" ? chatUnread : id === "registry" ? registryUnread : false;
 
   const tabs = [
     { id: "notebooks", label: "Notebooks", icon: Library },
@@ -332,6 +357,17 @@ function HomeSectionTabs() {
         >
           <Icon className="h-3.5 w-3.5" />
           {label}
+          {/* The notebook cards' activity dot, on a tab: something is
+              waiting here that you haven't seen. */}
+          {unread(id) && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+              aria-label={
+                id === "chat" ? "New answer" : "New suggestions"
+              }
+              title={id === "chat" ? "An answer landed" : "New suggestions"}
+            />
+          )}
         </button>
       ))}
     </div>
