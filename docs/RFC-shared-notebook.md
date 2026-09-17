@@ -112,9 +112,9 @@ rule — gets the usual two-data-dir tests.
   the HealthBanner instead — "“X” is in your iCloud Drive. Open · Not now".
   That root is also the user's own space, and a bundle there may be an
   experiment as easily as a share. `okf::shared_offers_in` is the filter
-  (one level down, not bound, not the Notebooks folder or inside it, not
-  dismissed), read at mount and every five minutes: a share accepted in
-  Finder lands with no event this app sees.
+  (not bound, not the Notebooks folder or inside it, not dismissed), read
+  at mount and every five minutes: a share accepted in Finder lands with
+  no event this app sees.
 - **Ownership is not detected.** macOS marks a shared item through
   Foundation resource keys, not anything `mdls` or an xattr exposes, and
   the offer does not need it: a bundle you can open is a bundle you can
@@ -202,6 +202,38 @@ rule — gets the usual two-data-dir tests.
   byte-for-byte the behavior that shipped: one person's two Macs are two
   machines, and a delete made on either is theirs and stands. Unsharing
   clears the open questions on the next pass.
+
+### Phase 1, corrected (2026-09-16)
+
+The first two-Apple-ID run found it: two notebooks shared, both accepted,
+one offered. Importing the second by hand worked, so the bundle was fine
+and the *scan* was not. Three things the pass could not see, fixed
+together because a second offer is one thing that either arrives or does
+not:
+
+- **Two levels, not one.** The pass read the iCloud Drive root and
+  `Alchemy Shared/` by name. A bundle the sender shared inside another
+  folder lands one level below either, and naming the layouts iCloud
+  might use is a losing game — `shared_offers_in` now walks two levels
+  from the root, stopping at the first bundle on each branch, skipping
+  the Notebooks folder, and capped at 400 folders so a five-minute poll
+  never walks the whole drive.
+- **A placeholder is still a share.** `find_bundle_root` asks whether
+  `index.md` exists, and for a folder iCloud has not downloaded the
+  answer is no — the legacy layout leaves `.index.md.icloud` in its
+  place. `looks_like_bundle` counts the stub, the offer falls back to the
+  folder's own name for its title, and Open asks iCloud for the folder
+  and waits ten seconds for the index before importing: a download still
+  running says so rather than failing as "not an Alchemy notebook".
+- **An unset Notebooks folder swallowed everything.**
+  `Path::new("anything").starts_with("")` is true, so a Mac that had
+  never answered "keep notebooks on disk" filtered out every offer it
+  found. An empty Notebooks folder now excludes nothing.
+
+The banner also rechecks when the window comes forward and carries a
+"Check now" button beside the last offer. Accepting a share means leaving
+Alchemy for Finder or Messages and coming back, and a five-minute timer
+is the wrong clock for that.
 
 ## Open questions
 
