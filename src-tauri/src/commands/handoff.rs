@@ -196,12 +196,20 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-/// Where a prompt can be carried in, per app, when the app offers a way:
-/// Claude Desktop registers `claude://` and opens a new chat from
-/// `claude://new?q=`; ChatGPT's app claims chatgpt.com links and prefills
-/// from `?q=`. GitHub Copilot's app ignores both, so it gets no URL and the
-/// person pastes. Returns None when the app has no prefill route.
+/// Prefill is off (2026-09-17): `claude://new?q=` opened Claude Desktop
+/// with an empty composer on Paul's Mac, and ChatGPT's app took the link
+/// but not the text. The routes stay here, gated, until one is seen to
+/// work; meanwhile every handoff is the clipboard plus the app in front.
+const PREFILL_ENABLED: bool = false;
+
+/// Where a prompt could be carried in, per app: Claude Desktop registers
+/// `claude://`, ChatGPT's app claims chatgpt.com links. GitHub Copilot's
+/// app ignores both. Returns None when prefill is off or the app has no
+/// route.
 pub(crate) fn prefill_url(app: &str, prompt: &str) -> Option<String> {
+    if !PREFILL_ENABLED {
+        return None;
+    }
     let clipped: String = prompt.chars().take(HANDOFF_URL_CHARS).collect();
     match app {
         "claude" => Some(format!("claude://new?q={}", url_encode(&clipped))),
@@ -277,18 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn prefill_urls_exist_only_where_the_app_takes_one() {
-        let claude = prefill_url("claude", "hi there & bye").unwrap();
-        assert_eq!(claude, "claude://new?q=hi%20there%20%26%20bye");
-        assert!(prefill_url("chatgpt", "x")
-            .unwrap()
-            .starts_with("https://chatgpt.com/?q=x"));
-        assert!(prefill_url("copilot", "x").is_none());
-        let long = "a".repeat(HANDOFF_URL_CHARS + 500);
-        assert_eq!(
-            prefill_url("claude", &long).unwrap().len(),
-            "claude://new?q=".len() + HANDOFF_URL_CHARS
-        );
+    fn prefill_is_off_until_an_app_is_seen_to_take_one() {
+        assert!(prefill_url("claude", "hi").is_none());
+        assert!(prefill_url("chatgpt", "hi").is_none());
+        assert!(prefill_url("copilot", "hi").is_none());
+        assert_eq!(url_encode("hi there & bye"), "hi%20there%20%26%20bye");
     }
 
     #[test]
