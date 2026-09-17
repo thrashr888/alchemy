@@ -12,9 +12,15 @@
   "action": {
     "default_title": "Add this page to Alchemy"
   },
-  "permissions": ["contextMenus", "activeTab", "scripting"],
-  "host_permissions": ["http://127.0.0.1/*"],
+  "permissions": ["contextMenus", "activeTab"],
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "alchemy-clipper@thrashr.dev",
+      "strict_min_version": "121.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
   }
 }
