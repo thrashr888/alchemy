@@ -648,6 +648,16 @@ export interface CardFact {
 /** What an explicit "suggest cards" ask produced. `reply` carries the
  *  model's raw answer so "it suggested nothing" can be told apart from
  *  "it said something that didn't survive the grounding gate". */
+/** One Mac app's connection, as the Connect buttons show it (see
+ *  `mac_status`): connected when its store reads without a prompt, when a
+ *  source from it is already in the library, or when Connect succeeded
+ *  here before. */
+export interface MacProviderStatus {
+  id: string;
+  connected: boolean;
+  detail: string;
+}
+
 /** What archiving or restoring a notebook did beyond the status flip. */
 export interface NotebookStatusOutcome {
   /** Registry cards removed because every document they held was in an

@@ -3,6 +3,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { AlchemySymbol } from "./AlchemyHero";
+import { DitherBackground } from "./DitherBackground";
+import { THEMES, resolveThemeId } from "@/lib/themes";
+import { currentEpigraph } from "@/lib/epigraph";
 import { MacConnect } from "./MacConnect";
 import { Button, Input } from "./ui";
 import { cn } from "@/lib/utils";
@@ -106,9 +109,40 @@ const AGENT_DOORS: Record<string, { label: string; note: string; vendor: string 
   codex: { label: "Codex", note: "Your ChatGPT subscription", vendor: "ChatGPT" },
 };
 
+/** One door on the first-run screen: a way Alchemy can answer. */
+function Door({
+  label,
+  note,
+  pressed,
+  onPick,
+}: {
+  label: string;
+  note: string;
+  pressed: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onPick}
+      className={cn(
+        "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+        pressed
+          ? "border-primary/60 bg-primary/10 text-foreground"
+          : "border-border bg-surface text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <span className="text-body font-medium">{label}</span>
+      <span className="text-micro text-subtle-foreground">{note}</span>
+    </button>
+  );
+}
+
 /** First-run / broken-setup guide: Ollama + required models, with live rechecks. */
 export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   const health = useStore((s) => s.modelHealth);
+  const theme = useStore((s) => s.theme);
   const aiConfig = useStore((s) => s.aiConfig);
   const save = useStore((s) => s.saveAiConfig);
   const dismiss = useStore((s) => s.dismissOnboarding);
@@ -125,6 +159,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Ollama, no Apple Intelligence, and no API key still has a chat model.
   // Hiding that door behind "Settings → Models…" blocked exactly that Mac.
   const [agentDoors, setAgentDoors] = useState<string[]>([]);
+  // Which Mac apps count as connected — MacConnect reads it, prompt-free.
+  const [macConnected, setMacConnected] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
     void api
@@ -199,13 +235,17 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       chatModel: "",
       effort: "",
     };
-    const providers = aiConfig.providers.some((p) => p.id === id)
+    // Match on KIND: an entry Settings made earlier may carry another id
+    // ("claude" for Claude Code) and a chosen model — answer with that one
+    // rather than minting a twin beside it.
+    const existing = aiConfig.providers.find((p) => p.kind === id);
+    const providers = existing
       ? aiConfig.providers
       : [...aiConfig.providers, entry];
     await save({
       ...aiConfig,
       providers,
-      chatProvider: id,
+      chatProvider: existing?.id ?? id,
       embedder: health?.reachable ? aiConfig.embedder : "builtin",
     });
     await refresh();
@@ -267,22 +307,53 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
-      className="fixed inset-0 z-40 overflow-y-auto bg-background"
+      className="fixed inset-0 z-40 bg-background"
     >
-      {/* Centered when it fits, scrolled from the top when it doesn't.
-          Centering the scroller itself clipped the heading on a short
-          window: you could reach the bottom but never the top. */}
-      <div className="flex min-h-full items-center justify-center">
-      <div className="flex w-full max-w-[520px] flex-col gap-5 px-6 py-10">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <AlchemySymbol className="h-14 w-14 text-citation" />
+      {/* Two panes: the brand on the left — the hero's dithered mist, the
+          transmutation sigil large enough to be the thing you look at while
+          a check runs, the mark and the wordmark — and the setup on the
+          right in its own scroller, so a short window scrolls the steps
+          from the top and never clips the heading. Narrow windows stack
+          them, the brand shrinking to a band. */}
+      <div className="grid h-full grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[minmax(300px,2fr)_minmax(0,3fr)] md:grid-rows-1">
+        <aside className="relative isolate flex min-h-[132px] items-center justify-center overflow-hidden border-b border-border md:min-h-0 md:border-b-0 md:border-r">
+          <div className="absolute inset-0">
+            <DitherBackground themeKey={theme} />
+          </div>
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_55%,var(--background)_130%)]" />
+          <div className="relative z-10 flex flex-row items-center gap-5 px-8 py-5 text-center md:flex-col md:gap-0 md:py-10">
+            <AlchemySymbol
+              className="h-16 w-16 shrink-0 text-citation/70 md:h-52 md:w-52 lg:h-64 lg:w-64"
+              preferred={THEMES[resolveThemeId(theme)]?.sigil}
+            />
+            <div className="flex flex-col items-start md:mt-9 md:items-center">
+              <div className="flex items-center gap-2.5">
+                <AlchemySymbol className="hidden h-5 w-5 text-citation md:block" strokeWidth={1.6} />
+                <span className="font-serif text-[1.375rem] font-medium uppercase tracking-[0.22em] text-foreground/90 md:text-3xl">
+                  Alchemy
+                </span>
+              </div>
+              <p className="mt-1.5 max-w-xs text-body leading-relaxed text-muted-foreground md:mt-3 md:text-center">
+                Research notebooks that stay on your Mac.
+              </p>
+              <p className="mt-2 hidden max-w-xs font-serif text-body italic leading-relaxed text-subtle-foreground md:block">
+                “{currentEpigraph(theme)}”
+              </p>
+            </div>
+          </div>
+        </aside>
+
+        <section className="overflow-y-auto">
+          <div className="flex min-h-full items-center">
+      <div className="mx-auto flex w-full max-w-[560px] flex-col gap-5 px-6 py-8 md:px-10 md:py-12">
+        <div className="flex flex-col gap-2">
           <h1
             id="onboarding-title"
             className="font-serif text-[1.625rem] font-medium tracking-[0.14em] text-foreground"
           >
             Set up Alchemy
           </h1>
-          <p className="max-w-sm text-body leading-relaxed text-muted-foreground">
+          <p className="max-w-md text-body leading-relaxed text-muted-foreground">
             {mode === "openai" ? (
               <>
                 Connect an OpenAI-compatible gateway. Your sources are indexed
@@ -314,48 +385,54 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </p>
         </div>
 
-        {/* The three broadest doors, plus one per subscription CLI this Mac
-            already has — a fourth door only when it is actually open. */}
-        <div className={cn("grid gap-1.5", agentDoors.length > 0 ? "grid-cols-2" : "grid-cols-3")}>
-          {[
-            { id: "fm", label: "Apple Intelligence", note: "On-device · zero setup", pressed: mode === "fm", pick: () => setMode("fm") },
-            { id: "ollama", label: "Ollama", note: "Local models · private", pressed: mode === "ollama", pick: () => setMode("ollama") },
-            { id: "openai", label: "OpenAI-compatible", note: "Your API key · 30+ services", pressed: mode === "openai", pick: () => setMode("openai") },
-            ...agentDoors.map((id) => ({
-              id,
-              label: AGENT_DOORS[id].label,
-              note: `${AGENT_DOORS[id].note} · installed`,
-              pressed: agentMode === id,
-              pick: () => useAgent(id),
-            })),
-          ].map((pv) => (
-            <button
+        {/* The three broadest doors. */}
+        <div className="grid grid-cols-3 gap-1.5">
+          {(
+            [
+              { id: "fm", label: "Apple Intelligence", note: "On-device · zero setup" },
+              { id: "ollama", label: "Ollama", note: "Local models · private" },
+              { id: "openai", label: "OpenAI-compatible", note: "Your API key · 30+ services" },
+            ] as const
+          ).map((pv) => (
+            <Door
               key={pv.id}
-              type="button"
-              aria-pressed={pv.pressed}
-              onClick={() => void pv.pick()}
-              className={cn(
-                "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
-                pv.pressed
-                  ? "border-primary/60 bg-primary/10 text-foreground"
-                  : "border-border bg-surface text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="text-body font-medium">{pv.label}</span>
-              <span className="text-micro text-subtle-foreground">{pv.note}</span>
-            </button>
+              label={pv.label}
+              note={pv.note}
+              pressed={mode === pv.id}
+              onPick={() => void setMode(pv.id)}
+            />
           ))}
         </div>
-        {/* The full roster (Claude Code and other signed-in subscriptions,
-            per-provider keys) lives in Settings — the overlay stays the
-            three broadest doors. */}
-        <button
-          className="-mt-3 text-center text-caption text-subtle-foreground hover:text-muted-foreground"
-          onClick={onOpenSettings}
-        >
-          Already pay for Claude or ChatGPT? Connect a subscription in
-          Settings → Models…
-        </button>
+        {/* The subscription CLIs this Mac already has, on their own row: the
+            probe lands a second or two after the overlay, and a fourth tile
+            arriving inside the grid above reflowed the three. The full
+            roster still lives in Settings → Models. */}
+        {agentDoors.length > 0 ? (
+          <div className="-mt-2 flex flex-col gap-1.5">
+            <span className="text-caption text-subtle-foreground">
+              Already on this Mac — answer with a subscription you pay for:
+            </span>
+            <div className="grid grid-cols-3 gap-1.5">
+              {agentDoors.map((id) => (
+                <Door
+                  key={id}
+                  label={AGENT_DOORS[id].label}
+                  note={AGENT_DOORS[id].note}
+                  pressed={agentMode === id}
+                  onPick={() => void useAgent(id)}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <button
+            className="-mt-3 text-center text-caption text-subtle-foreground hover:text-muted-foreground"
+            onClick={onOpenSettings}
+          >
+            Already pay for Claude or ChatGPT? Connect a subscription in
+            Settings → Models…
+          </button>
+        )}
 
         {mode === "openai" && (
           <div className="flex flex-col gap-1.5 rounded-lg border border-border-strong bg-surface px-4 py-3">
@@ -539,12 +616,18 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Step>
 
           <Step
-            ok={false}
+            ok={macConnected.length >= 4}
             optional
-            title="Connect Mac apps"
+            title={
+              macConnected.length >= 4
+                ? "Mac apps connected"
+                : macConnected.length > 0
+                  ? `${macConnected.length} of 4 Mac apps connected`
+                  : "Connect Mac apps"
+            }
             detail="Add Calendar, Reminders, and Apple Notes as auto-syncing sources. Connecting triggers the macOS permission prompts once, up front."
           >
-            <MacConnect />
+            <MacConnect onStatus={setMacConnected} />
           </Step>
         </div>
 
@@ -553,9 +636,27 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             Rechecks automatically every few seconds.
           </span>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={dismiss}>
-              Continue anyway
-            </Button>
+            {/* Ready is a door, not a dead end: the overlay leaves on its
+                own once health agrees, but a person who just watched the
+                last step go green wants the button that says so. In dev,
+                `#onboarding` forced the stage; the button clears it. */}
+            {chat.working && embed.working ? (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  if (window.location.hash === "#onboarding")
+                    window.history.replaceState(null, "", window.location.pathname);
+                  dismiss();
+                }}
+              >
+                Open Alchemy
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={dismiss}>
+                Continue anyway
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -572,6 +673,8 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         </div>
       </div>
+          </div>
+        </section>
       </div>
     </div>
   );

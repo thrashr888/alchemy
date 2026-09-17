@@ -60,6 +60,7 @@ import type {
   SuggestOutcome,
   Template,
   NotebookStatusOutcome,
+  MacProviderStatus,
 } from "./types";
 
 /** One API operation plus the command name diagnostics reports on failure. */
@@ -330,6 +331,8 @@ export const api = {
   // Mac providers (Calendar, Reminders, Apple Notes via cider)
   macAvailable: () => run(query<boolean>("mac_available")),
   macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
+  /** Which Mac apps count as connected — prompt-free. */
+  macStatus: () => run(query<MacProviderStatus[]>("mac_status", {})),
   listMacCollections: (provider: string) =>
     run(query<MacCollection[]>("list_mac_collections", { provider })),
   addSourceMac: (
