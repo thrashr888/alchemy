@@ -45,3 +45,6 @@ extension/chrome/*.zip
 
 # Copied in by scripts/release.sh only when APPLE_PROVISIONING_PROFILE is set
 src-tauri/embedded.provisionprofile
+.cortex/raw.db
+.cortex/raw.db-wal
+.cortex/raw.db-shm
