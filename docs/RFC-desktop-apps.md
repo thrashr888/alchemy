@@ -1,7 +1,10 @@
 # RFC: Desktop AI apps — hand a notebook to the app you already use
 
-Status: phase 1 (the handoff) built 2026-09-16 on `cld/wife-feedback-2`;
-phases 2–3 proposed, awaiting review.
+Status: phase 1 (the handoff) built 2026-09-16; phase 3 (the first-run
+door) built 2026-09-17; phase 2 (the Claude Desktop connector) in
+progress on `cld/wf-mcpb`. Prefill via URL schemes was tried and gated
+off: `claude://new?q=` opened an empty composer and ChatGPT's app took the
+link without the text.
 
 ## Summary
 
@@ -66,7 +69,22 @@ a local server does not qualify without a tunnel, which is out of scope.
 GitHub Copilot's desktop app has no connector surface we can target. Both
 keep phase 1's handoff.
 
-## Phase 3 — first run (proposed)
+## Phase 3 — first run (built 2026-09-17)
+
+As built: the "Already on this Mac" row lists the desktop apps beside the
+subscription CLIs, labelled "Claude Desktop" / "ChatGPT" / "GitHub
+Copilot" with the note "Answers there · notebooks here". Choosing one
+writes `answersIn` on the config (and `setupSeen`, and the built-in
+embedder when Ollama isn't running). With it set: the first-run gate and
+the health banner stop asking for a chat model (indexing still must work);
+the chat pane's composer becomes a card — "Answers happen in Claude. Alchemy
+keeps and indexes this notebook here" — with **Open in Claude**, whenever
+no in-app chat model works; the Open Alchemy button appears once indexing
+is green. Choosing any model door later clears `answersIn`. The open
+question below (a key prompt in the empty chat) was answered "no": the
+card names Settings → Models in one sentence and leaves it there.
+
+### As proposed
 
 The first-run stage gains a fourth kind of door under "Already on this Mac":
 **Claude Desktop** (and ChatGPT / GitHub Copilot when present). Choosing it
