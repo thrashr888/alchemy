@@ -527,6 +527,38 @@ export const THEMES: Record<string, Theme> = {
       input: "rgba(46,33,16,0.18)", scrollbar: "rgba(46,33,16,0.26)",
     },
   },
+  "carrera-dark": {
+    id: "carrera-dark",
+    label: "Carrera Dark",
+    dark: true,
+    shader: "grain", // hide grain: anisotropic fibers, the same field vellum uses
+    sigil: 3, // transmutation array — the four-spoke wheel, as Carrera
+    mood: "black leather and Guards Red under sodium light, a night drive on an empty pass",
+    verbs: [
+      "Warming the flat-six",
+      "Dipping the headlights",
+      "Reading the camber",
+      "Trimming the apex",
+      "Heeling and toeing",
+      "Settling the rear",
+    ],
+    vars: {
+      // Carrera at night: the hide goes black, the Cashmere stays — it is
+      // the text and the warm cast under every surface, never a fill.
+      // Guards Red carries the accent; the crest's brass reads as the link.
+      background: "#13110e", surface: "#1a1713", "surface-2": "#221e19", elevated: "#2b2620",
+      foreground: "#e8dcc4", muted: "#221e19", "muted-foreground": "#b9ab90",
+      "subtle-foreground": "#9c8e76", ring: "#e8203a", primary: "#d5001c",
+      "primary-hover": "#e8203a", "primary-foreground": "#ffffff", accent: "#2b2620",
+      "accent-foreground": "#e8dcc4", destructive: "#f2635e", success: "#8dc06a",
+      citation: "#e0bd74", selection: "rgba(213,0,28,0.32)",
+      // The hide is lit cashmere, not red: Guards Red is the accent, but a
+      // red-tinted grain field reads as oxblood vinyl rather than leather.
+      backdrop: "#c0ad8c",
+      border: "rgba(232,220,196,0.09)", "border-strong": "rgba(232,220,196,0.16)",
+      input: "rgba(232,220,196,0.12)", scrollbar: "rgba(232,220,196,0.14)",
+    },
+  },
   italia: {
     id: "italia",
     label: "Italia",
