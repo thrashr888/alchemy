@@ -528,8 +528,29 @@ export const useStore = create<AppState>((rawSet, get) => {
     ingestQueue: [],
     migration: null,
     draggingFiles: false,
-    sourcesOpen: localStorage.getItem("sourcesOpen") !== "false",
-    studioOpen: localStorage.getItem("studioOpen") !== "false",
+    // A fresh install starts with both rails closed: one column to learn
+    // before the other two. Written down at first launch so the choice
+    // holds until the person opens a rail; anyone with a remembered
+    // setting, or who has already been through setup, keeps theirs.
+    ...(() => {
+      const remembered = (key: string) => localStorage.getItem(key);
+      const fresh =
+        remembered("sourcesOpen") === null &&
+        remembered("studioOpen") === null &&
+        remembered("onboardingDismissed") === null;
+      if (fresh) {
+        try {
+          localStorage.setItem("sourcesOpen", "false");
+          localStorage.setItem("studioOpen", "false");
+        } catch {
+          // Per-viewer convenience only.
+        }
+      }
+      return {
+        sourcesOpen: fresh ? false : remembered("sourcesOpen") !== "false",
+        studioOpen: fresh ? false : remembered("studioOpen") !== "false",
+      };
+    })(),
     sourcesWidth: clampPanel(
       "sources",
       Number(localStorage.getItem("sourcesWidth")) || 280,

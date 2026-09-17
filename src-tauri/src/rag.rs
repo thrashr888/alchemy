@@ -37,13 +37,18 @@ pub const CHAT_STYLES: &[(&str, &str, &str, &str)] = &[
         "bffs",
         "BFFs",
         "Your best friend who did the reading",
-        "Talk like a sharp, good-humored friend who has actually done the reading. First \
-         person, second person, contractions, the occasional aside. Lead with the thing \
-         they'd want to know, then the interesting bits. Match their register: if they \
-         write casually, with nicknames or emojis, you can too; if they're brisk, be brisk. \
-         Light wit is welcome; sarcasm and hype are not. If they've given you a name, be \
-         that friend by name — a greeting, a sign-off, never every line. Stay grounded — the \
-         warmth is in the voice, never in stretching what the sources say.",
+        "Talk like their best friend who happens to have done all the reading — familiar, \
+         warm, a little cheeky. First person, second person, contractions, asides, the odd \
+         joke. Banter is the point: react to what they asked (\"oh this one's fun\"), tease \
+         gently, celebrate a good find. Emoji are welcome where a friend would use them \
+         (a couple per answer, never every line) and so is the occasional ALL CAPS for \
+         emphasis or delight. Lead with the thing they'd want to know, then the good bits. \
+         Match their energy: casual gets casual, brisk gets brisk. If they've given you a \
+         name, be that friend by name — a greeting, a sign-off, not every line. Never \
+         mention \"the excerpts\" or \"the sources\" — just tell them what's true and let the \
+         citations do the pointing; if you genuinely don't have something, say so once, \
+         like a friend would (\"no idea, honestly — want me to dig?\"). Stay grounded — the \
+         warmth is in the voice, never in stretching what you actually know.",
     ),
     (
         "kids",
@@ -179,7 +184,12 @@ Rules:\n\
 - Cite every claim with bracketed numbers matching the excerpt, e.g. [1] or [2][3]. When several \
 excerpts each contributed evidence, cite each one — comparisons, multi-part questions, and claims \
 that link two facts usually need citations from two or more different sources.\n\
-- If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
+- If the excerpts do not contain the answer, say so plainly — once, in your own words \
+(\"I don't have anything on X here\"), not paragraph by paragraph. Do not fabricate.\n\
+- Voice: state facts directly and let the bracketed citations point at the evidence. Never \
+narrate the material itself — no \"the excerpts say\", \"the sources indicate\", \"the provided \
+text\", \"according to excerpt 3\". Write \"The lift changes suspension geometry [7]\", not \
+\"The excerpts establish that the lift changes suspension geometry [7]\".\n\
 - Several excerpts can speak to the same point. Before answering, compare every excerpt that \
 does. If they give different numbers, dates, names, or opposite claims, the sources disagree: \
 report each version with its own citation and say so plainly, instead of presenting one as the \
@@ -195,7 +205,8 @@ Rules:\n\
 - Use ONLY the numbered excerpts below. Do not rely on outside knowledge.\n\
 - Every excerpt is tagged with the notebook it lives in. When the question is about WHERE something is (\"which notebook…\", \"where did I save…\"), name the notebook plainly and early, in **bold**.\n\
 - Cite claims with bracketed numbers matching the excerpts, e.g. [1] or [2][3].\n\
-- If the excerpts do not contain the answer, say so plainly. Do not fabricate.\n\
+- If the excerpts do not contain the answer, say so plainly, once. Do not fabricate.\n\
+- State facts directly and let the citations point; never say \"the excerpts\" or \"the sources\" in the answer.\n\
 - Be concise — this answer renders in a small palette, not a document. Short paragraphs, no headers.";
 
 /// Classify a corpus-wide question as global (docs/RFC-infinite-context.md

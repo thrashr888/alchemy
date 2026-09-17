@@ -50,7 +50,6 @@ export const DEFAULT_VERBS = [
   "Fermenting",
   "Coagulating",
   "Circulating",
-  "Macerating",
 ];
 
 export const DEFAULT_THEME = "midnight";
@@ -490,10 +489,14 @@ export const THEMES: Record<string, Theme> = {
     vars: {
       background: "#faf4ed", surface: "#fffaf3", "surface-2": "#f2e9e1", elevated: "#fffaf3",
       foreground: "#575279", muted: "#f2e9e1", "muted-foreground": "#67647f",
-      "subtle-foreground": "#6a6478", ring: "#d7827e", primary: "#c44741",
-      "primary-hover": "#bc524d", "primary-foreground": "#fffaf3", accent: "#f2e9e1",
+      // Links and the accent read pale on cream: iris sat at 5.2:1 and the
+      // rose primary under 4.5:1 on the raised surfaces, and a first-time
+      // user could not find the web-clipper link. Deepened to 7+:1 and
+      // 5+:1 on every surface, still Rosé Pine's iris and love.
+      "subtle-foreground": "#6a6478", ring: "#d7827e", primary: "#ad3a3a",
+      "primary-hover": "#963131", "primary-foreground": "#fffaf3", accent: "#f2e9e1",
       "accent-foreground": "#575279", destructive: "#a44f67", success: "#286983",
-      citation: "#745d8f", selection: "rgba(215,130,126,0.25)", ...lightBorder,
+      citation: "#5c4680", selection: "rgba(215,130,126,0.25)", ...lightBorder,
     },
   },
   carrera: {

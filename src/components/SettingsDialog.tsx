@@ -225,7 +225,7 @@ export function SettingsDialog({
               tabs would otherwise keep the old tab's scroll offset. */}
           <div
             key={tab}
-            className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1"
+            className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1 pb-6"
           >
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
@@ -721,17 +721,20 @@ function WebClipperLink() {
     <div className="flex flex-col gap-1.5">
       <div className="text-body">Web clipper</div>
       <p className="text-micro leading-relaxed text-subtle-foreground">
-        The{" "}
-        <button
-          type="button"
-          onClick={() => void openUrl(CLIPPER_URL)}
-          className="text-citation hover:underline"
-        >
-          Alchemy Web Clipper
-        </button>{" "}
-        sends the page you are viewing, including login-walled pages, to
-        Alchemy over a local endpoint.
+        The Alchemy Web Clipper sends the page you are viewing, including
+        login-walled pages, to Alchemy over a local endpoint.
       </p>
+      {/* A button, not a link buried in the sentence — the sentence explains,
+          the button acts. Firefox joins this row when its build ships. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void openUrl(CLIPPER_URL)}
+        >
+          Get it for Chrome
+        </Button>
+      </div>
     </div>
   );
 }
