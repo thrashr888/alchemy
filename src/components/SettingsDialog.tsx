@@ -1140,9 +1140,12 @@ function AgentsTab() {
         );
         pushToast(
           "success",
-          updated.configured
-            ? `${updated.name} connected. Restart it to pick up the change.`
-            : `Skill installed for ${updated.name}`,
+          // A client that installs the connection itself isn't connected
+          // yet — its own sheet is still waiting on the user.
+          updated.connectNote ??
+            (updated.configured
+              ? `${updated.name} connected. Restart it to pick up the change.`
+              : `Skill installed for ${updated.name}`),
         );
       })
       .catch((e) =>

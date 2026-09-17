@@ -1025,6 +1025,9 @@ export interface ConnectorStatus {
   skillInstalled: boolean;
   /** CLI one-liner or config snippet for manual setup. */
   snippet: string;
+  /** What is left to the user after Connect, when the client finishes the
+   *  job itself (Claude Desktop's extension install sheet). */
+  connectNote: string | null;
   /** Where its config lives, e.g. "~/.codex/config.toml". */
   configPath: string;
 }

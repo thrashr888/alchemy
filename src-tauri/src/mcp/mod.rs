@@ -367,20 +367,37 @@ impl AlchemyMcp {
     }
 }
 
-// One tool router per domain file; the handler serves their sum.
-// Parenthesized: the macro splices this expression in front of `.call(...)`,
-// and method calls bind tighter than `+`.
-#[tool_handler(router = (Self::notebooks_router()
-    + Self::sources_router()
-    + Self::mac_router()
-    + Self::search_router()
-    + Self::notes_router()
-    + Self::studio_router()
-    + Self::registry_router()
-    + Self::settings_router()
-    + Self::homechat_router()
-    + Self::growth_router()
-    + Self::diagnostics_router()))]
+/// One tool router per domain file; the server serves their sum.
+fn all_tools() -> rmcp::handler::server::router::tool::ToolRouter<AlchemyMcp> {
+    AlchemyMcp::notebooks_router()
+        + AlchemyMcp::sources_router()
+        + AlchemyMcp::mac_router()
+        + AlchemyMcp::search_router()
+        + AlchemyMcp::notes_router()
+        + AlchemyMcp::studio_router()
+        + AlchemyMcp::registry_router()
+        + AlchemyMcp::settings_router()
+        + AlchemyMcp::homechat_router()
+        + AlchemyMcp::growth_router()
+        + AlchemyMcp::diagnostics_router()
+}
+
+/// Every tool this build serves, as (name, description), sorted by name.
+///
+/// Read off the same routers the server runs on, so the Desktop Extension
+/// manifest (`crate::mcpb`) advertises exactly what an agent will find — a
+/// hand-kept copy would start lying one release after someone added a tool.
+pub(crate) fn tool_catalog() -> Vec<(String, Option<String>)> {
+    let mut tools: Vec<(String, Option<String>)> = all_tools()
+        .list_all()
+        .into_iter()
+        .map(|tool| (tool.name.to_string(), tool.description.map(Into::into)))
+        .collect();
+    tools.sort_by(|a, b| a.0.cmp(&b.0));
+    tools
+}
+
+#[tool_handler(router = all_tools())]
 impl ServerHandler for AlchemyMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
