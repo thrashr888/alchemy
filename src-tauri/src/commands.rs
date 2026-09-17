@@ -10803,6 +10803,15 @@ pub async fn convert_note_to_source(
 /// each source over its allocation, the tail it would have lost distilled
 /// against the instruction — one model call per over-budget source.
 /// Diagram kinds never come here: they draw from gists (`rag::diagram_corpus`).
+///
+/// The rescue pass is bounded twice over (`RESCUE_CALL`, `RESCUE_BUDGET`).
+/// It used to be neither: one untimed Small-role call per over-budget
+/// source, in series, on an `Ai` handle without `.helpers()`. Ollama puts
+/// no blanket timeout on a request, so one cold or wedged source could sit
+/// for minutes and a dozen of them could spend the queue's whole deadline
+/// before the real generation call ever started. Rescue is an enhancement
+/// with a free fallback — the head excerpt the distiller itself falls back
+/// to — so it yields as soon as it costs more than it returns.
 async fn waterfill_corpus(
     state: &AppState,
     instruction: &str,
@@ -10828,6 +10837,9 @@ async fn waterfill_corpus(
     } else {
         crate::agent::READ_CHARS_LOCAL
     };
+    let started = std::time::Instant::now();
+    let mut spent = false;
+    let mut skipped = 0usize;
     let mut corpus = String::new();
     for (i, (heading, full)) in contents.iter().enumerate() {
         let total = full.chars().count();
@@ -10841,16 +10853,57 @@ async fn waterfill_corpus(
         // losing everything past the cut.
         let clipped: String = full.chars().take(alloc[i]).collect();
         let tail: String = full.chars().skip(alloc[i]).take(distill_cap).collect();
-        let rescued = {
+        let rescued = if spent || started.elapsed() >= RESCUE_BUDGET {
+            spent = true;
+            skipped += 1;
+            rescue_head(&tail)
+        } else {
             let ai = state.ai.read().await.clone();
-            crate::agent::distill(&ai, instruction, heading, &tail).await
+            match tokio::time::timeout(
+                RESCUE_CALL,
+                crate::agent::distill(&ai, instruction, heading, &tail),
+            )
+            .await
+            {
+                Ok(text) => text,
+                Err(_) => {
+                    skipped += 1;
+                    rescue_head(&tail)
+                }
+            }
         };
         corpus.push_str(&format!(
             "{heading}\n\n{clipped}\n…[source truncated to fit context; key passages from the \
              remainder:]\n{rescued}\n\n"
         ));
     }
+    if skipped > 0 {
+        // A rescue nobody can see is how a slow generation hides: say it.
+        crate::note!(
+            "corpus: {skipped} over-budget source(s) used a plain excerpt — the rescue pass hit \
+             its {}s call limit or its {}s budget",
+            RESCUE_CALL.as_secs(),
+            RESCUE_BUDGET.as_secs(),
+        );
+    }
     corpus
+}
+
+/// Longest one over-budget source's rescue distillation may take. Generous
+/// against a cold local model (measured warm: 2-9 s) and far under Ollama's
+/// own 180 s cold-load guard, which is the bound this replaces.
+const RESCUE_CALL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Total the rescue pass may spend across every over-budget source. Past
+/// this the corpus is assembled from plain excerpts: a notebook with thirty
+/// large sources must not spend the generation's whole deadline reading.
+const RESCUE_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// What an un-rescued tail contributes: the same head excerpt
+/// `agent::distill` falls back to when the model errors, so a skipped
+/// rescue degrades exactly like a failed one.
+fn rescue_head(tail: &str) -> String {
+    tail.chars().take(crate::agent::READ_GIST_CHARS).collect()
 }
 
 /// Generate artifact content for a kind (+ optional custom prompt) over all of
@@ -15320,6 +15373,46 @@ pub async fn check_ollama(state: State<'_, AppState>) -> Result<bool, String> {
 #[tauri::command]
 pub async fn inference_activity() -> Result<Vec<crate::inference::ActivityItem>, String> {
     Ok(crate::inference::activity_running())
+}
+
+#[cfg(test)]
+mod corpus_tests {
+    use super::*;
+
+    /// The rescue pass must be able to give up and still leave room for the
+    /// generation itself. Both bounds live under the shortest run deadline
+    /// the queue hands out, so corpus assembly can never be the thing that
+    /// spends a run — which is exactly what it did before it had bounds.
+    #[test]
+    fn rescue_bounds_fit_inside_the_run_deadline() {
+        assert!(
+            RESCUE_CALL <= RESCUE_BUDGET,
+            "one call may not outlast the whole pass"
+        );
+        // Read the real ceiling, so lowering `run_deadline` without
+        // lowering these fails here instead of in someone's notebook.
+        // `infographic` is the shortest-deadline kind that still assembles
+        // a prose corpus, which makes it the tightest case.
+        let shortest_run = crate::genqueue::run_deadline("infographic");
+        assert!(
+            RESCUE_BUDGET * 2 <= shortest_run,
+            "reading may take at most half the run, leaving the model its half"
+        );
+    }
+
+    /// A rescue skipped for time reads like a rescue that errored: the same
+    /// head excerpt, the same cap. A caller cannot tell which happened, and
+    /// nothing downstream needs to.
+    #[test]
+    fn a_skipped_rescue_degrades_like_a_failed_one() {
+        let tail = "x".repeat(crate::agent::READ_GIST_CHARS * 3);
+        assert_eq!(
+            rescue_head(&tail).chars().count(),
+            crate::agent::READ_GIST_CHARS
+        );
+        let short = "only a little text";
+        assert_eq!(rescue_head(short), short, "a short tail is not padded");
+    }
 }
 
 #[cfg(test)]

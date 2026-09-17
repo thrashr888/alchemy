@@ -76,8 +76,10 @@ const SEARCH_POOL: usize = 20;
 /// generation to cap the input of its truncation-rescue distills.
 pub(crate) const READ_CHARS_LOCAL: usize = 12_000;
 pub(crate) const READ_CHARS_GATEWAY: usize = 120_000;
-/// Fallback excerpt size when the distiller fails — a raw head beats nothing.
-const READ_GIST_CHARS: usize = 1_500;
+/// Fallback excerpt size when the distiller fails — a raw head beats
+/// nothing. Artifact corpus assembly reuses it so a rescue that was skipped
+/// for time degrades exactly like one that errored.
+pub(crate) const READ_GIST_CHARS: usize = 1_500;
 /// Cap on a distilled read (the prompt asks for ~500 words; this guards
 /// runaway outputs). Distillates are re-sent in the planner transcript and
 /// persisted as the citation snippet, so they must stay small.

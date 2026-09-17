@@ -169,6 +169,13 @@ introduce a webfont; the system stack is deliberate.
   see the icon color policy in §2.
 - **Empty states** (`ui.EmptyState`): centered small icon + 13px title +
   one gray sentence. Every empty section uses it — no bare paragraphs.
+- **Progress bars** (`ui.ProgressBar`): 4px `surface-2` track, `--primary`
+  fill, 200ms width transition, floored at 3% so the first item doesn't
+  read as an empty track. Determinate only — an indeterminate bar is a
+  `Spinner` with words beside it. The element carries `aria-valuenow`/`max`
+  in real units and an `aria-valuetext` that says "3 of 12 documents", never
+  a percentage. Many small jobs of one kind collapse into one bar with the
+  current item as a subtitle; they do not each get a row.
 - **Tool confirmations** (chat): process, not conversation — one quiet
   12px gray row with a 12px icon, no bubble, no role label.
 - **Document properties** (`DocProperties` in the reader): Linear-style
@@ -470,7 +477,7 @@ not rendered — recorded as found, not as it ought to be.
 | Home Staff + Brief (`HomeSections`) | `StaffQuiet` per group; "No brief yet" | `StaffQuiet` "Loading…" (watchers only) | none — toasts, and `FiledGroup` catches into an empty list | "Night Shift is off" button |
 | Latest reports (`HomeReportsFeed`) | "You're all caught up"; `EmptyState` in `HomeView` | "Loading reports…" in `HomeView` | `EmptyState` "Reports unavailable" + Retry | none |
 | Registry (`RegistrySection`) | `EmptyState` "No cards yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
-| Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | per-item queue spinners; "Embedding n/m…" | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
+| Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | one "Indexing n of m documents" card with a `ProgressBar`; single imports keep their own row | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
 | Chat (`ChatPanel`) | `ChatHero`; disabled composer | `ThinkingDots`, `StepTrail`, streaming markdown | `ChatMessage` error branch + Retry + `FallbackOffers` | `ModelPill` "unavailable" rows; `HealthBanner` via `Workspace` |
 | Agent pane (`AgentPane`) | `AgentBlankSlate` | `AgentBlankSlate` "Looking for agents…" | `FailureNotice` + Terminal + Retry | "Running without notebook access" notice |
 | Reader (`ReaderPane`) | "No text stored for this source" | per-view spinners (source, live page, PDF pages, repo) | image / PDF / import failure lines | online-only placeholder + Download; live-view fallback; anchor downgrade |

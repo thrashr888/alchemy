@@ -1817,6 +1817,45 @@ export function LoadingState({
   );
 }
 
+/** A determinate progress bar. The only bar shape in the app: a hairline
+ *  track in `surface-2`, an accent fill, and the real numbers on the
+ *  element so a screen reader gets "3 of 12", not a percentage it has to
+ *  translate back. `label` names what is being counted.
+ *
+ *  The fill never drops below 3% — a bar that renders as an empty track at
+ *  the first item looks broken rather than early. */
+export function ProgressBar({
+  done,
+  total,
+  label,
+  className,
+}: {
+  done: number;
+  total: number;
+  label: string;
+  className?: string;
+}) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <div
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-valuenow={done}
+      aria-valuetext={`${done} of ${total} ${label}`}
+      className={cn(
+        "h-1 overflow-hidden rounded-full bg-surface-2",
+        className,
+      )}
+    >
+      <div
+        className="h-full rounded-full bg-primary transition-all duration-200"
+        style={{ width: `${Math.max(3, pct)}%` }}
+      />
+    </div>
+  );
+}
+
 /** The live progress of a retrieval pipeline: completed stages tick off, the
  *  one still running spins, and a transient line (`waiting`) sits below them
  *  without joining the trail. Shared by notebook chat (`chat://step`) and the

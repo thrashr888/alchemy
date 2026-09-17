@@ -8,6 +8,7 @@ import {
   Button,
   EmptyState,
   LoadingState,
+  ProgressBar,
   ResizeHandle,
   RowMenu,
   type RowMenuItem,
@@ -321,6 +322,45 @@ export function SourcesPanel() {
     }
     return m;
   }, [sources]);
+
+  // The import queue, split into the run and its casualties. A failure
+  // needs its own row because it carries its own verbs; everything still
+  // moving is one job with one progress card. "done" items linger ~2s
+  // before `clearQueueItem` drops them, which is what makes the count
+  // climb instead of the list shrinking under the bar.
+  const queueFailed = useMemo(
+    () => queue.filter((q) => q.status === "error"),
+    [queue],
+  );
+  const queueRunning = useMemo(
+    () => queue.filter((q) => q.status !== "error"),
+    [queue],
+  );
+  // A finished item leaves the queue two seconds later, so the array is a
+  // sliding window, not the run. Latch the high-water mark instead or the
+  // denominator counts down — "2 of 12", "2 of 11", "2 of 10" — while the
+  // import is in fact going forward. Monotonic and reset only on an empty
+  // queue, so a StrictMode double render lands on the same number.
+  const runTotal = useRef(0);
+  if (queueRunning.length === 0) runTotal.current = 0;
+  else if (queueRunning.length > runTotal.current)
+    runTotal.current = queueRunning.length;
+  const queueTotal = runTotal.current;
+  // Everything already dropped from the queue finished, plus the finished
+  // ones still showing.
+  const queueDone =
+    queueTotal -
+    queueRunning.length +
+    queueRunning.filter((q) => q.status === "done").length;
+  // The document being read right now, for the card's subtitle: the one
+  // in flight, else the next one up.
+  const queueCurrent =
+    queueRunning.find((q) => q.status === "processing")?.name ??
+    queueRunning.find((q) => q.status === "pending")?.name ??
+    "";
+  // Count the one in flight as the one being worked on, so a 12-file import
+  // opens at "1 of 12" rather than "0 of 12".
+  const indexingPosition = Math.min(queueDone + 1, queueTotal);
 
   // The badge reads the same notebook-scoped sections as the Grow pane.
   // A separate overview could outlive a notebook switch or keep advertising
@@ -883,68 +923,93 @@ export function SourcesPanel() {
         // leaves this app, not selection).
         className="flex-1 select-none overflow-y-auto p-2"
       >
-        {/* Active upload queue */}
-        {queue.length > 0 && (
+        {/* Active upload queue. Imports run one at a time, so a dozen files
+            used to stack a dozen near-identical spinner rows and push the
+            sources themselves off screen. The run is one piece of work and
+            reads as one card; only failures, which each need their own
+            Retry and Dismiss, stay individual. */}
+        {(queueRunning.length > 0 || queueFailed.length > 0) && (
           <div className="mb-2 flex flex-col gap-1">
-            {queue.map((q) => (
+            {queueRunning.length > 0 &&
+              (queueTotal === 1 ? (
+                <div className="flex items-start gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-2">
+                  {queueRunning[0].status === "done" ? (
+                    <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                  ) : (
+                    <Spinner className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="truncate text-caption"
+                      title={queueRunning[0].name}
+                    >
+                      {queueRunning[0].name}
+                    </div>
+                    <div className="text-micro text-subtle-foreground">
+                      {queueRunning[0].status === "done"
+                        ? "Added"
+                        : queueRunning[0].status === "pending"
+                          ? "Queued"
+                          : folderScan
+                            ? `Indexing ${Math.min(folderScan.done + 1, folderScan.total)} of ${folderScan.total}: ${folderScan.title}`
+                            : "Indexing…"}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-border bg-surface-2/60 px-2 py-2">
+                  <div className="flex items-center gap-2">
+                    <Spinner className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <div className="flex-1 text-caption">
+                      Indexing {indexingPosition} of {queueTotal} documents
+                    </div>
+                  </div>
+                  <ProgressBar
+                    done={queueDone}
+                    total={queueTotal}
+                    label="documents indexed"
+                    className="mt-2"
+                  />
+                  {queueCurrent && (
+                    <div
+                      className="mt-1.5 truncate text-micro text-subtle-foreground"
+                      title={queueCurrent}
+                    >
+                      {queueCurrent}
+                    </div>
+                  )}
+                </div>
+              ))}
+            {queueFailed.map((q) => (
               <div
                 key={q.id}
                 className="flex items-start gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-2"
               >
-                <div className="mt-0.5">
-                  {q.status === "done" ? (
-                    <Check className="h-3.5 w-3.5 text-success" />
-                  ) : q.status === "error" ? (
-                    <AlertCircle className="h-3.5 w-3.5 text-destructive" />
-                  ) : (
-                    <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                </div>
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-caption" title={q.name}>
                     {q.name}
                   </div>
-                  <div
-                    className={cn(
-                      "text-micro",
-                      q.status === "error"
-                        ? "text-destructive"
-                        : "text-subtle-foreground",
-                    )}
-                  >
-                    {q.status === "processing"
-                      ? folderScan
-                        ? `Embedding ${Math.min(folderScan.done + 1, folderScan.total)}/${folderScan.total}: ${folderScan.title}`
-                        : "Embedding…"
-                      : q.status === "pending"
-                        ? "Queued"
-                        : q.status === "done"
-                          ? "Added"
-                          : q.error}
-                  </div>
+                  <div className="text-micro text-destructive">{q.error}</div>
                 </div>
-                {q.status === "error" && (
-                  <>
-                    {q.retry && (
-                      <button
-                        className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                        onClick={q.retry}
-                        title="Retry"
-                        aria-label={`Retry failed import "${q.name}"`}
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    <button
-                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => clearQueueItem(q.id)}
-                      title="Dismiss"
-                      aria-label={`Dismiss failed import "${q.name}"`}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </>
+                {q.retry && (
+                  <button
+                    className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                    onClick={q.retry}
+                    title="Retry"
+                    aria-label={`Retry failed import "${q.name}"`}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </button>
                 )}
+                <button
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => clearQueueItem(q.id)}
+                  title="Dismiss"
+                  aria-label={`Dismiss failed import "${q.name}"`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
             ))}
           </div>
