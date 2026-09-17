@@ -599,6 +599,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     })(),
     registrySignal: null,
     desktopApps: [],
+    okfBindings: {},
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
@@ -2134,6 +2135,14 @@ export const useStore = create<AppState>((rawSet, get) => {
       }
     },
 
+    refreshOkfBindings: async () => {
+      try {
+        set({ okfBindings: await api.notebookOkfBindings() });
+      } catch {
+        // Row menus fall back to "Keep on Disk"; nothing else lost.
+      }
+    },
+
     refreshDesktopApps: async () => {
       try {
         set({ desktopApps: await api.desktopApps() });
@@ -2147,11 +2156,15 @@ export const useStore = create<AppState>((rawSet, get) => {
         get().desktopApps.find((a) => a.id === app)?.label ?? "the app";
       try {
         const prompt = await api.handoffPrompt(notebookId, app);
+        // The clipboard always gets the whole prompt: the URL route is the
+        // convenience, the paste is the guarantee.
         await navigator.clipboard.writeText(prompt);
-        await api.openDesktopApp(app);
+        const out = await api.openDesktopApp(app, prompt);
         get().pushToast(
           "success",
-          `Prompt copied — paste it into ${label} to pick up where you are.`,
+          out.prefilled
+            ? `Sent to ${label} — it's on your clipboard too, in case the app dropped it.`
+            : `Prompt copied — paste it into ${label} to pick up where you are.`,
         );
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));

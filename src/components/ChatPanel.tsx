@@ -65,6 +65,7 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
+  Share,
 } from "lucide-react";
 
 /** Composer autosize ceiling — past this the textarea scrolls instead. */
@@ -122,6 +123,10 @@ function loadDraftMentions(
 
 export function ChatPanel() {
   const currentId = useStore((s) => s.currentId);
+  const desktopApps = useStore((s) => s.desktopApps);
+  useEffect(() => {
+    void useStore.getState().refreshDesktopApps();
+  }, []);
   const messages = useStore((s) => s.messages);
   const messagesHasMore = useStore((s) => s.messagesHasMore);
   const messagesLoadingOlder = useStore((s) => s.messagesLoadingOlder);
@@ -773,6 +778,28 @@ export function ChatPanel() {
           {hostedAgent ? "Agent" : "Chat"}
         </span>
         <div className="ml-auto flex items-center gap-1">
+          {/* The handoff where the conversation is (docs/RFC-desktop-apps.md):
+              the same Open In the notebook menu offers, as a dropdown. */}
+          {currentId && desktopApps.some((a) => a.installed) && (
+            <RowMenu
+              alwaysVisible
+              label="Open in"
+              trigger={
+                <span className="inline-flex items-center gap-1.5">
+                  <Share className="h-3.5 w-3.5" />
+                  Open in
+                </span>
+              }
+              triggerClassName="inline-flex h-7 items-center rounded-md px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              items={desktopApps
+                .filter((a) => a.installed)
+                .map((a) => ({
+                  label: `${a.label}…`,
+                  onClick: () =>
+                    void useStore.getState().handoffNotebook(currentId, a.id),
+                }))}
+            />
+          )}
           {currentId && (
             <Button
               variant="ghost"

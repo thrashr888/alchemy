@@ -178,15 +178,73 @@ pub async fn handoff_prompt(
     Ok(build_handoff_prompt(&title, &notebook_id, d.label, &rows))
 }
 
-/// Bring the app to the front. `open -a` launches it if it isn't running.
+/// Longest prompt handed over inside a URL. Schemes are not files; past a
+/// few thousand characters some apps drop the request on the floor. The
+/// clipboard carries the whole prompt regardless.
+const HANDOFF_URL_CHARS: usize = 6000;
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Where a prompt can be carried in, per app, when the app offers a way:
+/// Claude Desktop registers `claude://` and opens a new chat from
+/// `claude://new?q=`; ChatGPT's app claims chatgpt.com links and prefills
+/// from `?q=`. GitHub Copilot's app ignores both, so it gets no URL and the
+/// person pastes. Returns None when the app has no prefill route.
+pub(crate) fn prefill_url(app: &str, prompt: &str) -> Option<String> {
+    let clipped: String = prompt.chars().take(HANDOFF_URL_CHARS).collect();
+    match app {
+        "claude" => Some(format!("claude://new?q={}", url_encode(&clipped))),
+        "chatgpt" => Some(format!("https://chatgpt.com/?q={}", url_encode(&clipped))),
+        _ => None,
+    }
+}
+
+/// What the handoff did, so the toast can say it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffOutcome {
+    /// The prompt travelled inside the URL the app opened (it is on the
+    /// clipboard too, for the app that drops a long one).
+    pub prefilled: bool,
+}
+
+/// Bring the app to the front — carrying the prompt in when the app takes
+/// one, else plainly. `open -a` launches the app if it isn't running.
 #[tauri::command]
-pub fn open_desktop_app(app: String) -> Result<(), String> {
+pub fn open_desktop_app(app: String, prompt: Option<String>) -> Result<HandoffOutcome, String> {
     let d = def(&app)?;
+    if let Some(url) = prompt.as_deref().and_then(|p| prefill_url(&app, p)) {
+        let ok = std::process::Command::new("open")
+            .arg("-a")
+            .arg(d.bundle)
+            .arg(&url)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return Ok(HandoffOutcome { prefilled: true });
+        }
+        crate::note!(
+            "handoff: {} refused its prefill URL; opening plainly",
+            d.label
+        );
+    }
     std::process::Command::new("open")
         .arg("-a")
         .arg(d.bundle)
         .spawn()
-        .map(|_| ())
+        .map(|_| HandoffOutcome { prefilled: false })
         .map_err(|e| format!("Couldn't open {}: {e}", d.label))
 }
 
@@ -216,6 +274,21 @@ mod tests {
         assert!(p.contains("- Build notes.md \u{2014} Build notes.md\n"));
         assert!(p.contains("notebook id is `nb-1`"));
         assert!(p.ends_with("Claude, here's my question: "));
+    }
+
+    #[test]
+    fn prefill_urls_exist_only_where_the_app_takes_one() {
+        let claude = prefill_url("claude", "hi there & bye").unwrap();
+        assert_eq!(claude, "claude://new?q=hi%20there%20%26%20bye");
+        assert!(prefill_url("chatgpt", "x")
+            .unwrap()
+            .starts_with("https://chatgpt.com/?q=x"));
+        assert!(prefill_url("copilot", "x").is_none());
+        let long = "a".repeat(HANDOFF_URL_CHARS + 500);
+        assert_eq!(
+            prefill_url("claude", &long).unwrap().len(),
+            "claude://new?q=".len() + HANDOFF_URL_CHARS
+        );
     }
 
     #[test]

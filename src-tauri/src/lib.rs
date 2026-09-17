@@ -596,6 +596,7 @@ pub fn run() {
             commands::probe_okf,
             okf::okf_lifecycle,
             okf::notebook_okf_binding,
+            okf::notebook_okf_bindings,
             okf::bind_notebook_okf,
             okf::unbind_notebook_okf,
             okf::write_notebook_okf,

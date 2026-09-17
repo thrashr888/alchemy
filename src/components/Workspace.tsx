@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
+import { notebookVerbs } from "@/lib/notebookMenu";
 import { SourcesPanel } from "./SourcesPanel";
 import { ChatPanel } from "./ChatPanel";
 import { CenterModeTabs, ReaderPane } from "./ReaderPane";
@@ -17,17 +16,10 @@ import { NotebookEditModal } from "./NotebookEditModal";
 import { shortcutBlocked } from "@/lib/utils";
 import type { Notebook } from "@/lib/types";
 import {
-  Archive,
-  FileDown,
-  FolderOpen,
-  HardDrive,
   ChevronDown,
   Library,
-  Pencil,
   Search,
-  Share,
   Settings,
-  Trash2,
 } from "lucide-react";
 import { notebookIcon } from "@/lib/notebookIcons";
 import { DevBadge } from "./DevBadge";
@@ -97,119 +89,15 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // The notebook's own verbs — the top half of the title menu; the switcher
   // is the bottom half. One dropdown, not a ⌄ beside a ⋯.
-  const notebookVerbs: RowMenuItem[] = notebook
-    ? [
-
-                {
-                  label: "Rename",
-                  icon: <Pencil className="h-3.5 w-3.5" />,
-                  onClick: () => setEditing(notebook),
-                },
-                {
-                  label: "Export Notebook…",
-                  icon: <FileDown className="h-3.5 w-3.5" />,
-                  onClick: () =>
-                    void useStore.getState().exportNotebookOkf(notebook.id),
-                },
-                {
-                  // docs/RFC-shared-notebook.md §1. This replaces the older
-                  // "Share Folder…", which only revealed the folder: a
-                  // notebook in the app's iCloud container cannot be shared
-                  // with another Apple ID at all, so pointing at it in Finder
-                  // was advice that couldn't be taken. The folder moves into
-                  // iCloud Drive first, and macOS's own sheet picks the
-                  // person; Finder is the fallback, not the plan.
-                  label: "Share with Someone…",
-                  icon: <Share className="h-3.5 w-3.5" />,
-                  onClick: () =>
-                    void useStore
-                      .getState()
-                      .shareNotebookWithSomeone(notebook.id),
-                },
-                // Hand the notebook to a desktop AI app this Mac has
-                // (docs/RFC-desktop-apps.md): prompt to the clipboard, app
-                // to the front.
-                ...(desktopApps.some((a) => a.installed)
-                  ? [
-                      {
-                        label: "Open In",
-                        icon: <Share className="h-3.5 w-3.5" />,
-                        onClick: () => {},
-                        items: desktopApps
-                          .filter((a) => a.installed)
-                          .map((a) => ({
-                            label: `${a.label}…`,
-                            onClick: () =>
-                              void useStore
-                                .getState()
-                                .handoffNotebook(notebook.id, a.id),
-                          })),
-                      },
-                    ]
-                  : []),
-                // Keeping a notebook on disk (RFC-okf-live §5.5). One verb
-                // while it is off; the two it earns once it is on.
-                ...(binding
-                  ? [
-                      {
-                        label: "Show Bundle in Finder",
-                        icon: <HardDrive className="h-3.5 w-3.5" />,
-                        onClick: () =>
-                          void revealItemInDir(binding.path).catch(() => {}),
-                      },
-                      {
-                        label: "Stop Keeping on Disk",
-                        icon: <FolderOpen className="h-3.5 w-3.5" />,
-                        onClick: () =>
-                          void useStore.getState().unbindNotebookOkf(),
-                      },
-                    ]
-                  : [
-                      {
-                        label: "Keep on Disk as OKF…",
-                        icon: <HardDrive className="h-3.5 w-3.5" />,
-                        onClick: async () => {
-                          const picked = await open({
-                            directory: true,
-                            title: "Choose a folder for this notebook",
-                          });
-                          if (typeof picked === "string")
-                            void useStore.getState().bindNotebookOkf(picked);
-                        },
-                      },
-                    ]),
-                // HIG: the destructive pair sits last, behind its own divider.
-                { label: "", separator: true, onClick: () => {} },
-                {
-                  // The store leaves the notebook when its current one is
-                  // archived or deleted — no extra navigation here.
-                  label: "Archive",
-                  symbol: "archivebox",
-                  icon: <Archive className="h-3.5 w-3.5" />,
-                  onClick: () =>
-                    void useStore
-                      .getState()
-                      .setNotebookStatus(notebook.id, "archived"),
-                },
-                {
-                  label: "Delete…",
-                  symbol: "trash",
-                  icon: <Trash2 className="h-3.5 w-3.5" />,
-                  danger: true,
-                  onClick: async () => {
-                    if (
-                      await confirm({
-                        title: `Delete "${notebook.title}"?`,
-                        message:
-                          "This permanently deletes the notebook and all of its sources.",
-                        confirmLabel: "Delete",
-                        danger: true,
-                      })
-                    )
-                      void useStore.getState().deleteNotebook(notebook.id);
-                  },
-                },
-      ]
+  // The same menu the Home shelf offers (src/lib/notebookMenu.tsx).
+  const verbs: RowMenuItem[] = notebook
+    ? notebookVerbs({
+        nb: notebook,
+        binding,
+        desktopApps,
+        onRename: () => setEditing(notebook),
+        confirm,
+      })
     : [];
 
   return (
@@ -278,7 +166,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             items={[
               ...(notebook
                 ? [
-                    { label: "Notebook", items: notebookVerbs, onClick: () => {} },
+                    { label: "Notebook", items: verbs, onClick: () => {} },
                     { label: "", separator: true, onClick: () => {} },
                   ]
                 : []),

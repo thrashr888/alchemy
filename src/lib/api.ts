@@ -336,7 +336,8 @@ export const api = {
   desktopApps: () => run(query<DesktopApp[]>("desktop_apps", {})),
   handoffPrompt: (notebookId: string, app: string) =>
     run(query<string>("handoff_prompt", { notebookId, app })),
-  openDesktopApp: (app: string) => run(cmd<void>("open_desktop_app", { app })),
+  openDesktopApp: (app: string, prompt?: string) =>
+    run(cmd<{ prefilled: boolean }>("open_desktop_app", { app, prompt })),
   /** Which Mac apps count as connected — prompt-free. */
   macStatus: () => run(query<MacProviderStatus[]>("mac_status", {})),
   listMacCollections: (provider: string) =>
@@ -521,6 +522,9 @@ export const api = {
     run(query<Record<string, OkfLifecycle>>("okf_lifecycle", { notebookId })),
   notebookOkfBinding: (notebookId: string) =>
     run(query<OkfBinding | null>("notebook_okf_binding", { notebookId })),
+  /** Every binding by notebook id — the Home shelf's row menus read it. */
+  notebookOkfBindings: () =>
+    run(query<Record<string, OkfBinding>>("notebook_okf_bindings", {})),
   sharedBundleOffers: () =>
     run(query<SharedBundleOffer[]>("shared_bundle_offers_cmd")),
   openSharedBundle: (path: string) =>

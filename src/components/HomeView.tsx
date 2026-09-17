@@ -25,6 +25,7 @@ import {
   useConfirm,
 } from "./ui";
 import { AlchemyHero } from "./AlchemyHero";
+import { notebookVerbs } from "@/lib/notebookMenu";
 import { currentEpigraph } from "@/lib/epigraph";
 import { DitherBackground } from "./DitherBackground";
 import { useHomeActivity } from "./useHomeActivity";
@@ -40,8 +41,6 @@ import type { Note, Notebook, SourceEvent } from "@/lib/types";
 import {
   Archive,
   ArchiveRestore,
-  FileDown,
-  Share,
   ChevronRight,
   MessagesSquare,
   ChartNoAxesGantt,
@@ -50,7 +49,6 @@ import {
   Search,
   Settings,
   Trash2,
-  Pencil,
   FileText,
   Newspaper,
   Package,
@@ -616,82 +614,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     onClearBackground: pick.clearPicked,
   });
 
-  // "Open in Claude…" and friends — one submenu, only the apps this Mac
-  // has (docs/RFC-desktop-apps.md).
+  // One menu for the rows and their right-click, shared with the workspace
+  // (src/lib/notebookMenu.tsx). The shelf needs every notebook's binding
+  // for the on-disk verbs; the map refreshes with the open notebook's.
   const desktopApps = useStore((s) => s.desktopApps);
+  const okfBindings = useStore((s) => s.okfBindings);
+  const okfBinding = useStore((s) => s.okfBinding);
   useEffect(() => {
     void useStore.getState().refreshDesktopApps();
   }, []);
-  const handoffItems = (notebookId: string): RowMenuItem[] => {
-    const apps = desktopApps.filter((a) => a.installed);
-    if (apps.length === 0) return [];
-    return [
-      {
-        label: "Open In",
-        icon: <Share className="h-3.5 w-3.5" />,
-        onClick: () => {},
-        items: apps.map((a) => ({
-          label: `${a.label}…`,
-          onClick: () =>
-            void useStore.getState().handoffNotebook(notebookId, a.id),
-        })),
-      },
-    ];
-  };
-
-  /** The single-notebook verbs, shared by the cards and the table so both
-   *  surfaces offer the same menu (and the same right-click). */
-  const notebookRowItems = (nb: Notebook): RowMenuItem[] => [
-
-    {
-      // Name, icon, AND color — the edit dialog owns the notebook's look,
-      // so color no longer needs its own pop-over or menu entry.
-      label: "Rename",
-      icon: <Pencil className="h-3.5 w-3.5" />,
-      onClick: () => setEditing(nb),
-    },
-    {
-      label: "Export Notebook…",
-      icon: <FileDown className="h-3.5 w-3.5" />,
-      onClick: () => void useStore.getState().exportNotebookOkf(nb.id),
-    },
-    {
-      // docs/RFC-shared-notebook.md §1: the notebook's folder moves into
-      // iCloud Drive, where a folder can be shared with another Apple ID at
-      // all, and macOS's own sheet picks the person.
-      // No `symbol`: this group of plain verbs wears none, and DESIGN.md's
-      // menu rule is all or none per group.
-      label: "Share with Someone…",
-      icon: <Share className="h-3.5 w-3.5" />,
-      onClick: () => void useStore.getState().shareNotebookWithSomeone(nb.id),
-    },
-    ...handoffItems(nb.id),
-    { label: "", separator: true, onClick: () => {} },
-    {
-      label: "Archive",
-      symbol: "archivebox",
-      icon: <Archive className="h-3.5 w-3.5" />,
-      onClick: () => void useStore.getState().archiveNotebooks([nb.id]),
-    },
-    {
-      label: "Delete…",
-      symbol: "trash",
-      icon: <Trash2 className="h-3.5 w-3.5" />,
-      danger: true,
-      onClick: async () => {
-        if (
-          await confirm({
-            title: `Delete "${nb.title}"?`,
-            message:
-              "This permanently deletes the notebook and all of its sources.",
-            confirmLabel: "Delete",
-            danger: true,
-          })
-        )
-          remove(nb.id);
-      },
-    },
-  ];
+  useEffect(() => {
+    void useStore.getState().refreshOkfBindings();
+  }, [okfBinding, notebooks.length]);
+  const notebookRowItems = (nb: Notebook): RowMenuItem[] =>
+    notebookVerbs({
+      nb,
+      binding: okfBindings[nb.id] ?? null,
+      desktopApps,
+      onRename: () => setEditing(nb),
+      confirm,
+    });
 
   /** Batch verbs for a right-click inside a multi-selection. Archiving is
    *  reversible and needs no confirm; deleting names every notebook it will

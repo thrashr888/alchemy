@@ -183,6 +183,10 @@ export interface AppState {
   /** Where the open notebook keeps itself on disk, if anywhere
    *  (RFC-okf-live §5.1). null when it is not kept on disk. */
   okfBinding: OkfBinding | null;
+  /** Every notebook's binding, by id, for menus on rows that aren't the
+   *  open notebook. Refreshed with the current binding. */
+  okfBindings: Record<string, OkfBinding>;
+  refreshOkfBindings: () => Promise<void>;
   picked: Picked | null;
   /** Latest hygiene classification for the current notebook
    *  (RFC-source-hygiene): drives row badges and the review modal. */
