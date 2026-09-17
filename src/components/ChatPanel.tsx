@@ -130,6 +130,12 @@ export function ChatPanel() {
   useEffect(() => {
     void useStore.getState().refreshDesktopApps();
   }, []);
+  // Answers happen in a desktop app (docs/RFC-desktop-apps.md phase 3):
+  // with no working chat model here, the composer becomes the handoff.
+  const answersIn = useStore((s) => s.aiConfig?.answersIn ?? "");
+  const chatWorks = useStore((s) => s.modelHealth?.chat.working ?? true);
+  const answersElsewhere = !!answersIn && !chatWorks;
+  const elsewhereApp = desktopApps.find((a) => a.id === answersIn) ?? null;
   const messages = useStore((s) => s.messages);
   const messagesHasMore = useStore((s) => s.messagesHasMore);
   const messagesLoadingOlder = useStore((s) => s.messagesLoadingOlder);
@@ -433,7 +439,7 @@ export function ChatPanel() {
     });
   };
 
-  const canChat = !!currentId && sources.length > 0;
+  const canChat = !!currentId && sources.length > 0 && !answersElsewhere;
   const isBlank = messages.length === 0 && !sending;
 
   function submit() {
@@ -1010,6 +1016,36 @@ export function ChatPanel() {
         )}
       </div>
 
+      {answersElsewhere && currentId ? (
+        <div className="relative z-10 px-5 pb-5 pt-2">
+          <div className="mx-auto flex max-w-[720px] items-center gap-3 rounded-lg border border-border-strong bg-surface px-4 py-3">
+            <Share className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="text-body text-foreground">
+                Answers happen in {elsewhereApp?.label ?? "your desktop app"}.
+              </div>
+              <div className="text-caption text-muted-foreground">
+                Alchemy keeps and indexes this notebook here; open it there
+                to ask about it. Choose a model in Settings → Models to
+                answer in Alchemy instead.
+              </div>
+            </div>
+            {elsewhereApp && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() =>
+                  void useStore
+                    .getState()
+                    .handoffNotebook(currentId, elsewhereApp.id)
+                }
+              >
+                Open in {elsewhereApp.label}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
       <div className="relative z-10 px-5 pb-5 pt-2">
         <div className="mx-auto max-w-[720px]">
           <div
@@ -1205,6 +1241,7 @@ export function ChatPanel() {
           </div>
         </div>
       </div>
+      )}
       </>
       )}
 

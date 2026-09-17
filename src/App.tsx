@@ -100,8 +100,11 @@ function App() {
   const dismissToast = useStore((s) => s.dismissToast);
   const health = useStore((s) => s.modelHealth);
   const onboardingDismissed = useStore((s) => s.onboardingDismissed);
+  const answersIn = useStore((s) => s.aiConfig?.answersIn ?? "");
+  // A person who answers in Claude Desktop has no chat model to set up;
+  // only indexing has to work here.
   const needsSetup =
-    !!health && (!health.chat.working || !health.embed.working);
+    !!health && (!(health.chat.working || answersIn) || !health.embed.working);
   // Dev only: `#onboarding` in the URL shows the first-run stage on a
   // working setup, so it can be looked at without breaking one.
   const forceOnboarding =
