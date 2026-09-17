@@ -1,21 +1,6 @@
 {
-  "enabledPlugins": {
-    "allbeads@allbeads-marketplace": true,
-    "beads@beads-marketplace": true
-  },
+  "enabledPlugins": {},
   "extraKnownMarketplaces": {
-    "allbeads-marketplace": {
-      "source": {
-        "repo": "thrashr888/AllBeads",
-        "source": "github"
-      }
-    },
-    "beads-marketplace": {
-      "source": {
-        "repo": "steveyegge/beads",
-        "source": "github"
-      }
-    },
     "chrome-devtools-mcp-marketplace": {
       "source": {
         "repo": "ChromeDevTools/chrome-devtools-mcp",
