@@ -496,6 +496,36 @@ export const THEMES: Record<string, Theme> = {
       citation: "#745d8f", selection: "rgba(215,130,126,0.25)", ...lightBorder,
     },
   },
+  sakura: {
+    id: "sakura",
+    label: "Sakura",
+    dark: false,
+    shader: "snow", // petals, not flakes: the same three-layer parallax drift
+    sigil: 2, // pentagram — the blossom's five petals
+    mood: "a hanami afternoon under falling petals, pale pink on still water, tea gone cold",
+    verbs: [
+      "Waiting for full bloom",
+      "Watching the petals fall",
+      "Spreading the mat",
+      "Warming the tea",
+      "Counting the blossoms",
+      "Drifting downstream",
+    ],
+    vars: {
+      // Blossom over paper: near-white canvas with a pink cast, petal-pink
+      // surfaces, and dark plum for every word. The accent is the deeper
+      // pink at the base of the petal; the link is a plum-rose a full step
+      // off the body text, so a link never reads as prose.
+      background: "#fff7f9", surface: "#fbeef2", "surface-2": "#f6e1e8", elevated: "#fffbfc",
+      foreground: "#3b2231", muted: "#f6e1e8", "muted-foreground": "#6d4a5e",
+      "subtle-foreground": "#7d5a6d", ring: "#b8406c", primary: "#b8406c",
+      "primary-hover": "#a2355d", "primary-foreground": "#ffffff", accent: "#f6e1e8",
+      "accent-foreground": "#3b2231", destructive: "#b3243c", success: "#3f7d4f",
+      citation: "#a03368", selection: "rgba(184,64,108,0.18)",
+      border: "rgba(59,34,49,0.10)", "border-strong": "rgba(59,34,49,0.18)",
+      input: "rgba(59,34,49,0.13)", scrollbar: "rgba(59,34,49,0.22)",
+    },
+  },
   carrera: {
     id: "carrera",
     label: "Carrera",
