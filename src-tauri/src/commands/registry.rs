@@ -297,7 +297,10 @@ pub(crate) fn only_in_archived(
 /// clears the notebook's suggest stamp and re-matches it, so the cards it
 /// implies are proposed again and any surviving card picks its documents
 /// back up.
-pub(crate) async fn retire_archived_cards(db: &crate::db::Db) -> anyhow::Result<Vec<RegistryCard>> {
+pub(crate) async fn retire_archived_cards(
+    db: &crate::db::Db,
+    archived_now: &str,
+) -> anyhow::Result<Vec<RegistryCard>> {
     let archived: std::collections::HashSet<String> = db
         .list_notebooks()
         .await?
@@ -316,6 +319,13 @@ pub(crate) async fn retire_archived_cards(db: &crate::db::Db) -> anyhow::Result<
         .collect();
     let mut retired = Vec::new();
     for card in db.list_registry().await? {
+        // Only what THIS archive stranded: a card the notebook holds a
+        // document of. Cards stranded by earlier archives keep their badge
+        // and their Clean up button — the toast says "only pointed there",
+        // and its count has to mean that.
+        if !holds_document_in(&card, archived_now) {
+            continue;
+        }
         if only_in_archived(&card, &existing, &archived) {
             db.delete_registry_card(&card.id).await?;
             crate::note!(
@@ -329,6 +339,13 @@ pub(crate) async fn retire_archived_cards(db: &crate::db::Db) -> anyhow::Result<
         super::notify_changed("registry", None);
     }
     Ok(retired)
+}
+
+/// Whether a card has a standing document in this notebook.
+pub(crate) fn holds_document_in(card: &RegistryCard, notebook_id: &str) -> bool {
+    card.attachments.iter().any(|a| {
+        a.notebook_id == notebook_id && (a.status == "confirmed" || a.status == "proposed")
+    })
 }
 
 /// What un-archiving owes the registry: forget that the notebook was asked
@@ -2482,6 +2499,12 @@ mod tests {
         let mut suggested = in_nb(card("Suggested", ""), "s1", "nbA");
         suggested.origin = "auto".into();
         assert!(!only_in_archived(&suggested, &existing, &archived));
+        // The archive click retires only what that notebook holds.
+        assert!(holds_document_in(&shelved, "nbA"));
+        assert!(!holds_document_in(&shelved, "nbB"));
+        let mut rejected_only = in_nb(card("Rejected only", ""), "s1", "nbA");
+        rejected_only.attachments[0].status = "rejected".into();
+        assert!(!holds_document_in(&rejected_only, "nbA"));
     }
 
     #[test]

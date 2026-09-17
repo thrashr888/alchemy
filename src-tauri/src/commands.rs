@@ -1372,7 +1372,7 @@ pub(crate) async fn set_notebook_status_impl(
         retired_cards: Vec::new(),
     };
     if status == "archived" {
-        out.retired_cards = registry::retire_archived_cards(&state.db)
+        out.retired_cards = registry::retire_archived_cards(&state.db, id)
             .await
             .map_err(|err| err.to_string())?;
     } else {
