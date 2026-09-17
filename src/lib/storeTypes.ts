@@ -288,6 +288,13 @@ export interface AppState {
   /** Center-column source Gallery mode; reader wins below it, chat is the
    *  default. */
   galleryOpen: boolean;
+  /** What the gallery opened on: a folder's level, or one host's pages.
+   *  Set by the sources panel's group rows; the gallery reads it once per
+   *  change and the person can widen from there. */
+  galleryScope: { folderId?: string; host?: string; nonce: number } | null;
+  /** Open the gallery scoped to a folder or a host (RFC-sources-at-scale:
+   *  the group row IS the folder; clicking it shows what is inside). */
+  openGalleryScoped: (scope: { folderId?: string; host?: string }) => void;
   /** Center-column Grow mode (RFC-living-notebook Pillar 2) — the growth
    *  review surface; wins above Gallery. */
   growOpen: boolean;
