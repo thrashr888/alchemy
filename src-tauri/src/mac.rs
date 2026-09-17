@@ -298,6 +298,21 @@ pub fn mac_uri(provider: &str, collection: &str) -> String {
     }
 }
 
+/// The text of a note, as Markdown. cider's `body` is Apple's `plaintext`
+/// rendering, which drops list markers and the blank lines between
+/// paragraphs — a bulleted note arrives as bare lines, which Markdown then
+/// renders as one flat paragraph. `markdown` (cider >= 0.8) is converted from
+/// the HTML the Notes app stores, so bullets, numbering, checkboxes, headings
+/// and links survive into the source text and the Reader. `body` remains the
+/// fallback for a note with no rich text.
+fn note_text(n: &serde_json::Value) -> Option<&str> {
+    n["markdown"]
+        .as_str()
+        .or_else(|| n["body"].as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+}
+
 /// Fetch a cider:// origin and render it to markdown for ingestion.
 /// Returns (default_title, markdown).
 pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
@@ -332,8 +347,8 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
             }
             out.push_str("_\n\n");
         }
-        if let Some(body) = n["body"].as_str() {
-            out.push_str(body.trim());
+        if let Some(text) = note_text(&n) {
+            out.push_str(text);
             out.push('\n');
         }
         return Ok((title, out));
@@ -376,8 +391,8 @@ pub async fn fetch(uri: &str) -> anyhow::Result<(String, String)> {
                     m.chars().take(10).collect::<String>()
                 ));
             }
-            if let Some(body) = n["body"].as_str() {
-                out.push_str(body.trim());
+            if let Some(text) = note_text(n) {
+                out.push_str(text);
                 out.push_str("\n\n");
             }
         }
@@ -878,6 +893,25 @@ mod tests {
             assert!(is_mac_uri(&mac_uri(provider, collection)));
         }
         assert!(!is_mac_uri("https://example.com"));
+    }
+
+    // A note's structure lives in `markdown`; `body` is Apple's flattened
+    // plaintext, where a bulleted list is indistinguishable from prose and
+    // renders as one paragraph. Prefer the former, fall back to the latter.
+    #[test]
+    fn note_text_prefers_markdown_over_flattened_body() {
+        let both = serde_json::json!({
+            "body": "Groceries\nmilk\neggs",
+            "markdown": "Groceries\n\n- milk\n- eggs",
+        });
+        assert_eq!(note_text(&both), Some("Groceries\n\n- milk\n- eggs"));
+
+        // A note with no rich text (or an older cider) still yields its text.
+        let plain = serde_json::json!({ "body": "just text" });
+        assert_eq!(note_text(&plain), Some("just text"));
+
+        assert_eq!(note_text(&serde_json::json!({ "body": "  " })), None);
+        assert_eq!(note_text(&serde_json::json!({})), None);
     }
 
     // A malformed origin must fail before any cider subprocess runs, so this
