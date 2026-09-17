@@ -61,6 +61,7 @@ import type {
   Template,
   NotebookStatusOutcome,
   MacProviderStatus,
+  DesktopApp,
 } from "./types";
 
 /** One API operation plus the command name diagnostics reports on failure. */
@@ -331,6 +332,11 @@ export const api = {
   // Mac providers (Calendar, Reminders, Apple Notes via cider)
   macAvailable: () => run(query<boolean>("mac_available")),
   macConnect: (provider: string) => run(cmd<void>("mac_connect", { provider })),
+  // Handoff to a desktop AI app (docs/RFC-desktop-apps.md)
+  desktopApps: () => run(query<DesktopApp[]>("desktop_apps", {})),
+  handoffPrompt: (notebookId: string, app: string) =>
+    run(query<string>("handoff_prompt", { notebookId, app })),
+  openDesktopApp: (app: string) => run(cmd<void>("open_desktop_app", { app })),
   /** Which Mac apps count as connected — prompt-free. */
   macStatus: () => run(query<MacProviderStatus[]>("mac_status", {})),
   listMacCollections: (provider: string) =>

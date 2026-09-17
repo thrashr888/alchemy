@@ -616,6 +616,29 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     onClearBackground: pick.clearPicked,
   });
 
+  // "Open in Claude…" and friends — one submenu, only the apps this Mac
+  // has (docs/RFC-desktop-apps.md).
+  const desktopApps = useStore((s) => s.desktopApps);
+  useEffect(() => {
+    void useStore.getState().refreshDesktopApps();
+  }, []);
+  const handoffItems = (notebookId: string): RowMenuItem[] => {
+    const apps = desktopApps.filter((a) => a.installed);
+    if (apps.length === 0) return [];
+    return [
+      {
+        label: "Open In",
+        icon: <Share className="h-3.5 w-3.5" />,
+        onClick: () => {},
+        items: apps.map((a) => ({
+          label: `${a.label}…`,
+          onClick: () =>
+            void useStore.getState().handoffNotebook(notebookId, a.id),
+        })),
+      },
+    ];
+  };
+
   /** The single-notebook verbs, shared by the cards and the table so both
    *  surfaces offer the same menu (and the same right-click). */
   const notebookRowItems = (nb: Notebook): RowMenuItem[] => [
@@ -642,6 +665,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       icon: <Share className="h-3.5 w-3.5" />,
       onClick: () => void useStore.getState().shareNotebookWithSomeone(nb.id),
     },
+    ...handoffItems(nb.id),
     { label: "", separator: true, onClick: () => {} },
     {
       label: "Archive",

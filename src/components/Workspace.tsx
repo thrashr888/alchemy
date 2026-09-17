@@ -44,6 +44,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
   const binding = useStore((s) => s.okfBinding);
+  const desktopApps = useStore((s) => s.desktopApps);
+  useEffect(() => {
+    void useStore.getState().refreshDesktopApps();
+  }, []);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
   const studioOpen = useStore((s) => s.studioOpen);
   const theme = useStore((s) => s.theme);
@@ -122,6 +126,27 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                       .getState()
                       .shareNotebookWithSomeone(notebook.id),
                 },
+                // Hand the notebook to a desktop AI app this Mac has
+                // (docs/RFC-desktop-apps.md): prompt to the clipboard, app
+                // to the front.
+                ...(desktopApps.some((a) => a.installed)
+                  ? [
+                      {
+                        label: "Open In",
+                        icon: <Share className="h-3.5 w-3.5" />,
+                        onClick: () => {},
+                        items: desktopApps
+                          .filter((a) => a.installed)
+                          .map((a) => ({
+                            label: `${a.label}…`,
+                            onClick: () =>
+                              void useStore
+                                .getState()
+                                .handoffNotebook(notebook.id, a.id),
+                          })),
+                      },
+                    ]
+                  : []),
                 // Keeping a notebook on disk (RFC-okf-live §5.5). One verb
                 // while it is off; the two it earns once it is on.
                 ...(binding

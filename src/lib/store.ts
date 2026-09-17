@@ -598,6 +598,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       }
     })(),
     registrySignal: null,
+    desktopApps: [],
     homeSection: "notebooks",
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
@@ -2130,6 +2131,30 @@ export const useStore = create<AppState>((rawSet, get) => {
         localStorage.setItem("alchemy.registrySeenAt", String(now));
       } catch {
         // Per-viewer convenience only.
+      }
+    },
+
+    refreshDesktopApps: async () => {
+      try {
+        set({ desktopApps: await api.desktopApps() });
+      } catch {
+        // No handoff rows, nothing else lost.
+      }
+    },
+
+    handoffNotebook: async (notebookId, app) => {
+      const label =
+        get().desktopApps.find((a) => a.id === app)?.label ?? "the app";
+      try {
+        const prompt = await api.handoffPrompt(notebookId, app);
+        await navigator.clipboard.writeText(prompt);
+        await api.openDesktopApp(app);
+        get().pushToast(
+          "success",
+          `Prompt copied — paste it into ${label} to pick up where you are.`,
+        );
+      } catch (e) {
+        get().pushToast("error", e instanceof Error ? e.message : String(e));
       }
     },
 

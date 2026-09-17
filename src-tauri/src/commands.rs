@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod brief;
 mod diagnostics;
+mod handoff;
 mod registry;
 pub(crate) mod reports;
 mod second_look;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
+pub use handoff::*;
 pub use registry::*;
 pub use reports::*;
 pub use second_look::*;

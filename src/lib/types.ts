@@ -648,6 +648,13 @@ export interface CardFact {
 /** What an explicit "suggest cards" ask produced. `reply` carries the
  *  model's raw answer so "it suggested nothing" can be told apart from
  *  "it said something that didn't survive the grounding gate". */
+/** A desktop AI app a notebook can be handed to (docs/RFC-desktop-apps.md). */
+export interface DesktopApp {
+  id: string;
+  label: string;
+  installed: boolean;
+}
+
 /** One Mac app's connection, as the Connect buttons show it (see
  *  `mac_status`): connected when its store reads without a prompt, when a
  *  source from it is already in the library, or when Connect succeeded

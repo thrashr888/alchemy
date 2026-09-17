@@ -26,6 +26,7 @@ import type {
   Toast,
   ToastKind,
   RegistryCard,
+  DesktopApp,
 } from "./types";
 import type { HistoryEntry } from "./history";
 
@@ -306,6 +307,13 @@ export interface AppState {
   refreshRegistrySignal: () => Promise<void>;
   /** The Registry tab is on screen: everything surfaced now counts as seen. */
   markRegistrySeen: () => void;
+  /** Desktop AI apps on this Mac (Claude, ChatGPT, GitHub Copilot) a
+   *  notebook can be handed to. Read once per launch. */
+  desktopApps: DesktopApp[];
+  refreshDesktopApps: () => Promise<void>;
+  /** Copy a prompt carrying the notebook to the clipboard and bring the
+   *  app to the front — the person pastes (docs/RFC-desktop-apps.md). */
+  handoffNotebook: (notebookId: string, app: string) => Promise<void>;
   /** The cast by kind, set by the Registry index after each load; the Home
    *  header's subtitle reads it. Null until the index has loaded once. */
   registryCounts: { total: number; kinds: { label: string; count: number }[] } | null;
