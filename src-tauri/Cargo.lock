@@ -1367,12 +1367,13 @@ dependencies = [
 
 [[package]]
 name = "cider-cli"
-version = "0.6.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab1c533503e475fdd8ac32c30f3e02eeabfc4fbc520dc910406049316a3d0b74"
+checksum = "5d607f2161d8bafaaf491b0a82b20d160c54561d1dc5235a9ef914da943d340e"
 dependencies = [
  "anyhow",
  "chrono",
+ "crc32fast",
  "log",
  "notify",
  "plist",
