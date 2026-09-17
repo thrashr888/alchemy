@@ -235,8 +235,7 @@ export function StudioPanel() {
   const notes = useStore((s) => s.notes);
   const notebookLoading = useStore((s) => s.notebookLoading);
   // A generation keeps running when the user navigates elsewhere; its live
-  // preview belongs to ONE notebook. Other notebooks keep the tiles disabled
-  // (the backend runs one generation per window) but paint no stream.
+  // preview belongs to ONE notebook, so other notebooks paint no stream.
   const generatingKind = useStore((s) => s.generatingKind);
   const genProgress = useStore((s) => s.genProgress);
   const genStatus = useStore((s) => s.genStatus);
@@ -253,7 +252,6 @@ export function StudioPanel() {
   const kokoroReady = useStore((s) => !!s.kokoroStatus?.verified);
   const generate = useStore((s) => s.generateArtifact);
   const templates = useStore((s) => s.templates);
-  const generatingTemplateId = useStore((s) => s.generatingTemplateId);
   const generateFromTemplate = useStore((s) => s.generateFromTemplate);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const toggleStudio = useStore((s) => s.toggleStudio);
@@ -300,6 +298,21 @@ export function StudioPanel() {
   const [noteQuery, setNoteQuery] = useState("");
   const shownNotes = useMemo(
     () => notes.filter((n) => n.status !== "archived" && !isWikiPage(n)),
+    [notes],
+  );
+  // Which generators are already cooking. The queue's pending note carries
+  // the kind it was asked for, so the notes themselves say what is busy —
+  // `generatingKind` only ever covered the rebuild and report paths, which
+  // is why a queued generation lit nothing and the tile invited a second
+  // press. Queued counts as busy: the work is accepted, it just hasn't
+  // reached the engine yet. Typed as strings rather than NoteKind because a
+  // template's note carries the literal "template:<id>" the backend
+  // resolves at run time, which the union does not spell.
+  const busyKinds = useMemo(
+    () =>
+      new Set<string>(
+        notes.filter((n) => n.status === "generating").map((n) => n.kind),
+      ),
     [notes],
   );
   const listedNotes = useMemo(() => {
@@ -559,13 +572,8 @@ export function StudioPanel() {
                 {primaryArtifacts.map((a) => (
                     <GenTile
                       key={a.kind}
-                      icon={
-                        generatingKind === a.kind && generatingHere ? (
-                          <Spinner className="h-3.5 w-3.5" />
-                        ) : (
-                          a.icon
-                        )
-                      }
+                      icon={a.icon}
+                      busy={busyKinds.has(a.kind)}
                       label={a.label}
                       category={a.family}
                       tint={TINT_BY_FAMILY[a.family]}
@@ -576,13 +584,8 @@ export function StudioPanel() {
                 {moreOpen && secondaryArtifacts.map((a) => (
                   <GenTile
                     key={a.kind}
-                    icon={
-                      generatingKind === a.kind ? (
-                        <Spinner className="h-3.5 w-3.5" />
-                      ) : (
-                        a.icon
-                      )
-                    }
+                    icon={a.icon}
+                    busy={busyKinds.has(a.kind)}
                     label={a.label}
                     category={a.family}
                     tint={TINT_BY_FAMILY[a.family]}
@@ -593,13 +596,8 @@ export function StudioPanel() {
                 {moreOpen && templates.map((t) => (
                   <GenTile
                     key={t.id}
-                    icon={
-                      generatingTemplateId === t.id ? (
-                        <Spinner className="h-3.5 w-3.5" />
-                      ) : (
-                        <FileText className="h-3.5 w-3.5" />
-                      )
-                    }
+                    icon={<FileText className="h-3.5 w-3.5" />}
+                    busy={busyKinds.has(`template:${t.id}`)}
                     label={t.name}
                     title={`${t.description || t.name} — right-click to edit`}
                     category="template"
@@ -1113,6 +1111,7 @@ function GenTile({
   category,
   tint,
   disabled,
+  busy,
   onClick,
   onContextMenu,
 }: {
@@ -1122,25 +1121,36 @@ function GenTile({
   category?: Artifact["family"] | "template";
   tint: Tint;
   disabled: boolean;
+  /** This kind is already generating: spin, dim, and refuse a second press.
+   *  The pending note below is where the run reports; pressing again only
+   *  queues a duplicate behind it. */
+  busy?: boolean;
   onClick: () => void;
   /** Template tiles: right-click opens the editor. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
-      disabled={disabled}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      aria-label={category ? `${label} — ${category}` : label}
+      aria-label={
+        [category ? `${label} — ${category}` : label, busy && "generating"]
+          .filter(Boolean)
+          .join(", ")
+      }
       // The tile clips long names with an ellipsis, so the tooltip always
       // leads with the whole name; a caller's own hint follows it.
-      title={[label, title].filter(Boolean).join(" — ")}
+      title={[label, busy ? "Generating…" : title].filter(Boolean).join(" — ")}
       className={cn(
         "flex items-center gap-2 rounded-md border px-2.5 py-2 text-caption text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
         tint.tile,
       )}
     >
-      <span className={tint.icon}>{icon}</span>
+      <span className={tint.icon}>
+        {busy ? <Spinner className="h-3.5 w-3.5" /> : icon}
+      </span>
       <span className="truncate">{label}</span>
     </button>
   );

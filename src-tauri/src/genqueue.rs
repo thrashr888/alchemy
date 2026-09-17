@@ -25,15 +25,16 @@ pub const QUEUE_FILE: &str = "generation-queue.json";
 const PRUNE_MS: i64 = 86_400_000;
 
 /// Hard deadline over one run — "generating" must be a bounded state.
-fn run_deadline(kind: &str) -> std::time::Duration {
-    // Visual summaries make one model call, without a prose distillation
-    // pass or audio synthesis. Even a provider that ignores output limits
-    // cannot occupy the generation slot indefinitely.
-    let minutes = if crate::rag::uses_diagram_corpus(kind) {
-        10
-    } else {
-        20
-    };
+/// `pub(crate)` so corpus assembly can assert its own bounds fit inside it.
+pub(crate) fn run_deadline(kind: &str) -> std::time::Duration {
+    // Only Audio Overview still earns twenty minutes: it writes a ~3,000
+    // word script over as many as four model calls, then voices every line.
+    // Everything else is now bounded corpus assembly (the rescue pass caps
+    // itself — see `waterfill_corpus`) plus one model call, the same shape
+    // the visual summaries have always had, so it gets the same ten. Twenty
+    // minutes of "generating" reads as hung, and a person who cannot tell
+    // presses the button again — which used to queue a second twenty.
+    let minutes = if kind == "audio_overview" { 20 } else { 10 };
     std::time::Duration::from_secs(minutes * 60)
 }
 
@@ -310,9 +311,14 @@ async fn run_job(app: tauri::AppHandle, job: GenJob) {
             ),
         ) => Some(match r {
             Ok(inner) => inner,
+            // Reads as the tail of "Generation failed: …", which is the
+            // frame `classify_model_error` puts an unmatched error in. The
+            // "Fix:" prefix keeps it out of that classifier's hands, so the
+            // sentence a person reads is the one written here.
             Err(_) => Err(anyhow::anyhow!(
-                "generation exceeded {} minutes — the model provider may be \
-                 overloaded; try again or switch providers",
+                "it passed its {}-minute limit and was stopped. Fix: pick a smaller \
+                 or faster model in Settings → Models, or select fewer sources and \
+                 try again.",
                 deadline.as_secs() / 60
             )),
         }),
@@ -460,8 +466,12 @@ fn placeholder_stripped(job: &GenJob) -> String {
 mod tests {
     use super::*;
 
+    /// Audio Overview is the one kind that writes over several calls and
+    /// then voices the result; every other kind is one bounded corpus plus
+    /// one model call and shares the shorter ceiling. `infographic` is here
+    /// by name: it was the kind that ran the old twenty minutes out.
     #[test]
-    fn visual_summaries_have_a_shorter_total_deadline() {
+    fn only_audio_overview_gets_the_long_deadline() {
         for kind in [
             "uml",
             "mind_map",
@@ -470,11 +480,15 @@ mod tests {
             "relationship",
             "data_model",
             "journey",
+            "infographic",
+            "summary",
+            "briefing",
+            "report",
+            "template:anything",
         ] {
-            assert_eq!(run_deadline(kind).as_secs(), 600);
+            assert_eq!(run_deadline(kind).as_secs(), 600, "{kind}");
         }
         assert_eq!(run_deadline("audio_overview").as_secs(), 1200);
-        assert_eq!(run_deadline("report").as_secs(), 1200);
     }
 
     fn job(id: &str, status: &str) -> GenJob {

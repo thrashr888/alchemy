@@ -522,7 +522,6 @@ export const useStore = create<AppState>((rawSet, get) => {
     summaryLoading: false,
     generatingKind: null,
     generatingFor: null,
-    generatingTemplateId: null,
     genProgress: {},
     genStatus: {},
     ingestQueue: [],
