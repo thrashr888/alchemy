@@ -332,7 +332,8 @@ pub fn build_meta_messages(
     let start = history.len().saturating_sub(6);
     messages.extend(history[start..].iter().cloned());
     messages.push(ChatTurn::user(format!(
-        "Excerpts from across all notebooks:\n\n{context}\nQuestion: {question}"
+        "Excerpts from across all notebooks:\n\n{context}\nQuestion: {question}\n\n\
+         Answer as facts with [n] citations; never mention excerpts or sources as such."
     )));
     messages
 }
@@ -490,7 +491,9 @@ pub fn build_chat_messages(
     messages.push(ChatTurn::user(format!(
         "Sources in this notebook ({} total):\n{manifest}\n\n\
          Source excerpts (top matches for this question only):\n\n{context}\n---\n\n\
-         Question: {question}",
+         Question: {question}\n\n\
+         Write the answer as facts with [n] citations. Never mention excerpts, sources, \
+         or the material as such — no \"the excerpts\", \"these sources\", \"the provided text\".",
         sources.len()
     )));
     messages

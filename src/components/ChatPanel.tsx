@@ -360,9 +360,13 @@ export function ChatPanel() {
     setAtBottom(near);
   };
   // Streaming text follows to the bottom while the reader stays there.
+  // Only while something IS streaming: this effect also fires when the
+  // stream clears as the answer lands, and that last run used to drag the
+  // view back to the bottom right after the new-answer effect below had
+  // brought the top into view.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || (!streamingText && steps.length === 0)) return;
     if (wasAtBottom.current) el.scrollTo({ top: el.scrollHeight });
     setAtBottom(wasAtBottom.current);
   }, [streamingText, steps]);
