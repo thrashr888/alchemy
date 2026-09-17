@@ -786,7 +786,10 @@ export const api = {
    *  the Registry's own button is corpus-scoped. Triage follows in the
    *  background and lands on a registry bump. */
   suggestCardsNow: (notebookId?: string) =>
-    run(cmd<SuggestOutcome>("suggest_cards_now", { notebookId })),
+    // A whole-corpus ask reads every notebook, one model call each — minutes
+    // on a big library, well past the mutation timeout, which reported
+    // "timed out" while the pass carried on and landed anyway.
+    run(ai<SuggestOutcome>("suggest_cards_now", { notebookId })),
   cardsForSource: (sourceId: string) =>
     run(query<RegistryCard[]>("cards_for_source", { sourceId })),
   rematchRegistry: (notebookId: string) =>
