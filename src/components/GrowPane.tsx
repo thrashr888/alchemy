@@ -59,6 +59,9 @@ const proposalHost = (p: GrowthProposal) =>
  *  (anchor, host, how often it is cited) at once, the page's own title
  *  and description once the peek lands. Stacked so a description can
  *  wrap; the backend already clips it to a few lines' worth. */
+/** Rows a Grow list shows before it folds the rest behind "Show N more". */
+const FOLD_AT = 5;
+
 function proposalCard(p: GrowthProposal, peek?: UrlPeek): HoverCardData {
   const host = proposalHost(p);
   const title = peek?.title || p.anchor || host;
@@ -658,6 +661,36 @@ export function GrowPane() {
   );
   /** What a section says when its own call failed. Plain, and only about
    *  itself — the rest of the pane is fine. */
+  // Every list here shows a handful and folds the rest behind one line.
+  // A notebook whose pages advertise forty feeds is not forty rows tall;
+  // it is five rows and "Show 35 more", and the same for every section, so
+  // the pane stays a page you can read top to bottom.
+  const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
+  const fold = <T,>(
+    key: string,
+    items: T[],
+    render: (item: T) => React.ReactNode,
+  ): React.ReactNode => {
+    const open = !!unfolded[key];
+    const shown = open ? items : items.slice(0, FOLD_AT);
+    return (
+      <>
+        {shown.map(render)}
+        {items.length > FOLD_AT && (
+          <button
+            type="button"
+            className="self-start rounded px-1 py-1 text-caption text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() =>
+              setUnfolded((u) => ({ ...u, [key]: !open }))
+            }
+          >
+            {open ? "Show less" : `Show ${items.length - FOLD_AT} more`}
+          </button>
+        )}
+      </>
+    );
+  };
+
   const errorLine = (label: string) => (
     <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-caption text-subtle-foreground">
       {label}
@@ -724,7 +757,7 @@ export function GrowPane() {
         ? pendingLine(state.pending)
         : items.length === 0
           ? !state.error && errorLine("Nothing right now.")
-          : items.map(row)}
+          : fold(title, items, row)}
     </div>
   );
 
@@ -753,7 +786,7 @@ export function GrowPane() {
                     This notebook is hungry for
                   </span>
                   <div className="flex flex-wrap gap-1.5">
-                    {queries.map((q) => (
+                    {fold("queries", queries, (q) => (
                       <span
                         key={q}
                         className="max-w-full truncate rounded-full border border-border px-2.5 py-1 text-caption text-muted-foreground"
@@ -901,7 +934,7 @@ export function GrowPane() {
                     Nothing new found for these questions.
                   </div>
                 ) : (
-                  found.map(row)
+                  fold("web", found, row)
                 )}
               </div>
               {/* Needs attention (RFC-source-hygiene), merged in from the
@@ -986,7 +1019,7 @@ export function GrowPane() {
                     All clean.
                   </div>
                 ) : (
-                  attention.map((h) => (
+                  fold("attention", attention, (h) => (
                     <div
                       key={`${h.kind}:${h.sourceId}:${h.bucket}`}
                       className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
@@ -1176,7 +1209,7 @@ export function GrowPane() {
                     Nothing gathering dust.
                   </div>
                 ) : (
-                  retireVisible.map((r) => (
+                  fold("retire", retireVisible, (r) => (
                     <div
                       key={r.sourceId}
                       className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
@@ -1250,7 +1283,7 @@ export function GrowPane() {
                       Merge all
                     </Button>
                   </div>
-                  {mergesVisible.map((m) => (
+                  {fold("merges", mergesVisible, (m) => (
                     <div
                       key={`${m.from}>${m.to}`}
                       className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
