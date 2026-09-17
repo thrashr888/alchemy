@@ -50,6 +50,18 @@ export function MacConnect({
   }, []);
   useEffect(() => {
     void readStatus();
+    // Once more a few seconds in: right after launch the first read can
+    // land before cider's prompt-free probe has answered, and a screen
+    // that says "Connect" for apps that are connected is worse than a
+    // late tick. Also re-read when the window comes back — a permission
+    // granted in System Settings shows up without a restart.
+    const again = window.setTimeout(() => void readStatus(), 5000);
+    const onFocus = () => void readStatus();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearTimeout(again);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [readStatus]);
   // A connect failure that Full Disk Access would fix — rendered inline with
   // a button straight to the right Settings pane, not just a toast.
