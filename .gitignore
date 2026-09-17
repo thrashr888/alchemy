@@ -38,10 +38,5 @@ extension/chrome/*.zip
 .pnpm-store/
 .playwright-mcp/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-
 # Copied in by scripts/release.sh only when APPLE_PROVISIONING_PROFILE is set
 src-tauri/embedded.provisionprofile
