@@ -36,34 +36,46 @@ function CommandChip({ command }: { command: string }) {
   );
 }
 
-/** Tick, hollow circle, or cross — the state of one setup step. The word for
- *  it rides beside the icon (see `Step`), so the icon itself is decoration. */
-function StatusIcon({ ok, optional }: { ok: boolean; optional?: boolean }) {
-  if (ok)
+/** One setup step's state. "todo" is a step nobody has tried yet — a
+ *  hollow circle, like the optional ones — and "failed" is a check that
+ *  actually ran and came back wrong. A first-run screen that opened with a
+ *  column of red crosses read as a list of requirements, when it is a list
+ *  of doors and you only need one. */
+type StepState = "ok" | "todo" | "failed";
+
+/** Tick, hollow circle, or cross. The word for it rides beside the icon
+ *  (see `Step`), so the icon itself is decoration. */
+function StatusIcon({ state }: { state: StepState }) {
+  if (state === "ok")
     return <CheckCircle2 aria-hidden className="h-4 w-4 shrink-0 text-success" />;
-  if (optional)
+  if (state === "todo")
     return <Circle aria-hidden className="h-4 w-4 shrink-0 text-subtle-foreground" />;
   return <XCircle aria-hidden className="h-4 w-4 shrink-0 text-destructive" />;
 }
 
-function statusWord(ok: boolean, optional?: boolean): string {
-  if (ok) return "Ready";
-  return optional ? "Not set up" : "Needs setting up";
+function statusWord(state: StepState, optional?: boolean): string {
+  if (state === "ok") return "Ready";
+  if (state === "failed") return "Not working";
+  return optional ? "Not set up" : "Not set up yet";
 }
 
 function Step({
   ok,
+  failed = false,
   optional,
   title,
   detail,
   children,
 }: {
   ok: boolean;
+  /** A check ran and came back wrong. Without it, a not-ok step is "todo". */
+  failed?: boolean;
   optional?: boolean;
   title: string;
   detail?: string;
   children?: React.ReactNode;
 }) {
+  const state: StepState = ok ? "ok" : failed ? "failed" : "todo";
   return (
     <div
       className={cn(
@@ -72,9 +84,9 @@ function Step({
       )}
     >
       <div className="flex items-center gap-2.5">
-        <StatusIcon ok={ok} optional={optional} />
+        <StatusIcon state={state} />
         <span className="text-body font-medium text-foreground">{title}</span>
-        <span className="sr-only">{statusWord(ok, optional)}</span>
+        <span className="sr-only">{statusWord(state, optional)}</span>
         {optional && (
           <span className="rounded border border-border px-1 py-px text-badge uppercase tracking-wide text-subtle-foreground">
             Optional
@@ -155,12 +167,23 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   async function setMode(m: "fm" | "ollama" | "openai") {
     if (!aiConfig) return;
-    if (m === "fm") await save({ ...aiConfig, chatProvider: "on-device" });
+    // Any door but Ollama's indexes with the built-in embedder unless Ollama
+    // is already running: a Mac without Ollama should never be told to
+    // start it for a path that doesn't need it.
+    const embedder = health?.reachable ? aiConfig.embedder : "builtin";
+    if (m === "fm") await save({ ...aiConfig, chatProvider: "on-device", embedder });
     else if (m === "ollama")
       await save({ ...aiConfig, provider: "ollama", chatProvider: "ollama" });
-    else await save({ ...aiConfig, provider: "openai", chatProvider: "" });
+    else await save({ ...aiConfig, provider: "openai", chatProvider: "", embedder });
     await refresh();
   }
+
+  // The gateway door is "open" once a key or URL has been saved; until then
+  // the chat probe is answering for whatever provider normalize fell back
+  // to, and its detail would describe the wrong door.
+  const gatewayConfigured = !!(
+    aiConfig?.openaiApiKey.trim() || aiConfig?.openaiBaseUrl.trim()
+  );
 
   /** Answer with an installed subscription CLI — the same entry Settings →
    *  Models adds — and index with the built-in embedder, since this is the
@@ -244,8 +267,12 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
-      className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-background"
+      className="fixed inset-0 z-40 overflow-y-auto bg-background"
     >
+      {/* Centered when it fits, scrolled from the top when it doesn't.
+          Centering the scroller itself clipped the heading on a short
+          window: you could reach the bottom but never the top. */}
+      <div className="flex min-h-full items-center justify-center">
       <div className="flex w-full max-w-[520px] flex-col gap-5 px-6 py-10">
         <div className="flex flex-col items-center gap-3 text-center">
           <AlchemySymbol className="h-14 w-14 text-citation" />
@@ -408,6 +435,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
           {(mode === "ollama" || aiConfig?.embedder === "ollama") && (
           <Step
             ok={health.reachable}
+            failed={mode === "ollama" && !health.reachable}
             title={
               health.reachable
                 ? "Ollama is running"
@@ -430,6 +458,13 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           <Step
             ok={mode === "ollama" ? health.reachable && chat.working : chat.working}
+            failed={
+              mode === "openai"
+                ? gatewayConfigured && !chat.working
+                : mode === "ollama"
+                  ? health.reachable && !chat.working
+                  : !chat.working
+            }
             title={
               mode === "openai"
                 ? chat.working
@@ -446,9 +481,13 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                       : "Get a chat model"
             }
             detail={
-              mode === "openai" || mode === "fm" || mode === "agent"
-                ? chat.detail
-                : health.reachable
+              mode === "openai"
+                ? gatewayConfigured
+                  ? chat.detail
+                  : "Paste an API key above and press Save & check."
+                : mode === "fm" || mode === "agent"
+                  ? chat.detail
+                  : health.reachable
                   ? `Answers questions and generates documents. ${chat.detail}`
                   : "Waiting for Ollama."
             }
@@ -465,6 +504,11 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
           <Step
             ok={embed.working}
+            failed={
+              aiConfig?.embedder === "builtin"
+                ? !embed.working && /fail|error|missing/i.test(embed.detail)
+                : health.reachable && !embed.working
+            }
             title={aiConfig?.embedder === "builtin" ? "Built-in search model" : "Search model"}
             detail={
               aiConfig?.embedder === "builtin"
@@ -527,6 +571,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             </Button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
