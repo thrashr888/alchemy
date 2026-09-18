@@ -128,20 +128,90 @@ probabilities sum to one, score matches its distribution), the way clue
 does. A malformed response fails the whole call; nothing is partially
 applied.
 
-### The local shim
+### The local judge
 
-`JudgeEngine::Local` renders one question at a time into the protocol the
-sites already use — "ONLY a single number", "ONLY YES or NO" — through
-`Ai::helpers()` with its 10 s ceiling, and parses back into an `Answer`
-with all probability on the parsed option and confidence 1.0. A parse
-failure is an `Err`, which callers already handle (unjudged, fusion
-order, most-recent notebook). Batched questions run serially.
+`JudgeEngine::Local` is not a text-parse fallback. Ollama has had two
+features since late 2025 that Alchemy never sends: `format` with a JSON
+schema (grammar-constrained decoding, so an enum answer is guaranteed
+valid) and `logprobs` with `top_logprobs` (v0.12.11 on the llama.cpp
+runner, v0.21.1 on the MLX runner; this machine runs 0.34.1). Together
+they turn any chat model into a typed judge:
 
-This is the same behavior as today, moved into one place. It exists so
-that **every site works without a key**, which is the sovereignty
-invariant ("access to a notebook must never depend on a particular model,
-provider, or agent"), and so the migration deletes parsers instead of
-forking each site into two code paths.
+- a **Choice** is a one-field schema with an `enum`; the distribution is
+  the top-logprobs at the value token, mapped back onto the options;
+- a **Noul** is the same with `yes | no`;
+- a **Score** is an enum of level indices.
+
+One question is one call through `Ai::helpers()` with its 10 s ceiling;
+batched questions run serially. The comment at `router.rs:118` ("small
+models do not parse JSON reliably") described unconstrained decoding.
+With the grammar on, there is nothing to parse. This is also why the
+migration deletes parsers instead of forking each site: the local path
+and the Jev path return the same `Answer`.
+
+The local judge exists so that **every site works without a key**, which
+is the sovereignty invariant ("access to a notebook must never depend on
+a particular model, provider, or agent"). It is also the only judge on a
+notebook marked local-only, if that flag ships.
+
+### Local judges, measured
+
+Two batteries, run 2026-09-17 on an M5 Max with 128 GB. *Verdicts* is
+the Second Look shape: 12 claim/excerpt pairs, four-way Choice, three
+per class including negations. *Routing* is `route_tool`'s vocabulary:
+16 messages over 21 actions with the "questions about sources are chat"
+trap. Latency is per call, warm, median.
+
+| judge | memory | verdicts | routing | latency | probabilities |
+| --- | --- | --- | --- | --- | --- |
+| Jev 1.13 (cloud) | 0 | 12/12 | 15/16 | 215 / 232 ms | calibrated by design |
+| qwen3.8:27b-mlx | 18 GB | 12/12 | 16/16 | 807 / 486 ms | spread, usable |
+| Bonsai 2 27B ternary | 6 GB | 11/12 | 14/16 | 644 / 1327 ms | spread, usable |
+| gemma4:12b-mlx | 8 GB | 12/12 | 13/16 | 289 / 296 ms | **always 1.0**, unusable |
+| digitsflow/bonsai-8b | 1.2 GB | 8/12 | 14/16 | 132 / 117 ms | spread |
+| lfm2.5 | 5 GB | 6/12 | — | 106 ms | spread |
+| GLiNER 2.5 multi (287M) | 0.6 GB | 4/12 | — | 57 ms | scores, not this task |
+
+What the table says:
+
+- **Quality tracks size.** Both 27B models match Jev on the batteries;
+  the 8B-and-under class misses the hard verdict classes (`unsupported`
+  vs `weak`) and the chat-vs-generate boundary. Jev's one routing miss
+  ("tonight, re-read the term sheet and rebuild the summary" → generate
+  0.78, commission 0.19) is its documented literal reading: the rubric
+  did not say that "tonight" means commission.
+- **Gemma's probabilities are not a signal.** It returns 1.0 on the
+  deliberately ambiguous "walked down to the bank" sense test where Qwen
+  gives 0.97/0.03. Confidence-gated behavior (propose vs. act, review vs.
+  assert) needs a judge whose distribution spreads. Gemma can route; it
+  cannot say it is unsure.
+- **Bonsai 2 is the 16 GB story, not the speed story.** It reproduces the
+  base model's answers in a third of the memory, which is what puts a
+  27B judge on a 16 GB Mac. But its ternary kernels process prompts at
+  ~44 tok/s on Metal (decode 34 tok/s), so long state costs seconds.
+  And it does not run in Ollama today: the PTQ1_0 GGUF fails metadata
+  parsing on 0.34.1 ("unsupported tensor output.weight size overflows")
+  and the MLX 2-bit repo is refused as non-GGUF. The numbers above came
+  from PrismML's llama.cpp fork with thinking disabled through the chat
+  template; the stock `--reasoning-budget 0` flag did not stop it from
+  spending its budget in a think block. Revisit when Ollama ships the
+  kernels.
+- **GLiNER 2.5 is an extractor, not a judge.** Zero-shot classification
+  over four verdict labels collapses to `supported`. Its actual job is
+  entity, relation, and record extraction with per-span confidence, and
+  on a registry-style paragraph it returned people, an organization, a
+  place, dates, two project mentions, and `works_for` relations in 114
+  ms. That is the shape of `suggest_for_notebook` and
+  `enrich_card_facts` (registry.rs), which today ask the Small role for
+  `kind|name` lines and verify them verbatim. It runs through
+  `pip install gliner2` (mDeBERTa encoder, Apache-2.0); the community
+  ONNX export keeps the decoding in JavaScript, so a Rust port through
+  the `ort` runtime Alchemy already ships for the reranker is real work.
+  A separate RFC if the registry wants it.
+
+Default for the local judge, given the table: the configured `Small`
+model when it is 27B-class, else the chat model, never Gemma for any
+site that reads confidence. Jev when a key is present.
 
 ### Credentials and discovery
 
