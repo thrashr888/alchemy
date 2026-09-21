@@ -22,7 +22,8 @@ export type ShaderVariant =
   | "steam"
   | "phosphor"
   | "blueprint"
-  | "crt";
+  | "crt"
+  | "camo";
 
 export interface Theme {
   id: string;
@@ -838,6 +839,131 @@ export const THEMES: Record<string, Theme> = {
       backdrop: "#aaaaaa",
       border: "rgba(255,255,255,0.14)", "border-strong": "rgba(255,255,255,0.30)",
       input: "rgba(255,255,255,0.14)", scrollbar: "rgba(170,170,170,0.30)",
+    },
+  },
+  "camo-jungle": {
+    id: "camo-jungle",
+    label: "Camo Jungle",
+    dark: true,
+    shader: "camo", // woodland blobs, khaki over black-green
+    sigil: 1,
+    mood: "a woodland hide at dusk, wet leaves and canvas, a blaze-orange cap the one bright thing",
+    verbs: [
+      "Reading the canopy",
+      "Waiting out the rain",
+      "Checking the compass",
+      "Marking the trail",
+      "Holding position",
+      "Breaking camp",
+    ],
+    vars: {
+      // Woodland camo as a palette: black-green canvas, olive surfaces,
+      // pale khaki for every word. The one accent is hunter's blaze
+      // orange — the colour worn to be seen against exactly this pattern —
+      // with dark text on the fill; the link is the light khaki-green.
+      background: "#0d120c", surface: "#121810", "surface-2": "#192015", elevated: "#1f2719",
+      foreground: "#e2e6cf", muted: "#192015", "muted-foreground": "#a9b394",
+      "subtle-foreground": "#8f9a7c", ring: "#e0731f", primary: "#e0731f",
+      "primary-hover": "#f0842e", "primary-foreground": "#14170d", accent: "#1f2719",
+      "accent-foreground": "#e2e6cf", destructive: "#f0705f", success: "#8cc063",
+      citation: "#bfd07a", selection: "rgba(224,115,31,0.30)",
+      // The blobs are khaki, not orange: the accent is a mark, the pattern is the hide.
+      backdrop: "#a89f6e",
+      border: "rgba(226,230,207,0.08)", "border-strong": "rgba(226,230,207,0.14)",
+      input: "rgba(226,230,207,0.10)", scrollbar: "rgba(226,230,207,0.12)",
+    },
+  },
+  "camo-ice": {
+    id: "camo-ice",
+    label: "Camo Ice",
+    dark: false,
+    shader: "camo", // arctic blobs, grey-blue over white
+    sigil: 4,
+    mood: "an arctic whiteout, grey-blue shadows on packed snow, breath on the goggles",
+    verbs: [
+      "Reading the drift",
+      "Waiting out the white",
+      "Checking the rope",
+      "Cutting steps",
+      "Holding the ridge",
+      "Melting snow for tea",
+    ],
+    vars: {
+      // Snow camo: near-white canvas with a blue cast, shadow-blue surfaces,
+      // slate for text. The accent is a steel blue deep enough to carry
+      // white; the link is a step darker still so it never reads as prose.
+      background: "#f5f8fb", surface: "#edf2f7", "surface-2": "#e2eaf1", elevated: "#ffffff",
+      foreground: "#182430", muted: "#e2eaf1", "muted-foreground": "#4d5f70",
+      "subtle-foreground": "#5b6d7d", ring: "#2b6a99", primary: "#2b6a99",
+      "primary-hover": "#245a83", "primary-foreground": "#ffffff", accent: "#e2eaf1",
+      "accent-foreground": "#182430", destructive: "#b3372f", success: "#2c7a57",
+      citation: "#1f5e8c", selection: "rgba(43,106,153,0.20)",
+      backdrop: "#8ea3b6",
+      border: "rgba(24,36,48,0.10)", "border-strong": "rgba(24,36,48,0.18)",
+      input: "rgba(24,36,48,0.13)", scrollbar: "rgba(24,36,48,0.22)",
+    },
+  },
+  "camo-sand": {
+    id: "camo-sand",
+    label: "Camo Sand",
+    dark: false,
+    shader: "camo", // desert blobs, brown over tan
+    sigil: 0,
+    mood: "a desert noon, tan canvas and hot brass, one line of shade under the truck",
+    verbs: [
+      "Reading the dunes",
+      "Waiting out the heat",
+      "Checking the canteen",
+      "Following the wadi",
+      "Holding the ridge",
+      "Shaking out the boots",
+    ],
+    vars: {
+      // Desert camo is a "medium mode" like Carrera: a true tan canvas,
+      // darker than the other light schemes, dark coffee text. The accent
+      // is terracotta; the link is a dark olive-brown a full step off the
+      // body text. Contrast holds AA on every surface (muted 6:1 on
+      // surface, subtle 4.3:1 on surface-2, citation 5.3:1).
+      background: "#d9c8a3", surface: "#d1be97", "surface-2": "#c6b189", elevated: "#e3d5b6",
+      foreground: "#251b0f", muted: "#c6b189", "muted-foreground": "#4a3a22",
+      "subtle-foreground": "#57462c", ring: "#9a3b12", primary: "#9a3b12",
+      "primary-hover": "#7f300e", "primary-foreground": "#ffffff", accent: "#c6b189",
+      "accent-foreground": "#251b0f", destructive: "#8a1f14", success: "#3f5a16",
+      citation: "#5a3f0a", selection: "rgba(154,59,18,0.22)",
+      backdrop: "#7d5f3d",
+      border: "rgba(37,27,15,0.14)", "border-strong": "rgba(37,27,15,0.24)",
+      input: "rgba(37,27,15,0.18)", scrollbar: "rgba(37,27,15,0.26)",
+    },
+  },
+  "camo-urban": {
+    id: "camo-urban",
+    label: "Camo Urban",
+    dark: true,
+    shader: "camo", // cement blobs, light grey over charcoal
+    sigil: 3,
+    mood: "wet concrete under sodium light, a caution stripe, the city as a grey pattern",
+    verbs: [
+      "Reading the skyline",
+      "Waiting for the light",
+      "Checking the map",
+      "Crossing the lot",
+      "Holding the corner",
+      "Counting the floors",
+    ],
+    vars: {
+      // Urban camo: charcoal canvas, cement surfaces, light grey text — a
+      // near-neutral scheme where the one colour is caution yellow, dark
+      // text on the fill. The link is a light steel blue, the only cool
+      // note, so it reads as a link and not as more concrete.
+      background: "#17191b", surface: "#1d2023", "surface-2": "#25292c", elevated: "#2c3034",
+      foreground: "#e4e7e9", muted: "#25292c", "muted-foreground": "#a5acb2",
+      "subtle-foreground": "#8b9399", ring: "#e2c21e", primary: "#e2c21e",
+      "primary-hover": "#f0d030", "primary-foreground": "#17191b", accent: "#2c3034",
+      "accent-foreground": "#e4e7e9", destructive: "#f2695e", success: "#7fc27a",
+      citation: "#9fc4e0", selection: "rgba(226,194,30,0.28)",
+      backdrop: "#a4a9ad",
+      border: "rgba(228,231,233,0.08)", "border-strong": "rgba(228,231,233,0.14)",
+      input: "rgba(228,231,233,0.10)", scrollbar: "rgba(228,231,233,0.12)",
     },
   },
 };

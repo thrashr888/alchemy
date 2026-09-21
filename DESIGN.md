@@ -43,7 +43,7 @@ Shader work is previewed, never shipped blind: `python3
 scripts/shader-harness.py --serve` renders every backdrop mode and tile field
 in one contact sheet (`.claude/skills/shaders/SKILL.md` has the loop).
 
-The app is themeable (33 schemes, dark and light) — never hardcode a hex in a
+The app is themeable (37 schemes, dark and light) — never hardcode a hex in a
 component; always go through the semantic tokens below.
 
 ## 2. Color Palette & Roles

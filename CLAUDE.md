@@ -96,10 +96,10 @@ Releases go through `scripts/release.sh` (see `RELEASE.md`). pnpm 11 quirks (`al
 
 ## Design system
 
-`DESIGN.md` is the source of truth for all visual/interaction decisions. Key rules: 31 themes (dark + light) driven by semantic CSS tokens in `src/index.css` and `src/lib/themes.ts` — **never hardcode a hex in a component**. Linear-inspired: hairline borders instead of tonal fills, color only when it means something, no colored left-border accents. Shared primitives live in `src/components/ui.tsx`.
+`DESIGN.md` is the source of truth for all visual/interaction decisions. Key rules: 37 themes (dark + light) driven by semantic CSS tokens in `src/index.css` and `src/lib/themes.ts` — **never hardcode a hex in a component**. Linear-inspired: hairline borders instead of tonal fills, color only when it means something, no colored left-border accents. Shared primitives live in `src/components/ui.tsx`.
 
 **Shaders.** The backdrop (`src/components/DitherBackground.tsx`, one GLSL ES 1.0
-program with 19 theme-driven modes) and the Activity tile washes
+program with 20 theme-driven modes) and the Activity tile washes
 (`src/components/settings/TileShader.tsx`) are WebGL1 on purpose — WKWebView
 everywhere, no WebGPU. Never edit a `FRAG` blind: shader quality is aesthetic,
 not just correct math, and one GLSL error kills the backdrop for every theme.

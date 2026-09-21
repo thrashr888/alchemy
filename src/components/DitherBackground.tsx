@@ -51,6 +51,7 @@ const SHADER_MODE: Record<ShaderVariant, number> = {
   phosphor: 16,
   blueprint: 17,
   crt: 18,
+  camo: 19,
 };
 export function DitherBackground({
   themeKey,
@@ -635,6 +636,26 @@ float crtField(vec2 uv, float glow){
   return clamp((0.06 + lit * scan + band) * vig * flicker + glow * 0.06, 0.0, 1.0);
 }
 
+// mode 19 -- camouflage: three layers of thresholded blobs, large patches
+// underneath, small ones on top, each layer a flat tone so the dither
+// quantizer renders them as the printed pattern rather than a gradient.
+// The theme's backdrop/primary picks the palette: khaki over black-green
+// reads woodland, grey-blue over white reads arctic, brown over tan reads
+// desert, cement over charcoal reads urban. The drift is glacial by design:
+// the shapes should change while nobody is looking, never crawl.
+float camoField(vec2 uv, float glow){
+  float t = u_time * 0.005;
+  vec2 p = uv * 2.2;
+  float a = fbm(p * 0.9 + vec2(t, -t * 0.7));
+  float b = fbm(p * 1.7 + vec2(-t * 0.8, t * 0.5) + 3.1);
+  float c = fbm(p * 3.1 + vec2(t * 0.4, t) + 7.7);
+  float L = 0.16;
+  L = mix(L, 0.42, step(0.50, a));
+  L = mix(L, 0.68, step(0.56, b));
+  L = mix(L, 0.92, step(0.61, c));
+  return clamp(L * (0.55 + 0.45 * glow), 0.0, 1.0);
+}
+
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
   float r = length(uv);
@@ -660,7 +681,8 @@ void main(){
   else if (u_mode < 15.5) L = steamField(uv, glow);
   else if (u_mode < 16.5) L = phosphorField(uv, glow);
   else if (u_mode < 17.5) L = blueprintField(uv, glow);
-  else                    L = crtField(uv, glow);
+  else if (u_mode < 18.5) L = crtField(uv, glow);
+  else                    L = camoField(uv, glow);
   float ring = smoothstep(0.006, 0.0, abs(r - 0.36)) * glow * 0.4;
   L = max(L, ring);
   float d = bayer4(gl_FragCoord.xy) - 0.5;

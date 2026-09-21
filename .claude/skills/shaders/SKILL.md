@@ -1,6 +1,6 @@
 ---
 name: shaders
-description: Use when editing, adding, or reviewing a WebGL shader mode in src/components/DitherBackground.tsx (the notebook backdrop, one GLSL program with 19 theme-driven modes) or src/components/settings/TileShader.tsx (Activity tile washes), or when a theme in src/lib/themes.ts gets a new `shader` variant. Renders the real GLSL in a browser harness so the change is seen before it ships.
+description: Use when editing, adding, or reviewing a WebGL shader mode in src/components/DitherBackground.tsx (the notebook backdrop, one GLSL program with 20 theme-driven modes) or src/components/settings/TileShader.tsx (Activity tile washes), or when a theme in src/lib/themes.ts gets a new `shader` variant. Renders the real GLSL in a browser harness so the change is seen before it ships.
 ---
 
 # Shaders — render before you ship
@@ -13,7 +13,7 @@ constant-bound loops, no `${}` in the literals (the harness refuses them).
 Two facts drive the workflow:
 
 - **One program serves every theme.** A GLSL error in the mode you're adding
-  kills the backdrop for all 27 themes. Compile is the first gate.
+  kills the backdrop for all 37 themes. Compile is the first gate.
 - **Aesthetic misses are confident.** Writing a "bokeh city lights" field
   from the words alone produced an abstract plexus. The only reliable check
   is the rendered pixels next to a reference image.

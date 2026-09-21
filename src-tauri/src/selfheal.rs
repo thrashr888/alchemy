@@ -1028,6 +1028,10 @@ pub(crate) const THEME_ROSTER: &[(&str, &str, bool)] = &[
     ("italia", "Italia", true),
     ("panigale", "Panigale", true),
     ("sepia", "Sepia", false),
+    ("camo-jungle", "Camo Jungle", true),
+    ("camo-ice", "Camo Ice", false),
+    ("camo-sand", "Camo Sand", false),
+    ("camo-urban", "Camo Urban", true),
 ];
 
 pub(crate) fn theme_roster_text() -> String {
