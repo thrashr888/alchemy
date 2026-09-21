@@ -155,8 +155,9 @@ fn is_badge_url(url: &str) -> bool {
         .unwrap_or(lower.as_str());
     let host = rest.split('/').next().unwrap_or(rest);
     let host = host.strip_prefix("www.").unwrap_or(host);
-    const BADGE_HOSTS: [&str; 7] = [
+    const BADGE_HOSTS: [&str; 8] = [
         "img.shields.io",
+        "camo.githubusercontent.com",
         "shields.io",
         "badge.fury.io",
         "badgen.net",
@@ -203,6 +204,91 @@ pub fn is_noise_link(url: &str, anchor: &str) -> bool {
     LICENSE_NAMES.contains(&label.as_str())
 }
 
+/// A URL that can only ever be a file a page decorates itself with, never a
+/// document worth reading. The extension is the obvious tell, but most of
+/// what reached the Grow pane had none (Reminders 7665c834): a logo service
+/// serving SVG from an `/api/svg/…` route, `http://www.w3.org/2000/svg` copied
+/// out of every inline `<svg>`, GitHub's camo proxy in front of README
+/// badges, a store icon on `lh3.googleusercontent.com`. So the host is read
+/// too: a namespace, an image CDN, or a subdomain whose name says "assets".
+/// A document extension wins over the host rule — `static.x.org/report.pdf`
+/// is a report.
+fn is_asset_url(base: &str) -> bool {
+    let lower = base.to_ascii_lowercase();
+    let path_for_ext = lower.trim_end_matches('/');
+    const SKIP_EXT: [&str; 20] = [
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif", ".bmp", ".tif", ".tiff",
+        ".css", ".js", ".mjs", ".map", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ];
+    if SKIP_EXT.iter().any(|ext| path_for_ext.ends_with(ext)) {
+        return true;
+    }
+    const DOC_EXT: [&str; 6] = [".pdf", ".html", ".htm", ".md", ".txt", ".xml"];
+    if DOC_EXT.iter().any(|ext| path_for_ext.ends_with(ext)) {
+        return false;
+    }
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(lower.as_str());
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    // `http://www.w3.org/2000/svg`, `/1999/xhtml`, `/1999/xlink`: XML
+    // namespaces, which are identifiers that happen to look like links.
+    // The specs live under `/TR/`, and those stay.
+    if host == "w3.org"
+        && path
+            .split('/')
+            .next()
+            .is_some_and(|y| y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return true;
+    }
+    // Hosts that serve nothing a person reads.
+    const ASSET_HOSTS: [&str; 9] = [
+        "camo.githubusercontent.com",
+        "avatars.githubusercontent.com",
+        "user-images.githubusercontent.com",
+        "private-user-images.githubusercontent.com",
+        "i.imgur.com",
+        "images.unsplash.com",
+        "fonts.googleapis.com",
+        "cdnjs.cloudflare.com",
+        "cdn.jsdelivr.net",
+    ];
+    const ASSET_DOMAINS: [&str; 3] = ["googleusercontent.com", "githubassets.com", "gstatic.com"];
+    if ASSET_HOSTS.contains(&host)
+        || ASSET_DOMAINS
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+    {
+        return true;
+    }
+    // `logos.`, `img.`, `cdn.`: a subdomain named for what it serves.
+    const ASSET_LABELS: [&str; 20] = [
+        "img", "image", "images", "static", "assets", "cdn", "media", "logo", "logos", "icon",
+        "icons", "avatar", "avatars", "badge", "badges", "thumb", "thumbs", "pics", "photos",
+        "fonts",
+    ];
+    host.split_once('.')
+        .is_some_and(|(label, rest)| rest.contains('.') && ASSET_LABELS.contains(&label))
+}
+
+/// RFC 2606's reserved names: `example.com` in a code sample is a
+/// placeholder, not a page, however many samples mention it.
+fn is_placeholder_host(base: &str) -> bool {
+    let lower = base.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(lower.as_str());
+    let host = rest.split('/').next().unwrap_or(rest);
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    ["example.com", "example.net", "example.org"]
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
 /// Strip fragments and tracking params; drop obvious non-documents. None
 /// means "not worth proposing" (media files, localhost, too short).
 fn normalize_url(raw: &str) -> Option<String> {
@@ -212,11 +298,7 @@ fn normalize_url(raw: &str) -> Option<String> {
     }
     // Keep the query string minus tracking params.
     let (base, query) = no_frag.split_once('?').unwrap_or((no_frag, ""));
-    const SKIP_EXT: [&str; 8] = [
-        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js",
-    ];
-    let path = base.to_lowercase();
-    if SKIP_EXT.iter().any(|ext| path.ends_with(ext)) {
+    if is_asset_url(base) || is_placeholder_host(base) {
         return None;
     }
     let kept: Vec<&str> = query
@@ -1500,6 +1582,54 @@ mod tests {
             Some("https://a.test/page?x=1".into())
         );
         assert_eq!(normalize_url("https://a.test/logo.svg"), None);
+    }
+
+    /// What Grow was proposing in the Curated Links notebook (Reminders
+    /// 7665c834): SVG and other page furniture with no extension to catch.
+    #[test]
+    fn normalize_drops_assets_without_an_extension() {
+        for url in [
+            "https://logos.computesdk.com/api/svg/vercel/normalized/logomark-dark?v=f9df7d02b5",
+            "http://www.w3.org/2000/svg",
+            "http://www.w3.org/1999/xlink",
+            "https://camo.githubusercontent.com/0720ca5973f9e4b8/68747470733a2f2f696d67",
+            "https://lh3.googleusercontent.com/z1cCzkuh5WB0rwPsJLB8AMNCoYzN0=s60",
+            "https://avatars.githubusercontent.com/u/123?v=4",
+            "https://img.example.test/hero",
+            "https://a.test/logo.SVG/",
+            "https://a.test/hero.webp",
+            "https://a.test/site.css?v=3",
+            "https://example.com/anything-at-all",
+            "https://api.example.com/v1",
+        ] {
+            assert_eq!(normalize_url(url), None, "{url}");
+        }
+        // Pages that talk about the format, and documents on asset hosts, stay.
+        for url in [
+            "https://www.w3.org/TR/SVG2/painting.html",
+            "https://developer.mozilla.org/en-US/docs/Web/SVG/Element/circle",
+            "https://static.a.test/reports/annual.pdf",
+            "https://raw.githubusercontent.com/o/r/main/README.md",
+            "https://a.test/blog/why-we-chose-svg",
+            "https://a.test/page?utm_source=tw&x=1#sec",
+        ] {
+            assert!(normalize_url(url).is_some(), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_camo_image_marks_the_link_behind_it_as_a_badge() {
+        let links = extract_links(
+            "[![Rust](https://camo.githubusercontent.com/abc/def)](https://www.rust-lang.org) \
+             and [the book](https://doc.rust-lang.org/book)",
+        );
+        assert_eq!(
+            links,
+            vec![(
+                "https://doc.rust-lang.org/book".to_string(),
+                "the book".to_string()
+            )]
+        );
     }
 
     #[test]

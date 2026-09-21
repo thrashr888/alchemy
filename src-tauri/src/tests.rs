@@ -1920,6 +1920,7 @@ fn okf_the_root_watcher_never_duplicates_a_notebook() {
             .map(|(id, t)| (id.to_string(), t.to_string()))
             .collect(),
         bound: bound.iter().map(|(id, _)| id.to_string()).collect(),
+        lost: Default::default(),
         folders: bound.iter().map(|(_, p)| same_folder(p)).collect(),
     };
 
@@ -5039,15 +5040,15 @@ async fn grow_sections_union_matches_aggregator() {
             &nb,
             "s1",
             "Field notes",
-            "https://example.com/notes",
-            "See [the survey](https://example.com/survey) and https://example.com/appendix.",
+            "https://example.test/notes",
+            "See [the survey](https://example.test/survey) and https://example.test/appendix.",
         ),
         grow_source(
             &nb,
             "s2",
             "Reading list",
-            "https://example.com/reading",
-            "Also [the survey](https://example.com/survey), worth a second look.",
+            "https://example.test/reading",
+            "Also [the survey](https://example.test/survey), worth a second look.",
         ),
     ])
     .await
@@ -5058,7 +5059,7 @@ async fn grow_sections_union_matches_aggregator() {
     db.kv_set(
         &format!("feed.discovered.{nb}"),
         &format!(
-            r#"{{"https://example.com/feed.xml":{{"source_id":"s1","source_title":"Field notes","seen_at":{now},"checked_at":{now},"entries":7}}}}"#,
+            r#"{{"https://example.test/feed.xml":{{"source_id":"s1","source_title":"Field notes","seen_at":{now},"checked_at":{now},"entries":7}}}}"#,
             now = now()
         ),
     )
@@ -5077,11 +5078,11 @@ async fn grow_sections_union_matches_aggregator() {
     assert!(
         feeds
             .iter()
-            .any(|p| p.url == "https://example.com/feed.xml"),
+            .any(|p| p.url == "https://example.test/feed.xml"),
         "the advertised feed is proposed"
     );
     assert!(
-        links.iter().any(|p| p.url == "https://example.com/survey"),
+        links.iter().any(|p| p.url == "https://example.test/survey"),
         "the twice-cited link is proposed"
     );
 

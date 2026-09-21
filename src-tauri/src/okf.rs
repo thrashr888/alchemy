@@ -3281,6 +3281,9 @@ pub(crate) struct KnownNotebooks {
     pub titles: HashMap<String, String>,
     /// Notebooks that already keep themselves on disk somewhere.
     pub bound: std::collections::HashSet<String>,
+    /// Bound notebooks whose folder is gone: the binding is waiting for the
+    /// bundle to turn up somewhere.
+    pub lost: std::collections::HashSet<String>,
     /// The bundle folders those bindings point at, normalized.
     pub folders: std::collections::HashSet<PathBuf>,
 }
@@ -3293,6 +3296,11 @@ fn known_notebooks(data_dir: &Path, notebooks: &[Notebook]) -> Result<KnownNoteb
             .map(|n| (n.id.clone(), n.title.clone()))
             .collect(),
         bound: bindings.keys().cloned().collect(),
+        lost: bindings
+            .iter()
+            .filter(|(_, b)| b.lost)
+            .map(|(id, _)| id.clone())
+            .collect(),
         folders: bindings.values().map(|b| same_folder(&b.path)).collect(),
     })
 }
@@ -3467,9 +3475,20 @@ pub(crate) fn decide_bundle(
         return FoundBundle::Skip("it is one of the app's own starter notebooks".into());
     }
     match claimed_id {
-        Some(id) if known.bound.contains(id) => FoundBundle::Skip(format!(
-            "notebook {id} already keeps itself on disk somewhere else"
-        )),
+        // A bound notebook whose folder is gone is a notebook that moved,
+        // and a bundle claiming its id is where it went — the other Mac
+        // shared it, so the container copy left and this one arrived
+        // (Reminders 23f270a2). The binding follows rather than refusing.
+        Some(id) if known.bound.contains(id) && !known.lost.contains(id) => {
+            let name = known
+                .titles
+                .get(id)
+                .map(|t| format!("“{t}”"))
+                .unwrap_or_else(|| format!("notebook {id}"));
+            FoundBundle::Skip(format!(
+                "{name} is already open here and keeps itself on disk somewhere else"
+            ))
+        }
         Some(id) if known.titles.contains_key(id) => FoundBundle::Rebind(id.to_string()),
         _ => FoundBundle::Import,
     }
@@ -3560,11 +3579,11 @@ async fn open_found_bundles_inner(
     let mut opened = Vec::new();
     for folder in found {
         match open_found_folder(state, &folder).await {
-            Ok(Some(name)) => {
+            Ok(FoundOutcome::Opened(name)) => {
                 crate::note!("okf: opened {name} from the Notebooks folder");
                 opened.push(name);
             }
-            Ok(None) => {}
+            Ok(FoundOutcome::Left(_)) => {}
             Err(err) => crate::diagnostics::error(
                 "okf",
                 format!("could not open {}: {err}", folder.display()),
@@ -3585,11 +3604,19 @@ async fn open_found_bundles_inner(
     Ok(opened.len())
 }
 
+/// What became of one found bundle: opened, under the name the toast and
+/// the log use, or left alone with the reason. The offer's Open shows the
+/// reason to the person — "see the log" was the whole message before.
+#[derive(Debug, PartialEq)]
+pub(crate) enum FoundOutcome {
+    Opened(String),
+    Left(String),
+}
+
 /// Open one found bundle: rebind when its `alchemy.id` is a notebook this
-/// machine has, import when it is new, skip when the decision says so.
-/// `Ok(Some(name))` when it opened; `Ok(None)` when it was left alone.
+/// machine has, import when it is new, leave it when the decision says so.
 /// Shared by the Notebooks-folder pass and the iCloud Drive offer.
-async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<String>, String> {
+async fn open_found_folder(state: &AppState, folder: &Path) -> Result<FoundOutcome, String> {
     let data_dir = app_data_dir(state);
     let path = folder.to_string_lossy().to_string();
     // Re-read the bindings for every folder: a bind may have landed since
@@ -3600,7 +3627,10 @@ async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<Str
     let index = std::fs::read_to_string(folder.join("index.md")).unwrap_or_default();
     let doc = parse_okf_doc(&index);
     if bindings::discovery_blocked(&data_dir, doc.nested("alchemy", "id").as_deref(), folder)? {
-        return Ok(None);
+        crate::note!("okf: left {path} alone: it was unbound from its notebook earlier");
+        return Ok(FoundOutcome::Left(
+            "that folder was unbound from its notebook earlier, so it is not picked up again on its own".into(),
+        ));
     }
     let decision = if discovery::has_reservation(&data_dir, folder)? {
         FoundBundle::Import
@@ -3615,7 +3645,7 @@ async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<Str
     let outcome = match decision {
         FoundBundle::Skip(why) => {
             crate::note!("okf: left {path} alone: {why}");
-            return Ok(None);
+            return Ok(FoundOutcome::Left(why));
         }
         // The same notebook by another route — the other Mac's copy, a
         // share, a folder moved — rebinds rather than duplicating.
@@ -3626,10 +3656,13 @@ async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<Str
                 .map(|binding| binding.id.clone())
                 .unwrap_or_else(new_id);
             let manifest_at = manifest_path(&data_dir, &binding_id);
-            let claims = if existing.is_some() {
-                load_manifest_checked(&manifest_at).map(|_| ())
-            } else {
-                adopt_imported_files(state, &id, folder, &manifest_at).await
+            let claims = match &existing {
+                // A binding that lost its folder keeps its manifest — every
+                // hash the reconciler has — restatted for the files' new
+                // clocks, exactly as a move within the Notebooks folder does.
+                Some(binding) if binding.lost => restat_manifest(&manifest_at, folder),
+                Some(_) => load_manifest_checked(&manifest_at).map(|_| ()),
+                None => adopt_imported_files(state, &id, folder, &manifest_at).await,
             };
             if let Err(error) = claims {
                 return Err(format!("could not bind {path}: {error}"));
@@ -3651,7 +3684,9 @@ async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<Str
                 Ok(())
             })?;
             if published.is_none() {
-                return Ok(None);
+                return Ok(FoundOutcome::Left(
+                    "its binding changed while it was being opened".into(),
+                ));
             }
             write_bound(state, &id).await.map(|_| id)
         }
@@ -3661,7 +3696,7 @@ async fn open_found_folder(state: &AppState, folder: &Path) -> Result<Option<Str
         },
     };
     outcome.map(|_| {
-        Some(
+        FoundOutcome::Opened(
             folder
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -3790,6 +3825,7 @@ pub(crate) fn shared_offers_in(
     root: &Path,
     notebooks_dir: &Path,
     bound: &std::collections::HashSet<String>,
+    open_here: &std::collections::HashSet<String>,
     dismissed: &std::collections::HashSet<String>,
 ) -> Vec<SharedBundleOffer> {
     // An unset Notebooks folder is not "every folder". `starts_with("")` is
@@ -3837,6 +3873,10 @@ pub(crate) fn shared_offers_in(
             }
         })
         .collect();
+    // A notebook this Mac has open is not an offer, whatever iCloud Drive
+    // holds under its id: opening it would only be refused. A binding
+    // whose folder is gone is the one case the copy out there is wanted.
+    offers.retain(|o| o.notebook_id.is_empty() || !open_here.contains(&o.notebook_id));
     offers.sort_by(|a, b| a.path.cmp(&b.path));
     offers
 }
@@ -3872,16 +3912,20 @@ pub(crate) async fn shared_bundle_offers(state: &AppState) -> Vec<SharedBundleOf
         return Vec::new();
     };
     let data_dir = app_data_dir(state);
-    let bound: std::collections::HashSet<String> = load_bindings_checked(&data_dir)
-        .unwrap_or_default()
-        .values()
-        .map(|b| b.path.clone())
+    let bindings = load_bindings_checked(&data_dir).unwrap_or_default();
+    let bound: std::collections::HashSet<String> =
+        bindings.values().map(|b| b.path.clone()).collect();
+    let open_here: std::collections::HashSet<String> = bindings
+        .iter()
+        .filter(|(_, b)| !b.lost)
+        .map(|(id, _)| id.clone())
         .collect();
     let (notebooks_dir, _) = notebooks_home(state).await;
     shared_offers_in(
         &root,
         &notebooks_dir,
         &bound,
+        &open_here,
         &load_shared_dismissals(&data_dir),
     )
 }
@@ -3909,9 +3953,10 @@ pub(crate) async fn open_shared_bundle(
     if crate::commands::find_bundle_root(folder.clone()).as_deref() != Ok(folder.as_path()) {
         return Err("That folder isn't an Alchemy notebook".into());
     }
-    let name = open_found_folder(state, &folder)
-        .await?
-        .ok_or_else(|| "That notebook couldn't be opened here — see the log".to_string())?;
+    let name = match open_found_folder(state, &folder).await? {
+        FoundOutcome::Opened(name) => name,
+        FoundOutcome::Left(why) => return Err(format!("That notebook wasn't opened: {why}.")),
+    };
     crate::fswatch::rearm(app).await;
     let _ = app.emit(
         "okf://opened",
@@ -7611,7 +7656,13 @@ mod shared_notebook_tests {
             [root.join("Bound").to_string_lossy().to_string()].into();
         let dismissed: std::collections::HashSet<String> =
             [root.join("Dismissed").to_string_lossy().to_string()].into();
-        let offers = shared_offers_in(&root, &root.join("Notebooks"), &bound, &dismissed);
+        let offers = shared_offers_in(
+            &root,
+            &root.join("Notebooks"),
+            &bound,
+            &Default::default(),
+            &dismissed,
+        );
         let titles: Vec<&str> = offers.iter().map(|o| o.title.as_str()).collect();
         // The Notebooks folder and what's inside it are the other pass's;
         // a bound bundle is open; a dismissed one was declined; a plain
@@ -7643,7 +7694,13 @@ mod shared_notebook_tests {
         let second = bundle(root.join("Shared/Trip"), "Trip", "nb-2");
         std::fs::create_dir_all(root.join("Notebooks")).unwrap();
         let none = std::collections::HashSet::new();
-        let offers = shared_offers_in(&root, &root.join("Notebooks"), &none, &none);
+        let offers = shared_offers_in(
+            &root,
+            &root.join("Notebooks"),
+            &none,
+            &Default::default(),
+            &none,
+        );
         let mut titles: Vec<&str> = offers.iter().map(|o| o.title.as_str()).collect();
         titles.sort();
         assert_eq!(titles, vec!["Household", "Trip"], "{offers:?}");
@@ -7651,7 +7708,13 @@ mod shared_notebook_tests {
         // Open the first: binding it must not take the second down with it.
         let bound: std::collections::HashSet<String> =
             [same_folder(&first).to_string_lossy().to_string()].into();
-        let after = shared_offers_in(&root, &root.join("Notebooks"), &bound, &none);
+        let after = shared_offers_in(
+            &root,
+            &root.join("Notebooks"),
+            &bound,
+            &Default::default(),
+            &none,
+        );
         assert_eq!(
             after.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
             vec!["Trip"],
@@ -7662,11 +7725,25 @@ mod shared_notebook_tests {
         let dismissed: std::collections::HashSet<String> =
             [same_folder(&second).to_string_lossy().to_string()].into();
         assert!(
-            shared_offers_in(&root, &root.join("Notebooks"), &bound, &dismissed).is_empty(),
+            shared_offers_in(
+                &root,
+                &root.join("Notebooks"),
+                &bound,
+                &Default::default(),
+                &dismissed
+            )
+            .is_empty(),
             "one dismissal, one folder"
         );
         assert_eq!(
-            shared_offers_in(&root, &root.join("Notebooks"), &none, &dismissed).len(),
+            shared_offers_in(
+                &root,
+                &root.join("Notebooks"),
+                &none,
+                &Default::default(),
+                &dismissed
+            )
+            .len(),
             1,
             "dismissing the second must not swallow the first"
         );
@@ -7684,7 +7761,13 @@ mod shared_notebook_tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join(".index.md.icloud"), b"").unwrap();
         let none = std::collections::HashSet::new();
-        let offers = shared_offers_in(&root, &root.join("Notebooks"), &none, &none);
+        let offers = shared_offers_in(
+            &root,
+            &root.join("Notebooks"),
+            &none,
+            &Default::default(),
+            &none,
+        );
         assert_eq!(
             offers.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
             vec!["Recipes"],
@@ -7696,6 +7779,51 @@ mod shared_notebook_tests {
     /// A Mac that never answered "keep notebooks on disk" has no Notebooks
     /// folder, and `Path::new("x").starts_with("")` is true — which filtered
     /// every offer away.
+    /// The second Mac of one Apple ID (Reminders 23f270a2). A notebook that
+    /// is open here is not offered again from iCloud Drive: opening it was
+    /// only ever refused, as "couldn't be opened here — see the log". And
+    /// once the other Mac has shared it — the container copy gone, the
+    /// binding lost — the bundle that arrived is offered, and rebinds.
+    #[test]
+    fn a_notebook_open_here_is_not_offered_but_a_lost_one_follows() {
+        let dir = std::env::temp_dir().join(format!("shared-open-{}", new_id()));
+        let root = dir.join("CloudDocs");
+        let folder = root.join(SHARED_FOLDER).join("Kitchen");
+        std::fs::create_dir_all(folder.join("sources")).unwrap();
+        std::fs::write(
+            folder.join("index.md"),
+            "---\ntitle: \"Kitchen\"\nalchemy:\n  id: \"nb-1\"\n---\n",
+        )
+        .unwrap();
+        let none = std::collections::HashSet::new();
+        let open_here: std::collections::HashSet<String> = ["nb-1".to_string()].into();
+        assert!(
+            shared_offers_in(&root, &root.join("Notebooks"), &none, &open_here, &none).is_empty(),
+            "open here already"
+        );
+        assert_eq!(
+            shared_offers_in(&root, &root.join("Notebooks"), &none, &none, &none).len(),
+            1,
+            "the binding lost its folder, so the copy out there is the notebook"
+        );
+        let mut known = KnownNotebooks {
+            titles: [("nb-1".to_string(), "Kitchen".to_string())].into(),
+            bound: ["nb-1".to_string()].into(),
+            lost: std::collections::HashSet::new(),
+            folders: std::collections::HashSet::new(),
+        };
+        assert!(matches!(
+            decide_bundle(&folder, Some("nb-1"), Some("Kitchen"), &known),
+            FoundBundle::Skip(_)
+        ));
+        known.lost.insert("nb-1".to_string());
+        assert_eq!(
+            decide_bundle(&folder, Some("nb-1"), Some("Kitchen"), &known),
+            FoundBundle::Rebind("nb-1".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_unset_notebooks_folder_does_not_swallow_every_offer() {
         let dir = std::env::temp_dir().join(format!("shared-unset-{}", new_id()));
@@ -7707,7 +7835,7 @@ mod shared_notebook_tests {
         )
         .unwrap();
         let none = std::collections::HashSet::new();
-        let offers = shared_offers_in(&root, Path::new(""), &none, &none);
+        let offers = shared_offers_in(&root, Path::new(""), &none, &Default::default(), &none);
         assert_eq!(offers.len(), 1, "{offers:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -7789,7 +7917,13 @@ mod shared_notebook_tests {
         // The sharing Mac has it bound; its other Mac does not, and the
         // folder sits one level deeper than a share somebody sent us.
         let bound = std::collections::HashSet::new();
-        let offers = shared_offers_in(&root, &root.join("Notebooks"), &bound, &bound);
+        let offers = shared_offers_in(
+            &root,
+            &root.join("Notebooks"),
+            &bound,
+            &Default::default(),
+            &bound,
+        );
         assert_eq!(
             offers.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(),
             vec!["Household"],
@@ -7797,7 +7931,14 @@ mod shared_notebook_tests {
         );
         let mine: std::collections::HashSet<String> = [offers[0].path.clone()].into();
         assert!(
-            shared_offers_in(&root, &root.join("Notebooks"), &mine, &bound).is_empty(),
+            shared_offers_in(
+                &root,
+                &root.join("Notebooks"),
+                &mine,
+                &Default::default(),
+                &bound
+            )
+            .is_empty(),
             "the Mac that shared it has it bound already"
         );
         let _ = std::fs::remove_dir_all(&dir);
