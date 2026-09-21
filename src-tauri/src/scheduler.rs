@@ -29,7 +29,11 @@ static PAUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
 /// stay resident for days, where Lance versions otherwise pile up between
 /// launches.
 static LAST_MAINTAIN: AtomicI64 = AtomicI64::new(0);
-const MAINTAIN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
+/// Hourly: a resident app that writes steadily leaves the sources table
+/// hundreds of fragments deep between passes (one per row written), and
+/// every filtered scan opens each of them. Compaction is a no-op when
+/// there is nothing to fold, so the pass is cheap when the app is quiet.
+const MAINTAIN_EVERY_MS: i64 = 60 * 60 * 1000;
 
 /// Epoch ms of the last tick that walked closed notebooks' local folders.
 /// Between those, only open notebooks' folders walk each minute — FSEvents
@@ -589,7 +593,7 @@ async fn run_okf_export(app: &AppHandle, state: &AppState) {
 /// longer than the interval delays the next tick rather than stacking.
 async fn run_pass(app: &AppHandle) {
     let state = app.state::<AppState>();
-    // Database housekeeping every few hours, ahead of the background gate on
+    // Database housekeeping every hour, ahead of the background gate on
     // purpose: pruning dead Lance versions is disk hygiene, not AI spend,
     // and it must run even when background intelligence is switched off.
     if now_ms() - LAST_MAINTAIN.load(Ordering::Relaxed) >= MAINTAIN_EVERY_MS {
