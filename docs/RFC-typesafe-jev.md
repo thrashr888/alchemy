@@ -27,12 +27,12 @@ probability), **Choice** (one of N → distribution + confidence), **Score**
 answers. No generated text, no parsing, calibrated probabilities, one HTTP
 round trip for any number of questions over the same state.
 
-This RFC proposes a **`Judge` role** with a typed question API in
-`inference/judge.rs`, backed by Jev when a key is present and by a local
-shim (the existing Small-role idiom, centralized) when it is not. Call
-sites migrate to the typed API and their parsers disappear. Jev is a
-cloud service, so the design is explicit about what leaves the machine,
-when, and how the user sees it. Nothing a notebook does may depend on it.
+This RFC adds a typed question API in `inference/judge.rs`, backed by
+Jev when a key is present and absent otherwise: a site asks the judge
+first and keeps its Small-role path when there is none. Jev is a cloud
+service, so the design is explicit about what leaves the machine, when,
+and how the user sees it. Nothing a notebook does may depend on it, and
+nothing new depends on any local engine either.
 
 ## What Jev is, as measured
 
@@ -89,21 +89,15 @@ to either.
 
 ## Design
 
-### The role
+### The module
+
+The judge is not a chat role and not a `ChatEngine` variant: the request
+shape is different (state plus questions, no messages, no stream) and a
+preference ladder would be wrong. It lives beside the router as its own
+thing, resolved at the moment of use.
 
 ```rust
-pub enum Role { Chat, Agent, Generate, Small, Embed, Vision, Judge }
-```
-
-`Judge` is not a chat role. It has its own closed enum beside `ChatEngine`
-and `Embedder`, for the same reason `Embedder` has one: the request shape
-is different and a preference ladder would be wrong.
-
-```rust
-pub enum JudgeEngine {
-    Jev(JevClient),      // HTTP, typed
-    Local(ChatEngine),   // the Small idiom, centralized
-}
+pub fn available() -> Option<Judge>;   // Some only when a credential resolves
 
 pub enum Question {
     Noul   { instructions: String, criteria: Option<YesNo> },
@@ -117,9 +111,9 @@ pub enum Answer {
     Score  { score: f64, probabilities: BTreeMap<u8, f64>, confidence: f64 },
 }
 
-impl JudgeEngine {
-    pub async fn ask(&self, state: serde_json::Value,
-                     questions: BTreeMap<String, Question>) -> Result<Answers>;
+impl Judge {
+    pub async fn ask(&self, site: &str, state: serde_json::Value,
+                     questions: &[(&str, Question)]) -> Result<Answers>;
 }
 ```
 
@@ -128,31 +122,29 @@ probabilities sum to one, score matches its distribution), the way clue
 does. A malformed response fails the whole call; nothing is partially
 applied.
 
-### The local judge
+### Without a key
 
-`JudgeEngine::Local` is not a text-parse fallback. Ollama has had two
-features since late 2025 that Alchemy never sends: `format` with a JSON
-schema (grammar-constrained decoding, so an enum answer is guaranteed
-valid) and `logprobs` with `top_logprobs` (v0.12.11 on the llama.cpp
-runner, v0.21.1 on the MLX runner; this machine runs 0.34.1). Together
-they turn any chat model into a typed judge:
+There is no local judge engine, and no new requirement. When no credential
+resolves, `judge::available()` is `None` and every site runs the code it
+runs today: the Small role, whatever engine answers it (Foundation Models,
+Ollama, an agent CLI, a gateway), with the site's own strict parse. A
+Jev-backed site is a branch in front of that code, never a replacement
+for it. This is the sovereignty invariant ("access to a notebook must
+never depend on a particular model, provider, or agent") applied twice:
+nothing depends on Jev, and nothing new depends on Ollama either.
 
-- a **Choice** is a one-field schema with an `enum`; the distribution is
-  the top-logprobs at the value token, mapped back onto the options;
-- a **Noul** is the same with `yes | no`;
-- a **Score** is an enum of level indices.
-
-One question is one call through `Ai::helpers()` with its 10 s ceiling;
-batched questions run serially. The comment at `router.rs:118` ("small
-models do not parse JSON reliably") described unconstrained decoding.
-With the grammar on, there is nothing to parse. This is also why the
-migration deletes parsers instead of forking each site: the local path
-and the Jev path return the same `Answer`.
-
-The local judge exists so that **every site works without a key**, which
-is the sovereignty invariant ("access to a notebook must never depend on
-a particular model, provider, or agent"). It is also the only judge on a
-notebook marked local-only, if that flag ships.
+A local typed judge is still possible, and the measurements below say
+what it would take. Ollama has had two features since late 2025 that
+Alchemy never sends: `format` with a JSON schema (grammar-constrained
+decoding, so an enum answer is guaranteed valid; v0.12.11 on the
+llama.cpp runner, v0.21.1 on the MLX runner) and `logprobs` with
+`top_logprobs`, whose alternatives at the value token give a distribution
+over the options. Together they turn any chat model into a Choice/Noul
+judge and would retire the parsers at the Ollama sites. But that is an
+Ollama-only capability; Foundation Models has guided generation without
+probabilities, gateways vary, agent CLIs have neither. So it is an
+optimization for one engine family, not the fallback, and it waits until
+a site wants it.
 
 ### Local judges, measured
 
@@ -209,9 +201,10 @@ What the table says:
   the `ort` runtime Alchemy already ships for the reranker is real work.
   A separate RFC if the registry wants it.
 
-Default for the local judge, given the table: the configured `Small`
-model when it is 27B-class, else the chat model, never Gemma for any
-site that reads confidence. Jev when a key is present.
+What the table says for defaults: Jev when a key is present. If a local
+typed judge is ever built on Ollama's constrained decoding, only a
+27B-class model matches Jev on these batteries, and Gemma must never
+answer a site that reads confidence.
 
 ### Credentials and discovery
 
@@ -362,10 +355,14 @@ Not replacements; things there was no cheap way to do before.
 
 ## Phases
 
-1. `inference/judge.rs`: `Question`, `Answer`, `JevClient`, the local
-   shim, credential resolution, the Activity tile, the trace line. Port
-   Second Look. Run `judged_calibrate` both ways.
-2. Port tool routing; run `eval_router` for accuracy and latency.
+1. `inference/judge.rs`: `Question`, `Answer`, the Jev client, credential
+   resolution, the trace line. Second Look judged by Jev with confidence
+   bands; a typed gate in front of both tool routers that settles
+   "this is just a question" without the JSON router. *(Built
+   2026-09-21; the Activity tile and `judged_calibrate` comparison are
+   still open.)*
+2. Full tool routing through the judge (action plus speculative target
+   Choices); run `eval_router` for accuracy and latency.
 3. Port answer verification; wire `ALCHEMY_JEV_EVALS=1` into the judged
    harness.
 4. Port notebook suggestion, card triage, global fan-out gating.
