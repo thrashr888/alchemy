@@ -7660,6 +7660,117 @@ const NOTEBOOK_STYLE_SCOPE: &str =
     "THIS notebook's answer voice/length (\"use the Google style here\", \
      \"shorter answers in this notebook\").";
 
+#[derive(Clone, Copy)]
+enum RouteSurface {
+    Notebook,
+    Home,
+}
+
+/// Below this confidence the typed judge's "chat" is not trusted and the
+/// JSON router runs as before; a wrong "chat" would silently drop a command.
+const ROUTE_CHAT_CONFIDENCE: f64 = 0.7;
+
+/// The typed routing gate (docs/RFC-typesafe-jev.md §"Tool routing"): one
+/// Choice over the surface's action vocabulary. Answers `true` only when
+/// the judge is confident the message is an ordinary question — the case
+/// the lexical gate lets through most often and the one the JSON router
+/// spends the longest deciding. Every other answer, and every failure,
+/// defers to the router, which still owns actions and their arguments.
+async fn typed_route_says_chat(surface: RouteSurface, content: &str, titles: &[String]) -> bool {
+    use crate::inference::judge::Question;
+    let Some(jev) = crate::inference::judge::available() else {
+        return false;
+    };
+    let shared: [(&str, &str); 3] = [
+        (
+            "night_shift",
+            "report the Night Shift's status or pause/resume it",
+        ),
+        (
+            "settings",
+            "show, test, or change AI providers, models, the answer style, the app theme, \
+             the user's own name or profile, connect an agent client, or guided setup",
+        ),
+        (
+            "chat",
+            "not a command: an ordinary question or request for an answer, including \
+             questions about what the sources or notebooks say",
+        ),
+    ];
+    let (label, own): (&str, Vec<(&str, &str)>) = match surface {
+        RouteSurface::Notebook => (
+            "current_sources",
+            vec![
+                ("add_urls", "add the URLs in the message as sources"),
+                (
+                    "add_text",
+                    "save text pasted in the message as a new source",
+                ),
+                (
+                    "generate",
+                    "produce a document from the sources now: a report, summary, FAQ, timeline, \
+                     infographic, or diagram",
+                ),
+                ("remove_source", "remove one of the current sources by name"),
+                ("refresh_sources", "re-fetch URL sources"),
+                (
+                    "save_note",
+                    "save the assistant's previous answer as a note",
+                ),
+                (
+                    "create_template",
+                    "save a reusable custom generator for later",
+                ),
+                ("schedule_report", "create a recurring report on a cadence"),
+                (
+                    "commission",
+                    "hand one job to the overnight Night Shift instead of running it now",
+                ),
+                ("update_report", "change an existing recurring report"),
+            ],
+        ),
+        RouteSurface::Home => (
+            "notebooks",
+            vec![
+                ("add_urls", "add the URLs in the message as sources"),
+                (
+                    "add_text",
+                    "save text pasted in the message as a new source",
+                ),
+                (
+                    "save_note",
+                    "save the assistant's previous answer as a note",
+                ),
+                ("open_notebook", "open one of the listed notebooks"),
+                ("rename_chat", "rename this conversation"),
+                ("delete_chat", "delete this conversation"),
+            ],
+        ),
+    };
+    let options = own.into_iter().chain(shared);
+    let question = Question::choice(
+        format!(
+            "Which tool does `user_message` ask the research-notebook app to run? \
+             `{label}` lists what exists. Choose chat for an ordinary question, including a \
+             question about what the {label} contain, and whenever the message is not a \
+             command."
+        ),
+        options,
+    );
+    let state = serde_json::json!({ "user_message": content, label: titles });
+    match jev.ask("route", state, &[("action", question)]).await {
+        Ok(answers) => answers
+            .choice("action")
+            .is_some_and(|(choice, confidence, _)| {
+                choice == "chat" && confidence >= ROUTE_CHAT_CONFIDENCE
+            }),
+        Err(err) => {
+            crate::note!("typed route gate: {err:#}");
+            false
+        }
+    }
+}
+
 /// Splice the shared tool lines into one router's prompt.
 fn with_shared_tools(template: &str, style_scope: &str) -> String {
     template.replace(
@@ -8647,6 +8758,13 @@ async fn try_tool_route(
     );
     // Fetched once: the router prompt and the remove/refresh arms all use it.
     let sources = state.db.list_sources(notebook_id).await.ok()?;
+    // A typed judge, when configured, settles the common case — a question
+    // that merely looked like a command — in one short round trip, so the
+    // Small-role JSON router only runs for messages that are commands.
+    let titles: Vec<String> = sources.iter().map(|s| sanitize_title(&s.title)).collect();
+    if typed_route_says_chat(RouteSurface::Notebook, content, &titles).await {
+        return None;
+    }
     match route_tool(state, &sources, content).await {
         ToolAction::Chat => None,
         ToolAction::AddUrls(urls) => {
@@ -9298,6 +9416,14 @@ async fn try_global_tool_route(
     let Ok(notebooks) = state.db.list_notebooks().await else {
         return ToolRoute::Fallthrough;
     };
+    let titles: Vec<String> = notebooks.iter().map(|n| sanitize_title(&n.title)).collect();
+    let gate = tokio::select! {
+        chat = typed_route_says_chat(RouteSurface::Home, content, &titles) => chat,
+        _ = cancel.cancelled() => return ToolRoute::Cancelled,
+    };
+    if gate {
+        return ToolRoute::Fallthrough;
+    }
     let action = tokio::select! {
         a = route_global_tool(state, &notebooks, content) => a,
         _ = cancel.cancelled() => return ToolRoute::Cancelled,
