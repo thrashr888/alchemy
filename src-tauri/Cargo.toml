@@ -32,6 +32,9 @@ serde_yaml_ng = "0.10"
 # (docs/RFC-okf-live.md §6). Already in the tree via rustls.
 sha2 = "0.10"
 lancedb = "0.37.1"
+# Same version lancedb pins; only for `lance::session::Session`, so the
+# connection's in-process caches can be sized (db.rs `open`).
+lance = { version = "10.0.0", default-features = false }
 tokio = { version = "1.52.3", features = ["full"] }
 anyhow = "1.0.103"
 thiserror = "2.0.18"

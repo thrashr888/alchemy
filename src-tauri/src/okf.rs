@@ -5255,7 +5255,10 @@ pub fn schedule_write(notebook_id: &str) {
                     }
                 }
                 Err(err) => {
-                    crate::diagnostics::error("okf", format!("bundle write failed: {err}"));
+                    let message = format!("bundle write failed: {err}");
+                    if write_error_is_news(&id, &message) {
+                        crate::diagnostics::error("okf", message);
+                    }
                     failed = true;
                 }
             }
@@ -5293,6 +5296,29 @@ pub fn schedule_write(notebook_id: &str) {
 
 /// How long a failed write waits before its one retry.
 const RETRY_MS: u64 = 15_000;
+
+/// The same failure for the same notebook is one fact, not a line per
+/// attempt: a Mac note resyncing every few seconds into a notebook whose
+/// write is refused put the one message in the diagnostics log three times a
+/// minute. The first report, a changed message, or this much silence since
+/// the last line each earn one.
+const WRITE_ERROR_REPEAT_MS: i64 = 10 * 60 * 1000;
+
+fn write_error_is_news(notebook_id: &str, message: &str) -> bool {
+    static LAST: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (String, i64)>>> =
+        std::sync::OnceLock::new();
+    let Ok(mut last) = LAST.get_or_init(Default::default).lock() else {
+        return true;
+    };
+    let now = now_ms();
+    if let Some((seen, at)) = last.get(notebook_id) {
+        if seen == message && now - at < WRITE_ERROR_REPEAT_MS {
+            return false;
+        }
+    }
+    last.insert(notebook_id.to_string(), (message.to_string(), now));
+    true
+}
 
 /// Concurrent bundle writes allowed across all notebooks.
 const WRITE_SLOTS: usize = 2;

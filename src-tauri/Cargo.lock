@@ -125,6 +125,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "kokoro-en",
+ "lance",
  "lancedb",
  "libc",
  "log",

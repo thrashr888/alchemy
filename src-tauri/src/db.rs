@@ -414,6 +414,58 @@ pub(crate) fn transient_lance_error(msg: &str) -> bool {
         || msg.contains("os error 24")
 }
 
+/// Lance's index cache cap for this connection (see `Db::open`).
+const INDEX_CACHE_BYTES: usize = 512 * 1024 * 1024;
+/// Lance's metadata cache cap for this connection (see `Db::open`).
+const METADATA_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+/// How many delta segments the chunk full-text index may carry before a
+/// flush folds them into one. Each flush appends a segment holding only
+/// the rows written since the last one — kilobytes — instead of rewriting
+/// the whole index; a search fans out over the segments, so their count
+/// stays small. `maintain` folds to one regardless.
+const FTS_MERGE_AT: u32 = 8;
+
+/// Remove empty `<table>.lance/_indices/<uuid>` directories older than
+/// `min_age` under `dir`. Returns how many went. Never touches a directory
+/// with anything in it: `remove_dir` refuses those by contract.
+fn sweep_empty_index_dirs(dir: &std::path::Path, min_age: std::time::Duration) -> usize {
+    let Ok(tables) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for table in tables.flatten() {
+        let indices = table.path().join("_indices");
+        let Ok(entries) = std::fs::read_dir(&indices) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let old = meta
+                .modified()
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age >= min_age);
+            let empty = std::fs::read_dir(&path)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false);
+            if meta.is_dir() && old && empty && std::fs::remove_dir(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// An empty `_indices/<uuid>` directory must be at least this old before
+/// `maintain` removes it: a build in flight has made its directory and not
+/// yet written into it.
+const EMPTY_INDEX_DIR_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 impl Db {
     /// Open (creating if needed) the Lance database at `dir` and ensure the
     /// fixed-schema tables exist. The chunks table is created lazily once we
@@ -421,7 +473,21 @@ impl Db {
     pub async fn open(dir: &std::path::Path) -> Result<Self> {
         std::fs::create_dir_all(dir).context("failed to create data dir")?;
         let uri = dir.to_string_lossy().to_string();
+        // Lance keeps two in-process caches per connection, and its
+        // defaults size them for a server: 6 GiB of loaded indices and
+        // 1 GiB of metadata. Every full-text flush commits a fresh index
+        // copy under a new id, and each copy a search touches stays cached
+        // until the cap evicts it — a chatty afternoon walked two resident
+        // Alchemys to ~8 GB of dirty heap each, nearly all dead index
+        // copies. The live chunk index is ~100 MB; these caps hold it and
+        // a few successors and nothing more.
+        let session = Arc::new(lance::session::Session::new(
+            INDEX_CACHE_BYTES,
+            METADATA_CACHE_BYTES,
+            Arc::new(lance::io::ObjectStoreRegistry::default()),
+        ));
         let conn = lancedb::connect(&uri)
+            .session(session)
             .execute()
             .await
             .context("failed to open LanceDB")?;
@@ -1913,6 +1979,35 @@ impl Db {
         Ok(has)
     }
 
+    /// Tests only: how many segments the chunk full-text index holds.
+    #[cfg(test)]
+    pub async fn fts_segments(&self) -> u32 {
+        let tbl = self
+            .conn
+            .open_table(T_CHUNKS)
+            .execute()
+            .await
+            .expect("chunks");
+        let col = if self.has_chunk_context().await.expect("schema") {
+            CHUNK_BM25_COL
+        } else {
+            "text"
+        };
+        let name = tbl
+            .list_indices()
+            .await
+            .expect("indices")
+            .into_iter()
+            .find(|i| i.columns == [col])
+            .map(|i| i.name)
+            .expect("fts index");
+        tbl.index_stats(&name)
+            .await
+            .expect("stats")
+            .and_then(|s| s.num_indices)
+            .unwrap_or(1)
+    }
+
     /// Tests only: rebuild the chunks FTS index from scratch, so a seeding
     /// that appended rows after an earlier build measures against one
     /// index of everything rather than an incrementally optimized one.
@@ -2254,7 +2349,52 @@ impl Db {
                 }
             }
         }
+        if let Err(err) = self.merge_fts_segments().await {
+            crate::note!("db maintenance: fts merge skipped: {err:#}");
+        }
+        // Lance's prune deletes an unreferenced index's files but leaves its
+        // directory; one store had 22,761 empty ones, and every prune lists
+        // them all. Only the old and empty go — a build in flight owns a
+        // fresh empty directory for a moment.
+        let swept = sweep_empty_index_dirs(&self.dir, EMPTY_INDEX_DIR_MIN_AGE);
+        if swept > 0 {
+            crate::note!("db maintenance: removed {swept} empty index directories");
+        }
         Ok((bytes, versions))
+    }
+
+    /// Fold the chunk full-text index's delta segments into one. Flushes
+    /// append segments (`rebuild_chunks_fts`); this is the periodic fold
+    /// that keeps a search from fanning out over many, and it pays the
+    /// whole-index rewrite once an hour instead of once per write burst.
+    async fn merge_fts_segments(&self) -> Result<()> {
+        if !self.table_exists(T_CHUNKS).await? {
+            return Ok(());
+        }
+        let _guard = self.fts_lock.lock().await;
+        let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
+        let fts_col = if self.has_chunk_context().await? {
+            CHUNK_BM25_COL
+        } else {
+            "text"
+        };
+        let indices = tbl.list_indices().await?;
+        let Some(index) = indices.iter().find(|i| i.columns == [fts_col]) else {
+            return Ok(());
+        };
+        let segments = tbl
+            .index_stats(&index.name)
+            .await?
+            .and_then(|s| s.num_indices)
+            .unwrap_or(1);
+        if segments <= 1 {
+            return Ok(());
+        }
+        let mut opts = lancedb::table::OptimizeOptions::merge(usize::MAX);
+        opts.index_names = Some(vec![index.name.clone()]);
+        tbl.optimize(lancedb::table::OptimizeAction::Index(opts))
+            .await?;
+        Ok(())
     }
 
     /// Rebuild the chunks FTS index if any deferred write dirtied it.
@@ -2270,13 +2410,22 @@ impl Db {
 
     /// Bring the chunks full-text index up to date, serialized process-wide
     /// and retried on Lance's retryable commit conflicts. INCREMENTAL when
-    /// the index exists: rows written since the last pass join as a delta
-    /// index and merge into the newest one (`OptimizeOptions` default), so
-    /// a burst of writes costs a delta, not a whole-corpus Tantivy rebuild.
+    /// the index exists: rows written since the last pass become a new
+    /// delta segment — kilobytes for a few chunks — and nothing else is
+    /// rewritten. Lance's default merges the delta into the newest segment,
+    /// which rewrites the whole index (~100 MB here) per flush; a Mac note
+    /// resyncing every few seconds turned that into 300 copies a day, 21 GB
+    /// of them still on disk. Once `FTS_MERGE_AT` segments have piled up a
+    /// flush folds them into one, and `maintain` folds hourly regardless.
     /// The only full build is the first (fresh store, or after
     /// `clear_all_chunks`). Rows deleted since (reingest, source deletion)
     /// leave stale index entries that Lance filters at query time; the
-    /// merge keeps the delta count bounded.
+    /// fold clears them.
+    ///
+    /// Only the live column's index is touched. Stores from before the
+    /// BM25 document column still carry the old `text` index; it answered
+    /// nothing once the new one existed but was rebuilt beside it on every
+    /// flush, so it is dropped here the first time it is seen.
     async fn rebuild_chunks_fts(&self) -> Result<()> {
         let _guard = self.fts_lock.lock().await;
         let mut attempt = 0u32;
@@ -2290,7 +2439,30 @@ impl Db {
             } else {
                 "text"
             };
-            let has_fts = indices.iter().any(|i| i.columns == [fts_col]);
+            let live = indices.iter().find(|i| i.columns == [fts_col]);
+            let has_fts = live.is_some();
+            if fts_col == CHUNK_BM25_COL {
+                for legacy in indices.iter().filter(|i| i.columns == ["text"]) {
+                    match tbl.drop_index(&legacy.name).await {
+                        Ok(()) => crate::note!("fts: retired the legacy {} index", legacy.name),
+                        Err(err) => crate::note!("fts: could not retire {}: {err}", legacy.name),
+                    }
+                }
+            }
+            let mut opts = lancedb::table::OptimizeOptions::append();
+            if let Some(live) = live {
+                let segments = tbl
+                    .index_stats(&live.name)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.num_indices)
+                    .unwrap_or(1);
+                if segments >= FTS_MERGE_AT {
+                    opts = lancedb::table::OptimizeOptions::merge(usize::MAX);
+                }
+                opts.index_names = Some(vec![live.name.clone()]);
+            }
             // lance-index 7.0's inverted builder PANICS (not errors) with an
             // index-out-of-bounds (builder.rs:856) when deletes + compaction
             // remap leave the token set inconsistent (TokenSet::next_id >
@@ -2304,11 +2476,9 @@ impl Db {
             let t = tbl.clone();
             let result: std::result::Result<(), String> = tokio::spawn(async move {
                 if has_fts {
-                    t.optimize(lancedb::table::OptimizeAction::Index(
-                        lancedb::table::OptimizeOptions::default(),
-                    ))
-                    .await
-                    .map(|_| ())
+                    t.optimize(lancedb::table::OptimizeAction::Index(opts))
+                        .await
+                        .map(|_| ())
                 } else {
                     t.create_index(&[fts_col], Index::FTS(FtsIndexBuilder::default()))
                         .replace(true)
@@ -3417,6 +3587,11 @@ impl Db {
         let (titles, recency) = self.corpus_meta().await?;
         let tbl = self.conn.open_table(T_CHUNKS).execute().await?;
         let pool = k.max(1) * opts.pool_multiplier.max(3);
+        let fts_col = if self.has_chunk_context().await? {
+            CHUNK_BM25_COL
+        } else {
+            "text"
+        };
 
         let nb_filter = route_notebooks.map(|ids| {
             // Some(&[]) matches nothing — '' is never a real notebook id.
@@ -3454,9 +3629,12 @@ impl Db {
         let fts_hits = if query_text.trim().is_empty() {
             vec![]
         } else {
+            let text_query = FullTextSearchQuery::new(query_text.to_string())
+                .with_column(fts_col.to_string())
+                .map_err(|e| anyhow!("fts query: {e}"))?;
             match tbl
                 .query()
-                .full_text_search(FullTextSearchQuery::new(query_text.to_string()))
+                .full_text_search(text_query)
                 .limit(pool)
                 .execute()
                 .await
@@ -6810,5 +6988,98 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// Flushes append delta segments; once `FTS_MERGE_AT` have piled up a
+    /// flush folds them, and maintenance folds to one. Search stays whole
+    /// through every shape.
+    #[tokio::test]
+    async fn fts_flush_appends_deltas_then_folds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(dir.path()).await.expect("open db");
+        let rounds = FTS_MERGE_AT + 2;
+        let mut peak = 0;
+        for i in 0..rounds {
+            db.add_chunks(
+                "nb",
+                &format!("s-{i}"),
+                &[(format!("c-{i}"), 0, format!("marker{i} shared"))],
+                &[vec![0.0; 4]],
+            )
+            .await
+            .expect("add");
+            db.flush_fts().await.expect("flush");
+            let segments = db.fts_segments().await;
+            assert!(
+                (1..=FTS_MERGE_AT).contains(&segments),
+                "round {i}: {segments} segments"
+            );
+            peak = peak.max(segments);
+        }
+        assert!(peak > 1, "flushes should append segments, not rewrite");
+        db.maintain().await.expect("maintain");
+        assert_eq!(db.fts_segments().await, 1, "maintenance folds to one");
+
+        let col = if db.has_chunk_context().await.expect("schema") {
+            CHUNK_BM25_COL
+        } else {
+            "text"
+        };
+        let tbl = db
+            .conn
+            .open_table(T_CHUNKS)
+            .execute()
+            .await
+            .expect("chunks");
+        for term in ["marker0".to_string(), format!("marker{}", rounds - 1)] {
+            let batches = tbl
+                .query()
+                .full_text_search(
+                    FullTextSearchQuery::new(term.clone())
+                        .with_column(col.to_string())
+                        .expect("fts query"),
+                )
+                .limit(5)
+                .execute()
+                .await
+                .expect("search")
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("collect");
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(rows, 1, "{term} found after folding");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only an index directory that is both empty and old is swept.
+    #[test]
+    fn sweep_removes_only_old_empty_index_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let indices = dir.path().join("chunks.lance").join("_indices");
+        let old_empty = indices.join("old-empty");
+        let fresh_empty = indices.join("fresh-empty");
+        let old_full = indices.join("old-full");
+        for d in [&old_empty, &fresh_empty, &old_full] {
+            std::fs::create_dir_all(d).expect("mkdir");
+        }
+        std::fs::write(old_full.join("index.idx"), b"x").expect("write");
+        let ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+        for d in [&old_empty, &old_full] {
+            std::fs::File::open(d)
+                .expect("open dir")
+                .set_modified(ago)
+                .expect("set mtime");
+        }
+        assert_eq!(
+            sweep_empty_index_dirs(dir.path(), EMPTY_INDEX_DIR_MIN_AGE),
+            1
+        );
+        assert!(!old_empty.exists(), "old and empty goes");
+        assert!(
+            fresh_empty.exists(),
+            "a fresh empty directory may be a build in flight"
+        );
+        assert!(old_full.exists(), "anything with files stays");
     }
 }
