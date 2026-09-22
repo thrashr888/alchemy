@@ -634,6 +634,10 @@ export const api = {
     run(cmd<void>("delete_meta_thread", { threadId })),
   createNote: (notebookId: string, title: string, content: string) =>
     run(cmd<Note>("create_note", { notebookId, title, content })),
+  /** "Save as Evidence" on a chat turn: a drafted evidence record, or the
+   *  answer filed as is when no model can draft. */
+  saveEvidence: (notebookId: string, question: string, answer: string, citations: Citation[]) =>
+    run(cmd<Note>("save_evidence", { notebookId, question, answer, citations })),
   /** Undo half of the note-delete toast: re-insert with kind/prompt intact. */
   restoreNote: (n: Note) =>
     run(

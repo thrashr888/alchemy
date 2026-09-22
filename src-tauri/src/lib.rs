@@ -684,6 +684,7 @@ pub fn run() {
             commands::rule_all_suggested,
             commands::rematch_registry,
             commands::run_second_look,
+            commands::save_evidence,
             commands::create_report_schedule,
             commands::update_report_schedule,
             commands::delete_report_schedule,

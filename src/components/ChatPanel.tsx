@@ -1631,6 +1631,7 @@ const ChatMessage = memo(function ChatMessage({
           look next. Only on answers the thin gate caught; never a fetch. */}
       <SuggestedSources items={message.suggestedSources ?? []} />
       <MessageActions
+        messageId={message.id}
         content={message.content}
         citations={message.citations}
         model={message.model}
@@ -1924,16 +1925,27 @@ function UserMessageActions({ message }: { message: Message }) {
 }
 
 function MessageActions({
+  messageId,
   content,
   citations,
   model,
 }: {
+  messageId: string;
   content: string;
   citations: Citation[];
   model?: string;
 }) {
   const createNote = useStore((s) => s.createNote);
+  const saveEvidence = useStore((s) => s.saveEvidence);
   const sources = useStore((s) => s.sources);
+  // The question this answer replied to: the nearest user turn above it.
+  const question = useStore((s) => {
+    const at = s.messages.findIndex((m) => m.id === messageId);
+    for (let i = at - 1; i >= 0; i--) {
+      if (s.messages[i].role === "user") return s.messages[i].content;
+    }
+    return "";
+  });
   return (
     <TurnActions
       model={model}
@@ -1949,6 +1961,14 @@ function MessageActions({
               noteTitleFrom(content),
               noteContentFrom(content, citations, sources),
             ),
+        },
+        {
+          label: "Save as Evidence",
+          doneLabel: "Recorded",
+          icon: <Quote className="h-3.5 w-3.5" />,
+          title:
+            "Record this as evidence: the claim, the passages behind it, and how sure to be",
+          onClick: () => saveEvidence(question, content, citations),
         },
       ]}
     />

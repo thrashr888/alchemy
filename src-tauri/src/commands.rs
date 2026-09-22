@@ -9989,13 +9989,6 @@ async fn send_message_impl(
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
     if assistant_msg.kind != "error" {
-        spawn_auto_evidence(
-            &app,
-            &notebook_id,
-            &content,
-            &assistant_msg.content,
-            &assistant_msg.citations,
-        );
         // Verify-and-repair closes behind the delivered answer
         // (RFC-judged-evals §5) — cited answers only; an abstention has
         // nothing to check.
@@ -10131,15 +10124,6 @@ pub async fn send_message_agentic(
     e(state.db.add_message(&assistant_msg).await)?;
     e(state.db.touch_notebook(&notebook_id, now()).await)?;
     let _ = app.emit("chat://done", &assistant_msg);
-    if assistant_msg.kind != "error" {
-        spawn_auto_evidence(
-            &app,
-            &notebook_id,
-            &content,
-            &assistant_msg.content,
-            &assistant_msg.citations,
-        );
-    }
     Ok(assistant_msg)
 }
 
@@ -10269,171 +10253,77 @@ fn spawn_answer_verify(
     });
 }
 
-fn spawn_auto_evidence(
-    app: &AppHandle,
+/// "Save as Evidence" on a chat turn (docs/RFC-note-curator.md §2, a verb
+/// since 2026-09-21 — the automatic post-pass was retired, RFC-ablation
+/// item 3). The model drafts the record from the question, the answer and
+/// the source passages behind it; when it cannot state a claim, the answer
+/// itself is filed with its sources, because the reader asked for a record
+/// and gets one. Note passages are left out of the evidence — a conclusion
+/// resting on prior conclusions is circular. The note is the user's
+/// (origin empty): the curator never merges or archives it.
+pub(crate) async fn write_evidence(
+    state: &AppState,
     notebook_id: &str,
     question: &str,
     answer: &str,
     citations: &[Citation],
-) {
-    // Gate: a conclusion needs synthesis across 2+ distinct SOURCES. Note
-    // passages don't count — evidence derived from prior conclusions would
-    // be circular. Short answers are lookups, not synthesis.
+) -> anyhow::Result<Note> {
     let sources: Vec<Citation> = citations
         .iter()
         .filter(|c| !c.source_id.is_empty())
         .cloned()
         .collect();
-    let distinct: HashSet<&str> = sources.iter().map(|c| c.source_id.as_str()).collect();
-    if distinct.len() < 2 || answer.chars().count() < 400 {
-        crate::note!(
-            "auto evidence: gate skipped ({} distinct sources, {} chars)",
-            distinct.len(),
-            answer.chars().count()
-        );
-        return;
-    }
-    let app = app.clone();
-    let notebook_id = notebook_id.to_string();
-    let question = question.to_string();
-    let answer = answer.to_string();
-    tauri::async_runtime::spawn(async move {
-        if let Err(err) = auto_evidence(&app, &notebook_id, &question, &answer, &sources).await {
-            crate::note!("auto evidence pass failed: {err:#}");
-        }
-    });
-}
-
-/// Overlap coefficient of two titles' word sets (lowercased, alphanumeric,
-/// stop-length words dropped) — the cheap same-claim test for deduping auto
-/// evidence notes. Shared words over the SMALLER set, not Jaccard: a title
-/// that restates another with extra qualifiers should still match.
-fn title_overlap(a: &str, b: &str) -> f32 {
-    let words = |s: &str| -> HashSet<String> {
-        s.to_lowercase()
-            .split(|ch: char| !ch.is_alphanumeric())
-            .filter(|w| w.len() > 2)
-            .map(str::to_string)
-            .collect()
-    };
-    let (wa, wb) = (words(a), words(b));
-    if wa.is_empty() || wb.is_empty() {
-        return 0.0;
-    }
-    let shared = wa.intersection(&wb).count() as f32;
-    shared / wa.len().min(wb.len()) as f32
-}
-
-async fn auto_evidence(
-    app: &AppHandle,
-    notebook_id: &str,
-    question: &str,
-    answer: &str,
-    sources: &[Citation],
-) -> anyhow::Result<()> {
-    use tauri::Manager;
-    let state = app.state::<AppState>();
-
     let draft = {
-        let messages = rag::build_auto_evidence_messages(question, answer, sources, None);
+        let messages = rag::build_evidence_messages(question, answer, &sources);
         let ai = state.ai.read().await.clone();
-        ai.chat(&messages).await?.text
-    };
-    let Some((title, body)) = rag::parse_auto_evidence(&draft) else {
-        // SKIP is the common, correct case — but say so in the terminal so
-        // "nothing happened" is diagnosable from the dev console.
-        crate::note!(
-            "auto evidence: model declined ({} chars): {}",
-            draft.len(),
-            draft
-                .trim()
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(80)
-                .collect::<String>()
-        );
-        return Ok(());
-    };
-
-    // Same claim already on record? Merge into it instead of a sibling
-    // (Hermes' patch-over-create). Only auto notes merge — owned notes are
-    // the user's, and the pass never touches them.
-    let existing = state
-        .db
-        .list_notes(notebook_id)
-        .await?
-        .into_iter()
-        .filter(|n| n.kind == "evidence" && n.origin == "auto")
-        .find(|n| title_overlap(&n.title, &title) >= 0.6);
-
-    let note = if let Some(prior) = existing {
-        let merged = {
-            let messages = rag::build_auto_evidence_messages(
-                question,
-                answer,
-                sources,
-                Some((&prior.title, &prior.content)),
-            );
-            let ai = state.ai.read().await.clone();
-            ai.chat(&messages).await?.text
-        };
-        let Some((title, body)) = rag::parse_auto_evidence(&merged) else {
-            crate::note!("auto evidence: merge declined for \"{}\"", prior.title);
-            return Ok(());
-        };
-        state
-            .db
-            .update_note(&prior.id, &title, &body, now())
-            .await?;
-        // update_note leaves origin untouched, so the record stays "auto"
-        // and claims accumulate evidence instead of siblings. Fresh evidence
-        // revives a stale/archived record.
-        state.db.set_note_status(&prior.id, "").await?;
-        match state.db.get_note(&prior.id).await? {
-            Some(n) => {
-                index_note(&state, &n).await;
-                n
+        match ai.chat(&messages).await {
+            Ok(reply) => reply.text,
+            Err(err) => {
+                crate::note!("evidence: no model for the draft, filing the answer as is: {err:#}");
+                String::new()
             }
-            None => return Ok(()),
         }
-    } else {
-        let ts = now();
-        let note = Note {
-            id: new_id(),
-            notebook_id: notebook_id.to_string(),
-            title,
-            content: body,
-            kind: "evidence".into(),
-            // The originating question, kept so the record can be rebuilt.
-            prompt: question.to_string(),
-            origin: "auto".into(),
-            status: String::new(),
-            created_at: ts,
-            updated_at: ts,
-        };
-        add_note_indexed(&state, &note).await?;
-        crate::note!("auto evidence: created \"{}\"", note.title);
-        note
     };
+    let (title, body) = rag::parse_auto_evidence(&draft)
+        .unwrap_or_else(|| rag::plain_evidence_record(question, answer, &sources));
+    let ts = now();
+    let note = Note {
+        id: new_id(),
+        notebook_id: notebook_id.to_string(),
+        title,
+        content: body,
+        kind: "evidence".into(),
+        // The originating question, kept so the record can be rebuilt.
+        prompt: question.to_string(),
+        origin: String::new(),
+        status: String::new(),
+        created_at: ts,
+        updated_at: ts,
+    };
+    add_note_indexed(state, &note).await?;
+    crate::note!("evidence: recorded \"{}\"", note.title);
+    Ok(note)
+}
 
-    // Same event the MCP server emits — open windows refresh their notes
-    // list live, with the arrival chime announcing the new record.
-    #[derive(serde::Serialize, Clone)]
-    #[serde(rename_all = "camelCase")]
-    struct Changed<'a> {
-        scope: &'a str,
-        notebook_id: Option<&'a str>,
-    }
+/// The chat turn's "Save as Evidence" verb. Returns the note; open windows
+/// refresh through the same event the MCP server emits.
+#[tauri::command]
+pub async fn save_evidence(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: String,
+    question: String,
+    answer: String,
+    citations: Vec<Citation>,
+) -> Result<Note, String> {
+    let note = write_evidence(&state, &notebook_id, &question, &answer, &citations)
+        .await
+        .map_err(|err| err.to_string())?;
     let _ = app.emit(
         "mcp://changed",
-        Changed {
-            scope: "notes",
-            notebook_id: Some(&note.notebook_id),
-        },
+        serde_json::json!({ "scope": "notes", "notebookId": note.notebook_id }),
     );
-    Ok(())
+    Ok(note)
 }
 
 /// Bump a usage counter for every note among these citations (best-effort;
@@ -15918,23 +15808,6 @@ mod tool_tests {
         assert!(similar_pairs(&[vec![1.0, 0.0], vec![0.0, 1.0]], 0.75).is_empty());
         // Degenerate vectors are safe.
         assert!(similar_pairs(&[vec![0.0, 0.0], vec![0.0, 0.0]], 0.75).is_empty());
-    }
-
-    #[test]
-    fn title_overlap_finds_same_claim() {
-        assert!(
-            title_overlap(
-                "The hail deductible is $2,500",
-                "Hail deductible is 2500 dollars"
-            ) >= 0.4
-        );
-        assert!(
-            title_overlap(
-                "The hail deductible is $2,500",
-                "Router firmware updates monthly"
-            ) < 0.2
-        );
-        assert_eq!(title_overlap("", "anything"), 0.0);
     }
 
     #[test]

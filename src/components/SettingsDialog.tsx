@@ -32,10 +32,8 @@ import {
   Cpu,
   MessageSquare,
   Palette,
-  Keyboard,
   Info,
   SlidersHorizontal,
-  UserRound,
   FolderGit2,
   Wand2,
   AudioLines,
@@ -55,10 +53,8 @@ const TABS = [
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
-  { id: "personalization", label: "Personalization", icon: UserRound },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "activity", label: "Activity", icon: ChartNoAxesColumn },
   { id: "about", label: "About", icon: Info },
 ];
@@ -80,12 +76,15 @@ export function SettingsDialog({
     s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
   );
 
-  const [tab, setTab] = useState(initialTab);
+  // Two tabs folded away in 2026-09 (docs/RFC-ablation.md item 6); a caller
+  // still asking for them lands where their panels went.
+  const FOLDED: Record<string, string> = { personalization: "chat", shortcuts: "about" };
+  const [tab, setTab] = useState(FOLDED[initialTab] ?? initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) setTab(initialTab);
+    if (open) setTab(FOLDED[initialTab] ?? initialTab);
   }, [open, initialTab]);
 
   useEffect(() => {
@@ -160,7 +159,7 @@ export function SettingsDialog({
       open={open}
       onClose={onClose}
       title="Settings"
-      width={tab === "shortcuts" ? "max-w-4xl" : "max-w-2xl"}
+      width={tab === "about" ? "max-w-4xl" : "max-w-2xl"}
       tall
       bodyScroll={false}
       hideHeader
@@ -242,19 +241,31 @@ export function SettingsDialog({
             />
           )}
           {tab === "models" && <PodcastVoicesSection />}
-          {tab === "chat" && <ChatTab />}
+          {tab === "chat" && (
+            <>
+              <ChatTab />
+              <FoldedSection title="About you" hint="Who the assistant is talking to, and what to call it.">
+                <PersonalizationTab />
+              </FoldedSection>
+            </>
+          )}
 
-          {tab === "personalization" && <PersonalizationTab />}
 
           {tab === "agents" && <AgentsTab />}
 
           {tab === "appearance" && <AppearanceTab />}
 
-          {tab === "shortcuts" && <ShortcutsTab />}
 
           {tab === "activity" && <ActivityTab />}
 
-          {tab === "about" && <AboutTab />}
+          {tab === "about" && (
+            <>
+              <AboutTab />
+              <FoldedSection title="Keyboard shortcuts" hint="Every shortcut the menus register.">
+                <ShortcutsTab />
+              </FoldedSection>
+            </>
+          )}
           </div>
         </div>
       </div>
@@ -1528,5 +1539,26 @@ function PodcastVoicesSection() {
         </div>
       </div>
     </Field>
+  );
+}
+
+/** Two settings tabs a person opens once (Personalization, Shortcuts) now
+ *  live at the foot of the tab they belong with (docs/RFC-ablation.md
+ *  item 6): the same panel, under a rule and a heading, no third level. */
+function FoldedSection({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mt-8 border-t border-border pt-6">
+      <h3 className="text-body font-medium text-foreground">{title}</h3>
+      <p className="mt-0.5 mb-4 text-caption text-muted-foreground">{hint}</p>
+      {children}
+    </section>
   );
 }

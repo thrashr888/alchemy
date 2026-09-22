@@ -47,6 +47,12 @@ field; agents get note recall for free.
 
 ### 2. Auto-create evidence notes from chat
 
+> **2026-09-21:** retired as an automatic pass (docs/RFC-ablation.md item 3:
+> 12 records in six months, a model call after every turn). The record is
+> now a verb — "Save as Evidence" on any answer — with the same shape, and
+> the answer filed as is when no model can draft. The curator's
+> consolidation still governs the `origin: "auto"` records it already made.
+
 After an assistant answer, a cheap post-pass decides whether the exchange
 produced a durable conclusion. Triggers (any one):
 
@@ -128,7 +134,7 @@ All five phases shipped 2026-07-14:
 1. Notes into the retrieval index with labeled citations (+ MCP `noteId`
    in search results). Standalone value: evidence notes become findable.
 2. Telemetry columns + bump sites.
-3. Chat post-pass auto-creating/updating evidence notes.
+3. Chat post-pass auto-creating/updating evidence notes (a verb since 2026-09-21).
 4. Curator deterministic pass (stale/archive/revive) + living report note.
 5. Curator LLM consolidation behind Settings → "Consolidate auto notes
    weekly", default on.

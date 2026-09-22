@@ -1,6 +1,13 @@
 # RFC: Ablation — what Alchemy can lose
 
-Status: draft, awaiting review (2026-09-15).
+Status: reviewed 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
+a verb) and 6 built the same day. Decisions: the PM/engineering
+generators and templates stay — newer users are product and engineering
+people, and the app is for more than one person; the tile wall is shelved
+by intent instead (Understand · Learn · Visualize · Write), most-used first
+inside each shelf. Evidence is a verb on a chat turn ("Save as Evidence");
+the automatic post-pass is retired. Notion stays: a second user has a key
+and asked for the door. Items 4 and 7 still want their counts.
 Origin: Reminders item "Reduce visual, data, and feature bloat. Conduct
 an ablation experiment, removing unnecessary abstractions and designs."
 The Ledger and the Arrivals strip went on 2026-09-15 (main e2f089b) as

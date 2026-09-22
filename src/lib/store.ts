@@ -3332,6 +3332,15 @@ export const useStore = create<AppState>((rawSet, get) => {
         set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
       }),
 
+    saveEvidence: (question, answer, citations) =>
+      guard(async () => {
+        const id = get().currentId;
+        if (!id) return;
+        const note = await api.saveEvidence(id, question, answer, citations);
+        set({ notes: [note, ...get().notes.filter((n) => n.id !== note.id)] });
+        get().pushToast("success", `Evidence recorded: ${note.title}`);
+      }),
+
     updateNote: (noteId, title, content) =>
       guard(async () => {
         const id = get().currentId;
