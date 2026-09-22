@@ -1,4 +1,5 @@
 import type {
+  Citation,
   AiConfig,
   ChatConfig,
   DeletionProposal,
@@ -622,6 +623,7 @@ export interface AppState {
    *  omitted, the stored ones are reused. */
   rebuildNote: (note: NoteSummary, prompt?: string) => Promise<void>;
   createNote: (title: string, content: string) => Promise<void>;
+  saveEvidence: (question: string, answer: string, citations: Citation[]) => Promise<void>;
   updateNote: (id: string, title: string, content: string) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
   discussNoteInChat: (id: string) => Promise<void>;

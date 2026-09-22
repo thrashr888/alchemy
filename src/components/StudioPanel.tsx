@@ -467,9 +467,10 @@ export function StudioPanel() {
   // Keep the common generators visible; the long tail and custom templates
   // share one progressive-disclosure control.
   const [moreOpen, setMoreOpen] = useState(false);
-  const { primary: primaryArtifacts, secondary: secondaryArtifacts } =
+  const { primary: primaryArtifacts, groups: artifactGroups } =
     studioArtifacts(kokoroReady);
-  const moreCount = secondaryArtifacts.length + templates.length;
+  const moreCount =
+    artifactGroups.reduce((n, g) => n + g.artifacts.length, 0) + templates.length;
 
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
@@ -581,35 +582,6 @@ export function StudioPanel() {
                       onClick={() => generate(a.kind, instructions)}
                     />
                   ))}
-                {moreOpen && secondaryArtifacts.map((a) => (
-                  <GenTile
-                    key={a.kind}
-                    icon={a.icon}
-                    busy={busyKinds.has(a.kind)}
-                    label={a.label}
-                    category={a.family}
-                    tint={TINT_BY_FAMILY[a.family]}
-                    disabled={!hasSources}
-                    onClick={() => generate(a.kind, instructions)}
-                  />
-                ))}
-                {moreOpen && templates.map((t) => (
-                  <GenTile
-                    key={t.id}
-                    icon={<FileText className="h-3.5 w-3.5" />}
-                    busy={busyKinds.has(`template:${t.id}`)}
-                    label={t.name}
-                    title={`${t.description || t.name} — right-click to edit`}
-                    category="template"
-                    tint={TINT_TEMPLATES}
-                    disabled={!hasSources}
-                    onClick={() => generateFromTemplate(t)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      useStore.getState().openInReader({ type: "template", id: t.id });
-                    }}
-                  />
-                ))}
                 {moreCount > 0 && (
                   <GenTile
                     icon={
@@ -622,8 +594,8 @@ export function StudioPanel() {
                     label={moreOpen ? "Less" : `More (${moreCount})`}
                     title={
                       moreOpen
-                        ? "Show only common generators"
-                        : `Show ${moreCount} more generators and templates`
+                        ? "Show only the common generators"
+                        : `Show ${moreCount} more generators and templates, by what they are for`
                     }
                     tint={TINT_DISCLOSURE}
                     disabled={false}
@@ -631,6 +603,51 @@ export function StudioPanel() {
                   />
                 )}
               </div>
+              {/* The long tail, shelved by intent and ordered by use inside
+                  each shelf; custom templates sit with the working documents. */}
+              {moreOpen &&
+                artifactGroups.map((group) => {
+                  const shelfTemplates = group.id === "write" ? templates : [];
+                  if (group.artifacts.length === 0 && shelfTemplates.length === 0) return null;
+                  return (
+                    <div key={group.id} className="mt-3">
+                      <div className="mb-1.5 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
+                        {group.label}
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {group.artifacts.map((a) => (
+                          <GenTile
+                            key={a.kind}
+                            icon={a.icon}
+                            busy={busyKinds.has(a.kind)}
+                            label={a.label}
+                            category={a.family}
+                            tint={TINT_BY_FAMILY[a.family]}
+                            disabled={!hasSources}
+                            onClick={() => generate(a.kind, instructions)}
+                          />
+                        ))}
+                        {shelfTemplates.map((t) => (
+                          <GenTile
+                            key={t.id}
+                            icon={<FileText className="h-3.5 w-3.5" />}
+                            busy={busyKinds.has(`template:${t.id}`)}
+                            label={t.name}
+                            title={`${t.description || t.name} — right-click to edit`}
+                            category="template"
+                            tint={TINT_TEMPLATES}
+                            disabled={!hasSources}
+                            onClick={() => generateFromTemplate(t)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              useStore.getState().openInReader({ type: "template", id: t.id });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
 
               {showInstructions ? (
                 <div className="mt-2.5 flex flex-col gap-1.5">

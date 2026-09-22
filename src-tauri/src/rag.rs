@@ -531,7 +531,78 @@ source, dated…).\n\
 When a PRIOR RECORD is provided, the claim was recorded before: reply with the MERGED record in \
 the same form — keep its still-valid evidence, fold in the new, and update the confidence.";
 
-/// Build the auto-evidence post-pass messages. `citations` should be source
+/// System prompt for the "Save as Evidence" verb: the same record, but the
+/// reader asked for it, so SKIP is not an answer. The shape and the rules
+/// about excerpts are AUTO_EVIDENCE_SYSTEM's; only the decision is gone.
+const EVIDENCE_VERB_SYSTEM: &str =
+    "You turn ONE exchange from a research-notebook chat into an evidence record — a durable \
+note a future reader (human or agent) can audit and build on. The reader asked for this record: \
+always write one. When the exchange holds no cross-source conclusion, record the best-supported \
+claim it does contain and say so under Confidence.\n\
+\n\
+Reply in exactly this form:\n\
+TITLE: <the claim itself in one line — a specific statement, not a topic label>\n\
+\n\
+**Claim:** one sentence.\n\
+**Evidence:** the 1-3 load-bearing passages, quoted from the excerpts below, each naming its \
+source title. Use ONLY the provided excerpts; with no excerpts, say so and quote the answer.\n\
+**Confidence:** high / medium / low, with a phrase on why (corroborated across sources, single \
+source, dated, no excerpts…).\n\
+**Counter-evidence:** anything in the excerpts that cuts against the claim, or \"none found\".\n\
+**Open questions:** what would firm this up, if anything.";
+
+/// Messages for the "Save as Evidence" verb — see [`EVIDENCE_VERB_SYSTEM`].
+pub fn build_evidence_messages(
+    question: &str,
+    answer: &str,
+    citations: &[Citation],
+) -> Vec<ChatTurn> {
+    let mut turns = build_auto_evidence_messages(question, answer, citations, None);
+    turns[0] = ChatTurn::system(EVIDENCE_VERB_SYSTEM);
+    turns
+}
+
+/// The record written when no model could draft one: the answer as given,
+/// with the passages it cited listed beneath it. Honest about what it is.
+pub fn plain_evidence_record(
+    question: &str,
+    answer: &str,
+    citations: &[Citation],
+) -> (String, String) {
+    let title = answer
+        .lines()
+        .map(|l| l.trim().trim_start_matches('#').trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or(question)
+        .chars()
+        .take(90)
+        .collect::<String>();
+    let mut body = format!(
+        "**Question:** {}\n\n**Answer, as given:**\n\n{}\n",
+        question.trim(),
+        answer.trim()
+    );
+    if !citations.is_empty() {
+        body.push_str("\n**Sources cited:**\n\n");
+        let mut seen = std::collections::HashSet::new();
+        for c in citations {
+            if seen.insert(c.source_title.as_str()) {
+                body.push_str(&format!("- {}\n", c.source_title));
+            }
+        }
+    }
+    body.push_str("\n**Confidence:** unrated — filed without a model's review.\n");
+    (
+        if title.is_empty() {
+            "Evidence".to_string()
+        } else {
+            title
+        },
+        body,
+    )
+}
+
+/// Build the evidence-record messages. `citations` should be source
 /// passages only (note passages are prior conclusions — evidence derived
 /// from them would be circular). `prior` is an existing record to merge.
 pub fn build_auto_evidence_messages(

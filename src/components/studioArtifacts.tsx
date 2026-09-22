@@ -65,72 +65,109 @@ export const AUDIO_OVERVIEW: Artifact = {
   family: "generate",
 };
 
-const SUMMARIES = inFamily("generate", [
+/** Layout groups for Studio and the command menu: what a person is trying
+ *  to do, in the order people actually reach for them (the note counts in
+ *  docs/RFC-ablation.md), most-used first inside each group. Families stay
+ *  the color; groups are the shelf. */
+export type ArtifactGroup = "understand" | "learn" | "visualize" | "write";
+
+export const GROUP_LABEL: Record<ArtifactGroup, string> = {
+  understand: "Understand",
+  learn: "Learn",
+  visualize: "Visualize",
+  write: "Write",
+};
+
+const UNDERSTAND = inFamily("generate", [
   { kind: "summary", label: "Summary", icon: <FileText className="h-3.5 w-3.5" /> },
-  { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
-  {
-    kind: "study_guide",
-    label: "Study guide",
-    icon: <GraduationCap className="h-3.5 w-3.5" />,
-  },
   { kind: "briefing", label: "Briefing", icon: <Newspaper className="h-3.5 w-3.5" /> },
+  { kind: "faq", label: "FAQ", icon: <HelpCircle className="h-3.5 w-3.5" /> },
   { kind: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
-  { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
   { kind: "data_table", label: "Data table", icon: <Table className="h-3.5 w-3.5" /> },
+  { kind: "insights", label: "Insights", icon: <Lightbulb className="h-3.5 w-3.5" /> },
   { kind: "round_table", label: "Round table", icon: <Users className="h-3.5 w-3.5" /> },
   { kind: "problems", label: "Problems", icon: <TriangleAlert className="h-3.5 w-3.5" /> },
   { kind: "evidence", label: "Evidence log", icon: <Quote className="h-3.5 w-3.5" /> },
 ]);
 
-const LEARNING = inFamily("learning", [
-  { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
+const LEARN = inFamily("learning", [
+  {
+    kind: "study_guide",
+    label: "Study guide",
+    icon: <GraduationCap className="h-3.5 w-3.5" />,
+  },
   { kind: "quiz", label: "Quiz", icon: <ListChecks className="h-3.5 w-3.5" /> },
+  { kind: "flashcards", label: "Flashcards", icon: <Layers className="h-3.5 w-3.5" /> },
+]);
+
+// Diagrams and decks share the learning accent: they are the same kind of
+// artifact, a picture of the material, whichever shelf they came from.
+const VISUALIZE = inFamily("learning", [
+  { kind: "process", label: "Process map", icon: <Route className="h-3.5 w-3.5" /> },
+  {
+    kind: "relationship",
+    label: "Relationship map",
+    icon: <Network className="h-3.5 w-3.5" />,
+  },
   { kind: "mind_map", label: "Mind map", icon: <Waypoints className="h-3.5 w-3.5" /> },
-  { kind: "uml", label: "UML diagram", icon: <Workflow className="h-3.5 w-3.5" /> },
+  {
+    kind: "slide_deck",
+    label: "Slide deck",
+    icon: <Presentation className="h-3.5 w-3.5" />,
+  },
+  {
+    kind: "infographic",
+    label: "Infographic",
+    icon: <BarChart3 className="h-3.5 w-3.5" />,
+  },
+  { kind: "journey", label: "Journey map", icon: <Footprints className="h-3.5 w-3.5" /> },
   {
     kind: "architecture",
     label: "Architecture diagram",
     icon: <Boxes className="h-3.5 w-3.5" />,
   },
   { kind: "data_model", label: "Data model", icon: <Database className="h-3.5 w-3.5" /> },
-  {
-    kind: "relationship",
-    label: "Relationship map",
-    icon: <Network className="h-3.5 w-3.5" />,
-  },
-  {
-    kind: "slide_deck",
-    label: "Slide deck",
-    icon: <Presentation className="h-3.5 w-3.5" />,
-  },
+  { kind: "uml", label: "UML diagram", icon: <Workflow className="h-3.5 w-3.5" /> },
 ]);
 
-const DOCUMENTS = inFamily("documents", [
-  {
-    kind: "infographic",
-    label: "Infographic",
-    icon: <BarChart3 className="h-3.5 w-3.5" />,
-  },
-  { kind: "process", label: "Process map", icon: <Route className="h-3.5 w-3.5" /> },
-  { kind: "journey", label: "Journey map", icon: <Footprints className="h-3.5 w-3.5" /> },
+// The working documents product and engineering people ship — kept as
+// tiles for them even where one person's store shows no runs.
+const WRITE = inFamily("documents", [
   { kind: "prd", label: "PRD", icon: <ClipboardList className="h-3.5 w-3.5" /> },
   { kind: "prfaq", label: "PR/FAQ", icon: <Megaphone className="h-3.5 w-3.5" /> },
   { kind: "rfc", label: "RFC", icon: <FileCode2 className="h-3.5 w-3.5" /> },
   { kind: "skill", label: "Skill", icon: <Sparkles className="h-3.5 w-3.5" /> },
 ]);
 
-/** Every built-in generator, for surfaces beyond Studio such as the command menu. */
-export const ARTIFACTS: Artifact[] = [...SUMMARIES, ...LEARNING, ...DOCUMENTS];
+const GROUPS: [ArtifactGroup, Artifact[]][] = [
+  ["understand", UNDERSTAND],
+  ["learn", LEARN],
+  ["visualize", VISUALIZE],
+  ["write", WRITE],
+];
 
-const PRIMARY_KINDS: NoteKind[] = ["summary", "study_guide", "briefing", "faq"];
+/** Every built-in generator, in shelf order, for surfaces beyond Studio such
+ *  as the command menu. */
+export const ARTIFACTS: Artifact[] = GROUPS.flatMap(([, artifacts]) => artifacts);
+
+/** The four a notebook reaches for first: the most-run generator overall,
+ *  the briefing, and the two visual kinds people actually make (process
+ *  maps and decks). Audio takes a slot once its voice model is present. */
+const PRIMARY_KINDS: NoteKind[] = ["summary", "briefing", "process", "slide_deck"];
+
+export type ArtifactShelf = {
+  id: ArtifactGroup;
+  label: string;
+  artifacts: Artifact[];
+};
 
 export function studioArtifacts(kokoroReady: boolean): {
   primary: Artifact[];
-  secondary: Artifact[];
+  groups: ArtifactShelf[];
 } {
   const available = kokoroReady ? [AUDIO_OVERVIEW, ...ARTIFACTS] : ARTIFACTS;
   const primaryKinds = kokoroReady
-    ? (["audio_overview", "summary", "study_guide", "briefing"] as NoteKind[])
+    ? (["audio_overview", "summary", "briefing", "process"] as NoteKind[])
     : PRIMARY_KINDS;
   const primary = primaryKinds
     .map((kind) => available.find((artifact) => artifact.kind === kind))
@@ -138,7 +175,11 @@ export function studioArtifacts(kokoroReady: boolean): {
   const primarySet = new Set(primaryKinds);
   return {
     primary,
-    secondary: available.filter((artifact) => !primarySet.has(artifact.kind)),
+    groups: GROUPS.map(([id, artifacts]) => ({
+      id,
+      label: GROUP_LABEL[id],
+      artifacts: artifacts.filter((artifact) => !primarySet.has(artifact.kind)),
+    })),
   };
 }
 
