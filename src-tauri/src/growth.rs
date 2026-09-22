@@ -1091,9 +1091,33 @@ pub fn build_entity_page(card: &RegistryCard, attached: &[&Source]) -> String {
     }
     md.push_str("\n## Documents\n\n");
     for s in attached {
-        md.push_str(&title_link_line(s, &format!("{} chars", s.char_count)));
+        md.push_str(&title_link_line(s, &chars_label(s.char_count)));
     }
     md
+}
+
+/// A source's size for the wiki, rounded so the pages stay still. The
+/// exact count moved every time a Mac item or a live page re-fetched a
+/// few characters differently, and each move rewrote every entity page
+/// listing that source plus the index — a bundle write of the whole wiki
+/// for nothing anyone would notice. Two significant figures is what a
+/// reader takes from the number anyway.
+pub fn chars_label(n: i64) -> String {
+    let short = |v: f64, unit: &str| {
+        if v >= 10.0 {
+            format!("{}{unit}", v.round() as i64)
+        } else {
+            format!("{v:.1}{unit}")
+        }
+    };
+    let label = if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        short(n as f64 / 1_000.0, "k")
+    } else {
+        short(n as f64 / 1_000_000.0, "M")
+    };
+    format!("{label} chars")
 }
 
 /// `- [Title](<Title>) — extra`, falling back to plain text when the title
@@ -1135,7 +1159,7 @@ pub fn build_wiki_index(
 
     let line = |s: &Source| {
         let age_days = (now_ms - s.created_at.max(s.fetched_at)) / 86_400_000;
-        let mut extra = format!("{} chars", s.char_count);
+        let mut extra = chars_label(s.char_count);
         if age_days > RETIRE_MIN_AGE_DAYS && !cited.contains(&s.id) {
             extra.push_str(" · never cited");
         }
@@ -1375,6 +1399,18 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chars_labels_round_to_two_figures() {
+        assert_eq!(chars_label(0), "0 chars");
+        assert_eq!(chars_label(999), "999 chars");
+        assert_eq!(chars_label(1_307), "1.3k chars");
+        assert_eq!(chars_label(1_349), "1.3k chars");
+        assert_eq!(chars_label(12_480), "12k chars");
+        assert_eq!(chars_label(999_600), "1000k chars");
+        assert_eq!(chars_label(1_260_000), "1.3M chars");
+        assert_eq!(chars_label(59_977_609), "60M chars");
+    }
 
     #[test]
     fn wiki_page_ids_are_the_same_on_every_mac() {
