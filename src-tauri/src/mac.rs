@@ -830,6 +830,94 @@ pub async fn complete_reminder(uri: &str, id: &str) -> anyhow::Result<()> {
     .map(|_| ())
 }
 
+/// One running Alchemy resyncs Mac items unattended; any other yields.
+///
+/// Two binaries over one store — the installed app and a `pnpm tauri dev`,
+/// or an old copy relaunched — each render the same Apple Note through
+/// their own cider, and each takes the other's rendering for a change:
+/// A reingests, the bundle write wakes B, B reingests its own rendering,
+/// and the note ping-pongs every ten seconds for as long as both run. The
+/// store watch and the minute sweep therefore run only in the process that
+/// holds this lease; user-driven refreshes (Sync now, a write-back) are not
+/// gated, since the user asked this process for them.
+///
+/// The lease is a file in the data dir naming a pid and a millisecond
+/// stamp. The holder refreshes it every sweep pass; another process takes
+/// it over only when the holder's pid is gone or the stamp is older than
+/// [`MAC_LEASE_TTL`] — a hung holder, not an idle one, since an idle holder
+/// still sweeps each minute.
+const MAC_LEASE_FILE: &str = "mac-resync.lease";
+const MAC_LEASE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Last decision, so the yield is logged when it changes, not every minute.
+static MAC_LEASE_LAST: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Whether this process may resync Mac items unattended right now. Takes
+/// or refreshes the lease when it may. Best-effort: a data dir that cannot
+/// be written yields `true`, as before the lease existed.
+pub fn holds_resync_lease(data_dir: &std::path::Path) -> bool {
+    let held = lease_decision(data_dir, std::process::id(), now_ms(), pid_alive);
+    let mut last = MAC_LEASE_LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != Some(held) {
+        if let Some(other) = lease_holder(data_dir) {
+            if !held {
+                crate::note!(
+                    "mac: another Alchemy (pid {other}) is resyncing Mac items; this one leaves them to it"
+                );
+            } else if last.is_some() {
+                crate::note!("mac: this Alchemy (pid {other}) now resyncs Mac items");
+            }
+        }
+        *last = Some(held);
+    }
+    held
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn pid_alive(pid: u32) -> bool {
+    // Signal 0 delivers nothing and only checks the target exists; EPERM
+    // means it exists and belongs to someone else.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The pid named in the lease file, if there is one.
+fn lease_holder(data_dir: &std::path::Path) -> Option<u32> {
+    let text = std::fs::read_to_string(data_dir.join(MAC_LEASE_FILE)).ok()?;
+    text.split_whitespace().next()?.parse().ok()
+}
+
+/// The decision itself, with time and liveness injected so it is testable.
+fn lease_decision(
+    data_dir: &std::path::Path,
+    me: u32,
+    now: i64,
+    alive: impl Fn(u32) -> bool,
+) -> bool {
+    let path = data_dir.join(MAC_LEASE_FILE);
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let mut parts = text.split_whitespace();
+        let pid: Option<u32> = parts.next().and_then(|p| p.parse().ok());
+        let at: i64 = parts.next().and_then(|a| a.parse().ok()).unwrap_or(0);
+        if let Some(pid) = pid {
+            let fresh = now.saturating_sub(at) < MAC_LEASE_TTL.as_millis() as i64;
+            if pid != me && fresh && alive(pid) {
+                return false;
+            }
+        }
+    }
+    // Ours to take or refresh. A failed write must not stop the resync:
+    // before the lease, every process resynced.
+    let _ = std::fs::write(&path, format!("{me} {now}\n"));
+    true
+}
+
 /// The resync sweep runs every minute, but Mac fetches go through osascript
 /// and permission-guarded databases — re-checking every 15 minutes is plenty
 /// for calendars and reminders. Manual refresh bypasses this.
@@ -856,6 +944,40 @@ pub fn sweep_due(source_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resync_lease_is_taken_refreshed_and_yielded() {
+        let dir = tempfile::tempdir().unwrap();
+        let ttl = MAC_LEASE_TTL.as_millis() as i64;
+        // Nobody holds it: taken.
+        assert!(lease_decision(dir.path(), 100, 1_000, |_| true));
+        assert_eq!(lease_holder(dir.path()), Some(100));
+        // The holder refreshes it, whatever the clock says.
+        assert!(lease_decision(dir.path(), 100, 1_000 + ttl * 2, |_| true));
+        // A fresh lease held by a live process: yield.
+        assert!(!lease_decision(
+            dir.path(),
+            200,
+            1_000 + ttl * 2 + 10,
+            |_| true
+        ));
+        assert_eq!(lease_holder(dir.path()), Some(100));
+        // The holder's pid is gone: taken over.
+        assert!(lease_decision(
+            dir.path(),
+            200,
+            1_000 + ttl * 2 + 20,
+            |pid| pid != 100
+        ));
+        assert_eq!(lease_holder(dir.path()), Some(200));
+        // A live holder whose stamp went stale (hung): taken over.
+        assert!(lease_decision(dir.path(), 300, 1_000 + ttl * 4, |_| true));
+        assert_eq!(lease_holder(dir.path()), Some(300));
+        // Garbage in the file yields nothing and is overwritten.
+        std::fs::write(dir.path().join(MAC_LEASE_FILE), "not a lease").unwrap();
+        assert!(lease_decision(dir.path(), 400, 5, |_| true));
+        assert_eq!(lease_holder(dir.path()), Some(400));
+    }
 
     // The exact stderr shapes seen in the wild (prod app without Full Disk
     // Access) — the user must never see raw JSON or tracebacks.

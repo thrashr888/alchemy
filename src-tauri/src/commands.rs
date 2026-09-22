@@ -4630,6 +4630,11 @@ pub(crate) async fn resync_mac_provider(
     provider: &str,
 ) -> Result<FolderScan, String> {
     let _guard = state.folder_scan_lock.lock().await;
+    // Unattended: only the lease holder resyncs (mac.rs), or two running
+    // copies take turns re-importing each other's rendering.
+    if !crate::mac::holds_resync_lease(&app_data_dir(state)) {
+        return Ok(FolderScan::default());
+    }
     let prefix = format!("cider://{provider}/");
     let archived = state.db.archived_notebook_ids().await.unwrap_or_default();
     let mut total = FolderScan::default();
@@ -6435,6 +6440,9 @@ pub(crate) async fn resync_sources_filtered(
     // file changes. Deleted files leave the source untouched; cloud-evicted
     // files aren't read (that would force a download).
     let data_dir = app_data_dir(state);
+    // Mac items resync unattended in one process only (mac.rs): checked once
+    // per pass, which also keeps the holder's lease fresh.
+    let mac_lease = crate::mac::holds_resync_lease(&data_dir);
     for src in e(state.db.all_loose_sources().await)? {
         if archived.contains(&src.notebook_id) {
             continue;
@@ -6476,7 +6484,7 @@ pub(crate) async fn resync_sources_filtered(
         // Mac items re-fetch on their own gentler cadence (osascript-backed);
         // re-embed only when the content hash moved.
         if crate::mac::is_mac_uri(&src.url) {
-            if !crate::mac::sweep_due(&src.id) {
+            if !mac_lease || !crate::mac::sweep_due(&src.id) {
                 continue;
             }
             match crate::mac::fetch(&src.url).await {
