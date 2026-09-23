@@ -543,13 +543,10 @@ const WEB_MODES = [
   },
 ];
 
-/** Chat ⇄ Reader segmented control for the WINDOW toolbar (Apple puts view
- *  switching in the titlebar — Notes, Safari). Renders nothing until a
- *  document has been opened, so fresh notebooks keep the plain toolbar.
- *
- *  Hand-drawn rather than `ui.Segmented`: the Reader tab is disabled until
- *  a document has been opened, with its own explanatory title, and the
- *  primitive has no disabled segment. */
+/** Chat ⇄ Reader ⇄ Gallery ⇄ Grow segmented control for the WINDOW toolbar
+ *  (Apple puts view switching in the titlebar — Notes, Safari). The one
+ *  `ui.Segmented` that is navigation: one size up, Reader dimmed until a
+ *  document has been opened. */
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
   const active = useStore((s) =>
@@ -561,66 +558,44 @@ export function CenterModeTabs() {
           ? "reader"
           : "chat",
   );
-  const tab = (
-    id: "chat" | "reader" | "gallery" | "grow",
-    icon: React.ReactNode,
-    label: string,
-    onClick: () => void,
-    disabled = false,
-  ) => (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active === id}
-      disabled={disabled}
-      title={disabled ? "Open a source or note to read it here" : label}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium transition-colors",
-        active === id
-          ? "bg-surface-2 text-foreground"
-          : "text-muted-foreground hover:text-foreground",
-        disabled && "cursor-default opacity-40 hover:text-muted-foreground",
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-  const s = useStore.getState();
+  const show = (mode: "chat" | "reader" | "gallery" | "grow") => {
+    const s = useStore.getState();
+    if (mode === "chat") {
+      useStore.setState({ galleryOpen: false, growOpen: false });
+      s.closeReader();
+    } else if (mode === "reader") {
+      useStore.setState((st) => ({
+        galleryOpen: false,
+        growOpen: false,
+        reader: { ...st.reader, open: true },
+      }));
+    } else if (mode === "gallery") {
+      useStore.setState({ galleryOpen: true, growOpen: false });
+    } else {
+      useStore.setState({ galleryOpen: false, growOpen: true });
+    }
+  };
+  // The one segmented control that is navigation: the same track as every
+  // other, one size up, with Reader dimmed until there is something to read.
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
-      {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
-        useStore.setState({
-          galleryOpen: false,
-          growOpen: false,
-        });
-        s.closeReader();
-      })}
-      {tab(
-        "reader",
-        <BookOpen className="h-3.5 w-3.5" />,
-        "Reader",
-        () =>
-          useStore.setState((st) => ({
-            galleryOpen: false,
-            growOpen: false,
-            reader: { ...st.reader, open: true },
-          })),
-        !hasDocs,
-      )}
-      {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
-        useStore.setState({
-          galleryOpen: true,
-          growOpen: false,
-        }),
-      )}
-      {tab("grow", <Sprout className="h-3.5 w-3.5" />, "Grow", () =>
-        useStore.setState({
-          growOpen: true,
-          galleryOpen: false,
-        }),
-      )}
-    </div>
+    <Segmented
+      label="Center"
+      size="md"
+      value={active}
+      onChange={show}
+      options={[
+        { value: "chat", label: "Chat", icon: <MessageSquare className="h-3.5 w-3.5" />, hint: "Chat" },
+        {
+          value: "reader",
+          label: "Reader",
+          icon: <BookOpen className="h-3.5 w-3.5" />,
+          hint: hasDocs ? "Reader" : "Open a source or note to read it here",
+          disabled: !hasDocs,
+        },
+        { value: "gallery", label: "Gallery", icon: <LayoutGrid className="h-3.5 w-3.5" />, hint: "Gallery" },
+        { value: "grow", label: "Grow", icon: <Sprout className="h-3.5 w-3.5" />, hint: "Grow" },
+      ]}
+    />
   );
 }
 

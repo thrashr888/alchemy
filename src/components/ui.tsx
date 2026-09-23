@@ -1816,6 +1816,9 @@ export type SegmentedOption<T extends string> = {
   icon?: React.ReactNode;
   /** Tooltip and accessible name. Required when there is no label. */
   hint?: string;
+  /** A segment that cannot be chosen right now (Reader before any document
+   *  is open). Shown dimmed; its `hint` says why. */
+  disabled?: boolean;
 };
 
 /**
@@ -1829,6 +1832,7 @@ export function Segmented<T extends string>({
   value,
   onChange,
   label,
+  size = "sm",
   className,
 }: {
   options: readonly SegmentedOption<T>[];
@@ -1836,6 +1840,9 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   /** Accessible name for the group ("View", "Sort"). */
   label: string;
+  /** `sm` (11px) in pane toolbars; `md` (12px) for the title bar's mode
+   *  tabs, the one segmented control that is navigation. */
+  size?: "sm" | "md";
   className?: string;
 }) {
   return (
@@ -1855,14 +1862,17 @@ export function Segmented<T extends string>({
             type="button"
             onClick={() => onChange(option.value)}
             aria-pressed={active}
+            disabled={option.disabled}
             title={option.hint}
             aria-label={option.label ? undefined : option.hint}
             className={cn(
-              "inline-flex items-center gap-1 rounded-md text-micro font-medium transition-colors",
-              option.label ? "px-2 py-0.5" : "p-1.5",
+              "inline-flex items-center rounded-md font-medium transition-colors",
+              size === "md" ? "gap-1.5 text-caption" : "gap-1 text-micro",
+              option.label ? (size === "md" ? "px-2 py-1" : "px-2 py-0.5") : "p-1.5",
               active
                 ? "bg-surface-2 text-foreground"
                 : "text-muted-foreground hover:text-foreground",
+              option.disabled && "cursor-default opacity-40 hover:text-muted-foreground",
             )}
           >
             {option.icon}
