@@ -1407,7 +1407,16 @@ impl AgentCli {
                                     .unwrap_or("a tool");
                                 emit_step(tool_step_label(name), false);
                             }
-                            "error" => errored = Some(copilot_error_message(&v)),
+                            // Copilot 1.0.84 reports a failed run as
+                            // `session.error` (quota, auth, a model that is
+                            // not enabled) with the reason in data.message,
+                            // then a `result` whose exitCode is 1. Only the
+                            // exit code reached the user until this arm
+                            // existed: "copilot exited with code 1" for a
+                            // spent monthly quota.
+                            "error" | "session.error" => {
+                                errored = Some(copilot_error_message(&v));
+                            }
                             "result" => {
                                 let code = v["exitCode"].as_i64().unwrap_or(0);
                                 if code != 0 && errored.is_none() {
@@ -2082,6 +2091,41 @@ printf '%s\n' '{reply}'
 
     /// Through the real spawn: the argv copilot receives carries the JSON,
     /// no-MCP, model and effort flags, in the order the CLI needs them.
+    /// A spent quota comes back as `session.error` + `result{exitCode:1}`
+    /// (verified live, CLI 1.0.84, HTTP 402). The reason must reach the user,
+    /// not the exit code.
+    #[tokio::test]
+    async fn copilot_session_error_is_the_message_not_the_exit_code() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copilot");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+cat > /dev/null
+printf '%s\n' '{"type":"session.error","data":{"errorType":"quota","message":"You have exceeded your monthly quota (Request ID: X)","statusCode":402,"errorCode":"quota_exceeded"}}'
+printf '%s\n' '{"type":"result","exitCode":1,"usage":{"premiumRequests":0}}'
+exit 1
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = AgentCli::with_binary_for_test(AgentKind::Copilot, path);
+        let err = match tokio::time::timeout(
+            Duration::from_secs(20),
+            cli.chat(&[ChatTurn::user("Say OK")]),
+        )
+        .await
+        .expect("provider must finish")
+        {
+            Ok(_) => panic!("a 402 is an error"),
+            Err(err) => err,
+        };
+        let text = format!("{err:#}");
+        assert!(text.contains("exceeded your monthly quota"), "{text}");
+        assert!(!text.contains("exited with code"), "{text}");
+    }
+
     #[tokio::test]
     async fn copilot_is_spawned_with_json_no_mcp_and_effort_flags() {
         let cli = AgentCli {
