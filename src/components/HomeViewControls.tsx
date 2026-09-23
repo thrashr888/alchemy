@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { cn, shortcutBlocked } from "@/lib/utils";
+import { Segmented } from "./ui";
 import {
   ChevronDown,
   ChevronUp,
@@ -17,6 +18,20 @@ import {
   Search,
   X,
 } from "lucide-react";
+
+/** Cards or rows, icon-only: the hint is where the meaning lives. */
+const HOME_VIEWS = [
+  {
+    value: "grid" as const,
+    icon: <LayoutGrid className="h-3.5 w-3.5" />,
+    hint: "Grid view",
+  },
+  {
+    value: "table" as const,
+    icon: <List className="h-3.5 w-3.5" />,
+    hint: "Table view",
+  },
+];
 
 /** Case-insensitive substring over whatever the row shows as its name. */
 export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
@@ -120,31 +135,12 @@ export function HomeViewControls({
           ))}
         </select>
       )}
-      <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-        {(
-          [
-            ["grid", "Grid", LayoutGrid],
-            ["table", "Table", List],
-          ] as const
-        ).map(([id, label, Icon]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setView(id)}
-            aria-pressed={view === id}
-            title={`${label} view`}
-            aria-label={`${label} view`}
-            className={cn(
-              "rounded-md p-1.5 transition-colors",
-              view === id
-                ? "bg-surface-2 text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-3.5 w-3.5" />
-          </button>
-        ))}
-      </div>
+      <Segmented
+        label="View"
+        options={HOME_VIEWS}
+        value={view}
+        onChange={setView}
+      />
       {trailing}
     </div>
   );

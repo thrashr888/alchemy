@@ -13,6 +13,7 @@ import {
   ResizeHandle,
   RowMenu,
   type RowMenuItem,
+  SortMenu,
   Spinner,
   CardAction,
   useHoverCard,
@@ -53,7 +54,6 @@ import {
   FolderOpen,
   ChevronDown,
   ChevronUp,
-  ArrowUpDown,
 } from "lucide-react";
 
 /** How the notes list is ordered. Recency is the default because the list is
@@ -723,17 +723,11 @@ export function StudioPanel() {
             {/* A menu rather than a select: the panel is 320px at rest, and
                 the three orders are a one-of choice, which is what a radio
                 menu item says out loud. */}
-            <RowMenu
+            <SortMenu
               label="Sort notes"
-              alwaysVisible
-              rowContext={false}
-              trigger={<ArrowUpDown className="h-3.5 w-3.5" />}
-              triggerClassName="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-              items={NOTE_SORTS.map((s) => ({
-                label: s.label,
-                checked: noteSort === s.value,
-                onClick: () => changeNoteSort(s.value),
-              }))}
+              value={noteSort}
+              options={NOTE_SORTS}
+              onChange={changeNoteSort}
             />
             <Button
               variant="ghost"

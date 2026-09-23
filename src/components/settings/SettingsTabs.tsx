@@ -10,7 +10,7 @@ import type { BuildInfo, ChatConfig, ReleaseNote } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
 import { Markdown } from "../Markdown";
-import { Button, EmptyState, Input, Spinner, Textarea } from "../ui";
+import { Button, Chip, EmptyState, Input, Spinner, Textarea } from "../ui";
 import {
   AlignLeft,
   Braces,
@@ -170,27 +170,27 @@ export function ChatTab() {
       <Field label="Chat font" hint="Display only; this does not change the model.">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_FONTS.map((font) => (
-            <Pill key={font.id} active={reading.font === font.id} onClick={() => setReading({ font: font.id })}>
+            <Chip key={font.id} active={reading.font === font.id} onClick={() => setReading({ font: font.id })}>
               <span className={font.className}>{font.label}</span>
-            </Pill>
+            </Chip>
           ))}
         </div>
       </Field>
       <Field label="Text size">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_SIZES.map((size) => (
-            <Pill key={size.id} active={reading.fontSize === size.id} onClick={() => setReading({ fontSize: size.id })}>
+            <Chip key={size.id} active={reading.fontSize === size.id} onClick={() => setReading({ fontSize: size.id })}>
               {size.label}
-            </Pill>
+            </Chip>
           ))}
         </div>
       </Field>
       <Field label="Alignment">
         <div className="flex flex-wrap gap-1.5">
           {CHAT_ALIGNS.map((alignment) => (
-            <Pill key={alignment.id} active={reading.textAlign === alignment.id} onClick={() => setReading({ textAlign: alignment.id })}>
+            <Chip key={alignment.id} active={reading.textAlign === alignment.id} onClick={() => setReading({ textAlign: alignment.id })}>
               {alignment.label}
-            </Pill>
+            </Chip>
           ))}
         </div>
       </Field>
@@ -302,24 +302,24 @@ export function AppearanceTab() {
         hint="Experimental: the desktop blurs through the chrome like native macOS apps. Tinted keeps more body; Clear lets more through."
       >
         <div className="flex flex-wrap gap-1.5">
-          <Pill
+          <Chip
             active={!reading.glass}
             onClick={() => setReading({ glass: false })}
           >
             Off
-          </Pill>
-          <Pill
+          </Chip>
+          <Chip
             active={reading.glass && reading.glassStyle === "tinted"}
             onClick={() => setReading({ glass: true, glassStyle: "tinted" })}
           >
             Tinted
-          </Pill>
-          <Pill
+          </Chip>
+          <Chip
             active={reading.glass && reading.glassStyle === "clear"}
             onClick={() => setReading({ glass: true, glassStyle: "clear" })}
           >
             Clear
-          </Pill>
+          </Chip>
         </div>
       </Field>
     </div>
@@ -769,10 +769,6 @@ function OptionTile({
       </span>
     </button>
   );
-}
-
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("rounded-md border px-3 py-1.5 text-caption transition-colors", active ? "border-primary/60 bg-primary/15 text-citation" : "border-border bg-surface-2 text-muted-foreground hover:text-foreground")}>{children}</button>;
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
