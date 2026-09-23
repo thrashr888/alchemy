@@ -151,6 +151,33 @@ introduce a webfont; the system stack is deliberate.
   lives in the row's ⋯ menu (`ui.RowMenu`), which right-clicking the row
   opens too (§9, objects are direct). List containers are `select-none`:
   row text is chrome, never a text selection.
+- **Toggle chips** (`ui.Chip`): one option in a filter row, a tag to narrow
+  by, a mode a pane can be in. Radius 6px, no border; at rest muted text,
+  selected = `surface-2` fill + medium weight — the same quiet tinted pill
+  every active control uses. `sm` (12px) in filter rows, `xs` (11px) in
+  dense strips. **Never the accent for a selected filter**: selection is
+  not a status, so color there would mean nothing (§1). The one colored
+  element a chip may carry is a `dot` swatch standing for a colored thing.
+- **Segmented controls** (`ui.Segmented`): two to four exclusive states of
+  one thing (grid/table, newest/A–Z) in one bordered 8px track, segments
+  6px, the active one `surface-2`. Icon-only segments carry `hint` as
+  their name. More than four options, or long names: a `Select`.
+- **Sorting**: tables sort by their column headers (`HomeTable`: the
+  header is the button, the arrow shows direction, text starts ascending
+  and counts and dates descending). Every other list sorts through
+  `ui.SortMenu` — an ArrowUpDown trigger opening a radio menu with the
+  current order ticked — so the affordance reads the same in Studio, the
+  gallery and the registry. No bare `<select>` for sort, no two-way
+  toggle: even a two-order list uses the menu.
+- **Filter fields** (`ui.SearchField`): the search glass drawn in at left,
+  a clear button once there is text, `type="search"`. `quiet` (28px,
+  transparent fill) inside a side card, where a filled box would be a box
+  in a box; `field` (32px, `surface-2`) in a page toolbar beside other
+  32px controls. Placeholder reads "Filter <things>…".
+- **Checkboxes**: a real `<input type="checkbox">` with the `select-quiet`
+  class for list selection (Finder-style, §9); a `ui.Switch` for a setting
+  that is on or off. Never a checkbox for a setting, never a switch for a
+  selection.
 - **Menus**: `menu-glass` material (see §2), hairline edge (see §6), radius 6px, 13px items;
   open focuses the first item, arrows cycle, Escape closes and restores focus,
   `role="menu"`/`menuitem`.
@@ -191,6 +218,34 @@ introduce a webfont; the system stack is deliberate.
   section rows (one label, then empties) render as muted subheads
   (`.tr-section`); an all-blank header row renders as nothing. Cells wrap
   at word boundaries only — wide tables scroll, words never shatter.
+
+### Consistency ledger
+
+One app does not need a design system, but it does need one answer per
+question. The primitives above are those answers; a component that draws
+its own version of one is a bug unless it is listed here with its reason.
+The measurable check (2026-09-22): raw `<select>`s outside `ui.tsx` went
+from 17 to 0; toggle chips from four drawn styles to one; sort controls
+from four shapes to two (headers for tables, the menu for the rest);
+filter fields from three to one. Raw `<button>`s (216) are fine — most are
+icon buttons and row bodies styled for their spot; the rule is that a
+button that *looks like* a primitive uses the primitive.
+
+Justified exceptions, kept on purpose:
+
+- **Onboarding doors** are cards with a title and a note, not chips —
+  they carry a paragraph, and a chip cannot. They keep their own layout
+  and the accent border for the chosen door: choosing a model is the one
+  place first-run color means something.
+- **The graph's degree badge** (`GraphView`) is a tabular-nums label that
+  toggles a highlight; it reads as data, not a filter, and stays a plain
+  label.
+- **The reader's title field** and the command palette's input are
+  transparent, unbordered inputs by design: the text *is* the surface.
+- **The chat composer** is its own component: a growing textarea with its
+  toolbar, not an `Input`.
+- **Studio's generator tiles** (`GenTile`) are buttons with a family accent
+  on the icon; the accent is wayfinding for note kinds (§2), not a state.
 
 ## 5. Layout Principles
 
