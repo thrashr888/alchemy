@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
+import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
@@ -33,6 +34,8 @@ import {
   MessageSquare,
   Palette,
   Info,
+  UserRound,
+  Keyboard,
   SlidersHorizontal,
   FolderGit2,
   Wand2,
@@ -53,8 +56,10 @@ const TABS = [
   { id: "studio", label: "Studio", icon: Wand2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "chat", label: "Chat", icon: MessageSquare },
+  { id: "personalization", label: "Personalization", icon: UserRound },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "activity", label: "Activity", icon: ChartNoAxesColumn },
   { id: "about", label: "About", icon: Info },
 ];
@@ -76,15 +81,12 @@ export function SettingsDialog({
     s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
   );
 
-  // Two tabs folded away in 2026-09 (docs/RFC-ablation.md item 6); a caller
-  // still asking for them lands where their panels went.
-  const FOLDED: Record<string, string> = { personalization: "chat", shortcuts: "about" };
-  const [tab, setTab] = useState(FOLDED[initialTab] ?? initialTab);
+  const [tab, setTab] = useState(initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) setTab(FOLDED[initialTab] ?? initialTab);
+    if (open) setTab(initialTab);
   }, [open, initialTab]);
 
   useEffect(() => {
@@ -159,7 +161,7 @@ export function SettingsDialog({
       open={open}
       onClose={onClose}
       title="Settings"
-      width={tab === "about" ? "max-w-4xl" : "max-w-2xl"}
+      width={tab === "shortcuts" ? "max-w-4xl" : "max-w-2xl"}
       tall
       bodyScroll={false}
       hideHeader
@@ -241,14 +243,8 @@ export function SettingsDialog({
             />
           )}
           {tab === "models" && <PodcastVoicesSection />}
-          {tab === "chat" && (
-            <>
-              <ChatTab />
-              <FoldedSection title="About you" hint="Who the assistant is talking to, and what to call it.">
-                <PersonalizationTab />
-              </FoldedSection>
-            </>
-          )}
+          {tab === "chat" && <ChatTab />}
+          {tab === "personalization" && <PersonalizationTab />}
 
 
           {tab === "agents" && <AgentsTab />}
@@ -258,14 +254,8 @@ export function SettingsDialog({
 
           {tab === "activity" && <ActivityTab />}
 
-          {tab === "about" && (
-            <>
-              <AboutTab />
-              <FoldedSection title="Keyboard shortcuts" hint="Every shortcut the menus register.">
-                <ShortcutsTab />
-              </FoldedSection>
-            </>
-          )}
+          {tab === "shortcuts" && <ShortcutsTab />}
+          {tab === "about" && <AboutTab />}
           </div>
         </div>
       </div>
@@ -336,6 +326,12 @@ function GeneralTab() {
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateFlow | null>(null);
   const [installing, setInstalling] = useState(false);
+  // The version in hand, beside the button that asks whether there is a
+  // newer one — the answer to "am I current?" should not need About.
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion(""));
+  }, []);
 
   // "Check for Updates…" from the app menu lands here with the flag set;
   // the quiet startup check leaves `updateAvailable` behind — either way,
@@ -390,6 +386,11 @@ function GeneralTab() {
           >
             Check for updates…
           </Button>
+          {version && (
+            <span className="text-caption text-muted-foreground">
+              {update?.status === "none" ? `${version} · up to date` : version}
+            </span>
+          )}
           {update?.status === "available" && (
             <Button
               variant="primary"
@@ -1539,26 +1540,5 @@ function PodcastVoicesSection() {
         </div>
       </div>
     </Field>
-  );
-}
-
-/** Two settings tabs a person opens once (Personalization, Shortcuts) now
- *  live at the foot of the tab they belong with (docs/RFC-ablation.md
- *  item 6): the same panel, under a rule and a heading, no third level. */
-function FoldedSection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mt-8 border-t border-border pt-6">
-      <h3 className="text-body font-medium text-foreground">{title}</h3>
-      <p className="mt-0.5 mb-4 text-caption text-muted-foreground">{hint}</p>
-      {children}
-    </section>
   );
 }
