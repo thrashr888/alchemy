@@ -52,8 +52,7 @@ import {
   ShieldCheck,
   FolderOpen,
   ChevronDown,
-  ChevronUp,
-} from "lucide-react";
+  ChevronUp, RotateCw } from "lucide-react";
 
 /** How the notes list is ordered. Recency is the default because the list is
  *  mostly a record of what was just made; the other two are for finding a
@@ -253,6 +252,16 @@ export function StudioPanel() {
   const templates = useStore((s) => s.templates);
   const generateFromTemplate = useStore((s) => s.generateFromTemplate);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
+  // A failed generation keeps its row (the prompt is the record of what was
+  // asked); Retry deletes that attempt and asks again with the same prompt.
+  // Shared by the row's inline verb and its menu, so the two never drift.
+  const retryNote = (n: Note) => {
+    void (async () => {
+      const full = await api.readNote(n.id);
+      await deleteNote(n.id);
+      await useStore.getState().generateArtifact(n.kind, full.prompt);
+    })().catch((error) => useStore.getState().pushToast("error", String(error)));
+  };
   const toggleStudio = useStore((s) => s.toggleStudio);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
@@ -880,6 +889,17 @@ export function StudioPanel() {
                               },
                             ]
                           : [
+                        // A failed attempt: the fix is the first verb, not
+                        // buried under Copy Text (Reminders, 2026-09-23).
+                        ...(n.status === "error"
+                          ? [
+                              {
+                                label: "Retry",
+                                icon: <RotateCw className="h-3.5 w-3.5" />,
+                                onClick: () => retryNote(n),
+                              },
+                            ]
+                          : []),
                         { label: "", separator: true, onClick: () => {} },
                         {
                           label: "Copy Text",
@@ -977,15 +997,7 @@ export function StudioPanel() {
                         <Badge>failed</Badge>
                         <button
                           type="button"
-                          onClick={() => {
-                            void (async () => {
-                              const full = await api.readNote(n.id);
-                              await deleteNote(n.id);
-                              await useStore
-                                .getState()
-                                .generateArtifact(n.kind, full.prompt);
-                            })().catch((error) => useStore.getState().pushToast("error", String(error)));
-                          }}
+                          onClick={() => retryNote(n)}
                           className="rounded px-1 py-0.5 text-subtle-foreground hover:text-foreground"
                           title="Delete this attempt and generate again"
                         >
