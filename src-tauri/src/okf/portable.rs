@@ -490,7 +490,13 @@ pub(super) fn prepare(
             .map(|(id, _)| id.clone())
             .collect();
         if owners.len() > 1 {
-            return Err("Multiple local rows claim one portable sync identity".into());
+            // Name the file and the rows: a bare refusal left a notebook
+            // unsynced for a day while the culprit (a twin's row surviving
+            // its file being set aside) was found by hand.
+            return Err(format!(
+                "Multiple local rows claim one portable sync identity: {rel} is claimed by rows {}. Delete the duplicate note (its file stays) and the notebook syncs again",
+                owners.join(", ")
+            ));
         }
         if let Some(id) = owners.first() {
             let entry = candidate.concepts.get_mut(id).unwrap();
