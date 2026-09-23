@@ -1137,7 +1137,41 @@ function AgentsTab() {
       .then(setConnectors)
       .catch(() => setConnectors([]));
   }
-  useEffect(refresh, []);
+  // The rows read files other apps write — Cursor's config after its
+  // install sheet, Claude Desktop's registry, a plugin install from a
+  // terminal — so a read at mount alone goes stale the moment the user
+  // leaves to say yes somewhere else. Re-read whenever the window comes
+  // back, and, after a Connect the client finishes itself, poll for a
+  // couple of minutes so the row turns green while they watch.
+  const watching = useRef<number | null>(null);
+  useEffect(() => {
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      if (watching.current !== null) window.clearInterval(watching.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function watchUntilConfigured(id: string, name: string) {
+    if (watching.current !== null) window.clearInterval(watching.current);
+    let polls = 0;
+    watching.current = window.setInterval(() => {
+      polls += 1;
+      api
+        .listAgentConnectors()
+        .then((list) => {
+          setConnectors(list);
+          const row = list.find((x) => x.id === id);
+          if (row?.configured || polls >= 40) {
+            if (watching.current !== null) window.clearInterval(watching.current);
+            watching.current = null;
+            if (row?.configured) pushToast("success", `${name} connected.`);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+  }
 
   if (!aiConfig) return null;
   const running = status?.running ?? false;
@@ -1159,6 +1193,8 @@ function AgentsTab() {
               ? `${updated.name} connected. Restart it to pick up the change.`
               : `Skill installed for ${updated.name}`),
         );
+        if (updated.connectNote && !updated.configured)
+          watchUntilConfigured(updated.id, updated.name);
       })
       .catch((e) =>
         pushToast("error", e instanceof Error ? e.message : String(e)),
