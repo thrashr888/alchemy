@@ -1,0 +1,20 @@
+{
+  "name": "alchemy",
+  "displayName": "Alchemy",
+  "version": "1.0.0",
+  "description": "Search and read your Alchemy notebooks from Claude Code: the notebook tools plus the skill that teaches Claude how to use them.",
+  "author": {
+    "name": "Paul Thrasher",
+    "url": "https://github.com/thrashr888/alchemy"
+  },
+  "homepage": "https://github.com/thrashr888/alchemy",
+  "repository": "https://github.com/thrashr888/alchemy",
+  "license": "MPL-2.0",
+  "keywords": [
+    "notebook",
+    "research",
+    "search",
+    "local-first",
+    "rag"
+  ]
+}

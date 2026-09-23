@@ -210,13 +210,20 @@ two-host podcast voiced on-device.*
   Note, add a reminder) — and connect Mac items themselves by passing a
   `cider://` origin (a Reminders list, Notes note, Calendar window, or Stocks
   watchlist) to `add_source` — with changes appearing live in the app. One-click connect (config + companion skill) for
-  **Claude Code, OpenAI Codex, GitHub Copilot, VS Code, OpenCode, Gemini CLI,
-  Google Antigravity, Factory Droid, AWS Kiro, IBM Bob, Hermes, Prime Agent,
-  and Pi** in Settings → Agents (see `docs/RFC-mcp-server.md`). The companion skill is
+  **Claude Code, Claude Desktop, OpenAI Codex, GitHub Copilot, VS Code, Cursor,
+  OpenCode, Gemini CLI, Google Antigravity, Factory Droid, AWS Kiro, IBM Bob,
+  Hermes, Prime Agent, and Pi** in Settings → Agents (see `docs/RFC-mcp-server.md`). The companion skill is
   also on [skills.sh](https://skills.sh/thrashr888/alchemy/alchemy):
 
   ```bash
   npx skills add thrashr888/alchemy@alchemy
+  ```
+
+  Claude Code can take the skill and the server together as a plugin:
+
+  ```bash
+  claude plugin marketplace add thrashr888/alchemy
+  claude plugin install alchemy@alchemy
   ```
 - **Command line** — a thin `alchemy` client talks to the embedded MCP
   server in the running app; it does not open a second database or start a
