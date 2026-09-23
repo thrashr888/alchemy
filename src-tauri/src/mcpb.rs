@@ -32,12 +32,16 @@ pub const EXTENSION_NAME: &str = "Alchemy";
 const ENTRY_POINT: &str = "server/index.mjs";
 
 /// What Claude Desktop reads first. `manifest_version` is what the current
-/// spec requires; `dxt_version` rides along because readers from the Desktop
-/// Extension era only know that one, and neither confuses the other.
+/// spec requires; `dxt_version` rides along for readers from the Desktop
+/// Extension era. Both carry the same value: Claude Desktop's validator
+/// checks `dxt_version` against the literal "0.3" when the field is
+/// present, and refused the bundle outright ("Invalid manifest:
+/// dxt_version: Invalid literal value, expected \"0.3\"") while it read
+/// "0.1".
 fn manifest(tools: &[(String, Option<String>)]) -> serde_json::Value {
     serde_json::json!({
         "manifest_version": "0.3",
-        "dxt_version": "0.1",
+        "dxt_version": "0.3",
         "name": EXTENSION_NAME,
         "display_name": "Alchemy",
         "version": env!("CARGO_PKG_VERSION"),
@@ -143,6 +147,8 @@ mod tests {
         assert!(read(&mut zip, entry).contains("mcp-session-id"));
 
         assert_eq!(manifest["manifest_version"], "0.3");
+        // Claude Desktop rejects any other literal here (2026-09-22).
+        assert_eq!(manifest["dxt_version"], "0.3");
         assert_eq!(manifest["name"], EXTENSION_NAME);
         assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
