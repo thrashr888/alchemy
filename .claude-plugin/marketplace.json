@@ -1,0 +1,18 @@
+{
+  "name": "alchemy",
+  "owner": {
+    "name": "Paul Thrasher",
+    "url": "https://github.com/thrashr888"
+  },
+  "metadata": {
+    "description": "Alchemy, the local-first research notebook, for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "alchemy",
+      "source": "./plugins/claude-code",
+      "description": "Search and read your Alchemy notebooks from Claude Code.",
+      "category": "productivity"
+    }
+  ]
+}

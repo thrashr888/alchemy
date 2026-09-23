@@ -145,6 +145,7 @@ The dialects, as researched July 2026 (they genuinely all differ):
 | OpenCode | `~/.config/opencode/opencode.json` | `mcp.<n> = {type:"remote", url, enabled}` | `~/.config/opencode/skills` |
 | Gemini CLI | `~/.gemini/settings.json` | `mcpServers.<n> = {httpUrl}` (`url` would mean SSE) | `~/.gemini/skills` |
 | Antigravity | `~/.gemini/config/mcp_config.json` + legacy `~/.gemini/antigravity/mcp_config.json` (write both) | `mcpServers.<n> = {serverUrl}` | `~/.gemini/skills` |
+| Cursor | `~/.cursor/mcp.json` — **written by Cursor** after its install link (`cursor://anysphere.cursor-deeplink/mcp/install?name=&config=<base64>`) | `mcpServers.<n> = {url, headers}` | — (rules, not skills) |
 | Hermes Agent | `~/.hermes/config.yaml` — **manual**: `hermes mcp add alchemy --url …` | `mcp_servers.<n>.url` (YAML) | `~/.hermes/skills/research` |
 | AWS Kiro | `~/.kiro/settings/mcp.json` | `mcpServers.<n> = {url}` (transport auto-negotiated) | `~/.kiro/skills` |
 | IBM Bob | `~/.bob/mcp.json` + `~/.bob/mcp_settings.json` (IDE/Shell disagree; write both) | `mcpServers.<n> = {type:"streamable-http", url}` — bare `url` falls back to legacy SSE | `~/.bob/skills` |

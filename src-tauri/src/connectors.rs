@@ -98,6 +98,18 @@ enum Strategy {
         /// mcp.json beside it.
         bundle: &'static str,
     },
+    /// Open the client's own one-click install link (Cursor). Like the
+    /// bundle, the client raises its sheet and the user says yes; unlike the
+    /// bundle, the client then writes an ordinary MCP entry into its config,
+    /// which is where `configured` reads — the same JSON check `JsonMerge`
+    /// uses, on a file we never write.
+    Deeplink {
+        path: &'static str,
+        pointer: &'static [&'static str],
+        entry: fn(u16, &str) -> serde_json::Value,
+        url: fn(u16, &str) -> String,
+        note: &'static str,
+    },
 }
 
 struct Target {
@@ -128,6 +140,28 @@ fn json_snippet(key: &str, entry: &serde_json::Value) -> String {
 const MCPB_NOTE: &str = "Claude Desktop will ask to install the Alchemy extension. \
      After that, ask Claude about any notebook.";
 
+/// Same idea for Cursor, whose install link raises its own sheet.
+const CURSOR_NOTE: &str = "Cursor will ask to add the Alchemy server. \
+     Accept it, then ask Cursor about any notebook.";
+
+fn cursor_entry(port: u16, token: &str) -> serde_json::Value {
+    serde_json::json!({ "url": server_url(port), "headers": http_headers(token) })
+}
+
+/// Cursor's one-click install link: the server name and its config, the
+/// config as base64 JSON in the query (cursor.com/docs/mcp/install-links).
+/// The base64 is percent-encoded on top so `+`, `/` and `=` survive the URL.
+fn cursor_install_link(port: u16, token: &str) -> String {
+    use base64::Engine;
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    let config =
+        base64::engine::general_purpose::STANDARD.encode(cursor_entry(port, token).to_string());
+    format!(
+        "cursor://anysphere.cursor-deeplink/mcp/install?name=alchemy&config={}",
+        utf8_percent_encode(&config, NON_ALPHANUMERIC)
+    )
+}
+
 static TARGETS: &[Target] = &[
     Target {
         id: "claude",
@@ -146,7 +180,9 @@ static TARGETS: &[Target] = &[
         skill_files: STD_SKILL,
         snippet: |port, _token| {
             format!(
-                "Use Connect, or run claude mcp add with --header Authorization:Bearer… at {}",
+                "Use Connect, or run claude mcp add with --header Authorization:Bearer… at {}. \
+                 As a plugin (skill + server in one): claude plugin marketplace add \
+                 thrashr888/alchemy && claude plugin install alchemy@alchemy",
                 server_url(port)
             )
         },
@@ -421,6 +457,33 @@ static TARGETS: &[Target] = &[
         },
     },
     Target {
+        id: "cursor",
+        name: "Cursor",
+        detect: &["/Applications/Cursor.app", ".cursor"],
+        // Cursor's documented path is its install link: Connect opens it,
+        // Cursor shows the server and the user accepts; Cursor then writes
+        // ~/.cursor/mcp.json itself and hot-loads the server. No skills dir
+        // of ours — Cursor's rules are a different mechanism.
+        strategies: &[Strategy::Deeplink {
+            path: ".cursor/mcp.json",
+            pointer: &["mcpServers"],
+            entry: cursor_entry,
+            url: cursor_install_link,
+            note: CURSOR_NOTE,
+        }],
+        skills_dirs: &[],
+        skill_files: STD_SKILL,
+        snippet: |port, _token| {
+            json_snippet(
+                "mcpServers",
+                &serde_json::json!({
+                    "url": server_url(port),
+                    "headers": { "Authorization": "Bearer <private token from Alchemy>" }
+                }),
+            )
+        },
+    },
+    Target {
         id: "prime",
         name: "Prime Agent",
         detect: &[".prime/agent"],
@@ -586,6 +649,7 @@ fn strategy_path(s: &Strategy) -> Option<&'static str> {
         Strategy::Manual { path, .. } => Some(path),
         Strategy::WriteFile { path, .. } => Some(path),
         Strategy::Mcpb { registry, .. } => Some(registry),
+        Strategy::Deeplink { path, .. } => Some(path),
     }
 }
 
@@ -614,23 +678,26 @@ fn mcpb_installed(home: &std::path::Path, registry: &str) -> bool {
 /// Does this config already contain an Alchemy entry from an earlier release?
 /// This intentionally ignores URL/token freshness and is used only to migrate
 /// connectors Alchemy previously installed, never to opt a new client in.
+/// Our entry in a client's JSON config, if the file parses and the pointer
+/// leads somewhere.
+fn json_alchemy_entry(
+    home: &std::path::Path,
+    path: &str,
+    pointer: &[&str],
+) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(resolve(home, path)).ok()?;
+    let root = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let mut node = &root;
+    for key in pointer {
+        node = node.get(key)?;
+    }
+    node.get("alchemy").cloned()
+}
+
 fn strategy_present(home: &std::path::Path, s: &Strategy) -> bool {
     match s {
-        Strategy::JsonMerge { path, pointer, .. } => {
-            let Ok(text) = std::fs::read_to_string(resolve(home, path)) else {
-                return false;
-            };
-            let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
-                return false;
-            };
-            let mut node = &root;
-            for key in *pointer {
-                let Some(next) = node.get(key) else {
-                    return false;
-                };
-                node = next;
-            }
-            node.get("alchemy").is_some()
+        Strategy::JsonMerge { path, pointer, .. } | Strategy::Deeplink { path, pointer, .. } => {
+            json_alchemy_entry(home, path, pointer).is_some()
         }
         Strategy::TomlAppend { path, .. } => std::fs::read_to_string(resolve(home, path))
             .is_ok_and(|text| {
@@ -649,23 +716,14 @@ fn strategy_configured(home: &std::path::Path, s: &Strategy, port: u16, token: &
             path,
             pointer,
             entry,
-        } => {
-            let Ok(text) = std::fs::read_to_string(resolve(home, path)) else {
-                return false;
-            };
-            let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
-                return false;
-            };
-            let mut node = &root;
-            for key in *pointer {
-                match node.get(key) {
-                    Some(n) => node = n,
-                    None => return false,
-                }
-            }
-            node.get("alchemy")
-                .is_some_and(|actual| json_contains(actual, &entry(port, token)))
         }
+        | Strategy::Deeplink {
+            path,
+            pointer,
+            entry,
+            ..
+        } => json_alchemy_entry(home, path, pointer)
+            .is_some_and(|actual| json_contains(&actual, &entry(port, token))),
         Strategy::TomlAppend { path, section } => std::fs::read_to_string(resolve(home, path))
             .is_ok_and(|text| {
                 section(port, token)
@@ -756,6 +814,18 @@ fn strategy_apply(
                 .status()
                 .map_err(|e| anyhow::anyhow!("could not open {}: {e}", file.display()))?;
             crate::note!("connectors: handed {} to its installer", file.display());
+            Ok(())
+        }
+        Strategy::Deeplink { url, .. } => {
+            let link = url(port, token);
+            std::process::Command::new("open")
+                .arg(&link)
+                .status()
+                .map_err(|e| anyhow::anyhow!("could not open the install link: {e}"))?;
+            crate::note!(
+                "connectors: opened an install link for {}",
+                link.split(':').next().unwrap_or("client")
+            );
             Ok(())
         }
     }
@@ -892,11 +962,11 @@ fn status_of(home: &std::path::Path, target: &Target, port: u16, token: &str) ->
         snippet: (target.snippet)(port, token),
         // Connect finishes the job for every strategy but this one, where
         // the client's own install sheet gets the last word.
-        connect_note: target
-            .strategies
-            .iter()
-            .any(|s| matches!(s, Strategy::Mcpb { .. }))
-            .then(|| MCPB_NOTE.to_string()),
+        connect_note: target.strategies.iter().find_map(|s| match s {
+            Strategy::Mcpb { .. } => Some(MCPB_NOTE.to_string()),
+            Strategy::Deeplink { note, .. } => Some(note.to_string()),
+            _ => None,
+        }),
         config_path: target
             .strategies
             .iter()
@@ -1100,6 +1170,77 @@ mod tests {
         );
         assert!(status_of(&home, t, 41414, TEST_TOKEN).configured);
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Cursor's link carries our server as base64 JSON, and "configured"
+    /// reads the file Cursor writes after the user accepts — Connect itself
+    /// never touches ~/.cursor/mcp.json.
+    #[test]
+    fn cursor_link_carries_the_entry_and_configured_reads_cursors_file() {
+        use base64::Engine;
+        let link = cursor_install_link(41414, TEST_TOKEN);
+        assert!(
+            link.starts_with("cursor://anysphere.cursor-deeplink/mcp/install?name=alchemy&config=")
+        );
+        let encoded = link.rsplit("config=").next().unwrap();
+        let b64 = percent_encoding::percent_decode_str(encoded)
+            .decode_utf8()
+            .unwrap();
+        let config: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::STANDARD
+                .decode(b64.as_bytes())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(config["url"], "http://127.0.0.1:41414/mcp");
+        assert_eq!(
+            config["headers"]["Authorization"],
+            format!("Bearer {TEST_TOKEN}")
+        );
+
+        let home = tmp_home();
+        let t = target("cursor");
+        let before = status_of(&home, t, 41414, TEST_TOKEN);
+        assert!(!before.configured);
+        assert!(before.can_auto);
+        assert_eq!(before.connect_note.as_deref(), Some(CURSOR_NOTE));
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(
+            home.join(".cursor/mcp.json"),
+            serde_json::json!({ "mcpServers": { "alchemy": config } }).to_string(),
+        )
+        .unwrap();
+        assert!(status_of(&home, t, 41414, TEST_TOKEN).configured);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// The Claude Code plugin ships copies of the skill and the stdio proxy:
+    /// a plugin directory has to be self-contained, and the app embeds the
+    /// originals, so this is what keeps the two from drifting apart.
+    #[test]
+    fn claude_code_plugin_carries_the_same_skill_and_proxy() {
+        assert_eq!(
+            include_str!("../../plugins/claude-code/skills/alchemy/SKILL.md"),
+            SKILL_MD
+        );
+        assert_eq!(
+            include_str!("../../plugins/claude-code/server/index.mjs"),
+            include_str!("../../skills/alchemy-mcpb/server/index.mjs")
+        );
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../plugins/claude-code/.claude-plugin/plugin.json"
+        ))
+        .unwrap();
+        assert_eq!(manifest["name"], "alchemy");
+        let mcp: serde_json::Value =
+            serde_json::from_str(include_str!("../../plugins/claude-code/.mcp.json")).unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["alchemy"]["args"][0],
+            "${CLAUDE_PLUGIN_ROOT}/server/index.mjs"
+        );
+        let market: serde_json::Value =
+            serde_json::from_str(include_str!("../../.claude-plugin/marketplace.json")).unwrap();
+        assert_eq!(market["plugins"][0]["source"], "./plugins/claude-code");
     }
 
     /// Prime Agent gets the full Python skill package (SKILL.md +
