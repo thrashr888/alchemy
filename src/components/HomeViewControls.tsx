@@ -9,14 +9,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { cn, shortcutBlocked } from "@/lib/utils";
-import {
-  ChevronDown,
-  ChevronUp,
-  LayoutGrid,
-  List,
-  Search,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, LayoutGrid, List } from "lucide-react";
+import { SearchField, SortMenu } from "./ui";
 
 /** Case-insensitive substring over whatever the row shows as its name. */
 export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
@@ -34,7 +28,7 @@ export function HomeViewControls({
   /** Optional section-specific control rendered after the view toggle —
    *  the Registry's "Suggest" lives here. Keep it one small button. */
   trailing?: React.ReactNode;
-  /** Optional sort order for the collection, rendered as a quiet select
+  /** Optional sort order for the collection, rendered as a `SortMenu`
    *  beside the view toggle. The caller persists the choice (the homeView
    *  localStorage idiom). */
   sort?: {
@@ -79,46 +73,29 @@ export function HomeViewControls({
 
   return (
     <div className="mb-3 flex items-center gap-2">
-      <div className="relative min-w-0 flex-1">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(e) => useStore.setState({ homeQuery: e.target.value })}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.stopPropagation();
-              useStore.setState({ homeQuery: "" });
-              inputRef.current?.blur();
-            }
-          }}
-          placeholder={placeholder}
-          className="h-8 w-full rounded-md border border-input bg-surface-2 pl-8 pr-8 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
-        />
-        {query && (
-          <button
-            onClick={() => useStore.setState({ homeQuery: "" })}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition hover:text-foreground"
-            aria-label="Clear the filter"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
+      <SearchField
+        ref={inputRef}
+        variant="field"
+        value={query}
+        onValueChange={(v) => useStore.setState({ homeQuery: v })}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            useStore.setState({ homeQuery: "" });
+            inputRef.current?.blur();
+          }
+        }}
+        placeholder={placeholder}
+        className="flex-1"
+      />
       {sort && (
-        <select
+        <SortMenu
+          label="Sort order"
           value={sort.value}
-          onChange={(e) => sort.onChange(e.target.value)}
-          title="Sort order"
-          aria-label="Sort order"
-          className="h-8 shrink-0 rounded-md border border-border bg-transparent px-2 text-caption text-muted-foreground outline-none transition-colors hover:text-foreground focus:border-ring/70"
-        >
-          {sort.options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          options={sort.options}
+          onChange={sort.onChange}
+          className="shrink-0"
+        />
       )}
       <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
         {(

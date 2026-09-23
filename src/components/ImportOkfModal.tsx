@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "@/lib/store";
-import { Button, Modal } from "./ui";
+import { Button, Modal, Select } from "./ui";
 import { FileArchive, FolderOpen } from "lucide-react";
 
 /**
@@ -69,18 +69,14 @@ export function ImportOkfModal() {
         </p>
         <label className="flex flex-col gap-1.5">
           <span className="text-caption text-muted-foreground">Import into</span>
-          <select
-            value={dest}
-            onChange={(e) => setDest(e.target.value)}
-            className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
-          >
+          <Select value={dest} onChange={setDest}>
             <option value="">New notebook (named from the bundle)</option>
             {notebooks.map((nb) => (
               <option key={nb.id} value={nb.id}>
                 Add to: {nb.title}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="flex items-start gap-2 text-caption text-muted-foreground">
           <input

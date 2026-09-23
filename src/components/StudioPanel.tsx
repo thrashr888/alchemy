@@ -15,6 +15,7 @@ import {
   type RowMenuItem,
   Spinner,
   CardAction,
+  SearchField,
   useHoverCard,
   useMarquee,
 } from "./ui";
@@ -42,8 +43,6 @@ import {
   FileDown,
   FileText,
   Plus,
-  Search,
-  X,
   Trash2,
   StickyNote,
   Square,
@@ -753,11 +752,10 @@ export function StudioPanel() {
         </div>
 
         {(shownNotes.length > 8 || noteQuery) && (
-          <div className="relative px-4 pb-2">
-            <Search className="pointer-events-none absolute left-6 top-1/2 h-3.5 w-3.5 -translate-y-1/2 -mt-1 text-subtle-foreground" />
-            <input
+          <div className="px-4 pb-2">
+            <SearchField
               value={noteQuery}
-              onChange={(e) => setNoteQuery(e.target.value)}
+              onValueChange={setNoteQuery}
               onKeyDown={(e) => {
                 if (e.key === "Escape" && noteQuery) {
                   e.preventDefault();
@@ -766,23 +764,8 @@ export function StudioPanel() {
               }}
               placeholder="Filter notes…"
               aria-label="Filter notes"
-              autoComplete="off"
-              autoCorrect="off"
               autoCapitalize="none"
-              spellCheck={false}
-              {...({ writingsuggestions: "false" } as Record<string, string>)}
-              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
             />
-            {noteQuery && (
-              <button
-                type="button"
-                onClick={() => setNoteQuery("")}
-                aria-label="Clear filter"
-                className="absolute right-5 top-1/2 -translate-y-1/2 -mt-1 rounded p-0.5 text-subtle-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
           </div>
         )}
         <div className="px-2 pb-2">

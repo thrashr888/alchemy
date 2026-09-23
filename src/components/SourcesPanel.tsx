@@ -12,6 +12,7 @@ import {
   ResizeHandle,
   RowMenu,
   type RowMenuItem,
+  SearchField,
   Spinner,
   CardAction,
   useConfirm,
@@ -65,7 +66,6 @@ import {
   X,
   RefreshCw,
   Cloud,
-  Search,
   Sprout,
   Tag,
 } from "lucide-react";
@@ -834,31 +834,13 @@ export function SourcesPanel() {
           along with it. */}
       {currentId && (sources.length > 8 || filterActive) && (
         <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter sources…"
-              aria-label="Filter sources"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              {...({ writingsuggestions: "false" } as Record<string, string>)}
-              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label="Clear filter"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-subtle-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
+          <SearchField
+            value={query}
+            onValueChange={setQuery}
+            placeholder="Filter sources…"
+            aria-label="Filter sources"
+            autoCapitalize="none"
+          />
           <div className="flex flex-wrap gap-1">
             {[...kindCounts.entries()]
               .filter(([, n]) => n > 0)
