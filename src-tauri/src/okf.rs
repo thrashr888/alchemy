@@ -6746,9 +6746,12 @@ pub async fn reconcile_all(state: &AppState) {
     let Ok(bindings) = load_bindings_checked(&data_dir) else {
         return;
     };
-    for notebook_id in bindings.keys() {
+    for (notebook_id, binding) in &bindings {
         if let Err(err) = reconcile(state, notebook_id).await {
-            crate::diagnostics::error("okf", format!("reconcile failed: {err}"));
+            crate::diagnostics::error(
+                "okf",
+                format!("reconcile failed in {}: {err}", binding.path),
+            );
         }
     }
 }
