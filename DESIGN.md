@@ -244,6 +244,11 @@ Justified exceptions, kept on purpose:
   transparent, unbordered inputs by design: the text *is* the surface.
 - **The chat composer** is its own component: a growing textarea with its
   toolbar, not an `Input`.
+- **Pickers that show the thing they pick** — the notebook color swatches
+  and icon grid (`NotebookEditModal`), the theme strips and the big
+  icon-and-label tiles in Appearance (`SettingsTabs`) — are not chips: the
+  swatch, glyph or strip *is* the label. They keep their own shapes and use
+  the ring for the selected one.
 - **Studio's generator tiles** (`GenTile`) are buttons with a family accent
   on the icon; the accent is wayfinding for note kinds (§2), not a state.
 
