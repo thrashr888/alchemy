@@ -6,6 +6,7 @@ import { describe } from "@/lib/errors";
 import {
   Badge,
   Button,
+  Chip,
   EmptyState,
   LoadingState,
   ProgressBar,
@@ -184,36 +185,6 @@ function hostname(url: string): string {
 
 /** Compact selection checkbox; supports the folder/master indeterminate state.
  *  Clicks stop propagating so the row's open-reader handler never fires. */
-/** One compact facet toggle under the filter box. */
-function FacetChip({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={cn(
-        "rounded-full border px-2 py-0.5 text-micro transition-colors",
-        active
-          ? "border-primary/50 bg-primary/15 text-citation"
-          : "border-border text-muted-foreground hover:bg-surface-2",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 function SelectBox({
   checked,
   indeterminate = false,
@@ -845,27 +816,27 @@ export function SourcesPanel() {
             {[...kindCounts.entries()]
               .filter(([, n]) => n > 0)
               .map(([kind, n]) => (
-                <FacetChip
+                <Chip size="xs"
                   key={kind}
                   active={liveKind === kind}
                   onClick={() => setKindFacet(liveKind === kind ? null : kind)}
                 >
                   {KIND_LABEL[kind]} {n}
-                </FacetChip>
+                </Chip>
               ))}
             {tagChips.map(([tag, n]) => (
-              <FacetChip
+              <Chip size="xs"
                 key={`#${tag}`}
                 active={liveTag === tag}
                 onClick={() => setTagFacet(liveTag === tag ? null : tag)}
               >
                 #{tag} {n}
-              </FacetChip>
+              </Chip>
             ))}
             {/* Only offered when something is actually missing — the chip
                 carries its count, the way the kind chips do. */}
             {missingIds.size > 0 && (
-              <FacetChip
+              <Chip size="xs"
                 active={liveFresh === "missing"}
                 title="File moved or deleted, or still in the cloud"
                 onClick={() =>
@@ -873,7 +844,7 @@ export function SourcesPanel() {
                 }
               >
                 Missing {missingIds.size}
-              </FacetChip>
+              </Chip>
             )}
             {(
               [
@@ -883,14 +854,14 @@ export function SourcesPanel() {
                 ["uncited", "Uncited", "Never came back as a citation"],
               ] as const
             ).map(([id, label, title]) => (
-              <FacetChip
+              <Chip size="xs"
                 key={id}
                 active={liveFresh === id}
                 title={title}
                 onClick={() => setFreshFacet(liveFresh === id ? null : id)}
               >
                 {label}
-              </FacetChip>
+              </Chip>
             ))}
           </div>
         </div>
