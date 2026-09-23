@@ -6,7 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
-import { Button, Input, Modal, Spinner, Switch } from "./ui";
+import { Button, Input, Modal, Select, Spinner, Switch } from "./ui";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cn, folderBreadcrumb } from "@/lib/utils";
@@ -582,17 +582,15 @@ function BudgetSelect() {
     <div className="flex flex-col gap-1">
       <label className="flex items-center justify-between gap-3">
         <span className="text-body text-foreground">Overnight effort</span>
-        <select
+        <Select
           value={aiConfig.backgroundBudget || "standard"}
-          onChange={(e) =>
-            void saveAiConfig({ ...aiConfig, backgroundBudget: e.target.value })
-          }
-          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
-        >
-          <option value="light">Light</option>
-          <option value="standard">Standard</option>
-          <option value="generous">Generous</option>
-        </select>
+          onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundBudget: v })}
+          options={[
+            { value: "light", label: "Light" },
+            { value: "standard", label: "Standard" },
+            { value: "generous", label: "Generous" },
+          ]}
+        />
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
         How much work to do each night before stopping until morning. Local
@@ -976,22 +974,19 @@ function GitSyncSelect() {
         <span className="text-body text-foreground">
           Auto-sync git repositories
         </span>
-        <select
+        <Select
           value={String(aiConfig.gitSyncMinutes)}
-          onChange={(e) =>
-            void saveAiConfig({
-              ...aiConfig,
-              gitSyncMinutes: Number(e.target.value),
-            })
+          onChange={(v) =>
+            void saveAiConfig({ ...aiConfig, gitSyncMinutes: Number(v) })
           }
-          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
-        >
-          <option value="15">Every 15 minutes</option>
-          <option value="60">Hourly</option>
-          <option value="360">Every 6 hours</option>
-          <option value="1440">Daily</option>
-          <option value="0">Off</option>
-        </select>
+          options={[
+            { value: "15", label: "Every 15 minutes" },
+            { value: "60", label: "Hourly" },
+            { value: "360", label: "Every 6 hours" },
+            { value: "1440", label: "Daily" },
+            { value: "0", label: "Off" },
+          ]}
+        />
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
         Re-fetches when the branch moves, using your own git credentials.
@@ -1017,26 +1012,26 @@ function HygieneSelect() {
         <span className="text-body text-foreground">
           Refresh aging web sources
         </span>
-        <select
+        <Select
           value={value}
-          onChange={(e) =>
+          onChange={(v) =>
             void saveAiConfig(
-              e.target.value === "off"
+              v === "off"
                 ? { ...aiConfig, sourceHygiene: false }
                 : {
                     ...aiConfig,
                     sourceHygiene: true,
-                    hygieneRefreshDays: Number(e.target.value),
+                    hygieneRefreshDays: Number(v),
                   },
             )
           }
-          className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
-        >
-          <option value="7">After a week</option>
-          <option value="30">After a month</option>
-          <option value="90">After 3 months</option>
-          <option value="off">Off</option>
-        </select>
+          options={[
+            { value: "7", label: "After a week" },
+            { value: "30", label: "After a month" },
+            { value: "90", label: "After 3 months" },
+            { value: "off", label: "Off" },
+          ]}
+        />
       </label>
       <span className="text-micro leading-relaxed text-subtle-foreground">
         Re-fetches a few pages per pass, keeping the last good copy if a site
@@ -1400,12 +1395,9 @@ function HostedAgents() {
       <div className="flex flex-col gap-3">
         <label className="flex items-center justify-between gap-3">
           <span className="text-body text-foreground">Open the Agent view with</span>
-          <select
+          <Select
             value={aiConfig.hostedAgent}
-            onChange={(e) =>
-              void saveAiConfig({ ...aiConfig, hostedAgent: e.target.value })
-            }
-            className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+            onChange={(v) => void saveAiConfig({ ...aiConfig, hostedAgent: v })}
           >
             <option value="">First one installed</option>
             {list.map((a) => (
@@ -1414,7 +1406,7 @@ function HostedAgents() {
                 {a.available ? "" : " (not installed)"}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
 
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">

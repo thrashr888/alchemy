@@ -6,12 +6,14 @@ import { describe } from "@/lib/errors";
 import {
   Badge,
   Button,
+  Chip,
   EmptyState,
   LoadingState,
   ProgressBar,
   ResizeHandle,
   RowMenu,
   type RowMenuItem,
+  SearchField,
   Spinner,
   CardAction,
   useConfirm,
@@ -65,7 +67,6 @@ import {
   X,
   RefreshCw,
   Cloud,
-  Search,
   Sprout,
   Tag,
 } from "lucide-react";
@@ -184,36 +185,6 @@ function hostname(url: string): string {
 
 /** Compact selection checkbox; supports the folder/master indeterminate state.
  *  Clicks stop propagating so the row's open-reader handler never fires. */
-/** One compact facet toggle under the filter box. */
-function FacetChip({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={cn(
-        "rounded-full border px-2 py-0.5 text-micro transition-colors",
-        active
-          ? "border-primary/50 bg-primary/15 text-citation"
-          : "border-border text-muted-foreground hover:bg-surface-2",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 function SelectBox({
   checked,
   indeterminate = false,
@@ -834,56 +805,38 @@ export function SourcesPanel() {
           along with it. */}
       {currentId && (sources.length > 8 || filterActive) && (
         <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter sources…"
-              aria-label="Filter sources"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              {...({ writingsuggestions: "false" } as Record<string, string>)}
-              className="w-full rounded-md border border-input bg-transparent py-1 pl-7 pr-6 text-caption text-foreground outline-none placeholder:text-subtle-foreground focus:border-ring/60"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label="Clear filter"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-subtle-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
+          <SearchField
+            value={query}
+            onValueChange={setQuery}
+            placeholder="Filter sources…"
+            aria-label="Filter sources"
+            autoCapitalize="none"
+          />
           <div className="flex flex-wrap gap-1">
             {[...kindCounts.entries()]
               .filter(([, n]) => n > 0)
               .map(([kind, n]) => (
-                <FacetChip
+                <Chip size="xs"
                   key={kind}
                   active={liveKind === kind}
                   onClick={() => setKindFacet(liveKind === kind ? null : kind)}
                 >
                   {KIND_LABEL[kind]} {n}
-                </FacetChip>
+                </Chip>
               ))}
             {tagChips.map(([tag, n]) => (
-              <FacetChip
+              <Chip size="xs"
                 key={`#${tag}`}
                 active={liveTag === tag}
                 onClick={() => setTagFacet(liveTag === tag ? null : tag)}
               >
                 #{tag} {n}
-              </FacetChip>
+              </Chip>
             ))}
             {/* Only offered when something is actually missing — the chip
                 carries its count, the way the kind chips do. */}
             {missingIds.size > 0 && (
-              <FacetChip
+              <Chip size="xs"
                 active={liveFresh === "missing"}
                 title="File moved or deleted, or still in the cloud"
                 onClick={() =>
@@ -891,7 +844,7 @@ export function SourcesPanel() {
                 }
               >
                 Missing {missingIds.size}
-              </FacetChip>
+              </Chip>
             )}
             {(
               [
@@ -901,14 +854,14 @@ export function SourcesPanel() {
                 ["uncited", "Uncited", "Never came back as a citation"],
               ] as const
             ).map(([id, label, title]) => (
-              <FacetChip
+              <Chip size="xs"
                 key={id}
                 active={liveFresh === id}
                 title={title}
                 onClick={() => setFreshFacet(liveFresh === id ? null : id)}
               >
                 {label}
-              </FacetChip>
+              </Chip>
             ))}
           </div>
         </div>

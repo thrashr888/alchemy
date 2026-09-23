@@ -8,6 +8,7 @@
    exists falls back rather than showing an empty grid — see useFilterAxis. */
 import { useState } from "react";
 import { cn } from "../lib/utils";
+import { Chip } from "./ui";
 
 /** One selectable option: the stored value plus how it reads. */
 export interface FilterOption {
@@ -36,44 +37,6 @@ export function effectiveValue<T extends string | null>(
 ): T {
   if (selected === null) return selected;
   return available.includes(selected as string) ? selected : fallback;
-}
-
-function FilterButton({
-  active,
-  onClick,
-  children,
-  dot,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-  /** Category colour, shown as a leading dot. Where a surface colours things
-   *  by group, this row is also the legend — a separate key would be one
-   *  more thing to keep in sync and one more thing to look at. */
-  dot?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-caption transition-colors",
-        active
-          ? "bg-surface-2 font-medium text-foreground"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {dot && (
-        <span
-          aria-hidden
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: dot }}
-        />
-      )}
-      {children}
-    </button>
-  );
 }
 
 export function FilterBar({
@@ -132,32 +95,35 @@ export function FilterBar({
     >
       {showGroups &&
         groups.map((g) => (
-          <FilterButton
+          <Chip
             key={g.value}
             active={group === g.value}
             onClick={() => onGroup(g.value)}
+            // Where a surface colours things by group, this row is also the
+            // legend — a separate key would be one more thing to keep in
+            // sync and one more thing to look at.
             dot={groupDot?.(g.value)}
           >
             {g.label}
-          </FilterButton>
+          </Chip>
         ))}
       {showGroups && showChips && (
         <span aria-hidden className="mx-1.5 h-3.5 w-px bg-border-strong" />
       )}
       {showChips && (
         <>
-          <FilterButton active={chip == null} onClick={() => onChip!(null)}>
+          <Chip active={chip == null} onClick={() => onChip!(null)}>
             {chipAllLabel}
-          </FilterButton>
+          </Chip>
           {visible.map((t) => (
-            <FilterButton
+            <Chip
               key={t}
               active={chip === t}
               onClick={() => onChip!(chip === t ? null : t)}
             >
               {chipPrefix}
               {t}
-            </FilterButton>
+            </Chip>
           ))}
           {(hiddenCount > 0 || expanded) && (
             <button

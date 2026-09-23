@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { Button, Input, Modal } from "../ui";
+import { Button, Input, Modal, Select } from "../ui";
 import { Field } from "./SettingsTabs";
 import { OllamaModelPicker } from "./OllamaModelPicker";
 import { cn } from "@/lib/utils";
@@ -558,13 +558,13 @@ export function ModelsTab({
                     // "provider · model" option pushed the button off the
                     // right edge of the dialog.
                     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                      <select
+                      <Select
                         aria-label="Studio provider"
                         value={draft.studioProvider}
-                        onChange={(e) =>
-                          setDraft({ ...draft, studioProvider: e.target.value })
+                        onChange={(v) =>
+                          setDraft({ ...draft, studioProvider: v })
                         }
-                        className="h-7 w-full rounded-md border border-input bg-surface-2 px-2 text-[0.78125rem] text-foreground focus:outline-none"
+                        className="w-full"
                       >
                         {draft.providers.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -572,7 +572,7 @@ export function ModelsTab({
                             {p.chatModel ? ` · ${p.chatModel}` : ""}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       <Button
                         variant="ghost"
                         className="self-start"
@@ -598,17 +598,15 @@ export function ModelsTab({
               hint="Used for search and citations. Changing it re-indexes every source."
             >
               <div className="flex flex-col gap-1.5">
-                <select
+                <Select
                   aria-label="Search engine"
                   value={draft.embedder}
-                  onChange={(e) =>
-                    setDraft({ ...draft, embedder: e.target.value })
-                  }
-                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
-                >
-                  <option value="builtin">Built-in (no setup, private)</option>
-                  <option value="ollama">Ollama model</option>
-                </select>
+                  onChange={(v) => setDraft({ ...draft, embedder: v })}
+                  options={[
+                    { value: "builtin", label: "Built-in (no setup, private)" },
+                    { value: "ollama", label: "Ollama model" },
+                  ]}
+                />
                 {draft.embedder === "ollama" && (
                   <OllamaModelPicker
                     label="Search model"
@@ -640,18 +638,16 @@ export function ModelsTab({
               }
             >
               <div className="flex flex-col gap-1.5">
-                <select
+                <Select
                   aria-label="Vision engine"
                   value={draft.visionProvider}
-                  onChange={(e) =>
-                    setDraft({ ...draft, visionProvider: e.target.value })
-                  }
-                  className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
-                >
-                  <option value="">Off</option>
-                  <option value="ollama">Ollama model</option>
-                  <option value="gateway">Gateway model</option>
-                </select>
+                  onChange={(v) => setDraft({ ...draft, visionProvider: v })}
+                  options={[
+                    { value: "", label: "Off" },
+                    { value: "ollama", label: "Ollama model" },
+                    { value: "gateway", label: "Gateway model" },
+                  ]}
+                />
                 {draft.visionProvider === "ollama" && (
                   <OllamaModelPicker
                     label="Vision model"
@@ -695,7 +691,9 @@ export function ModelsTab({
   );
 }
 
-function Select({
+/** A `Select` over model ids, with an unlisted saved value kept selectable
+ *  and a placeholder row until something is chosen. */
+function ModelSelect({
   ariaLabel,
   value,
   onChange,
@@ -709,11 +707,11 @@ function Select({
   const list =
     options.includes(value) || !value ? options : [value, ...options];
   return (
-    <select
+    <Select
       aria-label={ariaLabel}
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-body text-foreground outline-none transition-colors focus:border-ring/60"
+      onChange={onChange}
+      className="w-full"
     >
       {!value && <option value="">Choose a model…</option>}
       {list.map((m) => (
@@ -721,7 +719,7 @@ function Select({
           {m}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }
 
@@ -985,19 +983,18 @@ function ProviderWizard({
       {step === "key" && (
         <div className="flex flex-col gap-3">
           <Field label="Service">
-            <select
+            <Select
               aria-label="Service"
               value={service}
-              onChange={(e) => {
-                setService(e.target.value);
+              onChange={(v) => {
+                setService(v);
                 setFound([]);
                 setModel("");
                 const url =
-                  GATEWAY_PRESETS.find((g) => g.name === e.target.value)?.url ??
-                  customUrl;
+                  GATEWAY_PRESETS.find((g) => g.name === v)?.url ?? customUrl;
                 probeKey(url, key);
               }}
-              className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+              className="w-full"
             >
               {GATEWAY_PRESETS.map((g) => (
                 <option key={g.name} value={g.name}>
@@ -1005,7 +1002,7 @@ function ProviderWizard({
                 </option>
               ))}
               <option value="Custom">Custom…</option>
-            </select>
+            </Select>
           </Field>
           {service === "Custom" && (
             <Field label="Base URL" hint="Any OpenAI-compatible endpoint, usually ending in /v1.">
@@ -1047,7 +1044,7 @@ function ProviderWizard({
           <Field label="Model" hint="Picked for you. Change it if you like.">
             <div className="flex items-center gap-1.5">
               {found.length > 0 ? (
-                <Select
+                <ModelSelect
                   ariaLabel="Model"
                   value={model}
                   onChange={setModel}
@@ -1262,12 +1259,11 @@ function GatewayVisionPicker({
   const options =
     current && !models.includes(current) ? [current, ...models] : models;
   return (
-    <select
+    <Select
       aria-label="Vision model"
       value={current}
       disabled={loading}
-      onChange={(e) => setDraft({ ...draft, openaiVisionModel: e.target.value })}
-      className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
+      onChange={(v) => setDraft({ ...draft, openaiVisionModel: v })}
     >
       {!current && (
         <option value="">{loading ? "Loading models…" : "Select a model"}</option>
@@ -1277,6 +1273,6 @@ function GatewayVisionPicker({
           {m}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }

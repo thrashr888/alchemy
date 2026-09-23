@@ -7,7 +7,7 @@ import { DitherBackground } from "./DitherBackground";
 import { THEMES, resolveThemeId } from "@/lib/themes";
 import { currentEpigraph } from "@/lib/epigraph";
 import { MacConnect } from "./MacConnect";
-import { Button, Input } from "./ui";
+import { Button, Input, Select } from "./ui";
 import { cn } from "@/lib/utils";
 import type { DesktopApp, ModelStatus, ProviderEntry } from "@/lib/types";
 import { Check, Copy, CheckCircle2, XCircle, Circle, RefreshCw } from "lucide-react";
@@ -507,10 +507,11 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
             />
             <div className="flex gap-1.5">
               {gwModels.length > 0 ? (
-                <select
+                <Select
                   value={gwModel}
-                  onChange={(e) => setGwModel(e.target.value)}
-                  className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 px-2.5 text-body text-foreground outline-none transition-colors focus:border-ring/60"
+                  onChange={setGwModel}
+                  aria-label="Gateway model"
+                  className="w-full"
                 >
                   {!gwModel && <option value="">Choose a model…</option>}
                   {(gwModels.includes(gwModel) || !gwModel ? gwModels : [gwModel, ...gwModels]).map(
@@ -520,7 +521,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
                       </option>
                     ),
                   )}
-                </select>
+                </Select>
               ) : (
                 <Input
                   value={gwModel}

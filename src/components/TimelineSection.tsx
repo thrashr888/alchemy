@@ -29,7 +29,7 @@ import { NOTEBOOK_PALETTE } from "@/lib/notebookIcons";
 import { sourceIcon } from "@/lib/sourceIcon";
 import { kindIcon } from "./studioArtifacts";
 import { effectiveValue, FilterBar, rankByCount } from "./FilterBar";
-import { Button, EmptyState, LoadingState, useHoverCard } from "./ui";
+import { Button, Chip, EmptyState, LoadingState, useHoverCard } from "./ui";
 import { cn } from "@/lib/utils";
 import {
   ArrowUpRight,
@@ -699,21 +699,15 @@ export function TimelineSection() {
                 ["uncited", "Uncited", "Never came back as a citation"],
               ] as const
             ).map(([id, label, title]) => (
-              <button
+              <Chip
                 key={id}
-                type="button"
+                size="xs"
+                active={fresh === id}
                 onClick={() => setFresh(fresh === id ? null : id)}
                 title={title}
-                aria-pressed={fresh === id}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-micro transition-colors",
-                  fresh === id
-                    ? "border-primary/50 bg-primary/15 text-citation"
-                    : "border-border text-muted-foreground hover:bg-surface-2",
-                )}
               >
                 {label}
-              </button>
+              </Chip>
             ))}
           </div>
         </div>

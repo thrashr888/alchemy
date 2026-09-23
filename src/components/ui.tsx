@@ -21,6 +21,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   Info,
+  Search,
+  ArrowUpDown,
 } from "lucide-react";
 import type { Toast } from "@/lib/types";
 
@@ -853,13 +855,17 @@ export function Select({
   value,
   onChange,
   options,
+  children,
   className,
   ...rest
 }: {
   id?: string;
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  /** Flat options; pass `children` instead for `<optgroup>`s or a disabled
+   *  placeholder row. */
+  options?: { value: string; label: string }[];
+  children?: React.ReactNode;
   className?: string;
 } & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "value" | "onChange">) {
   return (
@@ -871,11 +877,12 @@ export function Select({
         className="h-8 w-full appearance-none rounded-md border border-input bg-surface-2 pl-2.5 pr-8 text-body text-foreground outline-none transition-colors focus:border-ring/60"
         {...rest}
       >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
+        {children ??
+          (options ?? []).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
       </select>
       <ChevronDown
         aria-hidden
@@ -1749,6 +1756,220 @@ export function RowMenu({
           </div>,
           document.body,
         )}
+    </div>
+  );
+}
+
+/**
+ * A toggle chip: one option in a filter row, a tag to narrow by, a mode a
+ * pane can be in. Quiet at rest, a `surface-2` fill and medium weight when
+ * selected — the same tinted-pill state every other active control uses
+ * (DESIGN.md §4 "Toggle chips"). Never the accent: a selected filter is
+ * not a status, and color here would mean nothing.
+ */
+export function Chip({
+  active,
+  size = "sm",
+  dot,
+  className,
+  children,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  active: boolean;
+  /** `sm` (12px, 28px tall) in filter rows; `xs` (11px) in dense strips
+   *  such as the Sources panel's type chips. */
+  size?: "sm" | "xs";
+  /** A color swatch before the label, for chips that stand for a colored
+   *  thing (a graph group). The dot carries the color; the chip stays gray. */
+  dot?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-md transition-colors",
+        size === "sm" ? "px-2 py-1 text-caption" : "px-1.5 py-0.5 text-micro",
+        active
+          ? "bg-surface-2 font-medium text-foreground"
+          : "text-muted-foreground hover:text-foreground",
+        className,
+      )}
+      {...rest}
+    >
+      {dot && (
+        <span
+          aria-hidden
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: dot }}
+        />
+      )}
+      {children}
+    </button>
+  );
+}
+
+export type SegmentedOption<T extends string> = {
+  value: T;
+  /** Text label; omit for an icon-only segment (then `hint` is required). */
+  label?: string;
+  icon?: React.ReactNode;
+  /** Tooltip and accessible name. Required when there is no label. */
+  hint?: string;
+  /** A segment that cannot be chosen right now (Reader before any document
+   *  is open). Shown dimmed; its `hint` says why. */
+  disabled?: boolean;
+};
+
+/**
+ * A segmented control: two to four exclusive states of one thing (grid or
+ * table, newest or A–Z), drawn as one bordered track with the active
+ * segment filled. For choosing among more than four, or when the options
+ * have long names, use `Select` or a `SortMenu` instead.
+ */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  size = "sm",
+  className,
+}: {
+  options: readonly SegmentedOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+  /** Accessible name for the group ("View", "Sort"). */
+  label: string;
+  /** `sm` (11px) in pane toolbars; `md` (12px) for the title bar's mode
+   *  tabs, the one segmented control that is navigation. */
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        "flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5",
+        className,
+      )}
+    >
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            aria-pressed={active}
+            disabled={option.disabled}
+            title={option.hint}
+            aria-label={option.label ? undefined : option.hint}
+            className={cn(
+              "inline-flex items-center rounded-md font-medium transition-colors",
+              size === "md" ? "gap-1.5 text-caption" : "gap-1 text-micro",
+              option.label ? (size === "md" ? "px-2 py-1" : "px-2 py-0.5") : "p-1.5",
+              active
+                ? "bg-surface-2 text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+              option.disabled && "cursor-default opacity-40 hover:text-muted-foreground",
+            )}
+          >
+            {option.icon}
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The one sort control for lists that are not tables: an ArrowUpDown
+ * trigger opening a radio menu of orders, the current one ticked. Tables
+ * sort by their column headers instead (`HomeTable`); a two-way toggle is
+ * still this menu, so the affordance reads the same everywhere.
+ */
+export function SortMenu<T extends string>({
+  value,
+  options,
+  onChange,
+  label = "Sort",
+  className,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (value: T) => void;
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <RowMenu
+      label={label}
+      alwaysVisible
+      rowContext={false}
+      trigger={<ArrowUpDown className="h-3.5 w-3.5" />}
+      triggerClassName={cn(
+        "rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground",
+        className,
+      )}
+      items={options.map((o) => ({
+        label: o.label,
+        checked: o.value === value,
+        onClick: () => onChange(o.value),
+      }))}
+    />
+  );
+}
+
+/**
+ * A filter field: an `Input` with the search glass drawn in, and a clear
+ * button once there is text. `quiet` (28px, transparent) inside a side
+ * card, where a filled box would be a box in a box; `field` (32px,
+ * surface-2) in a page toolbar beside other 32px controls.
+ */
+export function SearchField({
+  value,
+  onValueChange,
+  variant = "quiet",
+  className,
+  inputClassName,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
+  value: string;
+  onValueChange: (value: string) => void;
+  variant?: "quiet" | "field";
+  className?: string;
+  inputClassName?: string;
+  ref?: React.Ref<HTMLInputElement>;
+}) {
+  return (
+    <div className={cn("relative min-w-0", className)}>
+      <Search
+        aria-hidden
+        className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground"
+      />
+      <Input
+        type="search"
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+        className={cn(
+          "pl-7 pr-7 text-caption [&::-webkit-search-cancel-button]:hidden",
+          variant === "quiet" && "h-7 bg-transparent",
+          inputClassName,
+        )}
+        {...props}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onValueChange("")}
+          aria-label="Clear filter"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-subtle-foreground transition-colors hover:text-foreground"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
     </div>
   );
 }

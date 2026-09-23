@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, EmptyState, Input, Textarea, Modal, RowMenu, Select, Spinner } from "./ui";
+import { Button, EmptyState, Input, Textarea, Modal, RowMenu, Select, Spinner, Chip } from "./ui";
 import { FOLDER_TYPES } from "./SourceMenu";
 import { cn, fmtDay } from "@/lib/utils";
 import {
@@ -383,20 +383,14 @@ export function Reports() {
                   {EVENT_KIND_LABELS.map((k) => {
                     const on = watchKinds.includes(k.value);
                     return (
-                      <button
-                        key={k.value}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => setWatchKinds(toggleIn(watchKinds, k.value))}
-                        className={cn(
-                          "rounded-full border px-2.5 py-1 text-micro transition-colors",
-                          on
-                            ? "border-primary/60 text-foreground"
-                            : "border-border text-muted-foreground hover:text-foreground",
-                        )}
-                      >
+                      <Chip
+                      key={k.value}
+                      size="xs"
+                      active={on}
+                      onClick={() => setWatchKinds(toggleIn(watchKinds, k.value))}
+                    >
                         {k.label}
-                      </button>
+                      </Chip>
                     );
                   })}
                 </div>

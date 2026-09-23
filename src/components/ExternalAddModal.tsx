@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { Button, Modal, Spinner } from "./ui";
+import { Button, Modal, Select, Spinner } from "./ui";
 import { FileText, Globe, ClipboardPaste, Sparkles } from "lucide-react";
 
 /**
@@ -19,7 +19,7 @@ import { FileText, Globe, ClipboardPaste, Sparkles } from "lucide-react";
  */
 /** Select value prefix marking "create a notebook with this title first".
  *  A prefix rather than a second piece of state so the whole choice — file
- *  here vs. start something new — stays one `<select>` value. */
+ *  here vs. start something new — stays one `Select` value. */
 const NEW_NOTEBOOK = "new:";
 
 /** Active notebooks with the OPEN one first — it's the likeliest target,
@@ -224,14 +224,14 @@ function ExternalAddForm({
         <div className="rounded-md border border-border bg-surface-2/40 px-3 py-2.5 text-caption leading-relaxed text-foreground/90">
           {summary}
         </div>
-        <select
+        <Select
           autoFocus
+          aria-label="Notebook"
           value={notebookId}
-          onChange={(e) => {
+          onChange={(v) => {
             setTouched(true);
-            setNotebookId(e.target.value);
+            setNotebookId(v);
           }}
-          className="h-8 w-full rounded-md border border-input bg-surface-2 px-2 text-body text-foreground outline-none focus:border-ring/70 focus:ring-1 focus:ring-ring/40"
         >
           {newTitle && (
             <option value={`${NEW_NOTEBOOK}${newTitle}`}>
@@ -245,7 +245,7 @@ function ExternalAddForm({
                 : nb.title}
             </option>
           ))}
-        </select>
+        </Select>
         <div className="-mt-2 flex h-4 items-center gap-1.5 text-micro text-subtle-foreground">
           {suggesting ? (
             <>

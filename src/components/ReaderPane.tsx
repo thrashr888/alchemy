@@ -33,7 +33,15 @@ import { Favicon } from "./SourcesPanel";
 import { useSourceActions } from "./SourceMenu";
 import { OkfBadges } from "./OkfBadges";
 import { sourceIcon } from "@/lib/sourceIcon";
-import { Button, Input, RowMenu, Spinner, Textarea, useDelayedFlag } from "./ui";
+import {
+  Button,
+  Input,
+  RowMenu,
+  Segmented,
+  Spinner,
+  Textarea,
+  useDelayedFlag,
+} from "./ui";
 import {
   chatReadingClass,
   cn,
@@ -497,9 +505,48 @@ export function useElementWidth(ref: React.RefObject<HTMLElement | null>): numbe
   return width;
 }
 
-/** Chat ⇄ Reader segmented control for the WINDOW toolbar (Apple puts view
- *  switching in the titlebar — Notes, Safari). Renders nothing until a
- *  document has been opened, so fresh notebooks keep the plain toolbar. */
+/* What the reader is showing of one source: the original or the text made
+   from it. Two states each, so they are segmented controls (DESIGN.md §4),
+   and the hint is where the difference is actually explained. */
+const IMAGE_MODES = [
+  { value: "image" as const, label: "Image", hint: "The original image" },
+  {
+    value: "text" as const,
+    label: "Text",
+    hint: "The OCR transcription (searchable)",
+  },
+];
+
+const PDF_MODES = [
+  {
+    value: "text" as const,
+    label: "Text",
+    hint: "The extracted text (searchable, citable)",
+  },
+  {
+    value: "pages" as const,
+    label: "Pages",
+    hint: "The original pages, as laid out",
+  },
+];
+
+const WEB_MODES = [
+  {
+    value: "cached" as const,
+    label: "Cached",
+    hint: "The extracted article (fast, offline, searchable)",
+  },
+  {
+    value: "live" as const,
+    label: "Live",
+    hint: "The actual page, embedded in the reader",
+  },
+];
+
+/** Chat ⇄ Reader ⇄ Gallery ⇄ Grow segmented control for the WINDOW toolbar
+ *  (Apple puts view switching in the titlebar — Notes, Safari). The one
+ *  `ui.Segmented` that is navigation: one size up, Reader dimmed until a
+ *  document has been opened. */
 export function CenterModeTabs() {
   const hasDocs = useStore((s) => s.reader.history.length > 0);
   const active = useStore((s) =>
@@ -511,66 +558,44 @@ export function CenterModeTabs() {
           ? "reader"
           : "chat",
   );
-  const tab = (
-    id: "chat" | "reader" | "gallery" | "grow",
-    icon: React.ReactNode,
-    label: string,
-    onClick: () => void,
-    disabled = false,
-  ) => (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active === id}
-      disabled={disabled}
-      title={disabled ? "Open a source or note to read it here" : label}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium transition-colors",
-        active === id
-          ? "bg-surface-2 text-foreground"
-          : "text-muted-foreground hover:text-foreground",
-        disabled && "cursor-default opacity-40 hover:text-muted-foreground",
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-  const s = useStore.getState();
+  const show = (mode: "chat" | "reader" | "gallery" | "grow") => {
+    const s = useStore.getState();
+    if (mode === "chat") {
+      useStore.setState({ galleryOpen: false, growOpen: false });
+      s.closeReader();
+    } else if (mode === "reader") {
+      useStore.setState((st) => ({
+        galleryOpen: false,
+        growOpen: false,
+        reader: { ...st.reader, open: true },
+      }));
+    } else if (mode === "gallery") {
+      useStore.setState({ galleryOpen: true, growOpen: false });
+    } else {
+      useStore.setState({ galleryOpen: false, growOpen: true });
+    }
+  };
+  // The one segmented control that is navigation: the same track as every
+  // other, one size up, with Reader dimmed until there is something to read.
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
-      {tab("chat", <MessageSquare className="h-3.5 w-3.5" />, "Chat", () => {
-        useStore.setState({
-          galleryOpen: false,
-          growOpen: false,
-        });
-        s.closeReader();
-      })}
-      {tab(
-        "reader",
-        <BookOpen className="h-3.5 w-3.5" />,
-        "Reader",
-        () =>
-          useStore.setState((st) => ({
-            galleryOpen: false,
-            growOpen: false,
-            reader: { ...st.reader, open: true },
-          })),
-        !hasDocs,
-      )}
-      {tab("gallery", <LayoutGrid className="h-3.5 w-3.5" />, "Gallery", () =>
-        useStore.setState({
-          galleryOpen: true,
-          growOpen: false,
-        }),
-      )}
-      {tab("grow", <Sprout className="h-3.5 w-3.5" />, "Grow", () =>
-        useStore.setState({
-          growOpen: true,
-          galleryOpen: false,
-        }),
-      )}
-    </div>
+    <Segmented
+      label="Center"
+      size="md"
+      value={active}
+      onChange={show}
+      options={[
+        { value: "chat", label: "Chat", icon: <MessageSquare className="h-3.5 w-3.5" />, hint: "Chat" },
+        {
+          value: "reader",
+          label: "Reader",
+          icon: <BookOpen className="h-3.5 w-3.5" />,
+          hint: hasDocs ? "Reader" : "Open a source or note to read it here",
+          disabled: !hasDocs,
+        },
+        { value: "gallery", label: "Gallery", icon: <LayoutGrid className="h-3.5 w-3.5" />, hint: "Gallery" },
+        { value: "grow", label: "Grow", icon: <Sprout className="h-3.5 w-3.5" />, hint: "Grow" },
+      ]}
+    />
   );
 }
 
@@ -859,79 +884,31 @@ export function ReaderPane() {
             </span>
           )}
           {source && source.sourceType === "image" && source.url && (
-            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-              {(["image", "text"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setImageMode(mode === "image")}
-                  aria-pressed={imageMode === (mode === "image")}
-                  title={
-                    mode === "image"
-                      ? "The original image"
-                      : "The OCR transcription (searchable)"
-                  }
-                  className={cn(
-                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-                    imageMode === (mode === "image")
-                      ? "bg-surface-2 text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              className="mr-1"
+              label="Image view"
+              options={IMAGE_MODES}
+              value={imageMode ? "image" : "text"}
+              onChange={(mode) => setImageMode(mode === "image")}
+            />
           )}
           {source && isPdfFile(source) && (
-            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-              {(["text", "pages"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setPageMode(mode === "pages")}
-                  aria-pressed={pageMode === (mode === "pages")}
-                  title={
-                    mode === "pages"
-                      ? "The original pages, as laid out"
-                      : "The extracted text (searchable, citable)"
-                  }
-                  className={cn(
-                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-                    pageMode === (mode === "pages")
-                      ? "bg-surface-2 text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              className="mr-1"
+              label="PDF view"
+              options={PDF_MODES}
+              value={pageMode ? "pages" : "text"}
+              onChange={(mode) => setPageMode(mode === "pages")}
+            />
           )}
           {source && isWebUrl(source.url) && (
-            <div className="mr-1 flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
-              {(["cached", "live"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setLiveMode(mode === "live")}
-                  aria-pressed={liveMode === (mode === "live")}
-                  title={
-                    mode === "live"
-                      ? "The actual page, embedded in the reader"
-                      : "The extracted article (fast, offline, searchable)"
-                  }
-                  className={cn(
-                    "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-                    liveMode === (mode === "live")
-                      ? "bg-surface-2 text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              className="mr-1"
+              label="Page view"
+              options={WEB_MODES}
+              value={liveMode ? "live" : "cached"}
+              onChange={(mode) => setLiveMode(mode === "live")}
+            />
           )}
           {source && !liveMode && (
             <Button

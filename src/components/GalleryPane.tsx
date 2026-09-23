@@ -9,6 +9,8 @@ import {
   EmptyState,
   Input,
   RowMenu,
+  Segmented,
+  SortMenu,
   useConfirm,
   useHoverCard,
   useMarquee,
@@ -26,6 +28,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Share2,
   Trash2,
   X,
 } from "lucide-react";
@@ -70,63 +73,32 @@ function enqueueThumb(job: () => Promise<void>) {
 
 type SortMode = "recent" | "title";
 
+/** Grid or link graph — two ways to browse the same notebook. The segments
+ *  are icon-only, so the hint is where the meaning lives. */
+const GALLERY_SHAPES = [
+  {
+    value: "grid" as const,
+    icon: <LayoutGrid className="h-3.5 w-3.5" />,
+    hint: "Cards",
+  },
+  {
+    value: "graph" as const,
+    icon: <Share2 className="h-3.5 w-3.5" />,
+    hint: "How these sources and notes link to each other",
+  },
+];
+
+const GALLERY_SORTS = [
+  { value: "recent" as const, label: "Newest first" },
+  { value: "title" as const, label: "A to Z" },
+];
+
 /** Kinds whose card leads with opening lines of the text. URL sources join
  *  when their page yielded no lead image. */
 function wantsSnippet(s: Source): boolean {
   if (["text", "markdown", "html", "code", "mac"].includes(s.sourceType))
     return true;
   return s.sourceType === "url" && (s.imageUrl === "" || s.imageUrl === "-");
-}
-
-/** The header's compact segmented switch. Two of these sit side by side —
- *  grid/graph and the sort order — and they must read as one control family,
- *  which a second hand-rolled copy would drift away from within a release.
- *
- *  Deliberately not FilterBar's FilterButton: that one is a filter-row
- *  control (py-1, text-caption) and this is the tighter header variant. Same
- *  idea, different size class; merging them would resize one surface or the
- *  other. */
-function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-  hint,
-  className,
-}: {
-  options: readonly T[];
-  value: T;
-  onChange: (value: T) => void;
-  /** Tooltip per option — these switches are one word wide, so the tooltip
-   *  is where the meaning actually lives. */
-  hint: (option: T) => string;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5",
-        className,
-      )}
-    >
-      {options.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onChange(option)}
-          aria-pressed={value === option}
-          title={hint(option)}
-          className={cn(
-            "rounded-md px-2 py-0.5 text-micro font-medium capitalize transition-colors",
-            value === option
-              ? "bg-surface-2 text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {option}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /** The host a domain group row named, spelled the way the sources panel
@@ -533,25 +505,16 @@ export function GalleryPane() {
             switch lives here rather than as a fourth top-level pane. */}
         <Segmented
           className="ml-auto"
-          options={["grid", "graph"] as const}
+          label="Layout"
+          options={GALLERY_SHAPES}
           value={shape}
           onChange={setShape}
-          hint={(mode) =>
-            mode === "grid"
-              ? "Cards"
-              : "How these sources and notes link to each other"
-          }
         />
         {/* Sort orders cards. A force layout places by connectedness, so
             there is no order for this to change — in graph mode the control
             was simply inert. */}
         {shape === "grid" && (
-          <Segmented
-            options={["recent", "title"] as const}
-            value={sort}
-            onChange={setSortMode}
-            hint={(mode) => (mode === "recent" ? "Newest first" : "A to Z")}
-          />
+          <SortMenu value={sort} options={GALLERY_SORTS} onChange={setSortMode} />
         )}
       </div>
       {findOpen && (

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, FileDown, Maximize2, X } from "lucide-react";
 import { Markdown } from "./Markdown";
+import { Select } from "./ui";
 import { PrintPortal, usePrintExport } from "./printExport";
 import { THEMES as APP_THEMES, DEFAULT_THEME as APP_DEFAULT_THEME } from "@/lib/themes";
 import { useStore } from "@/lib/store";
@@ -278,9 +279,6 @@ function DeckView({
     setIndex((current) => Math.min(slides.length - 1, Math.max(0, current + dir)));
   };
 
-  const selectClass =
-    "h-7 rounded-md border border-border bg-transparent px-1.5 text-caption text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60";
-
   return (
     <div
       ref={rootRef}
@@ -321,32 +319,22 @@ function DeckView({
         >
           <ChevronRight className="h-4 w-4" />
         </button>
-        <select
+        <Select
           value={style.theme}
-          onChange={(e) => restyle({ ...style, theme: e.target.value })}
+          onChange={(v) => restyle({ ...style, theme: v })}
           aria-label="Deck theme"
           title="Deck color theme"
-          className={cn(selectClass, "ml-2 max-w-32")}
-        >
-          {Object.values(APP_THEMES).map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-        <select
+          className="ml-2 w-32"
+          options={Object.values(APP_THEMES).map((t) => ({ value: t.id, label: t.label }))}
+        />
+        <Select
           value={style.font}
-          onChange={(e) => restyle({ ...style, font: e.target.value })}
+          onChange={(v) => restyle({ ...style, font: v })}
           aria-label="Deck font"
           title="Deck font"
-          className={selectClass}
-        >
-          {Object.entries(FONTS).map(([id, f]) => (
-            <option key={id} value={id}>
-              {f.label}
-            </option>
-          ))}
-        </select>
+          className="w-28"
+          options={Object.entries(FONTS).map(([id, f]) => ({ value: id, label: f.label }))}
+        />
         <button
           type="button"
           onClick={() => setPresent(true)}

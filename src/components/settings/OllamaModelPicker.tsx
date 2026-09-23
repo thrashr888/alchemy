@@ -10,7 +10,7 @@
    and a value already set must never be erased just because Ollama is down. */
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { Input } from "../ui";
+import { Input, Select } from "../ui";
 
 const CUSTOM = "__custom__";
 
@@ -84,18 +84,17 @@ export function OllamaModelPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <select
+      <Select
         aria-label={label}
         value={custom ? CUSTOM : value}
-        onChange={(e) => {
-          if (e.target.value === CUSTOM) {
+        onChange={(v) => {
+          if (v === CUSTOM) {
             setCustom(true);
             return;
           }
           setCustom(false);
-          onChange(e.target.value);
+          onChange(v);
         }}
-        className="h-8 rounded-md border border-input bg-surface-2 px-2 text-body text-foreground focus:outline-none"
       >
         {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
         {shown.map((m) => (
@@ -104,7 +103,7 @@ export function OllamaModelPicker({
           </option>
         ))}
         <option value={CUSTOM}>Custom…</option>
-      </select>
+      </Select>
       {custom && (
         <Input
           autoFocus
