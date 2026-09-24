@@ -16,6 +16,7 @@ import type {
   NoteSummary,
   NoteKind,
   Notebook,
+  NotebookPreview,
   OkfBinding,
   OkfLifecycle,
   ReadingPrefs,
@@ -183,6 +184,13 @@ export interface AcpPaneState {
 
 export interface AppState {
   notebooks: Notebook[];
+  /** What each notebook holds, by notebook id — the contents the Library's
+   *  cards draw instead of ruled lines (DESIGN.md §9). Empty until Home's
+   *  shelf asks for it. A missing key means the read hasn't landed (the card
+   *  shows its skeleton); a key whose preview has no sources means the
+   *  notebook really is empty, and the card says so. That distinction is why
+   *  the backend returns a row for every notebook. */
+  notebookPreviews: Record<string, NotebookPreview>;
   currentId: string | null;
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
@@ -406,6 +414,10 @@ export interface AppState {
   init: () => Promise<void>;
   bindGlobalListeners: () => void;
   refreshNotebooks: () => Promise<void>;
+  /** Re-read what every notebook holds. One backend call for the whole
+   *  shelf, and only ever called from Home — inside a notebook the cards
+   *  aren't on screen, so the scan would be work for nobody. */
+  refreshNotebookPreviews: () => Promise<void>;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
   navBack: () => void;

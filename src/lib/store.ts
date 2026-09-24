@@ -375,6 +375,12 @@ let folderScanFlushHandle = 0;
 // mcp://changed arrives once per agent tool call; one trailing notebooks
 // refresh (a full list + native menu rebuild) covers a burst of them.
 let notebooksRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+// The card contents cost four corpus scans, so they refresh on the same
+// signals as the notebook list but on a far slacker leash: a title that
+// appeared five seconds ago is still news, and an agent importing in a loop
+// must not turn the shelf into a scan storm.
+const PREVIEWS_DEBOUNCE_MS = 5_000;
+let previewsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // True while navBack/navForward replays a history entry, so the location
 // subscriber doesn't record the replay as a fresh navigation.
 let navApplying = false;
@@ -383,6 +389,18 @@ let toastSeq = 0;
 
 type Getter = () => AppState;
 type Setter = (partial: Partial<AppState>) => void;
+
+/** Queue one trailing card-contents refresh, at most every
+ *  `PREVIEWS_DEBOUNCE_MS`. Skipped while a notebook is open: the Library's
+ *  cards aren't on screen, and Home re-asks on mount anyway. */
+function queueNotebookPreviews(get: Getter) {
+  if (previewsRefreshTimer !== null) return;
+  previewsRefreshTimer = setTimeout(() => {
+    previewsRefreshTimer = null;
+    if (get().currentId) return;
+    void get().refreshNotebookPreviews();
+  }, PREVIEWS_DEBOUNCE_MS);
+}
 
 /** Drive one queue item through processing → done/error and auto-clear successes. */
 async function runQueued(
@@ -507,6 +525,7 @@ export const useStore = create<AppState>((rawSet, get) => {
 
   return {
     notebooks: [],
+    notebookPreviews: {},
     currentId: null,
     sources: [],
     selectedSourceIds: null,
@@ -1512,6 +1531,27 @@ export const useStore = create<AppState>((rawSet, get) => {
     refreshNotebooks: async () => {
       set({ notebooks: await api.listNotebooks(), notebooksFailed: false });
       void api.rebuildAppMenu();
+      // Every signal that moves the shelf already comes through here —
+      // mcp://changed, a notebook created or deleted, an import or a chat
+      // turn settling — so the card contents follow the list from one place
+      // rather than thirteen call sites. On a 5s leash, and never while a
+      // notebook is open (see `queueNotebookPreviews`).
+      queueNotebookPreviews(get);
+    },
+
+    refreshNotebookPreviews: async () => {
+      try {
+        const rows = await api.notebookPreviews();
+        set({
+          notebookPreviews: Object.fromEntries(
+            rows.map((p) => [p.notebookId, p]),
+          ),
+        });
+      } catch {
+        // The cards keep whatever they already drew, and an unpreviewed
+        // notebook keeps its ruled lines. Contents are a hint, never the
+        // reason a shelf renders — a failed read must not blank it.
+      }
     },
 
     selectNotebook: async (id) => {

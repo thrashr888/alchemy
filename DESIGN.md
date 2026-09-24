@@ -482,8 +482,13 @@ timeline, the night shift's Staff, the Brief, the nightly reports — is a
 section of one center column rather than a card stacked around it. Shared
 and Archived are the same shelf, narrowed. The shelf groups notebooks by
 recency (Today, Last 7 days, Earlier) and draws each as a 212px card whose
-thumb stands in for the notebook: its color, its name in caps, and ruled
-lines whose widths come from its id so the page never shimmers. The sheet's
+thumb stands in for the notebook: its color, its name in caps, and then what
+is actually inside — two or three of its newest source titles behind their
+type glyphs, the newest note among them, and its lead images as a strip of
+three tiles along the bottom — with the counts moved to the tooltip, because
+a card has room to say what a notebook holds and the table already says how
+much. Until `notebook_previews` lands, id-derived ruled lines hold the space
+so the page never shimmers. The sheet's
 footer is one line of what last night's run did, with the Brief a link away.
 The toolbar carries the collection's controls for every section — the
 grid/table switch, the sort pop-up, the filter field — so no section draws

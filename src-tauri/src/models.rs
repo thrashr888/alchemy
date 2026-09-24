@@ -772,3 +772,52 @@ pub struct ActivityStats {
     #[serde(default)]
     pub tokens_generated: i64,
 }
+
+/// One source as a Home card names it: enough to say what the notebook is
+/// made of, and nothing the card doesn't draw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSource {
+    pub id: String,
+    pub title: String,
+    pub source_type: String,
+    /// The source's lead image (og:image) when it has one; "" otherwise.
+    /// `"-"` — ingest's "looked, found none" sentinel — reads as "".
+    pub image_url: String,
+}
+
+/// One note as a Home card names it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewNote {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+}
+
+/// What one notebook is made of, for the Library's cards: the titles, the
+/// pictures, and the last thing that was asked of it. The card used to draw
+/// ruled lines hashed from the notebook id — a steady shape, but a shape
+/// about nothing. Counts say how much is inside; this says what.
+///
+/// Every field is capped, because a card is 212px wide: four source titles,
+/// three images, two notes, one question. A notebook with nothing in it
+/// still gets a row, so "still loading" and "empty" are different states on
+/// screen rather than the same blank.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookPreview {
+    pub notebook_id: String,
+    /// Newest first, at most 4. Top-level sources are preferred over folder
+    /// children, which say less about the notebook than their folder does.
+    pub sources: Vec<PreviewSource>,
+    /// Distinct lead images across the notebook's sources, newest first, at
+    /// most 3.
+    pub images: Vec<String>,
+    /// Newest first, at most 2.
+    pub notes: Vec<PreviewNote>,
+    /// The newest user question in this notebook's chat, whitespace
+    /// collapsed and trimmed to 120 chars; "" when nothing was ever asked.
+    pub last_question: String,
+    pub last_question_at: i64,
+}

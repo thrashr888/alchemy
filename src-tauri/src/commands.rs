@@ -13074,6 +13074,17 @@ pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, S
     })
 }
 
+/// What each notebook holds, for the Library's cards (DESIGN.md §9): source
+/// titles, lead images, the newest notes, the last question. One entry per
+/// active notebook, four projected scans for all of them — never a
+/// per-notebook `list_sources` loop.
+#[tauri::command]
+pub async fn notebook_previews(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::NotebookPreview>, String> {
+    e(state.db.notebook_previews().await)
+}
+
 /// The corpus by arrival, batched per notebook (docs/RFC-timeline.md).
 /// Read-only, computed fresh per call from `created_at`; `with_items`
 /// false returns batch shapes and sample titles only.

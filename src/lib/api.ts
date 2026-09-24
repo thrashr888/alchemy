@@ -26,6 +26,7 @@ import type {
   FolderScan,
   GrepHit,
   HomeActivity,
+  NotebookPreview,
   ActivityItem,
   HygieneIssue,
   KokoroStatus,
@@ -481,6 +482,10 @@ export const api = {
   corpusTimeline: (notebookId?: string) =>
     run(query<CorpusTimeline>("corpus_timeline", { notebookId })),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
+  /** What every active notebook holds, for the Library's cards. One call for
+   *  the whole shelf — four projected scans in Rust, never one per card. */
+  notebookPreviews: () =>
+    run(query<NotebookPreview[]>("notebook_previews")),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),

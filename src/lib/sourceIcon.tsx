@@ -3,6 +3,7 @@
 // their own exports components-only — Vite Fast Refresh bails ("hmr
 // invalidate") on any module mixing component and non-component exports.
 import type { Source } from "@/lib/types";
+import type { LucideIcon } from "lucide-react";
 import {
   Blocks,
   BookOpen,
@@ -44,58 +45,60 @@ function fileExt(url?: string): string {
   return m ? m[1].toLowerCase() : "";
 }
 
-export function sourceIcon(t: Source["sourceType"], url?: string) {
+/** Which glyph a source wears. Separate from `sourceIcon` because Home's
+ *  cards draw the same type vocabulary at 12px rather than the rows' 14px —
+ *  the CHOICE is shared, the size is the caller's. */
+export function sourceGlyph(
+  t: Source["sourceType"],
+  url?: string,
+): LucideIcon {
   // Mac sources show the app they mirror (same icons as the add-source
-  // modal's provider tiles), in that app's signature color.
+  // modal's provider tiles).
   if (t === "mac" && url) {
-    if (url.startsWith("cider://calendar/"))
-      return <Calendar className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://reminders/"))
-      return <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://notes/"))
-      return <NotebookText className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (url.startsWith("cider://stocks/"))
-      return <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />;
+    if (url.startsWith("cider://calendar/")) return Calendar;
+    if (url.startsWith("cider://reminders/")) return ListChecks;
+    if (url.startsWith("cider://notes/")) return NotebookText;
+    if (url.startsWith("cider://stocks/")) return TrendingUp;
   }
   // File-backed sources show the application family the file came from —
   // Word, PowerPoint, Excel, Box, EPUB — not just "text".
   const ext = fileExt(url);
-  if (WORD_EXTS.has(ext))
-    return <FileType2 className="h-3.5 w-3.5 text-muted-foreground" />;
-  if (SLIDES_EXTS.has(ext))
-    return <Presentation className="h-3.5 w-3.5 text-muted-foreground" />;
-  if (SHEET_EXTS.has(ext))
-    return <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground" />;
-  if (ext === "epub")
-    return <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />;
-  if (ext === "boxnote")
-    return <Box className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (WORD_EXTS.has(ext)) return FileType2;
+  if (SLIDES_EXTS.has(ext)) return Presentation;
+  if (SHEET_EXTS.has(ext)) return FileSpreadsheet;
+  if (ext === "epub") return BookOpen;
+  if (ext === "boxnote") return Box;
   switch (t) {
     case "git":
-      return <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />;
+      return GitBranch;
     case "notion":
-      return <Blocks className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Blocks;
     case "obsidian":
-      return <Gem className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Gem;
     case "okf":
-      return <Library className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Library;
     case "code":
-      return <FileCode className="h-3.5 w-3.5 text-muted-foreground" />;
+      return FileCode;
     case "pdf":
-      return <FileType className="h-3.5 w-3.5 text-muted-foreground" />;
+      return FileType;
     case "url":
-      return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Globe;
     case "markdown":
-      return <Hash className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Hash;
     case "image":
-      return <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />;
+      return ImageIcon;
     case "folder":
-      return <Folder className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Folder;
     case "mac":
-      return <Command className="h-3.5 w-3.5 text-muted-foreground" />;
+      return Command;
     case "html":
-      return <CodeXml className="h-3.5 w-3.5 text-muted-foreground" />;
+      return CodeXml;
     default:
-      return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
+      return FileText;
   }
+}
+
+export function sourceIcon(t: Source["sourceType"], url?: string) {
+  const Glyph = sourceGlyph(t, url);
+  return <Glyph className="h-3.5 w-3.5 text-muted-foreground" />;
 }
