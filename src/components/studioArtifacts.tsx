@@ -68,13 +68,16 @@ export const AUDIO_OVERVIEW: Artifact = {
 /** Layout groups for Studio and the command menu: what a person is trying
  *  to do, in the order people actually reach for them (the note counts in
  *  docs/RFC-ablation.md), most-used first inside each group. Families stay
- *  the color; groups are the shelf. */
-export type ArtifactGroup = "understand" | "learn" | "visualize" | "write";
+ *  the color; groups are the shelf.
+ *
+ *  Three shelves, not four: Learn and Visualize are one errand (make the
+ *  material easier to hold onto) and the inspector is 300px wide, so the
+ *  mock in docs/RFC-mac-chrome.md merges them. */
+export type ArtifactGroup = "understand" | "learn" | "write";
 
 export const GROUP_LABEL: Record<ArtifactGroup, string> = {
   understand: "Understand",
-  learn: "Learn",
-  visualize: "Visualize",
+  learn: "Learn and visualize",
   write: "Write",
 };
 
@@ -141,8 +144,7 @@ const WRITE = inFamily("documents", [
 
 const GROUPS: [ArtifactGroup, Artifact[]][] = [
   ["understand", UNDERSTAND],
-  ["learn", LEARN],
-  ["visualize", VISUALIZE],
+  ["learn", [...LEARN, ...VISUALIZE]],
   ["write", WRITE],
 ];
 
@@ -152,35 +154,79 @@ export const ARTIFACTS: Artifact[] = GROUPS.flatMap(([, artifacts]) => artifacts
 
 /** The four a notebook reaches for first: the most-run generator overall,
  *  the briefing, and the two visual kinds people actually make (process
- *  maps and decks). Audio takes a slot once its voice model is present. */
+ *  maps and decks). Audio takes the first slot once its voice model is
+ *  present. These no longer get a shelf of their own — they are the
+ *  tie-break in `shelfOrder`, so they float to the top of the shelf they
+ *  belong to and become the rows that shelf shows at rest. */
 const PRIMARY_KINDS: NoteKind[] = ["summary", "briefing", "process", "slide_deck"];
+
+/** How many rows each shelf shows before the rest folds into one disclosure
+ *  row. Read off the iteration-2 mock: Understand earns the extra row
+ *  because it is where a fresh notebook starts. */
+export const SHELF_TOP: Record<ArtifactGroup, number> = {
+  understand: 3,
+  learn: 2,
+  write: 2,
+};
+
+/** A shelf's rows, most useful first: what this notebook has actually made
+ *  of that kind, then the primary order above, then the shelf's own order.
+ *  Counts win because a shelf should surface the generators this notebook
+ *  lives on, not the ones the list happens to start with. */
+function shelfOrder(
+  artifacts: Artifact[],
+  counts: Partial<Record<string, number>>,
+  primaryKinds: NoteKind[],
+): Artifact[] {
+  const rank = new Map(primaryKinds.map((kind, i) => [kind, i]));
+  const unranked = primaryKinds.length;
+  return artifacts
+    .map((artifact, index) => ({ artifact, index }))
+    .sort((a, b) => {
+      const byCount = (counts[b.artifact.kind] ?? 0) - (counts[a.artifact.kind] ?? 0);
+      if (byCount !== 0) return byCount;
+      const byPrimary =
+        (rank.get(a.artifact.kind) ?? unranked) -
+        (rank.get(b.artifact.kind) ?? unranked);
+      if (byPrimary !== 0) return byPrimary;
+      return a.index - b.index;
+    })
+    .map(({ artifact }) => artifact);
+}
 
 export type ArtifactShelf = {
   id: ArtifactGroup;
   label: string;
-  artifacts: Artifact[];
+  /** The rows the shelf shows at rest. */
+  top: Artifact[];
+  /** The rest, behind the shelf's one disclosure row. Nothing is out of
+   *  reach: opening the shelf shows these. */
+  folded: Artifact[];
 };
 
-export function studioArtifacts(kokoroReady: boolean): {
-  primary: Artifact[];
-  groups: ArtifactShelf[];
-} {
-  const available = kokoroReady ? [AUDIO_OVERVIEW, ...ARTIFACTS] : ARTIFACTS;
+/** The Studio shelves for one notebook: every built-in generator, split into
+ *  the rows a shelf shows and the rows it folds. `counts` is how many notes
+ *  of each kind the notebook already holds. */
+export function studioArtifacts(
+  kokoroReady: boolean,
+  counts: Partial<Record<string, number>> = {},
+): ArtifactShelf[] {
   const primaryKinds = kokoroReady
-    ? (["audio_overview", "summary", "briefing", "process"] as NoteKind[])
+    ? (["audio_overview", ...PRIMARY_KINDS] as NoteKind[])
     : PRIMARY_KINDS;
-  const primary = primaryKinds
-    .map((kind) => available.find((artifact) => artifact.kind === kind))
-    .filter((artifact): artifact is Artifact => !!artifact);
-  const primarySet = new Set(primaryKinds);
-  return {
-    primary,
-    groups: GROUPS.map(([id, artifacts]) => ({
+  return GROUPS.map(([id, artifacts]) => {
+    // Audio Overview only exists once its voice model is downloaded and
+    // verified; it reads the sources aloud, so it lives on Understand.
+    const all =
+      kokoroReady && id === "understand" ? [AUDIO_OVERVIEW, ...artifacts] : artifacts;
+    const ordered = shelfOrder(all, counts, primaryKinds);
+    return {
       id,
       label: GROUP_LABEL[id],
-      artifacts: artifacts.filter((artifact) => !primarySet.has(artifact.kind)),
-    })),
-  };
+      top: ordered.slice(0, SHELF_TOP[id]),
+      folded: ordered.slice(SHELF_TOP[id]),
+    };
+  });
 }
 
 /**
