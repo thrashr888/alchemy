@@ -427,7 +427,13 @@ function NotebookCard({
   // An image strip and three lines don't both fit in 140px; the pictures win,
   // because they say more per pixel than a third title does.
   const lineBudget = images.length > 0 ? 2 : 3;
-  const note = preview?.notes[0];
+  // Wiki pages ("Entity: MSFT", the index) are the notebook's bookkeeping;
+  // the backend already ranks them last, so notes[0] is a wiki page only
+  // when the notebook has nothing authored or generated. Then the card
+  // shows sources rather than the ledger, and the meta line falls through
+  // to the question or the newest source. The wiki still counts as a note
+  // in the tooltip.
+  const note = preview?.notes.find((n) => n.kind !== "wiki");
   // Sources, then a note: the mix is the point — a card that shows only
   // titles reads as a folder, and one that shows only its note reads as a
   // document. Reserve the last line for the note when there is one.
