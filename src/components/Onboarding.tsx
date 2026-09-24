@@ -812,7 +812,7 @@ export function Onboarding({ onOpenSettings }: { onOpenSettings: () => void }) {
 
         <section className="flex min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="flex w-full max-w-[560px] flex-col gap-5 px-6 py-8 md:px-10">
+            <div className="mx-auto flex w-full max-w-[640px] flex-col gap-5 px-6 py-8 md:px-10">
               <div className="flex flex-col gap-2">
                 <Badge className="self-start">
                   Step {stage + 1} of {STEPS.length} · {STEPS[stage]}

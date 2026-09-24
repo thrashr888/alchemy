@@ -41,6 +41,7 @@ import {
   ScrollText,
   Sparkles,
   Blocks,
+  ChevronDown,
   Smile,
   Wrench,
   Zap,
@@ -300,20 +301,39 @@ export function AppearanceTab() {
   // as "System" rather than as whatever it resolves to this minute.
   const themeName =
     theme === SYSTEM_THEME ? "System" : THEMES[resolveThemeId(theme)].label;
+  const [themesOpen, setThemesOpen] = useState(false);
   return (
     <div className="flex flex-col gap-5">
       <FormGroup
         caption="Theme"
         footer="37 themes, each with its own backdrop. System accent follows the color you chose in macOS settings."
       >
-        <FormRow label="Theme">
-          <span className="text-caption text-muted-foreground">{themeName}</span>
-        </FormRow>
-        {/* The swatch grid spans the row rather than sitting in the trailing
-            slot: the strip IS the label (DESIGN.md §4 ledger). */}
-        <div className="px-3 py-2.5">
-          <ThemePicker />
-        </div>
+        {/* The swatch grid is 38 entries tall, so it folds behind the row
+            (a disclosure, the System Settings way) and opens on demand;
+            the row itself names the current theme. Closed by default so
+            Selection color and Glass stay on screen. */}
+        <button
+          type="button"
+          onClick={() => setThemesOpen((open) => !open)}
+          aria-expanded={themesOpen}
+          className="flex w-full min-w-0 items-center justify-between gap-4 px-3 py-2 text-left transition-colors hover:bg-surface-2"
+        >
+          <span className="text-body text-foreground">Theme</span>
+          <span className="flex items-center gap-1.5 text-caption text-muted-foreground">
+            {themeName}
+            <ChevronDown
+              className={cn(
+                "h-3.5 w-3.5 transition-transform",
+                themesOpen && "rotate-180",
+              )}
+            />
+          </span>
+        </button>
+        {themesOpen && (
+          <div className="px-3 py-2.5">
+            <ThemePicker />
+          </div>
+        )}
         <FormRow label="Selection color">
           <Segmented
             label="Selection color"
