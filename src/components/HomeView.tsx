@@ -924,7 +924,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
       <header
         data-tauri-drag-region
-        className="toolbar flex h-[52px] shrink-0 items-center gap-2.5 pl-[84px] pr-5"
+        className="flex h-12 items-center gap-2.5 pl-[84px] pr-5"
       >
         <NavButtons />
         <div className="h-4 w-px bg-border" />
