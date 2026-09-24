@@ -62,6 +62,7 @@ import {
   Share2,
   Square,
   StickyNote,
+  Sun,
   Users,
 } from "lucide-react";
 import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
@@ -603,7 +604,7 @@ function NotebookCard({
       data-pick-id={nb.id}
       title={`${nb.title} — ${counts.join(" · ")}`}
       className={cn(
-        "group relative flex w-[212px] cursor-pointer flex-col gap-2.5",
+        "group relative flex w-[212px] cursor-pointer flex-col gap-1.5",
         "has-[[aria-expanded=true]]:z-30",
       )}
     >
@@ -671,7 +672,7 @@ function NotebookCard({
           </div>
         )}
       </div>
-      <div className="pointer-events-none relative z-10 flex flex-col gap-0.5">
+      <div className="pointer-events-none relative z-10 flex flex-col gap-0.5 px-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-body font-semibold text-foreground">
             {nb.title}
@@ -1114,6 +1115,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const briefUnread = briefNotes.some((r) =>
     noteUnread(r, noteReads, noteReadsBaseline),
   );
+  const feedUnreadCount = feedReports.filter((r) =>
+    noteUnread(r, noteReads, noteReadsBaseline),
+  ).length;
+  // What the night shift did, in one line — the sidebar's Brief row wears it
+  // as a tooltip, and the Brief section itself repeats it as a quiet second
+  // line (DESIGN.md §9 "Home is a library"). It used to be the footer's only
+  // job; the footer is now every section's status bar, so this line moved to
+  // the one place it is actually about.
+  const lastNight = lastNightLine({ reports, events: sourceEvents });
 
   const searchRef = useRef<HTMLInputElement>(null);
   useFindFocus(searchRef);
@@ -1188,30 +1198,67 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     </>
   );
 
-  /** The sheet's heading: the section's name as the page title, with what it
-   *  holds counted on the same baseline. The sections that carry their own
-   *  caps header (the conversation, Staff, the Brief, the reports feed) get
-   *  none — one name per surface. */
+  /** The sheet's heading: the section's name as the page title, nothing
+   *  else — what it holds moved to the status-bar footer below (DESIGN.md
+   *  §9 "Home is a library"). Notebooks keeps one more line, the "Since you
+   *  were away" digest, because that is about the visit rather than a count. */
   const shelfTitle =
     scope === "shared" ? "Shared" : scope === "archived" ? "Archived" : "Notebooks";
-  const shelfSummary = () => {
+
+  /** The status bar's one line: what the section on screen holds, the way
+   *  Finder counts a window's contents. Registry Cards and Suggested count
+   *  themselves; the shelf counts notebooks and, unfiltered, the whole
+   *  corpus; the Brief carries nothing here because its line lives in the
+   *  section itself (the tooltip and the quiet line below, both fed by
+   *  `lastNight`). */
+  const footerLine = (): string => {
+    if (homeSection === "chat") {
+      const n = homeThreads.length;
+      return `${n} ${n === 1 ? "conversation" : "conversations"}`;
+    }
+    if (homeSection === "staff") {
+      const n = allReports.length;
+      return n > 0
+        ? `${n} ${n === 1 ? "schedule" : "schedules"}`
+        : "Nothing scheduled";
+    }
+    if (homeSection === "brief") return "";
+    if (homeSection === "reports") {
+      const n = feedReports.length;
+      if (n === 0) return "No reports yet";
+      return feedUnreadCount > 0
+        ? `${n} ${n === 1 ? "report" : "reports"} · ${feedUnreadCount} unread`
+        : `${n} ${n === 1 ? "report" : "reports"}`;
+    }
+    if (homeSection === "registry") {
+      const n = registryCounts?.total ?? 0;
+      return `${n} ${n === 1 ? "card" : "cards"}`;
+    }
+    if (homeSection === "suggested") {
+      const n = registrySignal?.shown ?? 0;
+      return n > 0 ? `${n} waiting` : "Nothing waiting";
+    }
+    if (homeSection === "timeline")
+      return "Every source and note, by the day it arrived.";
+    // Notebooks — Shared and Archived are the same shelf, narrowed.
     if (scope === "archived")
       return `${archivedNotebooks.length} archived · data intact`;
     // While a tag is on, the line counts what the tag narrowed to and names
-    // it — the heading is where a filter says it is running, so the shelf
-    // never looks mysteriously short. The corpus totals are about the whole
-    // corpus, so they stand down rather than describe a subset.
+    // it — the status bar is where a filter says it is running, so the
+    // shelf never looks mysteriously short. The corpus totals are about the
+    // whole corpus, so they stand down rather than describe a subset.
     if (activeTag) {
       const n = filteredNotebooks.length;
       return `${n} ${n === 1 ? "notebook" : "notebooks"} · #${activeTag.tag}`;
     }
     // Built-ins are not counted as yours — they are the shelf's own section
-    // with its own count, and "22 active" meaning "16 of them mine" was the
-    // number quietly disagreeing with the shelf.
+    // with its own count, and "22 notebooks" meaning "16 of them mine" was
+    // the number quietly disagreeing with the shelf.
     const own = activeNotebooks.filter((n) => !n.builtIn).length;
     const n = scope === "shared" ? sharedNotebooks.length : own;
-    const head = scope === "shared" ? `${n} shared` : `${n} active`;
-    if (!stats) return `${head} · most recently used first`;
+    const head =
+      scope === "shared" ? `${n} shared` : `${n} ${n === 1 ? "notebook" : "notebooks"}`;
+    if (!stats) return head;
     return [
       head,
       `${Intl.NumberFormat().format(stats.sources)} ${stats.sources === 1 ? "source" : "sources"}`,
@@ -1222,51 +1269,74 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       .join(" · ");
   };
 
+  // The status bar's counts for these three sections come from
+  // `useHomeActivity` (`stats`/`reports`), so a failed read makes them say
+  // so instead of showing a wrong number. Registry and Suggested read their
+  // own store slices and are unaffected by that failure.
+  const footerActivityDependent =
+    homeSection === "notebooks" ||
+    homeSection === "reports" ||
+    homeSection === "staff";
+
+  // Where the Registry's own sort/suggest/orphan-cleanup controls land: the
+  // heading row's trailing slot, beside "New card" — the same slot
+  // Notebooks' Add source/Import occupy — rather than a second toolbar row
+  // inside the Registry's own content column. `RegistrySection` portals its
+  // controls into this node instead of drawing them itself.
+  const [registryActionsEl, setRegistryActionsEl] =
+    useState<HTMLDivElement | null>(null);
+
   const heading = (() => {
     if (homeSection === "registry")
       return {
         title: "Registry",
-        summary:
-          registryCounts && registryCounts.total > 0
-            ? [
-                `${registryCounts.total} ${registryCounts.total === 1 ? "card" : "cards"}`,
-                ...registryCounts.kinds.map(
-                  (k) => `${k.count} ${k.label.toLowerCase()}`,
-                ),
-              ].join(" · ")
-            : "The things your documents are about: assets, people, projects.",
         actions: (
-          <Button
-            variant="primary"
-            size="sm"
-            className="h-[26px] rounded-lg"
-            onClick={() => useStore.setState({ registryCreating: true })}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New card
-          </Button>
+          <>
+            <div ref={setRegistryActionsEl} className="flex items-center gap-2" />
+            <Button
+              variant="primary"
+              size="sm"
+              className="h-[26px] rounded-lg"
+              onClick={() => useStore.setState({ registryCreating: true })}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New card
+            </Button>
+          </>
         ),
       };
     if (homeSection === "suggested")
-      return {
-        title: "Suggested",
-        summary:
-          (registrySignal?.shown ?? 0) > 0
-            ? `${registrySignal!.shown} waiting for a yes or no`
-            : "Cards Alchemy proposed as it read your notebooks.",
-        actions: null,
-      };
+      return { title: "Suggested", actions: null };
     if (homeSection === "timeline")
+      return { title: "Timeline", actions: null };
+    if (homeSection === "staff") return { title: "Staff", actions: null };
+    if (homeSection === "brief") return { title: "Brief", actions: null };
+    if (homeSection === "reports")
       return {
-        title: "Timeline",
-        summary:
-          "Every source and note, by the day it arrived — grouped into the batches they came in.",
-        actions: null,
+        title: "Nightly Reports",
+        actions:
+          feedUnreadCount > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                useStore
+                  .getState()
+                  .markNotesRead(
+                    feedReports
+                      .filter((r) => noteUnread(r, noteReads, noteReadsBaseline))
+                      .map((r) => r.id),
+                  )
+              }
+            >
+              Mark all read
+            </Button>
+          ) : null,
       };
+    if (homeSection === "chat") return { title: "Chats", actions: null };
     if (homeSection !== "notebooks") return null;
     return {
       title: shelfTitle,
-      summary: shelfSummary(),
       // The two ways material arrives that aren't "a new notebook". They sit
       // with the shelf they fill rather than in the toolbar, which the spec
       // gives to New Notebook alone.
@@ -1449,7 +1519,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         </div>
       );
-    if (homeSection === "registry") return <RegistrySection view="cards" />;
+    if (homeSection === "registry")
+      return (
+        <RegistrySection view="cards" actionsPortal={registryActionsEl} />
+      );
     if (homeSection === "suggested")
       return <RegistrySection view="suggested" />;
     if (homeSection === "timeline") return <TimelineSection />;
@@ -1457,6 +1530,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       return (
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
           <StaffSidebar
+            bare
             schedules={allReports}
             reports={reports}
             recentNotes={recentNotes}
@@ -1477,6 +1551,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           briefs={briefNotes}
           schedules={allReports}
           unread={briefUnread}
+          lastNight={lastNight}
           onRan={refreshActivity}
         />
       );
@@ -1538,18 +1613,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     );
   })();
 
-  /** The heading row: the section's name as the page title with what it holds
-   *  counted on the same baseline, pinned above whatever scrolls. Sections
-   *  that carry their own caps header get none. */
+  /** The heading row: the section's name as the page title, pinned above
+   *  whatever scrolls, plus its trailing controls. What it holds is the
+   *  footer's job now (below); the one exception is Notebooks' "Since you
+   *  were away" line, which is about the visit rather than a count. */
   const headingBlock = heading && (
     <div className="relative z-10 flex shrink-0 flex-col gap-1 px-7 pb-[18px] pt-[22px]">
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-[26px] font-bold tracking-[-.01em] text-foreground">
-            {heading.title}
-          </h1>
-          <p className="text-body text-muted-foreground">{heading.summary}</p>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <h1 className="min-w-0 flex-1 text-[26px] font-bold tracking-[-.01em] text-foreground">
+          {heading.title}
+        </h1>
         {heading.actions && (
           <div className="flex shrink-0 items-center gap-2">
             {heading.actions}
@@ -1567,19 +1640,20 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     </div>
   );
 
-  /** The Library's footer: what the night shift did, and the way into the
-   *  Brief that explains it. Everywhere but the conversation, which docks its
-   *  composer in the same place. */
-  const footer = chatOpen ? null : (
-    <div className="relative z-10 flex shrink-0 items-center gap-4 border-t border-border px-7 pb-3.5 pt-3 text-caption text-muted-foreground">
-      {/* A failed activity read used to be reported beside the shelf's ask
-          box. The box is gone, and the counts on this line come from the very
-          read that failed — so the line says so, rather than reporting the
-          zeroes as a quiet night. */}
-      {activityError ? (
+  /** The Library's footer: a Finder-style status bar, one centered line of
+   *  what the section on screen holds. Every section gets one now, the
+   *  conversation included — its composer docks below it, the way a Finder
+   *  window keeps its status bar under whatever toolbar it carries. */
+  const footer = (
+    <div className="relative z-10 flex shrink-0 items-center justify-center border-t border-border px-7 pb-3.5 pt-3 text-center text-caption text-muted-foreground">
+      {/* A failed activity read used to be reported as the whole footer. The
+          counts on sections fed by that same read say so instead of showing
+          a wrong number; Registry and Suggested read their own store slices
+          and are never affected by it. */}
+      {activityError && footerActivityDependent ? (
         <span
           role="alert"
-          className="flex min-w-0 flex-1 items-center gap-2 truncate text-destructive"
+          className="flex min-w-0 items-center gap-2 truncate text-destructive"
         >
           {activityError}
           <Button
@@ -1593,20 +1667,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Button>
         </span>
       ) : (
-        <span className="min-w-0 flex-1 truncate">
-          {lastNightLine({ reports, events: sourceEvents })}
-        </span>
-      )}
-      {/* The one door to the Brief, which is what explains the line on the
-          left. Absent when the Brief is already what you are reading. */}
-      {homeSection !== "brief" && (
-        <button
-          type="button"
-          onClick={() => goSection("brief")}
-          className="shrink-0 rounded text-caption text-citation transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-        >
-          Read the Brief
-        </button>
+        footerLine() && <span className="min-w-0 truncate">{footerLine()}</span>
       )}
     </div>
   );
@@ -1796,13 +1857,26 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </div>
           )}
 
-          {/* The Library's sidebar: three blocks of places, the material
-              itself rather than a card on it (RFC-mac-chrome §2). */}
+          {/* The Library's sidebar: the Brief on its own above three blocks
+              of places, the material itself rather than a card on it
+              (RFC-mac-chrome §2). */}
           {sidebarOpen && (
             <nav
               aria-label="Library"
               className="side-pane relative z-10 hidden w-[220px] shrink-0 flex-col gap-3.5 overflow-y-auto border-r border-border p-2.5 lg:flex"
             >
+              {/* No caps label of its own — the arrival point sits above the
+                  Library rather than inside it, the way Mail's Inbox sits
+                  above its own sidebar's account blocks. */}
+              <LibraryRow
+                icon={<Sun className="h-3.5 w-3.5" />}
+                label="Brief"
+                dot={briefUnread}
+                selected={homeSection === "brief"}
+                title={lastNight}
+                onClick={() => goSection("brief")}
+              />
+
               <SidebarBlock title="Library">
                 <LibraryRow
                   icon={<Library className="h-3.5 w-3.5" />}
