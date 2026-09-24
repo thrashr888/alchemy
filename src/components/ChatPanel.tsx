@@ -787,28 +787,8 @@ export function ChatPanel() {
           {hostedAgent ? "Agent" : "Chat"}
         </span>
         <div className="ml-auto flex items-center gap-1">
-          {/* The handoff where the conversation is (docs/RFC-desktop-apps.md):
-              the same Open In the notebook menu offers, as a dropdown. */}
-          {currentId && desktopApps.some((a) => a.installed) && (
-            <RowMenu
-              alwaysVisible
-              label="Open in"
-              trigger={
-                <span className="inline-flex items-center gap-1.5">
-                  <Share className="h-3.5 w-3.5" />
-                  Open in
-                </span>
-              }
-              triggerClassName="inline-flex h-7 items-center rounded-md px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-              items={desktopApps
-                .filter((a) => a.installed)
-                .map((a) => ({
-                  label: `${a.label}…`,
-                  onClick: () =>
-                    void useStore.getState().handoffNotebook(currentId, a.id),
-                }))}
-            />
-          )}
+          {/* Open In lives in the notebook's title menu now (the toolbar's
+              pop-up on the name), the one place for the notebook's verbs. */}
           {currentId && (
             <Button
               variant="ghost"
