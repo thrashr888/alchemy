@@ -20,6 +20,7 @@ import { notify } from "./notify";
 import { loadGrowthDismissed, saveGrowthDismissed } from "./growth";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { historyOf, mergeLoadedTurns } from "./homeChatRun";
+import { homePlaceById, sameNavEntry, type HomePlace } from "./homeNav";
 import { claimTextUndo } from "./textUndo";
 import { playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -29,6 +30,7 @@ import type {
   AcpEntry,
   AcpPaneState,
   AppState,
+  HomeScope,
   HomeSection,
   Migration,
   NavEntry,
@@ -172,6 +174,27 @@ const HOME_CHAT_CONFIG_KEY = "homeChatConfig";
  *  thread — conversations are cheap to make and the sprawl would outlive
  *  them. Pruned when a thread is deleted. */
 const HOME_DRAFTS_KEY = "homeChatDrafts";
+
+/** The shelf's scope and its tag row are both remembered across relaunches:
+ *  they are where the user was, and a reload that lands on an unfiltered
+ *  library has lost that. Written in one place each, because back/forward
+ *  restores them too — a `set` that skipped localStorage would leave the
+ *  next launch disagreeing with the last thing on screen. */
+function loadHomeScope(): HomeScope {
+  const raw = localStorage.getItem("homeScope");
+  return raw === "shared" || raw === "archived" ? raw : "all";
+}
+
+function writeHomeScope(scope: HomeScope): void {
+  localStorage.setItem("homeScope", scope);
+  useStore.setState({ homeScope: scope });
+}
+
+function writeHomeTagFilter(tag: string | null): void {
+  if (tag) localStorage.setItem("homeTagFilter", tag);
+  else localStorage.removeItem("homeTagFilter");
+  useStore.setState({ homeTagFilter: tag });
+}
 
 function loadHomeDrafts(): Record<string, string> {
   try {
@@ -651,6 +674,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     okfBindings: {},
     galleryScope: null,
     homeSection: "notebooks",
+    homeScope: loadHomeScope(),
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
     homeDrafts: loadHomeDrafts(),
@@ -1239,6 +1263,15 @@ export const useStore = create<AppState>((rawSet, get) => {
           return;
         }
         const s = get();
+        // Every row of Home's sidebar has a View-menu item and a ⌘-digit
+        // (src/lib/homeNav.ts), and all three land in the same place. The
+        // group is greyed out off Home (`set_menu_context`), but an action
+        // that does arrive from inside a notebook goes Home first.
+        const place = homePlaceById(e.payload.id);
+        if (place) {
+          void goHomePlace(place);
+          return;
+        }
         if (e.payload.id === "menu-settings") s.openSettings();
         else if (e.payload.id === "menu-about") s.openSettings("about");
         else if (e.payload.id === "menu-search") s.togglePalette();
@@ -1282,6 +1315,13 @@ export const useStore = create<AppState>((rawSet, get) => {
           else s.pushToast("info", "Open a notebook first, then add sources");
         } else if (e.payload.id === "menu-find") {
           set({ findBump: get().findBump + 1 });
+        } else if (e.payload.id === "menu-new-chat") {
+          // A fresh conversation, from anywhere — so it leaves a notebook
+          // first, and the two writes are one history entry.
+          void navAtomic(async () => {
+            if (get().currentId) get().closeNotebook();
+            await get().openHomeThread(null);
+          });
         } else if (e.payload.id === "menu-toggle-sources") {
           toggleNotebookPanel("sources");
         } else if (e.payload.id === "menu-toggle-studio") {
@@ -1572,11 +1612,15 @@ export const useStore = create<AppState>((rawSet, get) => {
     setHomeTagFilter: (tag) => {
       // Pressing the row that is already on clears it — one control, two
       // directions, the way every other facet here works.
-      const next = get().homeTagFilter === tag ? null : tag;
-      if (next) localStorage.setItem("homeTagFilter", next);
-      else localStorage.removeItem("homeTagFilter");
-      set({ homeTagFilter: next });
+      writeHomeTagFilter(get().homeTagFilter === tag ? null : tag);
     },
+
+    goHomeShelf: (scope) => {
+      writeHomeScope(scope);
+      set({ homeSection: "notebooks", openCardId: null });
+    },
+
+    goHomeSection: (section) => set({ homeSection: section, openCardId: null }),
 
     selectNotebook: async (id) => {
       localStorage.setItem("lastNotebookId", id);
@@ -3843,11 +3887,15 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       });
       if (st.reader.open) st.closeReader();
     }
-    // Home's tabs are places too — a notebook has center modes, Home has
-    // sections, and back should return you to the one you were reading.
-    // A chat entry names its conversation, so back lands in that thread.
+    // Home's sections are places too — a notebook has center modes, Home
+    // has sections, and back should return you to the one you were reading.
+    // A chat entry names its conversation, so back lands in that thread; a
+    // shelf entry names its scope and its tag, so back lands on the shelf
+    // as it was narrowed and not on the whole library.
     if (target.nb === null) {
       const section = target.section ?? "notebooks";
+      writeHomeScope(target.scope ?? "all");
+      writeHomeTagFilter(target.tag ?? null);
       if (section === "chat")
         await useStore.getState().openHomeThread(target.thread ?? null);
       else if (section === "registry")
@@ -3857,6 +3905,32 @@ async function applyNav(delta: 1 | -1): Promise<void> {
   } finally {
     navApplying = false;
   }
+}
+
+/** Go to one of Home's places — the sidebar's rows, the View menu's Home
+ *  group, and ⌘1–⌘9 all land here, so the three can never drift.
+ *
+ *  A place on Home is reachable from inside a notebook (the menu items are
+ *  live wherever `set_menu_context` says Home is, and the palette jumps
+ *  here too), so leaving the notebook is part of the move — and the pair is
+ *  ONE history entry, the way the toolbar's own way out is. */
+export async function goHomePlace(place: HomePlace): Promise<void> {
+  await navAtomic(async () => {
+    const s = useStore.getState();
+    if (s.currentId) s.closeNotebook();
+    if (place.clearTag) writeHomeTagFilter(null);
+    if (place.section === "chat") {
+      // Whatever conversation was last on screen, minting one only if there
+      // has never been one — what the sidebar's Chats row does.
+      const st = useStore.getState();
+      useStore.setState({ openCardId: null });
+      await st.openHomeThread(st.homeChat.threadId);
+    } else if (place.section === "notebooks") {
+      useStore.getState().goHomeShelf(place.scope ?? "all");
+    } else {
+      useStore.getState().goHomeSection(place.section);
+    }
+  });
 }
 
 /** A notebook's five panels, in rail order — which is the View menu's order
@@ -3922,7 +3996,12 @@ useStore.subscribe((s, prev) => {
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
     s.homeChat.threadId === prev.homeChat.threadId &&
-    s.openCardId === prev.openCardId
+    s.openCardId === prev.openCardId &&
+    // The shelf's scope and tag row are part of where you are, not how it
+    // is drawn: grid-vs-table is a preference and stays out of the stack,
+    // but Archived and Shared are somewhere else entirely.
+    s.homeScope === prev.homeScope &&
+    s.homeTagFilter === prev.homeTagFilter
   )
     return;
   recordNav(s);
@@ -3946,24 +4025,26 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   const section = s.currentId ? undefined : s.homeSection;
   const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
   const card = section === "registry" ? (s.openCardId ?? null) : undefined;
+  // The shelf's scope and tag belong to the shelf: carried on a Notebooks
+  // entry the way `thread` is carried on a chat one, and absent everywhere
+  // else so that two visits to the Registry don't differ by a filter that
+  // wasn't on screen either time.
+  const scope = section === "notebooks" ? s.homeScope : undefined;
+  const tag = section === "notebooks" ? (s.homeTagFilter ?? null) : undefined;
+  const entry: NavEntry = {
+    nb: s.currentId,
+    mode,
+    doc,
+    section,
+    thread,
+    card,
+    scope,
+    tag,
+  };
   const { stack, index } = s.nav;
-  const cur = stack[index];
-  if (
-    cur &&
-    cur.nb === s.currentId &&
-    cur.mode === mode &&
-    cur.doc?.type === doc?.type &&
-    cur.doc?.id === doc?.id &&
-    cur.section === section &&
-    cur.thread === thread &&
-    cur.card === card
-  )
-    return;
+  if (sameNavEntry(stack[index], entry)) return;
   // A fresh navigation discards forward entries, browser-style.
-  const next: NavEntry[] = [
-    ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc, section, thread, card },
-  ];
+  const next: NavEntry[] = [...stack.slice(0, index + 1), entry];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 }

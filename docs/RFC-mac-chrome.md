@@ -185,6 +185,24 @@ newest note, else the last question behind a chat glyph, else the newest source
 title — then `· Shared · 2 min ago`; the counts move to the card's `title`
 tooltip (`7 sources · 29 notes`) and stay as they were in the table.
 
+**Every row has a menu item and a key.** The View menu's Home group is the
+sidebar, one item per row in sidebar order — Notebooks, Chats, Shared,
+Nightly Reports, Archived, Staff, then Registry Cards and Suggested, then
+the Brief and the Timeline — and ⌘1–⌘9 run down the first nine. The items
+carry no native accelerator, because a key equivalent is global to the
+process and the same digits mean a notebook's panels inside one; the
+frontend reads the view and dispatches, and `set_menu_context` greys out
+whichever group is not on screen. One table on each side
+(`menu.rs`'s registry, `src/lib/homeNav.ts`) so the sidebar, the menu and
+the keys cannot drift, and all three land through `goHomePlace` — which
+leaves an open notebook first and records the pair as one history entry.
+
+**A place on Home is restorable.** Back and forward carry the shelf's scope
+and its tag row along with the section, so opening a notebook from a shelf
+filtered to `invoices` and pressing Back returns to that filtered shelf.
+Grid versus table stays out: that is how the shelf is drawn, not where the
+user is.
+
 ### Settings
 
 Sidebar 200px, padding 12px 8px, 2px between rows; search 26px radius 7;

@@ -81,6 +81,14 @@ export interface NavEntry {
    *  is a page of its own, and back from one returns to the cast. A
    *  suggestion has no page, so `section: "suggested"` never carries one. */
   card?: string | null;
+  /** Which notebooks the shelf was showing, for `section: "notebooks"`.
+   *  Part of the shelf's identity the way `thread` is part of chat's:
+   *  Archived is not where you were when you were looking at Shared. */
+  scope?: HomeScope;
+  /** The tag the shelf was narrowed to, for `section: "notebooks"`. Opening
+   *  a notebook off a filtered shelf and pressing Back must return to the
+   *  filter, not to the whole library. */
+  tag?: string | null;
 }
 
 /** Home's center column: which surface the Library's sidebar has selected.
@@ -100,6 +108,11 @@ export type HomeSection =
   | "staff"
   | "brief"
   | "reports";
+
+/** Which notebooks the Notebooks shelf is showing. Shared and Archived are
+ *  the same shelf narrowed, not sections of their own — so they are a scope
+ *  the shelf carries rather than a `HomeSection`. */
+export type HomeScope = "all" | "shared" | "archived";
 
 /** Home's conversation, as the store holds it: which thread is open and the
  *  turns already settled into it. Both come from the backend — the thread
@@ -365,6 +378,11 @@ export interface AppState {
   /** Home's center column: the notebook grid, the Registry's cast, or the
    *  Chat tab's conversation. */
   homeSection: HomeSection;
+  /** Which notebooks the shelf shows. In the store rather than in HomeView
+   *  because it is part of where the user IS: back/forward records it, the
+   *  View menu's Shared and Archived set it, and neither can reach a
+   *  useState that only exists while Home is mounted. */
+  homeScope: HomeScope;
   /** The Home conversation currently open (docs/RFC-meta-chat.md). Persisted
    *  per thread in the `meta_turns` table, so it survives a tab switch, a
    *  window close, and a relaunch. */
@@ -438,6 +456,12 @@ export interface AppState {
   refreshNotebookPreviews: () => Promise<void>;
   /** Pick a tag row, or clear it by passing the one already on. */
   setHomeTagFilter: (tag: string | null) => void;
+  /** Show the Notebooks shelf at this scope — what the sidebar's Notebooks,
+   *  Shared and Archived rows do, and what the View menu's first, third and
+   *  fifth items do. */
+  goHomeShelf: (scope: HomeScope) => void;
+  /** Show one of Home's other sections. */
+  goHomeSection: (section: HomeSection) => void;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
   navBack: () => void;

@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
-import { HOME_CARDS, registerHomeCards, toggleHomeCard } from "@/lib/homeCards";
 import { DevBadge } from "./DevBadge";
 import { InferenceActivity } from "./InferenceActivity";
 import { UpdateBadge } from "./UpdateBadge";
@@ -47,7 +43,6 @@ import type {
   NotebookPreview,
   SourceEvent,
 } from "@/lib/types";
-import type { HomeSection } from "@/lib/storeTypes";
 import {
   Archive,
   ArchiveRestore,
@@ -750,19 +745,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   /** Which notebooks the shelf is showing. Shared and Archived are not
    *  places of their own — they are the same shelf, narrowed — so they are a
-   *  scope on the notebooks section rather than sections. */
-  const [scope, setScope] = useState<"all" | "shared" | "archived">(
-    () =>
-      (localStorage.getItem("homeScope") as "all" | "shared" | "archived") ||
-      "all",
-  );
-  const goShelf = (next: "all" | "shared" | "archived") => {
-    localStorage.setItem("homeScope", next);
-    setScope(next);
-    useStore.setState({ homeSection: "notebooks", openCardId: null });
-  };
-  const goSection = (section: HomeSection) =>
-    useStore.setState({ homeSection: section, openCardId: null });
+   *  scope on the notebooks section rather than sections. The store holds
+   *  it, not this component: the View menu, ⌘1/⌘3/⌘5 and back/forward all
+   *  set it, and none of them can reach a useState that only exists while
+   *  Home is mounted. */
+  const scope = useStore((s) => s.homeScope);
+  const goShelf = useStore((s) => s.goHomeShelf);
+  const goSection = useStore((s) => s.goHomeSection);
 
   // "system" notebooks (Briefs) are working infrastructure, not shelf items.
   const activeNotebooks = notebooks.filter((n) => !n.status);
@@ -873,42 +862,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       ? registrySignal.shown
       : 0;
 
-  // View > Chats/Staff/Brief/Nightly Reports (menu.rs), and ⌘1–4 with them.
-  // The four used to fold four cards; with the cards gone they choose the
-  // section the sidebar row chooses, so the menu still names every surface.
-  // Held in a ref so the subscription outlives a render.
-  const homeJump = useRef(goSection);
-  homeJump.current = goSection;
-  useEffect(() => {
-    registerHomeCards((card) => {
-      if (card === "chats") {
-        // Reopens whatever conversation was last on screen, minting a fresh
-        // one only when there has never been one.
-        void useStore
-          .getState()
-          .openHomeThread(useStore.getState().homeChat.threadId);
-        return;
-      }
-      homeJump.current(card === "staff" ? "staff" : card === "brief" ? "brief" : "reports");
-    });
-    return () => registerHomeCards(null);
-  }, []);
-  useEffect(() => {
-    if (!isTauri()) return;
-    const label = getCurrentWebview().label;
-    // The menu items are disabled off Home, so an action can't arrive with no
-    // section to select — it goes through the same registration ⌘1–4 uses.
-    const un = listen<{ target: string; id: string }>("menu://action", (e) => {
-      if (e.payload.target !== label) return;
-      const card = HOME_CARDS.find(
-        (c) => e.payload.id === `menu-toggle-home-${c}`,
-      );
-      if (card) toggleHomeCard(card);
-    });
-    return () => {
-      void un.then((off) => off());
-    };
-  }, []);
+  // The View menu's Home group and ⌘1–⌘9 select these same rows, from the
+  // store rather than from here: every place is a section (and, for the
+  // shelf, a scope) the store holds, so nothing has to be registered while
+  // Home happens to be mounted. See `goHomePlace` in src/lib/store.ts.
 
   const { confirm, dialog: confirmDialog } = useConfirm();
 
