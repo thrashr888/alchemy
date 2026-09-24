@@ -48,7 +48,6 @@ import {
   Trash2,
   StickyNote,
   Square,
-  PanelRightClose,
   Copy,
   ShieldCheck,
   FolderOpen,
@@ -296,7 +295,6 @@ export function StudioPanel() {
       await useStore.getState().generateArtifact(n.kind, full.prompt);
     })().catch((error) => useStore.getState().pushToast("error", String(error)));
   };
-  const toggleStudio = useStore((s) => s.toggleStudio);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
@@ -584,26 +582,13 @@ export function StudioPanel() {
         onResize={(w) => setPanelWidth("studio", w)}
         label="Resize studio panel"
       />
-      {/* The inspector's blocks, 12px apart inside the pane's own padding —
-          no rule under the header: the pane already has its hairline toward
-          the center, and a second line here would box the title in
+      {/* No STUDIO caps line and no collapse button: the toolbar's inspector
+          toggle and ⌘2 already close the pane, and a second control saying
+          the same thing in the pane's own header is one too many. The
+          segmented control is the first thing here, inside the pane's own
+          padding; the blocks below carry the 12px between them
           (docs/RFC-mac-chrome.md, Inspector). */}
-      <div className="flex flex-col gap-3 px-3 pt-2.5">
-        <div className="flex items-center">
-          <span className="text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
-            Studio
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="ml-auto h-6 min-w-7 rounded-md"
-            onClick={toggleStudio}
-            title="Collapse studio"
-            aria-label="Collapse studio"
-          >
-            <PanelRightClose className="h-4 w-4" />
-          </Button>
-        </div>
+      <div className="px-3 pt-2.5">
         {/* An inspector, not a stack: Generate, Notes and Reports are three
             faces of one pane (macOS inspectors do this with a segmented
             control at the top), so a tall generator list never pins the
@@ -641,9 +626,13 @@ export function StudioPanel() {
         />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      {/* The tabs share the rest of the pane, and each face owns its own
+          scrolling — exactly one region per tab — so Generate can keep its
+          instructions field out of the scroll. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {studioTab === "generate" && (
-        <div className="flex min-h-full flex-col px-3 pb-2.5 pt-3">
+        <>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 pt-3">
           {/* No GENERATE caps row: the tab already says it. What is left here
               is only what a run in flight has to report — and the stop it
               has to offer. */}
@@ -693,10 +682,20 @@ export function StudioPanel() {
                       onClick={() => generate(a.kind, instructions)}
                     />
                   ))}
-                  {shelf.folded.length > 0 && !open && (
+                  {/* The same row both ways, in the same place so it never
+                      jumps: closed it names what it is hiding, open it offers
+                      the way back. Rendering it only while closed left an
+                      opened shelf with no way to fold again. */}
+                  {shelf.folded.length > 0 && (
                     <FoldRow
-                      label={foldSummary(shelf.folded)}
-                      title={`Show the rest of ${shelf.label}`}
+                      label={open ? "Show less" : foldSummary(shelf.folded)}
+                      open={open}
+                      collapses={open}
+                      title={
+                        open
+                          ? `Fold ${shelf.label} back`
+                          : `Show the rest of ${shelf.label}`
+                      }
                       onClick={() => toggleShelf(shelf.id)}
                     />
                   )}
@@ -785,40 +784,47 @@ export function StudioPanel() {
               );
             })}
           </div>
+        </div>
 
-          {/* One field for the whole pane, pinned to its foot: whatever is
-              typed here rides along with the next generator pressed. */}
-          <div className="mt-auto pt-3">
-            {!hasSources && (
-              <p className="pb-2 px-1 text-micro text-subtle-foreground">
-                Add sources to generate documents.
-              </p>
-            )}
-            <div className="relative min-w-0">
-              <Sparkles
-                aria-hidden
-                className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle-foreground"
-              />
-              <Input
-                name="generation-instructions"
-                aria-label="Instructions for the next generation"
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                disabled={!hasSources}
-                placeholder="Instructions for the next generation…"
-                className="h-[30px] rounded-[8px] border-transparent bg-surface-2 pl-8 pr-2 text-caption shadow-[inset_0_0_0_0.5px_var(--border)] disabled:opacity-50"
-              />
-            </div>
+        {/* One field for the whole pane, a footer outside the scroll so an
+            unfolded shelf can never push it off the bottom: whatever is
+            typed here rides along with the next generator pressed. */}
+        <div className="shrink-0 border-t border-border px-3 pb-2.5 pt-3">
+          {!hasSources && (
+            <p className="pb-2 px-1 text-micro text-subtle-foreground">
+              Add sources to generate documents.
+            </p>
+          )}
+          <div className="relative min-w-0">
+            <Sparkles
+              aria-hidden
+              className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle-foreground"
+            />
+            <Input
+              name="generation-instructions"
+              aria-label="Instructions for the next generation"
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              disabled={!hasSources}
+              placeholder="Instructions for the next generation…"
+              className="h-[30px] rounded-[8px] border-transparent bg-surface-2 pl-8 pr-2 text-caption shadow-[inset_0_0_0_0.5px_var(--border)] disabled:opacity-50"
+            />
           </div>
         </div>
+        </>
         )}
 
-        {studioTab === "reports" && currentId && <Reports />}
+        {studioTab === "reports" && currentId && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Reports />
+        </div>
+        )}
 
         {/* Header and list share one marquee container: the sources panel
             lets a drag start on its "All selected" strip, and starting a
             notes selection was harder for want of the same run-up. */}
         {studioTab === "notes" && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
         <div ref={notesListRef} onPointerDown={marqueeDown} className="select-none">
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
@@ -1130,6 +1136,7 @@ export function StudioPanel() {
           />
         </div>
         </div>
+        </div>
         )}
       </div>
 
@@ -1255,14 +1262,18 @@ function FoldRow({
   label,
   count,
   open,
+  collapses,
   title,
   onClick,
 }: {
   label: string;
   count?: number;
-  /** Given for a two-way fold (the templates row); omitted for a one-way
-   *  "show the rest", which never needs to close again. */
+  /** Whether the rows this row governs are showing. */
   open?: boolean;
+  /** True when pressing the row folds its shelf back up ("Show less" at the
+   *  foot of an opened shelf), so the chevron points up — where the rows are
+   *  about to go — rather than down at rows already on the page. */
+  collapses?: boolean;
   title: string;
   onClick: () => void;
 }) {
@@ -1278,7 +1289,9 @@ function FoldRow({
       {count ? (
         <span className="text-micro tabular-nums text-subtle-foreground">{count}</span>
       ) : null}
-      {open ? (
+      {collapses ? (
+        <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+      ) : open ? (
         <ChevronDown className="h-3.5 w-3.5 shrink-0" />
       ) : (
         <ChevronRight className="h-3.5 w-3.5 shrink-0" />

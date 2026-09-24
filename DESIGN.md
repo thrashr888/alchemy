@@ -502,23 +502,30 @@ filled in `--primary`. The pane is grouped inset forms (`FormGroup`/
 found by the group it belongs to, the way it is on the rest of the Mac.
 
 **Studio is an inspector.** 300px wide, `px-3 py-2.5`, 12px between blocks,
-one hairline toward the center. A caps STUDIO line with its collapse button
-in the 24px icon-button size, then a segmented control stretched across the
-pane — Generate, Notes, Reports, each with its count after the word in
-`text-micro font-normal` — and the chosen face is remembered. Generate is
-shelves, not a wall: Understand, Learn and visualize, Write, each a grouped
-list (radius 10, `surface-2`, inset hairline) of 38px rows carrying a
-family-accented icon, the generator's name, and how many notes of that kind
-the notebook already holds. A shelf shows its **top rows** — ordered by what
-this notebook actually makes, then by the primary set — and folds the rest
-into one disclosure row that names them (`Timeline, Data table, Insights, 3
-more`). Folding is not hiding: the row is a button, and pressing it puts
-every generator on the page. Nothing lives behind a More menu, there is no
-separate "start here" shelf (the top rows *are* the start), and the Write
-shelf carries the reader's own templates plus the two verbs that make and
-keep them. One instructions field is pinned to the foot of the pane, 30px,
-`surface-2` with an inset hairline — whatever is typed there rides along
-with the next generator pressed.
+one hairline toward the center. The segmented control is the first thing in
+the pane — Generate, Notes, Reports, each with its count after the word in
+`text-micro font-normal` — and the chosen face is remembered. No caps STUDIO
+line and no collapse button in the pane's own header: the toolbar's
+inspector toggle and ⌘2 close it, and a second control saying the same
+thing is one too many. Generate is shelves, not a wall: Understand, Learn
+and visualize, Write, each a grouped list (radius 10, `surface-2`, inset
+hairline) of 38px rows carrying a family-accented icon, the generator's
+name, and how many notes of that kind the notebook already holds. A shelf
+shows its **top rows** — ordered by what this notebook actually makes, then
+by the primary set — and folds the rest into one disclosure row that names
+them (`Timeline, Data table, Insights, 3 more`). Folding is not hiding: the
+row is a button, and pressing it puts every generator on the page. **A fold
+goes both ways.** The row stays where it is once opened, reading `Show less`
+with the chevron pointing up — a disclosure that can only be opened is a
+trapdoor, and the row never jumps out from under the finger that pressed it.
+Nothing lives behind a More menu, there is no separate "start here" shelf
+(the top rows *are* the start), and the Write shelf carries the reader's own
+templates plus the two verbs that make and keep them. **Exactly one region
+scrolls per tab.** On Generate the shelves scroll and the instructions field
+is a footer outside that region, hairline above it, pinned to the pane's
+foot — 30px, `surface-2` with an inset hairline — so unfolding a shelf can
+never push it off the bottom; whatever is typed there rides along with the
+next generator pressed. Notes and Reports each scroll their own list.
 
 ### Menus — the NSMenu formula
 
