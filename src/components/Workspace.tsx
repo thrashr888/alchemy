@@ -26,7 +26,6 @@ import { DevBadge } from "./DevBadge";
 import { InferenceActivity } from "./InferenceActivity";
 import { UpdateBadge } from "./UpdateBadge";
 import { DitherBackground } from "./DitherBackground";
-import { OkfChip } from "./OkfChip";
 
 export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const currentId = useStore((s) => s.currentId);
@@ -50,6 +49,13 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const sourceCount = useStore((s) => s.sources.length);
 
   const notebook = notebooks.find((n) => n.id === currentId);
+  const subtitle = [
+    `${sourceCount} ${sourceCount === 1 ? "source" : "sources"}`,
+    binding ? (binding.shared ? "Shared" : "On disk") : null,
+    binding?.lastWriteAt ? `written ${wroteAgo(binding.lastWriteAt)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const [editing, setEditing] = useState<Notebook | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
@@ -104,7 +110,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
       <header
         data-tauri-drag-region
-        className="flex h-12 items-center gap-2 pl-[84px] pr-3"
+        className="toolbar flex h-[52px] shrink-0 items-center gap-2 pl-[84px] pr-3"
       >
         <NavButtons />
         <div className="mx-1 h-4 w-px bg-border" />
@@ -118,9 +124,13 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             window while it is up and macOS leaves it painted at its old
             screen point, which is how "Your notebooks" ended up floating
             over the Studio list. */}
-        <Button variant="ghost" size="sm" onClick={close}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={close}
+          aria-label="All notebooks"
+        >
           <Library className="h-4 w-4" />
-          Notebooks
         </Button>
         <div className="mx-1 h-4 w-px bg-border" />
         {/* `group`: the name cluster is a right-clickable object — the title
@@ -150,17 +160,26 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             alwaysVisible
             label={notebook ? `Options for ${notebook.title}` : "Switch notebook"}
             trigger={
-              <span className="flex min-w-0 items-center gap-1">
-                <span
-                  className="truncate text-body font-semibold"
-                  title={notebook?.title}
-                >
-                  {notebook?.title ?? "Notebook"}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="flex min-w-0 flex-col items-start leading-tight">
+                  <span
+                    className="truncate text-body font-semibold"
+                    title={notebook?.title}
+                  >
+                    {notebook?.title ?? "Notebook"}
+                  </span>
+                  {/* The window's subtitle, the way Notes and Mail put the
+                      count under the title: what is here, where it is kept,
+                      when it was last written. The old "On disk" chip is
+                      this line now; Show Bundle in Finder is in the menu. */}
+                  <span className="truncate text-micro text-muted-foreground">
+                    {subtitle}
+                  </span>
                 </span>
                 <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
               </span>
             }
-            triggerClassName="flex min-w-0 items-center rounded-md px-1 py-0.5 transition-colors hover:bg-surface-2"
+            triggerClassName="flex min-w-0 items-center rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface-2"
             menuClassName="w-64"
             align="left"
             items={[
@@ -196,7 +215,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               },
             ]}
           />
-          <OkfChip />
         </div>
         <div className="mx-2">
           <CenterModeTabs />
@@ -254,7 +272,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="flex min-w-0 flex-1 overflow-hidden pt-1">
+        <div className="flex min-w-0 flex-1 overflow-hidden">
           {growOpen ? (
             <GrowPane />
           ) : galleryOpen ? (
@@ -274,4 +292,16 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       <NotebookEditModal notebook={editing} onClose={() => setEditing(null)} />
     </div>
   );
+}
+
+/** "written 2 min ago" for the title's subtitle — the same clock the On
+ *  disk chip kept, in fewer words. */
+function wroteAgo(ms: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return new Date(ms).toLocaleDateString();
 }

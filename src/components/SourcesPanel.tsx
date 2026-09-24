@@ -696,7 +696,7 @@ export function SourcesPanel() {
   return (
     <div
       style={{ width }}
-      className="side-card relative mx-2 mb-2 mt-1 flex shrink-0 flex-col"
+      className="side-pane relative flex shrink-0 flex-col border-r border-border"
     >
       <ResizeHandle
         edge="right"

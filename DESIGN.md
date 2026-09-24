@@ -22,14 +22,20 @@ carries hierarchy**, not boxes; **shadows are whispers** and borders carry
 the edge; active states are quiet tinted pills; radius is disciplined and
 un-nested.
 
-The workspace is a Finder-style arrangement: the window is one chrome
-container (`app-root`) holding the titlebar and two floating **side-cards**
-(`side-card` — Sources and Studio, inset rounded-xl), while the center
-chat/reader column stays **uncontained** — it is the paper itself, never a
-third card. Optional **glass mode** (Settings → Appearance) makes the window
-transparent behind macOS Liquid Glass: the chrome layer and side-cards go
-translucent, the center goes fully transparent, and content cards carry
-their own opaque surfaces.
+The workspace is the macOS split-view arrangement (docs/RFC-mac-chrome.md):
+one **toolbar** (`.toolbar`, 52px) that is also the title bar — the
+notebook's name is the window title with a subtitle line under it (sources,
+where it is kept, when it was last written) and a pop-up of the notebook's
+verbs; the center mode tabs sit in its middle as a segmented control. Below
+it, Sources and Studio are **panes** (`.side-pane`): full height, no radius,
+one hairline toward the center, the material itself rather than cards on a
+surface. Studio is an **inspector** — Generate, Notes and Reports are three
+faces behind a segmented control. The center column stays **uncontained**;
+it is the paper. Optional **glass mode** (Settings → Appearance: Off, Tinted,
+Clear) makes the window transparent behind macOS Liquid Glass: the toolbar
+and panes go translucent — tinted with the theme's own surface, never
+system gray — the center goes fully transparent, and content cards carry
+their own opaque surfaces. Home keeps its inset `side-card` regions for now.
 
 Empty chat may use the animated dithered "aetheric mist" WebGL background
 (`DitherBackground`) — the app's primary decorative element: behind content,
@@ -178,6 +184,11 @@ introduce a webfont; the system stack is deliberate.
   class for list selection (Finder-style, §9); a `ui.Switch` for a setting
   that is on or off. Never a checkbox for a setting, never a switch for a
   selection.
+- **Generator rows** (Studio › Generate): grouped hairline lists, one group
+  per shelf, each row an icon in its family accent, the generator's name,
+  and how many notes of that kind the notebook already holds. The row is
+  the button; while it runs the icon spins and a second press is refused.
+  One instructions field at the foot of the list, always present.
 - **Menus**: `menu-glass` material (see §2), hairline edge (see §6), radius 6px, 13px items;
   open focuses the first item, arrows cycle, Escape closes and restores focus,
   `role="menu"`/`menuitem`.
@@ -260,11 +271,10 @@ Justified exceptions, kept on purpose:
   padding 84px clears macOS traffic lights (centered via
   `trafficLightPosition` in `tauri.conf.json`). No bottom rule — the cards
   provide the separation.
-- Workspace arrangement: side-cards are inset `mx-2 mb-2 mt-1` with an 8px
-  gap to the open center; the 4px top inset plus the center's `pt-1` puts
-  the SOURCES / CHAT / STUDIO headers on one horizontal line. Collapsed
-  rails are `w-12` cards that hug their content (`self-start`), not
-  full-height strips.
+- Workspace arrangement: the panes are flush — no margins, no radius — with
+  a hairline on the edge that meets the center, so the SOURCES / CHAT /
+  STUDIO headers sit on one line by construction. Collapsed rails are
+  `w-12` full-height strips with the same hairline.
 - Side panels: Sources 280px default (drag 220–400), Studio 320px default
   (drag 260–460); resizable via `ResizeHandle` (double-click resets).
   Collapsed panels become 48px icon rails.
