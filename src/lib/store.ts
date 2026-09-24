@@ -291,6 +291,16 @@ function applyGlass(
   });
 }
 
+/** Under glass, whether the two side panes stay translucent. Only the flag
+ *  lives here — the background rules are in index.css under
+ *  `html[data-glass-sidebars="off"]`. The attribute is absent in the default
+ *  (show-through) state, like `data-accent`, so the CSS has one rule, not two. */
+function applyGlassSidebars(on: boolean) {
+  const root = document.documentElement;
+  if (on) delete root.dataset.glassSidebars;
+  else root.dataset.glassSidebars = "off";
+}
+
 /** Selection/primary accent: the theme's own color, or the one the user picked
  *  in macOS System Settings. Only the flag lives here — the token swap is in
  *  index.css under `html[data-accent="system"]`, which has to carry
@@ -669,6 +679,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         });
       applyTheme(get().theme);
       applyAccent(get().reading.accent);
+      applyGlassSidebars(get().reading.glassSidebars);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
       // Every page load (incl. dev reloads) resets the macOS stoplights to
@@ -1959,6 +1970,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           get().theme !== "system",
         );
       if ("accent" in patch) applyAccent(reading.accent);
+      if ("glassSidebars" in patch) applyGlassSidebars(reading.glassSidebars);
     },
 
     clearQueueItem: (id) =>

@@ -209,9 +209,13 @@ export function SettingsDialog({
           body padding, and the models tab's Save footer. bodyScroll={false}
           keeps the modal body from scrolling too, so exactly one region
           moves. "Settings" is the nav's section header (no title bar). */}
-      <div className="flex gap-5">
-        <nav className="flex w-40 shrink-0 flex-col gap-0.5">
-          <h2 className="px-1.5 pb-2 pt-0.5 text-body font-semibold text-foreground">
+      {/* The negative margin bleeds past the modal body's padding so the
+          sidebar, the vertical hairline and the pane header's hairline reach
+          the dialog edges — the System Settings shape (two columns meeting at
+          a rule), not two boxes inset from a frame. */}
+      <div className="-m-4 flex min-h-0 flex-1">
+        <nav className="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-border px-2 py-3">
+          <h2 className="px-1.5 pb-2 text-body font-semibold text-foreground">
             Settings
           </h2>
           <SearchField
@@ -221,6 +225,7 @@ export function SettingsDialog({
             placeholder="Filter settings…"
             aria-label="Filter settings"
             className="mb-1.5"
+            inputClassName="rounded-[7px]"
           />
           {shownTabs.map((t) => (
             <button
@@ -229,7 +234,7 @@ export function SettingsDialog({
               onClick={() => setTab(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
               className={cn(
-                "flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-caption transition-colors",
+                "flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-body transition-colors",
                 // The selection wash is the theme's own `--selection` (a
                 // ~25-35% primary over transparent), so the sidebar picks up
                 // the macOS accent along with every other selection when
@@ -242,7 +247,7 @@ export function SettingsDialog({
               <span
                 aria-hidden
                 className={cn(
-                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors",
+                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] transition-colors",
                   tab === t.id
                     ? "bg-primary text-primary-foreground"
                     : "bg-surface-2 text-muted-foreground",
@@ -261,20 +266,24 @@ export function SettingsDialog({
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Pane header: names the active tab and pushes the content below
-              the modal's floating close button (which otherwise collides
-              with the first row's trailing switch). pr-10 keeps a long tab
-              name from running under the X. */}
-          <h2 className="pb-3 pl-1 pr-10 pt-0.5 text-body font-semibold text-foreground">
-            {TABS.find((t) => t.id === tab)?.label}
-          </h2>
+          {/* Pane header: 52px, the same strip height as the window toolbar,
+              with a hairline below. It also holds the modal's floating close
+              button (top-right), which otherwise collided with the first
+              row's trailing switch; pr-10 keeps a long tab name clear of it. */}
+          <div className="flex h-[52px] shrink-0 items-center border-b border-border px-5 pr-10">
+            <h2 className="text-section font-semibold text-foreground">
+              {TABS.find((t) => t.id === tab)?.label}
+            </h2>
+          </div>
           {/* The scroll cap MUST stay a definite height on this column (see
-              the note above); 11rem additionally clears the pane header.
-              key={tab}: the scroll position lives on this div, so switching
-              tabs would otherwise keep the old tab's scroll offset. */}
+              the note above). 10.25rem = the Save footer and slack the 8.5rem
+              base covered, less the 2rem of body padding now bled away, plus
+              the 3.25rem pane header above. key={tab}: the scroll position
+              lives on this div, so switching tabs would otherwise keep the
+              old tab's scroll offset. */}
           <div
             key={tab}
-            className="flex max-h-[calc(92vh-11rem)] min-w-0 flex-col gap-4 overflow-y-auto px-1 pb-6"
+            className="flex max-h-[calc(92vh-10.25rem)] min-w-0 flex-col gap-[18px] overflow-y-auto px-5 py-[18px]"
           >
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
@@ -327,7 +336,7 @@ function SettingRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-4 px-3 py-2">
+    <label className="flex min-h-10 cursor-pointer items-center justify-between gap-2.5 px-3 py-1.5">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-body text-foreground">{label}</span>
         <span className="text-pretty text-micro leading-relaxed text-subtle-foreground">
@@ -418,7 +427,7 @@ function GeneralTab() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup caption="Updates">
         <PrefToggle
           storageKey="autoUpdateCheck"
@@ -577,7 +586,7 @@ function SelfDiagnoseToggle() {
  *  cost control; everything else is documented, not switched. */
 function BackgroundTab() {
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup>
         <BackgroundToggle />
       </FormGroup>
@@ -728,7 +737,7 @@ function SnapshotRow() {
 /** Everything about getting content in: Mac apps, git repositories. */
 function SourcesTab() {
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup
         caption="Mac apps"
         footer="Connect once to grant macOS permissions; any notebook can then add Calendar, Reminders, and Apple Notes as auto-syncing sources."
@@ -927,7 +936,7 @@ function NotionTokenField() {
 function StudioTab() {
   const pushToast = useStore((s) => s.pushToast);
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup
         caption="Studio templates"
         footer="One .md file per generator in ~/Documents/Alchemy/templates. This restores the default pack without touching files you've edited."
@@ -1218,7 +1227,7 @@ function AgentsTab() {
   const sorted = [...connectors].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup>
         <SettingRow
           label="Let AI agents use Alchemy (MCP)"
