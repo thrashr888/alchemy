@@ -261,10 +261,15 @@ button that *looks like* a primitive uses the primitive.
 
 Justified exceptions, kept on purpose:
 
-- **Onboarding doors** are cards with a title and a note, not chips —
-  they carry a paragraph, and a chip cannot. They keep their own layout
-  and the accent border for the chosen door: choosing a model is the one
-  place first-run color means something.
+- **Onboarding doors** are rows in a grouped inset list, not chips and no
+  longer cards: first run is a Setup Assistant asking one question per
+  step, and a question with four answers is a radio group. The list is a
+  10px container on `surface-2` with a hairline border and hairlines
+  between rows; each row carries a radio circle, an 18px icon, a title and
+  a one-line hint, and an optional status pill on the right. The accent
+  appears only in the filled radio of the chosen row, and `success` only
+  in a pill that reports something actually found or running — a door this
+  Mac does not have is dimmed and unpickable instead of colored.
 - **The graph's degree badge** (`GraphView`) is a tabular-nums label that
   toggles a highlight; it reads as data, not a filter, and stays a plain
   label.
