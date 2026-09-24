@@ -138,17 +138,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             a notebook row on Home (color lives in Rename's dialog) plus the
             switcher. The name is chrome, not copy — no text selection. */}
         <div className="group relative flex select-none items-center gap-1.5 min-w-0">
-          {/* The icon wears the notebook's color; a separate color dot read
-              as a status light next to Home's green ones. */}
-          {(() => {
-            const Icon = notebookIcon(notebook?.icon);
-            return (
-              <Icon
-                className="h-3.5 w-3.5 shrink-0 text-primary"
-                style={notebook?.color ? { color: notebook.color } : undefined}
-              />
-            );
-          })()}
           {/* One menu off the name, shaped the way the HIG shapes a pop-up:
               the choices are the body — the other notebooks, most recently
               touched first, the current one ticked — with the notebook's own
@@ -159,8 +148,20 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           <RowMenu
             alwaysVisible
             label={notebook ? `Options for ${notebook.title}` : "Switch notebook"}
+            tooltip={false}
             trigger={
-              <span className="flex min-w-0 items-center gap-1.5">
+              <span className="flex min-w-0 items-center gap-2">
+                {/* The icon wears the notebook's color and sits inside the
+                    pill, so the hover covers the whole title cluster. */}
+                {(() => {
+                  const Icon = notebookIcon(notebook?.icon);
+                  return (
+                    <Icon
+                      className="h-4 w-4 shrink-0 text-primary"
+                      style={notebook?.color ? { color: notebook.color } : undefined}
+                    />
+                  );
+                })()}
                 <span className="flex min-w-0 flex-col items-start leading-tight">
                   <span
                     className="truncate text-body font-semibold"
@@ -179,7 +180,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                 <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
               </span>
             }
-            triggerClassName="flex min-w-0 items-center rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface-2"
+            triggerClassName="flex min-w-0 items-center rounded-lg px-2 py-1 transition-colors hover:bg-surface-2"
             menuClassName="w-64"
             align="left"
             items={[
