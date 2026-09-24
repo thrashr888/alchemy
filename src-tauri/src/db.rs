@@ -6176,9 +6176,14 @@ pub(crate) fn group_notebook_previews(
         // always win. What the card should name is what someone made or
         // asked for: authored notes and generated documents first, newest
         // first; the wiki only when there is nothing else to show.
+        // Entity pages predate the `wiki` kind and sit in the table as
+        // `note`, so the ledger is recognized by title and the preview
+        // reports it as `wiki` either way — one word for the front end.
+        let is_ledger =
+            |r: &PreviewNoteRow| r.kind == "wiki" || crate::growth::is_wiki_page_title(&r.title);
         note_rows.sort_by(|a, b| {
-            (a.kind == "wiki")
-                .cmp(&(b.kind == "wiki"))
+            is_ledger(a)
+                .cmp(&is_ledger(b))
                 .then_with(|| b.updated_at.cmp(&a.updated_at))
                 .then_with(|| a.id.cmp(&b.id))
         });
@@ -6188,7 +6193,11 @@ pub(crate) fn group_notebook_previews(
             .map(|r| PreviewNote {
                 id: r.id.clone(),
                 title: r.title.clone(),
-                kind: r.kind.clone(),
+                kind: if is_ledger(r) {
+                    "wiki".to_string()
+                } else {
+                    r.kind.clone()
+                },
             })
             .collect::<Vec<_>>();
 
@@ -7467,7 +7476,7 @@ mod tests {
             note_row("nb-1", "n-3", "Newest summary", "summary", 400),
             // The wiki index is touched on every sweep; it must not win the
             // card by recency alone.
-            note_row("nb-1", "n-4", "Entity: MSFT", "wiki", 900),
+            note_row("nb-1", "n-4", "Entity: MSFT", "note", 900),
         ];
         let mut questions = HashMap::new();
         questions.insert(
