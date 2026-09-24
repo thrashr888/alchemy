@@ -512,6 +512,10 @@ export function RegistrySection() {
               suggestions, which reads as the control disappearing. */}
           <HomeViewControls
             placeholder="Filter cards by name or identifier…"
+            // The Library's toolbar holds the filter field and the
+            // grid/table switch for every Home section, so this row keeps
+            // only what is the Registry's own.
+            chrome="own"
             sort={
               view === "table"
                 ? undefined

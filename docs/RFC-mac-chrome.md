@@ -40,8 +40,14 @@ Verified in the dev app on Night City (glass tinted and off) and Midnight.
 
 ## Not built, decided
 
-- Home stays on its inset cards until the Registry and Brief usage counts
-  from docs/RFC-ablation.md items 4 and 7 exist.
+- ~~Home stays on its inset cards until the Registry and Brief usage counts
+  from docs/RFC-ablation.md items 4 and 7 exist.~~ Superseded: Home is now
+  the Library below, as a **re-arrangement** rather than a cut. Every
+  surface the four cards held is a section of the one sheet, chosen from the
+  sidebar, so items 4 and 7 still have everything they need to measure —
+  nothing was removed, only moved. The Tags block is the one part of the
+  Home spec not built: tags are a per-source field, and a corpus-wide tag
+  list needs a backend rollup rather than a scan per render.
 - The composer's three pills, the Sources chip strip, and the DEV badge
   keep their places for now; each is a separate small change.
 - Sidebars honoring the macOS accent color is an Appearance option to add,

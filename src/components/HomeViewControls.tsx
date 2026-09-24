@@ -12,8 +12,9 @@ import { cn, shortcutBlocked } from "@/lib/utils";
 import { ChevronDown, ChevronUp, LayoutGrid, List } from "lucide-react";
 import { SearchField, Segmented, SortMenu } from "./ui";
 
-/** Cards or rows, icon-only: the hint is where the meaning lives. */
-const HOME_VIEWS = [
+/** Cards or rows, icon-only: the hint is where the meaning lives. Exported
+ *  because Home's toolbar draws the same switch for the Library. */
+export const HOME_VIEWS = [
   {
     value: "grid" as const,
     icon: <LayoutGrid className="h-3.5 w-3.5" />,
@@ -27,16 +28,55 @@ const HOME_VIEWS = [
 ];
 
 /** Case-insensitive substring over whatever the row shows as its name. */
+/** The one writer of the remembered view, shared by the toolbar's switch and
+ *  the Registry's. */
+export function setHomeView(v: "grid" | "table") {
+  localStorage.setItem("homeView", v);
+  useStore.setState({ homeView: v });
+}
+
 export function matchesHomeQuery(query: string, ...fields: string[]): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return fields.some((f) => f?.toLowerCase().includes(q));
 }
 
+/** ⌘F and Edit > Find, pointed at one filter field. The Library moved the
+ *  field into Home's toolbar while the Registry keeps its own, so the wiring
+ *  is a hook rather than a thing only this component can have. */
+export function useFindFocus(ref: React.RefObject<HTMLInputElement | null>) {
+  // ⌘F narrows the collection here, matching the gallery and the reader —
+  // the same key means "find within what I'm looking at" everywhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Not while a modal owns the keyboard or the user is typing in a
+      // field — find used to open behind dialogs and steal focus mid-word.
+      if (shortcutBlocked(e)) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        ref.current?.focus();
+        ref.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ref]);
+
+  // Edit > Find (menu.rs): accelerator-less menu item, routed via findBump.
+  const findBump = useStore((s) => s.findBump);
+  useEffect(() => {
+    if (findBump === 0) return;
+    ref.current?.focus();
+    ref.current?.select();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findBump]);
+}
+
 export function HomeViewControls({
   placeholder,
   trailing,
   sort,
+  chrome = "full",
 }: {
   placeholder: string;
   /** Optional section-specific control rendered after the view toggle —
@@ -50,58 +90,37 @@ export function HomeViewControls({
     options: { value: string; label: string }[];
     onChange: (value: string) => void;
   };
+  /** `full` draws the filter field and the grid/table switch here. `own`
+   *  leaves both out because Home's toolbar already carries them for every
+   *  section, and two search boxes on one screen is one too many — the row
+   *  then holds only the section's own sort and buttons. */
+  chrome?: "full" | "own";
 }) {
   const view = useStore((s) => s.homeView);
   const query = useStore((s) => s.homeQuery);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // ⌘F narrows the collection here, matching the gallery and the reader —
-  // the same key means "find within what I'm looking at" everywhere.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Not while a modal owns the keyboard or the user is typing in a
-      // field — find used to open behind dialogs and steal focus mid-word.
-      if (shortcutBlocked(e)) return;
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        e.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Edit > Find (menu.rs): accelerator-less menu item, routed via findBump.
-  const findBump = useStore((s) => s.findBump);
-  useEffect(() => {
-    if (findBump === 0) return;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, [findBump]);
-
-  const setView = (v: "grid" | "table") => {
-    localStorage.setItem("homeView", v);
-    useStore.setState({ homeView: v });
-  };
+  useFindFocus(inputRef);
 
   return (
     <div className="mb-3 flex items-center gap-2">
-      <SearchField
-        ref={inputRef}
-        variant="field"
-        value={query}
-        onValueChange={(v) => useStore.setState({ homeQuery: v })}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.stopPropagation();
-            useStore.setState({ homeQuery: "" });
-            inputRef.current?.blur();
-          }
-        }}
-        placeholder={placeholder}
-        className="flex-1"
-      />
+      {chrome === "full" && (
+        <SearchField
+          ref={inputRef}
+          variant="field"
+          value={query}
+          onValueChange={(v) => useStore.setState({ homeQuery: v })}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              useStore.setState({ homeQuery: "" });
+              inputRef.current?.blur();
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1"
+        />
+      )}
       {sort && (
         <SortMenu
           label="Sort order"
@@ -111,12 +130,18 @@ export function HomeViewControls({
           className="shrink-0"
         />
       )}
-      <Segmented
-        label="View"
-        options={HOME_VIEWS}
-        value={view}
-        onChange={setView}
-      />
+      {chrome === "full" && (
+        <Segmented
+          label="View"
+          options={HOME_VIEWS}
+          value={view}
+          onChange={setHomeView}
+        />
+      )}
+      {/* The section's own buttons sit right when the toolbar holds the
+          field: with nothing stretching on the left they would otherwise
+          bunch against the heading. */}
+      {chrome === "own" && <div className="flex-1" />}
       {trailing}
     </div>
   );

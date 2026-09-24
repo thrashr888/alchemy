@@ -80,9 +80,17 @@ export interface NavEntry {
   card?: string | null;
 }
 
-/** Home's center column: the notebook grid, the Registry's cast, or the
- *  corpus-wide conversation. */
-export type HomeSection = "notebooks" | "registry" | "chat" | "timeline";
+/** Home's center column: which surface the Library's sidebar has selected.
+ *  `notebooks` is the shelf itself; the rest are the surfaces that used to
+ *  be rails or cards around it (docs/RFC-mac-chrome.md, "Home"). */
+export type HomeSection =
+  | "notebooks"
+  | "registry"
+  | "chat"
+  | "timeline"
+  | "staff"
+  | "brief"
+  | "reports";
 
 /** Home's conversation, as the store holds it: which thread is open and the
  *  turns already settled into it. Both come from the backend — the thread

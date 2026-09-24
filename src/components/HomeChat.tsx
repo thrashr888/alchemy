@@ -220,9 +220,13 @@ export function HomeThreadsSidebar({
   style,
   resizeHandle,
   onCollapse,
+  bare = false,
 }: {
   className?: string;
   style?: React.CSSProperties;
+  /** Drop the card frame: inside the Library's sheet the thread list is a
+   *  column of the conversation surface, not a card floating on it. */
+  bare?: boolean;
   /** The left column's width handle, rendered on this card's edge. */
   resizeHandle?: React.ReactNode;
   /** Fold the card down to the rail, as Staff below it and Brief opposite. */
@@ -246,7 +250,11 @@ export function HomeThreadsSidebar({
 
   return (
     <section
-      className={cn("side-card relative flex min-h-0 flex-col", className)}
+      className={cn(
+        "relative flex min-h-0 flex-col",
+        !bare && "side-card",
+        className,
+      )}
       style={style}
     >
       {resizeHandle}

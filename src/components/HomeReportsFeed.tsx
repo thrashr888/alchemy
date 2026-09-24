@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import type { Note, SourceEvent } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
-import { tallyEvents, unseenEvents } from "@/lib/arrivals";
+import { eventCount, tallyEvents, unseenEvents } from "@/lib/arrivals";
 import { Button } from "./ui";
 import {
   ChevronDown,
@@ -43,6 +43,54 @@ export function AwayDigest({
       Since you were away: {parts.join(" · ")}
     </p>
   );
+}
+
+/** Last night, as a window: the twelve hours ending at 9am today, or ending
+ *  now when it is still before nine. Everything the Night Shift is meant to
+ *  do happens inside it, so one range answers "what got done while I was
+ *  asleep" without asking the backend for a second opinion. */
+export function lastNightWindow(now = Date.now()): { start: number; end: number } {
+  const nine = new Date(now);
+  nine.setHours(9, 0, 0, 0);
+  const end = Math.min(nine.getTime(), now);
+  return { start: end - 12 * 60 * 60 * 1000, end };
+}
+
+/** The Library footer's one line: what the night shift did, counted from the
+ *  same rows the Brief and the reports feed read. Clauses whose count is zero
+ *  are left out rather than written as "0"; when every count is zero there
+ *  was no run to describe.
+ *
+ *  Duplicates set aside are deliberately absent: hygiene findings live per
+ *  notebook in Grow, and reading them here would mean a corpus scan on every
+ *  Home render (the scan-storm lesson). When a corpus-wide count exists it
+ *  joins this list. */
+export function lastNightLine({
+  reports,
+  events,
+  now = Date.now(),
+}: {
+  /** Report-kind notes across every notebook, Briefs included. */
+  reports: Note[];
+  events: SourceEvent[];
+  now?: number;
+}): string {
+  const { start, end } = lastNightWindow(now);
+  const inWindow = (at: number) => at >= start && at <= end;
+  const written = reports.filter((r) => inWindow(r.updatedAt)).length;
+  const tally = (kind: string) =>
+    events
+      .filter((e) => e.kind === kind && inWindow(e.at))
+      .reduce((n, e) => n + eventCount(e), 0);
+  const refreshed = tally("updated");
+  const added = tally("added");
+  const parts = [
+    written > 0 && `${written} ${written === 1 ? "report" : "reports"} written`,
+    refreshed > 0 && `${refreshed} ${refreshed === 1 ? "source" : "sources"} refreshed`,
+    added > 0 && `${added} ${added === 1 ? "source" : "sources"} added`,
+  ].filter(Boolean) as string[];
+  if (parts.length === 0) return "No nightly run yet.";
+  return `Last night: ${parts.join(", ")}.`;
 }
 
 /** Read reports revealed per press of "Load older reports", and the number

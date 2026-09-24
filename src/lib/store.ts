@@ -1422,7 +1422,15 @@ export const useStore = create<AppState>((rawSet, get) => {
           // actually waiting on an answer.
           const wanted = tail as HomeSection;
           const section: HomeSection = (
-            ["notebooks", "registry", "chat", "timeline"] as const
+            [
+              "notebooks",
+              "registry",
+              "chat",
+              "timeline",
+              "staff",
+              "brief",
+              "reports",
+            ] as const
           ).includes(wanted)
             ? wanted
             : "notebooks";
