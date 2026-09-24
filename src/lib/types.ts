@@ -1081,6 +1081,11 @@ export interface ReadingPrefs {
   glass: boolean;
   /** Glass opacity level, mirroring macOS's Clear/Tinted styles. */
   glassStyle: "tinted" | "clear";
+  /** Where the selection and primary-button color comes from: the theme's own
+   *  accent, or the one the user picked in macOS System Settings. "system"
+   *  puts `data-accent="system"` on <html>, where index.css swaps the primary
+   *  and selection tokens for the `AccentColor` system keyword. */
+  accent: "theme" | "system";
 }
 
 export const DEFAULT_READING_PREFS: ReadingPrefs = {
@@ -1091,4 +1096,5 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   showRelated: true,
   glass: false,
   glassStyle: "tinted",
+  accent: "theme",
 };

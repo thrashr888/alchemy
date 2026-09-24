@@ -168,6 +168,18 @@ introduce a webfont; the system stack is deliberate.
   one thing (grid/table, newest/A–Z) in one bordered 8px track, segments
   6px, the active one `surface-2`. Icon-only segments carry `hint` as
   their name. More than four options, or long names: a `Select`.
+- **Grouped forms** (`ui.FormGroup` + `ui.FormRow`): the macOS System
+  Settings shape, and the only shape a settings pane uses. A group is a
+  rounded-10px hairline box over a faint `surface-2` fill whose rows are
+  divided by hairlines; the optional uppercase 11px `caption` sits above it
+  and the optional one-sentence `footer` below it, both outside the box. A
+  row is one control: the label leading (with an optional 11px hint under
+  it), the control trailing — a `Switch`, a `Segmented`, a `Select`, a small
+  `Button`, or just a value. The label column takes the slack, so a
+  label-less row still pushes its buttons to the right edge. A control that
+  needs the whole width (the theme swatch grid, a textarea, the chat style
+  tiles) is a plain `px-3 py-2.5` div inside the group instead of a row. No
+  `<hr>` dividers between sections: the gap between groups is the division.
 - **Sorting**: tables sort by their column headers (`HomeTable`: the
   header is the button, the arrow shows direction, text starts ascending
   and counts and dates descending). Every other list sorts through
@@ -238,7 +250,12 @@ its own version of one is a bug unless it is listed here with its reason.
 The measurable check (2026-09-22): raw `<select>`s outside `ui.tsx` went
 from 17 to 0; toggle chips from four drawn styles to one; sort controls
 from four shapes to two (headers for tables, the menu for the rest);
-filter fields from three to one. Raw `<button>`s (216) are fine — most are
+filter fields from three to one. Settings (2026-09-23): the twelve panes'
+hand-drawn label/hint/divider stacks became `FormGroup`/`FormRow`, and the
+chip rows for glass, chat font, text size and alignment became `Segmented`
+— seven panes converted, five (Models, Agents, Activity, Shortcuts, About)
+keep their own sections because their rows are lists and status, not
+settings. Raw `<button>`s (216) are fine — most are
 icon buttons and row bodies styled for their spot; the rule is that a
 button that *looks like* a primitive uses the primitive.
 
@@ -341,7 +358,10 @@ What each clause means here:
 
 - **System is law** — appearance, accessibility text size, and reduced
   motion come from macOS and are never overridden (§3, §7). Standard edit
-  shortcuts (⌘C/V/X/Z/A, ⌘F) always mean the standard thing.
+  shortcuts (⌘C/V/X/Z/A, ⌘F) always mean the standard thing. Appearance →
+  Selection color → System accent goes one further and hands `--primary`,
+  `--ring` and `--selection` to the `AccentColor` system keyword, so
+  selection follows the color the user picked in System Settings.
 - **Menu is the index** — every user-facing command appears in the native
   menu bar (`menu.rs`) with its shortcut. If it's not in a menu, it's not
   discoverable; the menu is the app's table of contents, not a formality.
@@ -357,6 +377,13 @@ What each clause means here:
   text restore on relaunch. Quitting is not losing your place.
 
 When a rule here conflicts with a web idiom, the Mac wins.
+
+**Settings is System Settings.** The dialog is a sidebar and a pane, not a
+tab bar: a filter field over twelve rows, each row a 20px colored icon tile
+beside its name, the selected row washed in `--selection` with the tile
+filled in `--primary`. The pane is grouped inset forms (`FormGroup`/
+`FormRow`, §4) — never a long ungrouped column of labels — so a setting is
+found by the group it belongs to, the way it is on the rest of the Mac.
 
 ### Menus — the NSMenu formula
 

@@ -291,6 +291,17 @@ function applyGlass(
   });
 }
 
+/** Selection/primary accent: the theme's own color, or the one the user picked
+ *  in macOS System Settings. Only the flag lives here — the token swap is in
+ *  index.css under `html[data-accent="system"]`, which has to carry
+ *  `!important` because applyTheme() writes each theme's palette as inline
+ *  custom properties on this same element. */
+function applyAccent(accent: ReadingPrefs["accent"]) {
+  const root = document.documentElement;
+  if (accent === "system") root.dataset.accent = "system";
+  else delete root.dataset.accent;
+}
+
 function loadReadingPrefs(): ReadingPrefs {
   try {
     const raw = localStorage.getItem("readingPrefs");
@@ -657,6 +668,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             applyGlass(true, themeIsDark(theme), reading.glassStyle, false);
         });
       applyTheme(get().theme);
+      applyAccent(get().reading.accent);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
       // Every page load (incl. dev reloads) resets the macOS stoplights to
@@ -1946,6 +1958,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           reading.glassStyle,
           get().theme !== "system",
         );
+      if ("accent" in patch) applyAccent(reading.accent);
     },
 
     clearQueueItem: (id) =>
