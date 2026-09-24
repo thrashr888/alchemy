@@ -1394,6 +1394,7 @@ export function RowMenu({
   native = true,
   contextAt,
   rowContext,
+  tooltip = true,
 }: {
   items: RowMenuItem[];
   label?: string;
@@ -1435,6 +1436,11 @@ export function RowMenu({
   /** Bind right-click on the nearest `.group` row (default). Off for a
    *  menu that floats over a surface with its own right-click handling. */
   rowContext?: boolean;
+  /** The label doubles as the trigger's tooltip by default. A trigger in a
+   *  `data-tauri-drag-region` title bar turns it off: a native tooltip
+   *  raised there outlives a window drag and stays painted at its old
+   *  screen point. */
+  tooltip?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -1672,7 +1678,7 @@ export function RowMenu({
             setOpen(true);
           }
         }}
-        title={label}
+        title={tooltip ? label : undefined}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
