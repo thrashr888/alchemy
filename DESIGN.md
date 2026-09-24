@@ -437,6 +437,40 @@ What each clause means here:
 
 When a rule here conflicts with a web idiom, the Mac wins.
 
+**The Sources pane is a Finder sidebar.** 260px, 10px of padding, 12px
+between its blocks, one hairline toward the center
+(docs/RFC-mac-chrome.md, "Sources pane" — that table is the spec).
+The rules that are easy to lose:
+
+- **One line per row.** 28px, `px-2`, radius 6, 13px, 1px apart, selected
+  in `--selection`. What a source's domain is, where its folder lives and
+  how much it contributes are on the hover card and in the `title`, not on
+  a second line. Four states earn a second line, because each is the row
+  asking for something: a proposed deletion, an import running, an import
+  that failed, a file still in the cloud.
+- **A caption before a chart.** The corpus size is one `text-micro` line
+  under the header; the bar only appears past 80% of the 10M the evals
+  fence, because that is the only point where "where you are" is worth a
+  picture.
+- **The filter field stays, the chips fold.** 2,487-source notebooks are
+  navigated by typing, so the field is always there past eight sources;
+  kind, tag and condition chips fold behind the filter toggle in the
+  header. A filter that is on keeps its chip visible whatever the toggle
+  says, so it can always be switched off.
+- **Tags are rows, not just chips.** Under the list: caps label, then the
+  busiest eight as rows with an 8px dot and a count, each one applying the
+  same tag facet the chips do — one filter state, two ways in. Tags carry
+  no color in the model, so the dot is a stable hash over the categorical
+  palette in `src/lib/sourceGroups.ts`, never a fresh hex in a component.
+- **Grow is pinned to the foot.** 32px, `surface-2` under an inset
+  hairline, a 6px `--warning` dot and "N to review". It is the notebook's
+  standing offer, not the list's first row, where it pushed the sources
+  down and scrolled away.
+- **Icon buttons are 24px**, min-width 28 (24 and square in a pane header
+  or a collapsed rail), `px-[7px]`, radius 6, muted, `surface-2` on hover.
+  The chrome's buttons are shorter than they are wide so a row of them
+  reads as one strip; `Button size="icon"` is a 28px square and is not it.
+
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar: a filter field over twelve rows, each row a 20px colored icon tile
 beside its name, the selected row washed in `--selection` with the tile
@@ -619,8 +653,9 @@ Re-runnable by hand: ⌘F5 to start VoiceOver, then walk the main window with
 VO-→ and confirm each line. A failure here is a bug, not a nit.
 
 1. **Titlebar** — notebook name is read once, not twice (the color dot is
-   `aria-hidden`); "Open the command menu" and "Open settings" announce as
-   buttons with those names.
+   `aria-hidden`); "Search and commands" and "Open settings" announce as
+   buttons with those names, and the two pane toggles say which way they
+   go ("Hide sources" / "Show studio") rather than only "Sidebar".
 2. **Degraded bar**, when one is showing — the title and the sentence are
    read together, and each fix button announces its own verb ("Start
    Ollama", "Install qwen3", "Rebuild now").
