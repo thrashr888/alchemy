@@ -174,7 +174,7 @@ const CMD: &[Command] = &[
         menu_label: "Chats",
         accelerator: None,
         keys: "⌘ 1",
-        label: "Show or hide Chats",
+        label: "Go to Chats",
         context: "Home",
     },
     Command {
@@ -182,7 +182,7 @@ const CMD: &[Command] = &[
         menu_label: "Staff",
         accelerator: None,
         keys: "⌘ 2",
-        label: "Show or hide Staff",
+        label: "Go to Staff",
         context: "Home",
     },
     Command {
@@ -190,15 +190,15 @@ const CMD: &[Command] = &[
         menu_label: "Brief",
         accelerator: None,
         keys: "⌘ 3",
-        label: "Show or hide Brief",
+        label: "Go to the Brief",
         context: "Home",
     },
     Command {
         id: "menu-toggle-home-reports",
-        menu_label: "Latest Reports",
+        menu_label: "Nightly Reports",
         accelerator: None,
         keys: "⌘ 4",
-        label: "Show or hide Latest Reports",
+        label: "Go to Nightly Reports",
         context: "Home",
     },
     Command {
