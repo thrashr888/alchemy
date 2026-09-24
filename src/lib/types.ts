@@ -649,6 +649,38 @@ export interface HomeActivity {
   stats: CorpusStats;
 }
 
+/** One source as a Home card names it. */
+export interface PreviewSource {
+  id: string;
+  title: string;
+  sourceType: Source["sourceType"];
+  /** Lead image when the source has one; "" otherwise (the backend already
+   *  folds ingest's "-" sentinel into ""). */
+  imageUrl: string;
+}
+
+/** One note as a Home card names it. */
+export interface PreviewNote {
+  id: string;
+  title: string;
+  kind: string;
+}
+
+/** What one notebook is made of, for the Library's cards (DESIGN.md §9) —
+ *  contents rather than counts. Mirrors `models::NotebookPreview`. */
+export interface NotebookPreview {
+  notebookId: string;
+  /** Newest first, at most 4; top-level sources ahead of folder children. */
+  sources: PreviewSource[];
+  /** Distinct lead images, newest first, at most 3. */
+  images: string[];
+  /** Newest first, at most 2. */
+  notes: PreviewNote[];
+  /** Newest user question, whitespace collapsed and cut to 120 chars. */
+  lastQuestion: string;
+  lastQuestionAt: number;
+}
+
 /** The Registry's kinds (RFC-registry). */
 export type CardKind =
   "asset" | "person" | "policy" | "provider" | "project" | "dependency";

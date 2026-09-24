@@ -39,7 +39,13 @@ import {
   shortcutBlocked,
   strayTypingKey,
 } from "@/lib/utils";
-import type { Note, Notebook, SourceEvent } from "@/lib/types";
+import { sourceGlyph } from "@/lib/sourceIcon";
+import type {
+  Note,
+  Notebook,
+  NotebookPreview,
+  SourceEvent,
+} from "@/lib/types";
 import type { HomeSection } from "@/lib/storeTypes";
 import {
   Archive,
@@ -59,6 +65,7 @@ import {
   Library,
   Share2,
   Square,
+  StickyNote,
 } from "lucide-react";
 import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
 import {
@@ -171,10 +178,12 @@ function recencyGroups(
   return groups.filter((g) => g.rows.length > 0);
 }
 
-/** Three or four bars, at widths this notebook always draws. The thumb
- *  stands in for a cover nobody has made, so its one job is to be steady:
- *  widths derived from the id mean the same notebook shows the same page on
- *  every render, in every window, instead of shimmering as React re-runs. */
+/** Three or four bars, at widths this notebook always draws — the card's
+ *  skeleton while `notebook_previews` is in flight. Widths derived from the
+ *  id mean the same notebook shows the same placeholder on every render, in
+ *  every window, instead of shimmering as React re-runs. Once the contents
+ *  land they replace these entirely: a shape hashed from an id was steady,
+ *  but it was a shape about nothing. */
 function thumbLines(id: string): number[] {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
@@ -364,10 +373,41 @@ function SidebarBlock({
   );
 }
 
-/** One notebook as the Library draws it: a thumb that stands for the
- *  notebook, its name, and the three numbers that say how much is in it. */
+/** A note's glyph at card scale. `kindIcon` (studioArtifacts) is the full
+ *  vocabulary at 14px; a 212px card only needs the distinction anybody makes
+ *  from across the room — a report, or a note. */
+function noteGlyph(kind: string) {
+  return kind === "report" ? Newspaper : StickyNote;
+}
+
+/** One image tile in a thumb's strip. A lead image is a remote og: URL, so
+ *  it can 404, expire, or be behind a login — a tile that can't load removes
+ *  itself rather than drawing the broken-image glyph, and the strip closes up
+ *  around it. */
+function ThumbTile({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="h-9 w-14 shrink-0 rounded-md border border-border object-cover"
+    />
+  );
+}
+
+/** One notebook as the Library draws it: a thumb standing in for what is
+ *  inside — the titles it holds, the pictures it holds, the last thing that
+ *  was asked of it — then its name and one line of the same. The counts moved
+ *  to the tooltip: "29 notes" says how much, and a card has room to say what.
+ *
+ *  `preview` is undefined until the shelf's one backend call lands, and the
+ *  ruled lines are the skeleton for exactly that gap. */
 function NotebookCard({
   nb,
+  preview,
   unread,
   shared,
   picked,
@@ -375,6 +415,7 @@ function NotebookCard({
   menu,
 }: {
   nb: Notebook;
+  preview: NotebookPreview | undefined;
   unread: number;
   shared: boolean;
   picked: boolean;
@@ -382,20 +423,59 @@ function NotebookCard({
   menu: React.ReactNode;
 }) {
   const color = nb.color || NOTEBOOK_PALETTE[0];
-  const meta = [
-    `${nb.sourceCount} ${nb.sourceCount === 1 ? "source" : "sources"}`,
-    nb.noteCount > 0 &&
-      `${nb.noteCount} ${nb.noteCount === 1 ? "note" : "notes"}`,
+  const images = preview?.images ?? [];
+  // An image strip and three lines don't both fit in 140px; the pictures win,
+  // because they say more per pixel than a third title does.
+  const lineBudget = images.length > 0 ? 2 : 3;
+  const note = preview?.notes[0];
+  // Sources, then a note: the mix is the point — a card that shows only
+  // titles reads as a folder, and one that shows only its note reads as a
+  // document. Reserve the last line for the note when there is one.
+  const titleRows = (preview?.sources ?? [])
+    .slice(0, note ? lineBudget - 1 : lineBudget)
+    .map((s) => ({
+      key: s.id,
+      // The preview carries no `url`, so this is the type's glyph and not the
+      // file family's: a .docx reads as text here where a Sources row reads
+      // as Word. A card gets the columns a card needs, not a row's.
+      Glyph: sourceGlyph(s.sourceType),
+      text: s.title,
+    }));
+  const contentRows = note
+    ? [
+        ...titleRows,
+        { key: note.id, Glyph: noteGlyph(note.kind), text: note.title },
+      ]
+    : titleRows;
+
+  // The meta line leads with contents too, in the order they're worth
+  // knowing: what was written, else what was asked, else what arrived.
+  const lead = note
+    ? { Glyph: noteGlyph(note.kind), text: note.title }
+    : preview?.lastQuestion
+      ? { Glyph: MessagesSquare, text: preview.lastQuestion }
+      : preview?.sources[0]
+        ? {
+            Glyph: sourceGlyph(preview.sources[0].sourceType),
+            text: preview.sources[0].title,
+          }
+        : null;
+  const metaTail = [
     // Whose share it is would read better than "Shared", but the binding
     // only records THAT a folder is shared, never with whom — no peer name
     // reaches the front end yet (docs/RFC-shared-notebook.md).
     shared && "Shared",
     relativeTime(nb.updatedAt),
   ].filter(Boolean) as string[];
+  const counts = [
+    `${nb.sourceCount} ${nb.sourceCount === 1 ? "source" : "sources"}`,
+    nb.noteCount > 0 &&
+      `${nb.noteCount} ${nb.noteCount === 1 ? "note" : "notes"}`,
+  ].filter(Boolean) as string[];
   return (
     <div
       data-pick-id={nb.id}
-      title={nb.title}
+      title={`${nb.title} — ${counts.join(" · ")}`}
       className={cn(
         "group relative flex w-[212px] cursor-pointer flex-col gap-2.5",
         "has-[[aria-expanded=true]]:z-30",
@@ -403,11 +483,11 @@ function NotebookCard({
     >
       <CardAction label={`Open notebook ${nb.title}`} onClick={onOpen} />
       {/* The thumb: the notebook as an object. A dot in its color, its name
-          set small, and a few ruled lines for the text inside — the shape of
-          a page seen from across the desk. */}
+          set small, and then what is actually inside — a few of its titles,
+          and its pictures along the bottom. */}
       <div
         className={cn(
-          "pointer-events-none relative z-10 flex h-[140px] flex-col rounded-[10px] bg-surface p-3.5",
+          "pointer-events-none relative z-10 flex h-[140px] flex-col overflow-hidden rounded-[10px] bg-surface p-3.5",
           "shadow-[inset_0_0_0_0.5px_var(--border-strong)] transition-colors",
           "group-hover:bg-surface-2",
           // A picked card trades its hairline for a ring in the selection's
@@ -427,16 +507,43 @@ function NotebookCard({
             {nb.title}
           </span>
         </div>
-        <div className="mt-3 flex flex-col gap-1.5">
-          {thumbLines(nb.id).map((w, i) => (
-            <span
-              key={i}
-              aria-hidden
-              className="h-1.5 rounded-[3px] bg-border"
-              style={{ width: `${w}%` }}
-            />
-          ))}
-        </div>
+        {!preview ? (
+          // Still loading. Widths come from the notebook id, so the skeleton
+          // is steady instead of shimmering as React re-runs.
+          <div className="mt-3 flex flex-col gap-1.5">
+            {thumbLines(nb.id).map((w, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="h-1.5 rounded-[3px] bg-border"
+                style={{ width: `${w}%` }}
+              />
+            ))}
+          </div>
+        ) : contentRows.length === 0 ? (
+          <div className="mt-2.5 truncate text-micro text-subtle-foreground">
+            Add a source…
+          </div>
+        ) : (
+          <div className="mt-2.5 flex flex-col gap-1">
+            {contentRows.map(({ key, Glyph, text }) => (
+              <div
+                key={key}
+                className="flex min-w-0 items-center gap-1.5 text-micro text-muted-foreground"
+              >
+                <Glyph className="h-3 w-3 shrink-0" aria-hidden />
+                <span className="truncate">{text}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {images.length > 0 && (
+          <div className="mt-auto flex items-end gap-1.5 pt-2">
+            {images.map((url) => (
+              <ThumbTile key={url} url={url} />
+            ))}
+          </div>
+        )}
       </div>
       <div className="pointer-events-none relative z-10 flex flex-col gap-0.5">
         <div className="flex items-center gap-1.5">
@@ -451,9 +558,18 @@ function NotebookCard({
             />
           )}
         </div>
-        <span className="truncate text-caption text-muted-foreground">
-          {meta.join(" · ")}
-        </span>
+        <div className="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
+          {lead && (
+            <>
+              <lead.Glyph className="h-3 w-3 shrink-0" aria-hidden />
+              <span className="truncate">{lead.text}</span>
+              <span aria-hidden>·</span>
+            </>
+          )}
+          <span className="shrink-0 whitespace-nowrap">
+            {metaTail.join(" · ")}
+          </span>
+        </div>
       </div>
       <div className="absolute right-1.5 top-1.5 z-20 flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
         {menu}
@@ -464,6 +580,7 @@ function NotebookCard({
 
 export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const notebooks = useStore((s) => s.notebooks);
+  const notebookPreviews = useStore((s) => s.notebookPreviews);
   const notebooksFailed = useStore((s) => s.notebooksFailed);
   const open = useStore((s) => s.selectNotebook);
   const create = useStore((s) => s.createNotebook);
@@ -566,6 +683,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       useStore.setState({ homeChatUnread: false });
     if (homeSection === "registry") useStore.getState().markRegistrySeen();
   }, [homeSection, chatUnread, registrySignal]);
+  // What the cards draw, asked for when the shelf comes on screen. Four
+  // corpus scans is not something to run from a notebook or from the Brief,
+  // so it is the section that asks; after that `refreshNotebooks` keeps it
+  // current on a 5s leash (src/lib/store.ts, `queueNotebookPreviews`).
+  useEffect(() => {
+    if (homeSection !== "notebooks") return;
+    void useStore.getState().refreshNotebookPreviews();
+  }, [homeSection]);
   const suggestedCount =
     registrySignal && registrySignal.newest > registrySeenAt
       ? registrySignal.shown
@@ -1105,6 +1230,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <NotebookCard
                     key={nb.id}
                     nb={nb}
+                    preview={notebookPreviews[nb.id]}
                     unread={unreadByNb.get(nb.id) ?? 0}
                     shared={isShared(nb.id)}
                     picked={pick.pickedIds.has(nb.id)}

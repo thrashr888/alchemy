@@ -158,6 +158,21 @@ pinned bottom: hairline above, padding-top 12, 12px muted `Last night: 2
 reports written, 14 sources refreshed, 1 duplicate set aside.` with
 "Read the Brief" as a link on the right.
 
+**Thumb contents.** The canvas drew the thumb's body as rounded bars; built,
+those bars are only the skeleton, and the body is the notebook's real
+contents (`notebook_previews`). Under the caps name, 10px down: up to three
+11px muted rows, each a 12px type glyph and one truncated title — the newest
+sources, with the newest note taking the last row when there is one, so the
+mix of material reads at a glance. When the notebook has lead images, the
+bottom of the thumb (`mt-auto`, 8px above) is a strip of up to three 56×36
+tiles, radius 6, `object-cover`, 6px apart, each under a hairline; images are
+lazy and a tile that fails to load removes itself. The strip costs a line, so
+a card with images shows two titles rather than three. A notebook with nothing
+in it shows one muted `Add a source…`. The meta line leads with contents too —
+newest note, else the last question behind a chat glyph, else the newest source
+title — then `· Shared · 2 min ago`; the counts move to the card's `title`
+tooltip (`7 sources · 29 notes`) and stay as they were in the table.
+
 ### Settings
 
 Sidebar 200px, padding 12px 8px, 2px between rows; search 26px radius 7;
