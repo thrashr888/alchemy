@@ -6,7 +6,17 @@ import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
-import { Button, Input, Modal, Select, Spinner, Switch } from "./ui";
+import {
+  Button,
+  FormGroup,
+  FormRow,
+  Input,
+  Modal,
+  SearchField,
+  Select,
+  Spinner,
+  Switch,
+} from "./ui";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cn, folderBreadcrumb } from "@/lib/utils";
@@ -84,9 +94,16 @@ export function SettingsDialog({
   const [tab, setTab] = useState(initialTab);
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [saving, setSaving] = useState(false);
+  // Sidebar filter, the way System Settings searches its own pane list. It
+  // narrows the rows only — the open pane stays open, so typing never yanks
+  // the content out from under you.
+  const [navFilter, setNavFilter] = useState("");
 
   useEffect(() => {
-    if (open) setTab(initialTab);
+    if (open) {
+      setTab(initialTab);
+      setNavFilter("");
+    }
   }, [open, initialTab]);
 
   useEffect(() => {
@@ -145,6 +162,10 @@ export function SettingsDialog({
     onClose();
   }
 
+  const needle = navFilter.trim().toLowerCase();
+  const shownTabs = needle
+    ? TABS.filter((t) => t.label.toLowerCase().includes(needle))
+    : TABS;
 
   if (!draft) {
     return (
@@ -189,27 +210,54 @@ export function SettingsDialog({
           keeps the modal body from scrolling too, so exactly one region
           moves. "Settings" is the nav's section header (no title bar). */}
       <div className="flex gap-5">
-        <nav className="flex w-36 shrink-0 flex-col gap-0.5">
-          <h2 className="px-2.5 pb-2 pt-0.5 text-body font-semibold text-foreground">
+        <nav className="flex w-40 shrink-0 flex-col gap-0.5">
+          <h2 className="px-1.5 pb-2 pt-0.5 text-body font-semibold text-foreground">
             Settings
           </h2>
-          {TABS.map((t) => (
+          <SearchField
+            variant="field"
+            value={navFilter}
+            onValueChange={setNavFilter}
+            placeholder="Filter settings…"
+            aria-label="Filter settings"
+            className="mb-1.5"
+          />
+          {shownTabs.map((t) => (
             <button
               type="button"
               key={t.id}
               onClick={() => setTab(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.78125rem] transition-colors",
+                "flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-caption transition-colors",
+                // The selection wash is the theme's own `--selection` (a
+                // ~25-35% primary over transparent), so the sidebar picks up
+                // the macOS accent along with every other selection when
+                // Appearance → Selection color is set to System accent.
                 tab === t.id
-                  ? "bg-surface-2 font-medium text-foreground"
+                  ? "bg-[var(--selection)] font-medium text-foreground"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <t.icon className="h-3.5 w-3.5" />
+              <span
+                aria-hidden
+                className={cn(
+                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors",
+                  tab === t.id
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-surface-2 text-muted-foreground",
+                )}
+              >
+                <t.icon className="h-3 w-3" />
+              </span>
               {t.label}
             </button>
           ))}
+          {shownTabs.length === 0 && (
+            <p className="px-1.5 py-1 text-caption text-subtle-foreground">
+              No settings match.
+            </p>
+          )}
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -264,8 +312,9 @@ export function SettingsDialog({
   );
 }
 
-/** Toggle row: label + native checkbox, persisted to localStorage. */
-/** A macOS-style settings row: label and hint leading, Switch trailing. */
+/** A switch row inside a `FormGroup`: label and hint leading, Switch
+ *  trailing. Shaped exactly like `ui.FormRow` but rendered as a `<label>`, so
+ *  clicking anywhere on the row still flips the switch. */
 function SettingRow({
   label,
   hint,
@@ -278,15 +327,14 @@ function SettingRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-4">
-      <span className="flex flex-col gap-0.5">
+    <label className="flex cursor-pointer items-center justify-between gap-4 px-3 py-2">
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-body text-foreground">{label}</span>
-        <span className="text-micro leading-relaxed text-subtle-foreground">
+        <span className="text-pretty text-micro leading-relaxed text-subtle-foreground">
           {hint}
         </span>
       </span>
-      {/* Centers the 16px switch on the label's 20px line box. */}
-      <Switch checked={checked} onChange={onChange} className="mt-0.5" />
+      <Switch checked={checked} onChange={onChange} />
     </label>
   );
 }
@@ -371,13 +419,20 @@ function GeneralTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-3">
+      <FormGroup caption="Updates">
         <PrefToggle
           storageKey="autoUpdateCheck"
           label="Automatically check for updates"
           hint="Checks GitHub once per launch; installing is always your call."
         />
-        <div className="flex items-center gap-2 pl-6.5">
+        {/* The version in hand sits in the row that asks whether there is a
+            newer one, so "am I current?" never needs the About tab. */}
+        <FormRow label="Version">
+          {version && (
+            <span className="text-caption text-muted-foreground">
+              {update?.status === "none" ? `${version} · up to date` : version}
+            </span>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -386,11 +441,6 @@ function GeneralTab() {
           >
             Check for updates…
           </Button>
-          {version && (
-            <span className="text-caption text-muted-foreground">
-              {update?.status === "none" ? `${version} · up to date` : version}
-            </span>
-          )}
           {update?.status === "available" && (
             <Button
               variant="primary"
@@ -410,26 +460,23 @@ function GeneralTab() {
               Install {update.version} & relaunch
             </Button>
           )}
-        </div>
-      </div>
+        </FormRow>
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-3">
-        <div className="text-body">Notebooks</div>
+      <FormGroup caption="Notebooks">
         <NotebooksFolderRow />
         <KeepOnDiskToggle />
-      </div>
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <PrefToggle
-        storageKey="playSounds"
-        label="Play sounds"
-        hint="Soft cues when work you request finishes or fails."
-        onEnable={previewSound}
-      />
-      <SelfDiagnoseToggle />
+      <FormGroup>
+        <PrefToggle
+          storageKey="playSounds"
+          label="Play sounds"
+          hint="Soft cues when work you request finishes or fails."
+          onEnable={previewSound}
+        />
+        <SelfDiagnoseToggle />
+      </FormGroup>
     </div>
   );
 }
@@ -443,26 +490,24 @@ function NotebooksFolderRow() {
   if (!aiConfig) return null;
   const dir = aiConfig.notebooksDir;
   return (
-    <div className="flex flex-col gap-1">
+    <>
       {/* A label and a value on one line, the way System Settings shows a
           location: the label never wraps, the value gives way and carries
           the full path as its tooltip. The value reads like Finder's
           breadcrumb (“iCloud Drive › Alchemy › Documents”), not like a
           Unix path a person has to decode. */}
-      <div className="flex items-baseline gap-3">
-        <span className="shrink-0 text-body text-foreground">Folder</span>
+      <FormRow
+        label="Folder"
+        hint="Each notebook is a folder of markdown here. Put it in iCloud Drive or Dropbox and your Macs stay in step."
+      >
         <span
-          className="ml-auto min-w-0 truncate text-right text-caption text-muted-foreground"
+          className="max-w-44 truncate text-right text-caption text-muted-foreground"
           title={dir || undefined}
         >
           {dir ? folderBreadcrumb(dir) : "Not set"}
         </span>
-      </div>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        Each notebook is a folder of markdown here. Put it in iCloud Drive or
-        Dropbox and your Macs stay in step.
-      </span>
-      <div className="flex items-center gap-2 pt-1">
+      </FormRow>
+      <FormRow>
         <Button
           variant="secondary"
           size="sm"
@@ -487,8 +532,8 @@ function NotebooksFolderRow() {
         >
           Show in Finder
         </Button>
-      </div>
-    </div>
+      </FormRow>
+    </>
   );
 }
 
@@ -533,40 +578,30 @@ function SelfDiagnoseToggle() {
 function BackgroundTab() {
   return (
     <div className="flex flex-col gap-5">
-      <BackgroundToggle />
+      <FormGroup>
+        <BackgroundToggle />
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-3">
-        <div className="text-body">Residency</div>
+      <FormGroup caption="Residency">
         <TrayToggle />
-      </div>
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-3">
-        <div className="text-body">Notifications</div>
+      <FormGroup caption="Notifications">
         <NotificationsToggle />
         <QuietWhenFocusedToggle />
-      </div>
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-3">
-        <div className="text-body">Library</div>
+      <FormGroup caption="Library">
         <SnapshotRow />
         <HygieneSelect />
         <GitSyncSelect />
-      </div>
+      </FormGroup>
 
-      <div className="h-px bg-border" />
-
-      <div className="flex flex-col gap-3">
-        <div className="text-body">While you are away</div>
+      <FormGroup caption="While you are away">
         <BudgetSelect />
         <SourceGistsToggle />
         <CuratorToggle />
-      </div>
+      </FormGroup>
     </div>
   );
 }
@@ -579,24 +614,21 @@ function BudgetSelect() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <div className="flex flex-col gap-1">
-      <label className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">Overnight effort</span>
-        <Select
-          value={aiConfig.backgroundBudget || "standard"}
-          onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundBudget: v })}
-          options={[
-            { value: "light", label: "Light" },
-            { value: "standard", label: "Standard" },
-            { value: "generous", label: "Generous" },
-          ]}
-        />
-      </label>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        How much work to do each night before stopping until morning. Local
-        models are free either way; this caps what a paid model can spend.
-      </span>
-    </div>
+    <FormRow
+      label="Overnight effort"
+      hint="How much work to do each night before stopping until morning. Local models are free either way; this caps what a paid model can spend."
+    >
+      <Select
+        aria-label="Overnight effort"
+        value={aiConfig.backgroundBudget || "standard"}
+        onChange={(v) => void saveAiConfig({ ...aiConfig, backgroundBudget: v })}
+        options={[
+          { value: "light", label: "Light" },
+          { value: "standard", label: "Standard" },
+          { value: "generous", label: "Generous" },
+        ]}
+      />
+    </FormRow>
   );
 }
 
@@ -642,19 +674,16 @@ function SnapshotRow() {
       : null;
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">Nightly snapshot</span>
-        <span className="text-micro text-subtle-foreground">
+    <>
+      <FormRow
+        label="Nightly snapshot"
+        hint="A copy of your library each night, kept for a week plus four weekly ones. Copies share disk with the original until they differ, so they cost almost nothing."
+      >
+        <span className="text-caption text-subtle-foreground">
           {when ? `${when}${size ? ` \u00b7 ${size}` : ""}` : "None yet"}
         </span>
-      </div>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        A copy of your library each night, kept for a week plus four weekly
-        ones. Copies share disk with the original until they differ, so they
-        cost almost nothing.
-      </span>
-      <div className="flex items-center gap-2 pt-1">
+      </FormRow>
+      <FormRow>
         <Button
           variant="secondary"
           size="sm"
@@ -691,8 +720,8 @@ function SnapshotRow() {
         >
           Restore last snapshot…
         </Button>
-      </div>
-    </div>
+      </FormRow>
+    </>
   );
 }
 
@@ -700,20 +729,16 @@ function SnapshotRow() {
 function SourcesTab() {
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-1.5">
-        <div className="text-body">Mac apps</div>
-        <p className="text-micro leading-relaxed text-subtle-foreground">
-          Connect once to grant macOS permissions; any notebook can then add
-          Calendar, Reminders, and Apple Notes as auto-syncing sources.
-        </p>
-        <MacConnect />
-      </div>
-
-      <div className="h-px bg-border" />
+      <FormGroup
+        caption="Mac apps"
+        footer="Connect once to grant macOS permissions; any notebook can then add Calendar, Reminders, and Apple Notes as auto-syncing sources."
+      >
+        <div className="px-3 py-2.5">
+          <MacConnect />
+        </div>
+      </FormGroup>
 
       <NotionTokenField />
-
-      <div className="h-px bg-border" />
 
       <WebClipperLink />
     </div>
@@ -735,17 +760,14 @@ const FIREFOX_CLIPPER_LIVE = !FIREFOX_CLIPPER_URL.endsWith("PENDING-LISTING");
  *  in front of it gated nothing. */
 function WebClipperLink() {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="text-body">Web clipper</div>
-      <p className="text-micro leading-relaxed text-subtle-foreground">
-        The Alchemy Web Clipper sends the page you are viewing, including
-        login-walled pages, to Alchemy over a local endpoint. The Firefox
-        build clips links and selections; Alchemy fetches the page itself.
-      </p>
+    <FormGroup
+      caption="Web clipper"
+      footer="The Alchemy Web Clipper sends the page you are viewing, including login-walled pages, to Alchemy over a local endpoint. The Firefox build clips links and selections; Alchemy fetches the page itself."
+    >
       {/* Buttons, not links buried in the sentence — the sentence explains,
           the buttons act. The span carries the tooltip because a disabled
           button takes no pointer events, so its own title never shows. */}
-      <div className="flex flex-wrap items-center gap-1.5">
+      <FormRow>
         <Button
           variant="secondary"
           size="sm"
@@ -763,8 +785,8 @@ function WebClipperLink() {
             Get it for Firefox
           </Button>
         </span>
-      </div>
-    </div>
+      </FormRow>
+    </FormGroup>
   );
 }
 
@@ -823,76 +845,81 @@ function NotionTokenField() {
   // runs the draft is already stored.
   const checkNow = () => void verify(value);
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="text-body">Notion</div>
-      <div className="flex items-center gap-2">
-        <Input
-          type="password"
-          aria-label="Notion integration token"
-          placeholder="ntn_… integration token"
-          value={value}
-          className="min-w-0 flex-1"
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setCheck({ state: "idle" });
-          }}
-          onFocus={(e) => e.currentTarget.select()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              e.currentTarget.blur();
-            }
-          }}
-          onBlur={() => {
-            if (draft !== null && draft.trim() !== aiConfig.notionToken) {
-              void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
-              void verify(draft);
-            }
-            setDraft(null);
-          }}
-        />
-        {/* The field checks itself on entry, but a check you cannot ask for
-            is a check the user has no reason to believe. */}
-        <Button
-          variant="secondary"
-          className="shrink-0"
-          loading={check.state === "checking"}
-          disabled={!value.trim()}
-          onClick={checkNow}
-          title="Ask Notion whether this token works"
-        >
-          Check
-        </Button>
+    <FormGroup
+      caption="Notion"
+      footer={
+        <>
+          Create an internal integration at{" "}
+          <button
+            type="button"
+            onClick={() => void openUrl("https://www.notion.so/my-integrations")}
+            className="text-citation hover:underline"
+          >
+            notion.so/my-integrations
+          </button>
+          , share pages with it (••• → Connections), then paste a page URL into
+          any notebook. The token stays on this Mac.
+        </>
+      }
+    >
+      <div className="flex flex-col gap-1.5 px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <Input
+            type="password"
+            aria-label="Notion integration token"
+            placeholder="ntn_… integration token"
+            value={value}
+            className="min-w-0 flex-1"
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setCheck({ state: "idle" });
+            }}
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={() => {
+              if (draft !== null && draft.trim() !== aiConfig.notionToken) {
+                void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
+                void verify(draft);
+              }
+              setDraft(null);
+            }}
+          />
+          {/* The field checks itself on entry, but a check you cannot ask for
+              is a check the user has no reason to believe. */}
+          <Button
+            variant="secondary"
+            className="shrink-0"
+            loading={check.state === "checking"}
+            disabled={!value.trim()}
+            onClick={checkNow}
+            title="Ask Notion whether this token works"
+          >
+            Check
+          </Button>
+        </div>
+        {check.state === "checking" && (
+          <span className="flex items-center gap-1.5 text-caption text-subtle-foreground">
+            <Spinner className="h-3 w-3" /> Checking the token…
+          </span>
+        )}
+        {check.state === "ok" && (
+          <span className="flex items-center gap-1.5 text-caption text-success">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
+            {check.workspace}
+          </span>
+        )}
+        {check.state === "error" && (
+          <span className="text-caption leading-relaxed text-destructive/90">
+            {check.message}
+          </span>
+        )}
       </div>
-      {check.state === "checking" && (
-        <span className="flex items-center gap-1.5 text-caption text-subtle-foreground">
-          <Spinner className="h-3 w-3" /> Checking the token…
-        </span>
-      )}
-      {check.state === "ok" && (
-        <span className="flex items-center gap-1.5 text-caption text-success">
-          <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
-          {check.workspace}
-        </span>
-      )}
-      {check.state === "error" && (
-        <span className="text-caption leading-relaxed text-destructive/90">
-          {check.message}
-        </span>
-      )}
-      <span className="text-caption leading-relaxed text-subtle-foreground">
-        Create an internal integration at{" "}
-        <button
-          type="button"
-          onClick={() => void openUrl("https://www.notion.so/my-integrations")}
-          className="text-citation hover:underline"
-        >
-          notion.so/my-integrations
-        </button>
-        , share pages with it (••• → Connections), then paste a page URL into
-        any notebook. The token stays on this Mac.
-      </span>
-    </div>
+    </FormGroup>
   );
 }
 
@@ -901,13 +928,11 @@ function StudioTab() {
   const pushToast = useStore((s) => s.pushToast);
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-1.5">
-        <div className="text-body">Studio templates</div>
-        <p className="text-micro leading-relaxed text-subtle-foreground">
-          One .md file per generator in ~/Documents/Alchemy/templates. This
-          restores the default pack without touching files you've edited.
-        </p>
-        <div>
+      <FormGroup
+        caption="Studio templates"
+        footer="One .md file per generator in ~/Documents/Alchemy/templates. This restores the default pack without touching files you've edited."
+      >
+        <FormRow>
           <Button
             variant="secondary"
             size="sm"
@@ -931,13 +956,12 @@ function StudioTab() {
           <Button
             variant="ghost"
             size="sm"
-            className="ml-1.5"
             onClick={() => void api.openTemplatesFolder()}
           >
             Show in Finder
           </Button>
-        </div>
-      </div>
+        </FormRow>
+      </FormGroup>
     </div>
   );
 }
@@ -969,30 +993,25 @@ function GitSyncSelect() {
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   if (!aiConfig) return null;
   return (
-    <div className="flex flex-col gap-1">
-      <label className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">
-          Auto-sync git repositories
-        </span>
-        <Select
-          value={String(aiConfig.gitSyncMinutes)}
-          onChange={(v) =>
-            void saveAiConfig({ ...aiConfig, gitSyncMinutes: Number(v) })
-          }
-          options={[
-            { value: "15", label: "Every 15 minutes" },
-            { value: "60", label: "Hourly" },
-            { value: "360", label: "Every 6 hours" },
-            { value: "1440", label: "Daily" },
-            { value: "0", label: "Off" },
-          ]}
-        />
-      </label>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        Re-fetches when the branch moves, using your own git credentials.
-        Alchemy stores no tokens.
-      </span>
-    </div>
+    <FormRow
+      label="Auto-sync git repositories"
+      hint="Re-fetches when the branch moves, using your own git credentials. Alchemy stores no tokens."
+    >
+      <Select
+        aria-label="Auto-sync git repositories"
+        value={String(aiConfig.gitSyncMinutes)}
+        onChange={(v) =>
+          void saveAiConfig({ ...aiConfig, gitSyncMinutes: Number(v) })
+        }
+        options={[
+          { value: "15", label: "Every 15 minutes" },
+          { value: "60", label: "Hourly" },
+          { value: "360", label: "Every 6 hours" },
+          { value: "1440", label: "Daily" },
+          { value: "0", label: "Off" },
+        ]}
+      />
+    </FormRow>
   );
 }
 
@@ -1007,38 +1026,32 @@ function HygieneSelect() {
   if (!aiConfig) return null;
   const value = aiConfig.sourceHygiene ? String(aiConfig.hygieneRefreshDays) : "off";
   return (
-    <div className="flex flex-col gap-1">
-      <label className="flex items-center justify-between gap-3">
-        <span className="text-body text-foreground">
-          Refresh aging web sources
-        </span>
-        <Select
-          value={value}
-          onChange={(v) =>
-            void saveAiConfig(
-              v === "off"
-                ? { ...aiConfig, sourceHygiene: false }
-                : {
-                    ...aiConfig,
-                    sourceHygiene: true,
-                    hygieneRefreshDays: Number(v),
-                  },
-            )
-          }
-          options={[
-            { value: "7", label: "After a week" },
-            { value: "30", label: "After a month" },
-            { value: "90", label: "After 3 months" },
-            { value: "off", label: "Off" },
-          ]}
-        />
-      </label>
-      <span className="text-micro leading-relaxed text-subtle-foreground">
-        Re-fetches a few pages per pass, keeping the last good copy if a site
-        is down. Dead links and duplicates are flagged in the sources panel —
-        never removed automatically.
-      </span>
-    </div>
+    <FormRow
+      label="Refresh aging web sources"
+      hint="Re-fetches a few pages per pass, keeping the last good copy if a site is down. Dead links and duplicates are flagged in the sources panel — never removed automatically."
+    >
+      <Select
+        aria-label="Refresh aging web sources"
+        value={value}
+        onChange={(v) =>
+          void saveAiConfig(
+            v === "off"
+              ? { ...aiConfig, sourceHygiene: false }
+              : {
+                  ...aiConfig,
+                  sourceHygiene: true,
+                  hygieneRefreshDays: Number(v),
+                },
+          )
+        }
+        options={[
+          { value: "7", label: "After a week" },
+          { value: "30", label: "After a month" },
+          { value: "90", label: "After 3 months" },
+          { value: "off", label: "Off" },
+        ]}
+      />
+    </FormRow>
   );
 }
 
@@ -1206,17 +1219,19 @@ function AgentsTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <SettingRow
-        label="Let AI agents use Alchemy (MCP)"
-        hint="Agents can create notebooks, add sources, search, and write notes. The server listens on 127.0.0.1 only."
-        checked={aiConfig.mcpEnabled}
-        onChange={(v) => {
-          void saveAiConfig({ ...aiConfig, mcpEnabled: v }).then(() =>
-            // The server starts/stops on save; give it a beat before polling.
-            setTimeout(refresh, 400),
-          );
-        }}
-      />
+      <FormGroup>
+        <SettingRow
+          label="Let AI agents use Alchemy (MCP)"
+          hint="Agents can create notebooks, add sources, search, and write notes. The server listens on 127.0.0.1 only."
+          checked={aiConfig.mcpEnabled}
+          onChange={(v) => {
+            void saveAiConfig({ ...aiConfig, mcpEnabled: v }).then(() =>
+              // The server starts/stops on save; give it a beat before polling.
+              setTimeout(refresh, 400),
+            );
+          }}
+        />
+      </FormGroup>
 
       <div className="flex items-center gap-2 text-caption">
         <span

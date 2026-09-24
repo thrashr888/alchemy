@@ -208,6 +208,30 @@ button {
   background: var(--selection, rgba(94, 106, 210, 0.35));
 }
 
+/* Appearance → Selection color → System accent (ReadingPrefs.accent). WebKit
+   resolves the `AccentColor` / `AccentColorText` system keywords to the color
+   chosen in macOS System Settings, so selection and primary fills follow the
+   Mac instead of the theme; everything else drawn from --primary (buttons,
+   switches, progress fills, the citation and find highlights, the settings
+   sidebar wash) follows for free.
+
+   `!important` is load-bearing: applyTheme() writes each theme's palette as
+   inline custom properties on this same <html>, and an inline declaration
+   outranks a stylesheet rule unless the rule is important. */
+html[data-accent="system"] {
+  --primary: AccentColor !important;
+  /* Hover moves toward the foreground, which lightens the fill in dark
+     themes and darkens it in light ones — the same direction either way. */
+  --primary-hover: color-mix(
+    in srgb,
+    AccentColor 82%,
+    var(--foreground)
+  ) !important;
+  --primary-foreground: AccentColorText !important;
+  --ring: AccentColor !important;
+  --selection: color-mix(in srgb, AccentColor 35%, transparent) !important;
+}
+
 /* Markdown rendering inside chat + notes. */
 .prose {
   font-size: 0.8125rem;

@@ -2172,3 +2172,88 @@ export function EmptyState({
     </div>
   );
 }
+
+/**
+ * A grouped inset form, the macOS System Settings shape: a rounded hairline
+ * container whose rows are separated by hairlines, over a faint `surface-2`
+ * fill. `caption` is the small uppercase label above the group and `footer`
+ * the one gray sentence under it — both optional, both outside the box, the
+ * way System Settings puts them.
+ *
+ * Rows are `FormRow`s. A control that needs the whole width (a swatch grid, a
+ * textarea) is a plain `px-3 py-2.5` div instead; it still gets the hairline.
+ */
+export function FormGroup({
+  caption,
+  footer,
+  className,
+  children,
+}: {
+  caption?: React.ReactNode;
+  footer?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex min-w-0 flex-col gap-1.5">
+      {caption && (
+        <div className="px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+          {caption}
+        </div>
+      )}
+      <div
+        className={cn(
+          "flex min-w-0 flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-2/60",
+          className,
+        )}
+      >
+        {children}
+      </div>
+      {footer && (
+        <div className="text-pretty px-1 text-micro leading-relaxed text-subtle-foreground">
+          {footer}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One row of a `FormGroup`: the label leading, with an optional hint beneath
+ * it, and the control trailing. `children` is that control — a `Switch`, a
+ * `Segmented`, a `Select`, a small `Button`, or just a value. The label
+ * column takes the slack, so a row with no label still pushes its control to
+ * the right edge.
+ */
+export function FormRow({
+  label,
+  hint,
+  className,
+  children,
+}: {
+  label?: React.ReactNode;
+  hint?: React.ReactNode;
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center justify-between gap-4 px-3 py-2",
+        className,
+      )}
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {label && <span className="text-body text-foreground">{label}</span>}
+        {hint && (
+          <span className="text-pretty text-micro leading-relaxed text-subtle-foreground">
+            {hint}
+          </span>
+        )}
+      </span>
+      {children && (
+        <span className="flex shrink-0 items-center gap-1.5">{children}</span>
+      )}
+    </div>
+  );
+}
