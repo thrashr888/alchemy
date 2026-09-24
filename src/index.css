@@ -564,6 +564,35 @@ html[data-glass="clear"] .app-root {
 html[data-glass="clear"] .side-card {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
+/* Workspace panes and the toolbar (DESIGN.md §9, "the Mac formula"):
+   the sidebars are the material, not cards on it. Full height, no radius,
+   one hairline toward the content. Opaque at rest; under glass they go
+   translucent so the native vibrancy (and the blank-chat shader behind
+   them) shows through, tinted with the theme's own surface — the macOS
+   Tinted style in the theme's color rather than system gray. */
+.side-pane {
+  background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
+}
+[data-scheme="light"] .side-pane {
+  background: var(--surface);
+}
+.glass .side-pane {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+}
+html[data-glass="clear"] .side-pane {
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+}
+.toolbar {
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.glass .toolbar {
+  background: color-mix(in srgb, var(--chrome) 55%, transparent);
+}
+html[data-glass="clear"] .toolbar {
+  background: transparent;
+}
+
 /* Floating menus and popovers: frosted like native macOS menus —
    a translucent elevated tone over a backdrop blur of whatever sits
    beneath, in or out of glass mode. */
