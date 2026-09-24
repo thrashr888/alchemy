@@ -6171,9 +6171,15 @@ pub(crate) fn group_notebook_previews(
         }
 
         let mut note_rows = notes_by_notebook.remove(id.as_str()).unwrap_or_default();
+        // Wiki pages ("Entity: MSFT", the index) are the notebook's own
+        // bookkeeping, refreshed on every sweep, so by timestamp they would
+        // always win. What the card should name is what someone made or
+        // asked for: authored notes and generated documents first, newest
+        // first; the wiki only when there is nothing else to show.
         note_rows.sort_by(|a, b| {
-            b.updated_at
-                .cmp(&a.updated_at)
+            (a.kind == "wiki")
+                .cmp(&(b.kind == "wiki"))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
                 .then_with(|| a.id.cmp(&b.id))
         });
         let picked_notes = note_rows
@@ -7459,6 +7465,9 @@ mod tests {
             note_row("nb-1", "n-1", "Old note", "note", 100),
             note_row("nb-1", "n-2", "Newer report", "report", 300),
             note_row("nb-1", "n-3", "Newest summary", "summary", 400),
+            // The wiki index is touched on every sweep; it must not win the
+            // card by recency alone.
+            note_row("nb-1", "n-4", "Entity: MSFT", "wiki", 900),
         ];
         let mut questions = HashMap::new();
         questions.insert(
