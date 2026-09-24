@@ -55,6 +55,7 @@ import {
   Quote,
   StickyNote,
   Sparkles,
+  Telescope,
   Check,
   Copy,
   NotebookPen,
@@ -156,6 +157,8 @@ export function ChatPanel() {
   const waiting = useStore((s) =>
     s.sendingFor === s.currentId ? s.waiting : "",
   );
+  const agentMode = useStore((s) => s.agentMode);
+  const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
   // the user's own coding agent. The pane itself stays mounted behind the
   // chat view (its session is a live subprocess and its transcript persists
@@ -1177,7 +1180,20 @@ export function ChatPanel() {
               </div>
             )}
             <div className="flex items-center gap-1.5 px-1.5 pt-1">
-              <ModelPill deepResearch />
+              <button
+                onClick={toggleAgentMode}
+                title="Deep research: several searches over your sources before answering"
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-micro transition-colors",
+                  agentMode
+                    ? "border-primary/50 bg-primary/15 text-citation"
+                    : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Telescope className="h-3 w-3" />
+                {agentMode ? "Deep research: on" : "Deep research: off"}
+              </button>
+              <ModelPill />
               <span className="flex-1" />
               {sending ? (
                 <Button
@@ -2263,38 +2279,23 @@ const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
  *  The choice is the app's, not the notebook's (it writes `AiConfig`), so the
  *  same pills serve Home's corpus-wide composer — `scope` only names what the
  *  provider is about to answer. */
-/** The composer's one pop-up for how answers are made: which provider,
- *  which of its models, how hard it thinks, and — in a notebook — whether
- *  deep research runs first. Three pills used to carry these; one pill
- *  reading "Claude Code · Default" carries them now, with the sections
- *  stacked in one panel, the way a macOS pop-up button groups related
- *  choices behind one control. */
-export function ModelPill({
-  scope = "this notebook",
-  deepResearch = false,
-}: {
-  scope?: string;
-  /** Show the Deep research row (notebook chat; Home's corpus chat has none). */
-  deepResearch?: boolean;
-}) {
+export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const openSettings = useStore((s) => s.openSettings);
-  const agentMode = useStore((s) => s.agentMode);
-  const toggleAgentMode = useStore((s) => s.toggleAgentMode);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<null | "provider" | "model" | "effort">(null);
   const [ready, setReady] = useState<
     { id: string; ready: boolean; detail: string }[]
   >([]);
-  // What the active provider offers. Fetched when the menu opens (listing
-  // spawns a CLI), and re-fetched when the provider changes.
+  // What the active provider offers. Fetched when a menu that needs it opens
+  // (listing spawns a CLI), and re-fetched when the provider changes.
   const [offer, setOffer] = useState<ProviderModels | null>(null);
 
   const active = aiConfig?.providers.find((p) => p.id === aiConfig.chatProvider);
   const activeId = active?.id;
 
   useEffect(() => {
-    if (open) void api.providerReadiness().then(setReady).catch(() => {});
+    if (open === "provider") void api.providerReadiness().then(setReady).catch(() => {});
   }, [open]);
 
   useEffect(() => {
@@ -2329,7 +2330,7 @@ export function ModelPill({
   function commit(next: Partial<ProviderEntry>, keepOpen = false) {
     if (!aiConfig || !active) return;
     const id = active.id;
-    if (!keepOpen) setOpen(false);
+    if (!keepOpen) setOpen(null);
     void saveAiConfig({
       ...aiConfig,
       chatProvider: id,
@@ -2340,53 +2341,65 @@ export function ModelPill({
   }
 
   const efforts = offer?.efforts ?? [];
-  const modelName = active.chatModel || offer?.defaultModel || "Default";
-  const label = [
-    active.label,
-    active.kind !== "fm" ? modelName : null,
-    active.effort || null,
-    deepResearch && agentMode ? "Deep research" : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const section = (text: string) => (
-    <div className="px-2.5 pb-0.5 pt-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-      {text}
-    </div>
-  );
 
   return (
-    <MenuPill
-      label={label}
-      muted={!active.chatModel && !active.effort}
-      open={open}
-      onToggle={() => setOpen((o) => !o)}
-      onClose={() => setOpen(false)}
-      title={`How answers are made ${scope}: provider, model, effort`}
-      menuLabel="Answer with"
-      wide
-    >
-      {aiConfig.providers.map((p) => {
-        const r = ready.find((x) => x.id === p.id);
-        const selectable = r ? r.ready : true;
-        return (
-          <MenuRow
-            key={p.id}
-            label={p.label}
-            selected={aiConfig.chatProvider === p.id}
-            disabled={!selectable}
-            note={!selectable ? "unavailable" : undefined}
-            autoFocus={p.id === aiConfig.chatProvider}
-            onPick={() => {
-              void saveAiConfig({ ...aiConfig, chatProvider: p.id });
-            }}
-          />
-        );
-      })}
+    <span className="inline-flex items-center gap-1">
+      <MenuPill
+        label={active.label}
+        open={open === "provider"}
+        onToggle={() => setOpen((o) => (o === "provider" ? null : "provider"))}
+        onClose={() => setOpen(null)}
+        title={`Which provider answers ${scope}`}
+        menuLabel="Answer with"
+      >
+        {aiConfig.providers.map((p) => {
+          const r = ready.find((x) => x.id === p.id);
+          const selectable = r ? r.ready : true;
+          return (
+            <MenuRow
+              key={p.id}
+              label={p.label}
+              selected={aiConfig.chatProvider === p.id}
+              disabled={!selectable}
+              note={!selectable ? "unavailable" : undefined}
+              autoFocus={p.id === aiConfig.chatProvider}
+              onPick={() => {
+                setOpen(null);
+                void saveAiConfig({ ...aiConfig, chatProvider: p.id });
+              }}
+            />
+          );
+        })}
+        <div className="mx-2 my-1 h-px bg-border" />
+        <MenuRow
+          label="Model settings…"
+          muted
+          onPick={() => {
+            setOpen(null);
+            openSettings("models");
+          }}
+        />
+      </MenuPill>
 
       {active.kind !== "fm" && (
-        <>
-          {section("Model")}
+        <MenuPill
+          // Naming the inherited model beats the bare word "Default", which
+          // tells the user nothing about what will actually answer. Muted, so
+          // "inherited" still reads differently from "chosen".
+          label={active.chatModel || offer?.defaultModel || "Default"}
+          muted={!active.chatModel}
+          open={open === "model"}
+          onToggle={() => setOpen((o) => (o === "model" ? null : "model"))}
+          onClose={() => setOpen(null)}
+          title={
+            active.chatModel
+              ? `Model for ${active.label}`
+              : offer?.defaultModel
+                ? `${active.label} default: ${offer.defaultModel}`
+                : `Model for ${active.label} — using its own default`
+          }
+          menuLabel="Models"
+        >
           {!offer ? (
             <div className="px-2.5 py-1.5 text-micro text-subtle-foreground">
               reading models…
@@ -2403,7 +2416,7 @@ export function ModelPill({
                     (isAgentProvider(active.kind) ? "the CLI's own" : undefined)
                   }
                   selected={!active.chatModel}
-                  onPick={() => commit({ chatModel: "" }, true)}
+                  onPick={() => commit({ chatModel: "" })}
                 />
               )}
               {offer.models.map((m: string) => (
@@ -2411,9 +2424,10 @@ export function ModelPill({
                   key={m}
                   label={m}
                   selected={active.chatModel === m}
-                  onPick={() => commit({ chatModel: m }, true)}
+                  onPick={() => commit({ chatModel: m })}
                 />
               ))}
+              <div className="mx-2 my-1 h-px bg-border" />
               <CustomModelRow
                 current={active.chatModel}
                 known={offer.models}
@@ -2421,45 +2435,32 @@ export function ModelPill({
               />
             </>
           )}
-        </>
+        </MenuPill>
       )}
 
       {efforts.length > 0 && (
-        <>
-          {section("Effort")}
+        <MenuPill
+          label={active.effort || "Default"}
+          muted={!active.effort}
+          open={open === "effort"}
+          onToggle={() => setOpen((o) => (o === "effort" ? null : "effort"))}
+          onClose={() => setOpen(null)}
+          title={`Reasoning effort for ${active.label}`}
+          menuLabel=""
+          wide
+        >
           <EffortSlider
             levels={efforts}
             value={active.effort}
             onPick={(e) => commit({ effort: e }, true)}
           />
-        </>
+        </MenuPill>
       )}
-
-      {deepResearch && (
-        <>
-          <div className="mx-2 my-1 h-px bg-border" />
-          <MenuRow
-            label="Deep research"
-            note="several searches before answering"
-            selected={agentMode}
-            onPick={() => toggleAgentMode()}
-          />
-        </>
-      )}
-
-      <div className="mx-2 my-1 h-px bg-border" />
-      <MenuRow
-        label="Model settings…"
-        muted
-        onPick={() => {
-          setOpen(false);
-          openSettings("models");
-        }}
-      />
-    </MenuPill>
+    </span>
   );
 }
 
+/** A composer pill that opens a popover menu above it. */
 export function MenuPill({
   label,
   muted,

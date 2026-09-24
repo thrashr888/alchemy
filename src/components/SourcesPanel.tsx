@@ -69,7 +69,6 @@ import {
   Cloud,
   Sprout,
   Tag,
-  ListFilter,
 } from "lucide-react";
 
 // Reference scale for the "how big is this notebook" gauge. Not a capacity —
@@ -374,21 +373,6 @@ export function SourcesPanel() {
   // of sources the filter box is the way in. Facets narrow by kind, tag,
   // and freshness; everything applies before rows are built.
   const [query, setQuery] = useState("");
-  // Facet chips fold behind the filter button; remembered per viewer.
-  const [facetsOpen, setFacetsOpen] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("sourcesFacets") === "open";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("sourcesFacets", facetsOpen ? "open" : "closed");
-    } catch {
-      // per-viewer convenience only
-    }
-  }, [facetsOpen]);
   const [kindFacet, setKindFacet] = useState<SourceKind | null>(null);
   const [tagFacet, setTagFacet] = useState<string | null>(null);
   const [freshFacet, setFreshFacet] = useState<FreshFacet | null>(null);
@@ -821,34 +805,13 @@ export function SourcesPanel() {
           along with it. */}
       {currentId && (sources.length > 8 || filterActive) && (
         <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
-          <div className="flex items-center gap-1">
-            <SearchField
-              value={query}
-              onValueChange={setQuery}
-              placeholder="Filter sources…"
-              aria-label="Filter sources"
-              autoCapitalize="none"
-              className="flex-1"
-            />
-            {/* The chip rows fold behind this toggle (macOS puts a filter
-                behind a button, not a strip). A filter that is on keeps its
-                row visible whatever the toggle says, so it can be switched
-                off. */}
-            <button
-              type="button"
-              aria-pressed={facetsOpen}
-              onClick={() => setFacetsOpen((o) => !o)}
-              title={facetsOpen ? "Hide filters" : "Filter by kind, tag or condition"}
-              aria-label={facetsOpen ? "Hide filters" : "Show filters"}
-              className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground",
-                (facetsOpen || filterActive) && "bg-surface-2 text-foreground",
-              )}
-            >
-              <ListFilter className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          {(facetsOpen || filterActive) && (
+          <SearchField
+            value={query}
+            onValueChange={setQuery}
+            placeholder="Filter sources…"
+            aria-label="Filter sources"
+            autoCapitalize="none"
+          />
           <div className="flex flex-wrap gap-1">
             {[...kindCounts.entries()]
               .filter(([, n]) => n > 0)
@@ -901,7 +864,6 @@ export function SourcesPanel() {
               </Chip>
             ))}
           </div>
-          )}
         </div>
       )}
 
