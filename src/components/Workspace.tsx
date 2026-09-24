@@ -138,10 +138,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             aria-pressed={sourcesOpen}
             title={sourcesOpen ? "Hide sources (⌘1)" : "Show sources (⌘1)"}
             aria-label={sourcesOpen ? "Hide sources" : "Show sources"}
-            className={cn(
-              CHROME_BUTTON,
-              sourcesOpen && "bg-surface-2 text-foreground",
-            )}
+            // Plain at rest either way, like Finder's sidebar toggle: the
+            // pane itself is the state. The inspector toggle keeps its wash
+            // (docs/RFC-mac-chrome.md, "Toolbar").
+            className={CHROME_BUTTON}
           >
             <PanelLeft className="h-4 w-4" />
           </button>

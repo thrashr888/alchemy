@@ -1585,15 +1585,20 @@ export function SourcesPanel() {
           <span className="truncate text-body text-foreground">
             Grow this notebook
           </span>
-          {/* The pending-review dot and its count read as one trailing unit,
-              which also buys the label room at the pane's spec width. */}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* The pending-review dot and its count read as one trailing unit.
+              "to review" travels with the count while the label still fits
+              at the pane's spec width (up to two digits) and folds into the
+              tooltip past that, so "Grow this notebook" never truncates. */}
+          <span
+            className="ml-auto flex shrink-0 items-center gap-1.5"
+            title={`${reviewCount} to review`}
+          >
             <span
               aria-hidden
               className="h-1.5 w-1.5 rounded-full bg-warning"
             />
             <span className="text-caption text-muted-foreground">
-              {reviewCount} to review
+              {reviewCount < 100 ? `${reviewCount} to review` : reviewCount}
             </span>
           </span>
         </button>
