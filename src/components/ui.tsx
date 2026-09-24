@@ -334,18 +334,29 @@ export function useHoverCard(side: "left" | "right") {
 export function Switch({
   checked,
   onChange,
+  disabled,
   className,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
+  /** A setting that cannot apply right now (the glass sub-options with the
+   *  window material Off). Dimmed and inert, still readable. */
+  disabled?: boolean;
   className?: string;
 }) {
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
+    <span
+      className={cn(
+        "relative inline-flex shrink-0",
+        disabled && "pointer-events-none opacity-40",
+        className,
+      )}
+    >
       <input
         type="checkbox"
         role="switch"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         // h/w-full is load-bearing: a checkbox keeps its intrinsic ~12px
         // box under `inset-0` alone (form controls don't stretch), which
@@ -353,16 +364,16 @@ export function Switch({
         // any box past the pill overflows edge-flush scroll containers.
         className="peer absolute inset-0 h-full w-full cursor-pointer rounded-full opacity-0"
       />
-      {/* Native NSSwitch geometry, measured off a rendered control (dark
-          aqua): 2.25:1 pill, knob a 1.6:1 capsule spanning 59% of the track
-          width with an ~8% inset. At our scale: 36×16 track, 21×13 knob,
-          1.5px inset, 12px travel. In dark themes the knob is translucent,
-          picking up the track's tint like the native glass knob; in light
-          themes it stays solid white. */}
+      {/* 26×16 track with a round 12px knob and a 2px inset — the switch in
+          docs/RFC-mac-chrome.md's shared table, the compact settings-row
+          geometry off the iteration-2 mocks (it was 36×16 with a 21×13
+          capsule). Travel is 26 - 2·2 - 12 = 10px. In dark themes the knob
+          is translucent, picking up the track's tint like the native glass
+          knob; in light themes it stays solid white. */}
       <span
         aria-hidden
         className={cn(
-          "pointer-events-none flex h-4 w-9 shrink-0 items-center rounded-full p-[1.5px]",
+          "pointer-events-none flex h-4 w-[26px] shrink-0 items-center rounded-full p-[2px]",
           "transition-colors duration-200 ease-out",
           "peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60",
           checked ? "bg-primary" : "bg-muted-foreground/35",
@@ -370,10 +381,10 @@ export function Switch({
       >
         <span
           className={cn(
-            "h-[13px] w-[21px] rounded-full bg-white [[data-scheme=dark]_&]:bg-white/85",
+            "h-3 w-3 rounded-full bg-white [[data-scheme=dark]_&]:bg-white/85",
             "shadow-[0_0_0_0.5px_rgba(0,0,0,0.05),0_1px_1px_rgba(0,0,0,0.16)]",
             "transition-transform duration-200 ease-out",
-            checked && "translate-x-3",
+            checked && "translate-x-[10px]",
           )}
         />
       </span>
@@ -1846,8 +1857,9 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   /** Accessible name for the group ("View", "Sort"). */
   label: string;
-  /** `sm` (11px) in pane toolbars; `md` (12px) for the title bar's mode
-   *  tabs, the one segmented control that is navigation. */
+  /** `sm` is the spec (22px buttons in a 26px track, 12px labels). `md`
+   *  keeps 26px buttons for the one segmented control that is navigation —
+   *  the toolbar's view switcher, which sits among 32px chrome. */
   size?: "sm" | "md";
   className?: string;
 }) {
@@ -1855,8 +1867,12 @@ export function Segmented<T extends string>({
     <div
       role="group"
       aria-label={label}
+      // The track is a fill with an INSET hairline, not a border: an inset
+      // shadow does not add to the box, so the 22px buttons + 2px padding
+      // come out at exactly 26px (docs/RFC-mac-chrome.md, shared table).
       className={cn(
-        "flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5",
+        "flex shrink-0 items-center gap-0.5 rounded-[7px] bg-surface-2 p-0.5",
+        "shadow-[inset_0_0_0_0.5px_var(--border)]",
         className,
       )}
     >
@@ -1872,11 +1888,15 @@ export function Segmented<T extends string>({
             title={option.hint}
             aria-label={option.label ? undefined : option.hint}
             className={cn(
-              "inline-flex items-center rounded-md font-medium transition-colors",
-              size === "md" ? "gap-1.5 text-caption" : "gap-1 text-micro",
-              option.label ? (size === "md" ? "px-2 py-1" : "px-2 py-0.5") : "p-1.5",
+              "inline-flex items-center justify-center gap-1 rounded-[5px] text-caption font-medium transition-colors",
+              size === "md" ? "h-[26px]" : "h-[22px]",
+              option.label ? "px-2.5" : "px-2",
+              // The chosen segment is a raised tile: the elevated tone, a
+              // stronger inset hairline and one soft shadow — the macOS
+              // NSSegmentedControl read, and the only place a segment
+              // carries a fill.
               active
-                ? "bg-surface-2 text-foreground"
+                ? "bg-elevated text-foreground shadow-[inset_0_0_0_0.5px_var(--border-strong),0_1px_2px_rgba(0,0,0,0.35)]"
                 : "text-muted-foreground hover:text-foreground",
               option.disabled && "cursor-default opacity-40 hover:text-muted-foreground",
             )}
@@ -1887,6 +1907,40 @@ export function Segmented<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A pop-up button: the macOS control that names its current value and opens
+ * a menu (or a disclosure) to change it. 22px tall, the elevated tone under
+ * a strong inset hairline, a 10px chevron trailing — the shared table in
+ * docs/RFC-mac-chrome.md. Used for the Theme row in Appearance, Home's sort
+ * order, and the composer's model pill. Not a `Select`: the list it opens is
+ * a real menu (or a fold), not a native popup.
+ */
+export function PopupButton({
+  className,
+  children,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: React.Ref<HTMLButtonElement>;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex h-[22px] shrink-0 items-center gap-1 rounded-md bg-elevated pl-2.5 pr-1.5",
+        "text-caption text-foreground transition-colors",
+        "shadow-[inset_0_0_0_0.5px_var(--border-strong)]",
+        "hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring/60 outline-none",
+        "disabled:opacity-40 disabled:pointer-events-none",
+        className,
+      )}
+      {...rest}
+    >
+      {children}
+      <ChevronDown aria-hidden className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+    </button>
   );
 }
 
@@ -1931,8 +1985,10 @@ export function SortMenu<T extends string>({
 /**
  * A filter field: an `Input` with the search glass drawn in, and a clear
  * button once there is text. `quiet` (28px, transparent) inside a side
- * card, where a filled box would be a box in a box; `field` (32px,
- * surface-2) in a page toolbar beside other 32px controls.
+ * card, where a filled box would be a box in a box; `field` (26px,
+ * `surface-2` under an inset hairline, 13px text, 16px glass) everywhere a
+ * toolbar or a settings sidebar wants a visible box — the field row in
+ * docs/RFC-mac-chrome.md's shared table.
  */
 export function SearchField({
   value,
@@ -1953,15 +2009,23 @@ export function SearchField({
     <div className={cn("relative min-w-0", className)}>
       <Search
         aria-hidden
-        className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground"
+        className={cn(
+          "pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-subtle-foreground",
+          variant === "field" ? "h-4 w-4" : "h-3.5 w-3.5",
+        )}
       />
       <Input
         type="search"
         value={value}
         onChange={(e) => onValueChange(e.target.value)}
         className={cn(
-          "pl-7 pr-7 text-caption [&::-webkit-search-cancel-button]:hidden",
-          variant === "quiet" && "h-7 bg-transparent",
+          "pr-7 [&::-webkit-search-cancel-button]:hidden",
+          variant === "quiet"
+            ? "h-7 bg-transparent pl-7 text-caption"
+            : // 26px with an inset hairline instead of a border, so the box
+              // measures exactly 26 and lines up with the 22px controls
+              // beside it. pl-7 clears the 16px glass at left-2.
+              "h-[26px] rounded-lg border-0 bg-surface-2 pl-7 text-body shadow-[inset_0_0_0_0.5px_var(--border)]",
           inputClassName,
         )}
         {...props}
@@ -2182,6 +2246,8 @@ export function EmptyState({
  *
  * Rows are `FormRow`s. A control that needs the whole width (a swatch grid, a
  * textarea) is a plain `px-3 py-2.5` div instead; it still gets the hairline.
+ * Measurements: docs/RFC-mac-chrome.md, the "grouped list" and "footnote"
+ * rows of the shared table.
  */
 export function FormGroup({
   caption,
@@ -2195,22 +2261,26 @@ export function FormGroup({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-1.5">
+    <section className="flex min-w-0 flex-col">
       {caption && (
-        <div className="px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+        <div className="px-3 pb-1.5 text-micro font-semibold uppercase tracking-[.04em] text-subtle-foreground">
           {caption}
         </div>
       )}
+      {/* An INSET hairline, not a border: the edge does not add to the box,
+          so a 40px row is 40px tall and the group aligns with the caption
+          and footnote outside it. */}
       <div
         className={cn(
-          "flex min-w-0 flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-2/60",
+          "flex min-w-0 flex-col divide-y divide-border overflow-hidden rounded-[10px] bg-surface-2",
+          "shadow-[inset_0_0_0_0.5px_var(--border)]",
           className,
         )}
       >
         {children}
       </div>
       {footer && (
-        <div className="text-pretty px-1 text-micro leading-relaxed text-subtle-foreground">
+        <div className="text-pretty px-3 pt-1.5 text-micro leading-relaxed text-muted-foreground">
           {footer}
         </div>
       )}
@@ -2223,7 +2293,8 @@ export function FormGroup({
  * it, and the control trailing. `children` is that control — a `Switch`, a
  * `Segmented`, a `Select`, a small `Button`, or just a value. The label
  * column takes the slack, so a row with no label still pushes its control to
- * the right edge.
+ * the right edge. 40px tall in Settings (the "group row" spec in
+ * docs/RFC-mac-chrome.md); a row carrying a hint grows past it.
  */
 export function FormRow({
   label,
@@ -2239,7 +2310,11 @@ export function FormRow({
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center justify-between gap-4 px-3 py-2",
+        // No vertical padding on a plain row: min-h-10 IS the height, so
+        // every control-only row is exactly 40px. A hint needs the air, so
+        // it brings its own py-1.5 and the row grows.
+        "flex min-h-10 min-w-0 items-center justify-between gap-2.5 px-3 text-body",
+        hint && "py-1.5",
         className,
       )}
     >

@@ -136,6 +136,22 @@ introduce a webfont; the system stack is deliberate.
 
 ## 4. Component Stylings
 
+**Measurements.** The exact numbers for the shared controls — track and
+button heights, radii, paddings, the caps label, the group row, the
+footnote — live in one table: the "Shared" section of
+docs/RFC-mac-chrome.md § Measurements, read off the approved mocks. This
+section says what each primitive *is* and when to reach for it; that table
+says how big. When the two disagree, the table wins and this section is
+stale.
+
+Two shapes recur and are worth naming. A **hairline** is `--border` (a
+strong one is `--border-strong`). An **inset hairline** is
+`box-shadow: inset 0 0 0 0.5px …` rather than a `border`: it draws the same
+edge without adding to the box, so a 22px button in a 2px-padded track comes
+out at exactly 26px and a 40px row is 40px. Every group, track, field and
+pop-up below uses the inset form; a `border` is for things whose edge may
+add height (cards, modals, table frames).
+
 - **Buttons** (`ui.Button`): heights 28px (`sm`, icon) / 32px (`md`); radius 6px.
   Variants: `primary` (accent fill, subtle 1px shadow), `secondary`
   (surface-2 fill + strong border), `ghost` (text-only, surface-2 on hover),
@@ -165,21 +181,36 @@ introduce a webfont; the system stack is deliberate.
   not a status, so color there would mean nothing (§1). The one colored
   element a chip may carry is a `dot` swatch standing for a colored thing.
 - **Segmented controls** (`ui.Segmented`): two to four exclusive states of
-  one thing (grid/table, newest/A–Z) in one bordered 8px track, segments
-  6px, the active one `surface-2`. Icon-only segments carry `hint` as
-  their name. More than four options, or long names: a `Select`.
+  one thing (grid/table, newest/A–Z, Tinted/Clear/Off). The track is a
+  `surface-2` fill under an inset hairline — not a border — and the chosen
+  segment is a raised tile: the `elevated` tone, a strong inset hairline and
+  one soft `0 1px 2px` shadow, which is the only fill a segment ever
+  carries. `sm` is the spec (26px track, 22px buttons, 12px medium labels);
+  `md` exists for the one segmented control that is navigation, the
+  toolbar's view switcher, which sits among 32px chrome. Icon-only segments
+  lose the label padding and carry `hint` as their name. More than four
+  options, or long names: a `PopupButton` or a `Select`.
+- **Pop-up buttons** (`ui.PopupButton`): the macOS control that *names its
+  current value* and opens a menu or a fold to change it — the theme in
+  Appearance, the sort order on Home, the model on the composer. 22px, the
+  `elevated` tone under a strong inset hairline, a 10px chevron trailing.
+  It is not a `Select`: what it opens is a real menu or a disclosure, so it
+  can show icons, counts and swatches. Reach for it when a `Segmented`
+  would need a fifth option or a long name.
 - **Grouped forms** (`ui.FormGroup` + `ui.FormRow`): the macOS System
   Settings shape, and the only shape a settings pane uses. A group is a
-  rounded-10px hairline box over a faint `surface-2` fill whose rows are
+  rounded-10px `surface-2` box under an inset hairline whose rows are
   divided by hairlines; the optional uppercase 11px `caption` sits above it
-  and the optional one-sentence `footer` below it, both outside the box. A
-  row is one control: the label leading (with an optional 11px hint under
-  it), the control trailing — a `Switch`, a `Segmented`, a `Select`, a small
-  `Button`, or just a value. The label column takes the slack, so a
-  label-less row still pushes its buttons to the right edge. A control that
-  needs the whole width (the theme swatch grid, a textarea, the chat style
-  tiles) is a plain `px-3 py-2.5` div inside the group instead of a row. No
-  `<hr>` dividers between sections: the gap between groups is the division.
+  and the optional one-sentence `footer` below it, both outside the box and
+  aligned to the row padding, not the box edge. A row is 40px and one
+  control: the label leading (with an optional 11px hint under it, which is
+  the only thing that grows a row past 40), the control trailing — a
+  `Switch`, a `Segmented`, a `PopupButton`, a `Select`, a small `Button`, or
+  just a value. The label column takes the slack, so a label-less row still
+  pushes its buttons to the right edge. A control that needs the whole width
+  (the theme swatch grid, a textarea, the chat style tiles) is a plain
+  `px-3 py-2.5` div inside the group instead of a row. No `<hr>` dividers
+  between sections: the 18px gap between groups is the division.
 - **Sorting**: tables sort by their column headers (`HomeTable`: the
   header is the button, the arrow shows direction, text starts ascending
   and counts and dates descending). Every other list sorts through
@@ -190,12 +221,17 @@ introduce a webfont; the system stack is deliberate.
 - **Filter fields** (`ui.SearchField`): the search glass drawn in at left,
   a clear button once there is text, `type="search"`. `quiet` (28px,
   transparent fill) inside a side card, where a filled box would be a box
-  in a box; `field` (32px, `surface-2`) in a page toolbar beside other
-  32px controls. Placeholder reads "Filter <things>…".
-- **Checkboxes**: a real `<input type="checkbox">` with the `select-quiet`
-  class for list selection (Finder-style, §9); a `ui.Switch` for a setting
+  in a box; `field` (26px, `surface-2` under an inset hairline, 13px text,
+  a 16px glass) in a toolbar or a settings sidebar, where the box should be
+  visible. Placeholder reads "Filter <things>…".
+- **Checkboxes and switches**: a real `<input type="checkbox">` with the
+  `select-quiet` class for list selection (Finder-style, §9); a `ui.Switch`
+  — a 26×16 track with a 12px knob, `--primary` when on — for a setting
   that is on or off. Never a checkbox for a setting, never a switch for a
-  selection.
+  selection. A switch whose setting cannot apply right now (the glass
+  sub-options with the window material Off) takes `disabled` and stays
+  visible and dimmed rather than disappearing: the row still says what the
+  app can do.
 - **Generator rows** (Studio › Generate): grouped hairline lists, one group
   per shelf, each row 38px with an icon in its family accent, the
   generator's name, and how many notes of that kind the notebook already
@@ -257,7 +293,14 @@ hand-drawn label/hint/divider stacks became `FormGroup`/`FormRow`, and the
 chip rows for glass, chat font, text size and alignment became `Segmented`
 — seven panes converted, five (Models, Agents, Activity, Shortcuts, About)
 keep their own sections because their rows are lists and status, not
-settings. Raw `<button>`s (216) are fine — most are
+settings. The Mac chrome pass (2026-09-23) then put numbers on all of it:
+every shared control now measures what docs/RFC-mac-chrome.md's table says
+(segmented 26/22, group rows 40, fields 26, switch 26×16, pop-up 22), and
+the borders on groups, tracks and fields became inset hairlines so those
+numbers are the rendered heights and not one or two pixels more. One
+primitive was added rather than drawn per site: `PopupButton`, which the
+theme row, Home's sort order and the composer's model pill all use.
+Raw `<button>`s (216) are fine — most are
 icon buttons and row bodies styled for their spot; the rule is that a
 button that *looks like* a primitive uses the primitive.
 
@@ -289,7 +332,10 @@ Justified exceptions, kept on purpose:
   and icon grid (`NotebookEditModal`), the theme strips and the big
   icon-and-label tiles in Appearance (`SettingsTabs`) — are not chips: the
   swatch, glyph or strip *is* the label. They keep their own shapes and use
-  the ring for the selected one.
+  the ring for the selected one. The Theme row's four-block strip is the
+  same idea shrunk to a row: it shows the current theme's background,
+  surface, text and accent, and it opens the same fold the `PopupButton`
+  beside it does, because both are the row's answer to one question.
 - **Studio's generator tiles** (`GenTile`) are buttons with a family accent
   on the icon; the accent is wayfinding for note kinds (§2), not a state.
 

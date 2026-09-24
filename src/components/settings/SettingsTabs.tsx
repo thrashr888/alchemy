@@ -4,7 +4,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdates } from "@/lib/updates";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { SYSTEM_THEME, THEME_LIST, THEMES, resolveThemeId } from "@/lib/themes";
+import {
+  SYSTEM_THEME,
+  THEME_LIST,
+  THEMES,
+  resolveThemeId,
+  type ShaderVariant,
+} from "@/lib/themes";
 import { SLASH_COMMANDS } from "@/lib/slashCommands";
 import type {
   BuildInfo,
@@ -21,8 +27,10 @@ import {
   FormGroup,
   FormRow,
   Input,
+  PopupButton,
   Segmented,
   Spinner,
+  Switch,
   Textarea,
   type SegmentedOption,
 } from "../ui";
@@ -41,7 +49,6 @@ import {
   ScrollText,
   Sparkles,
   Blocks,
-  ChevronDown,
   Smile,
   Wrench,
   Zap,
@@ -94,6 +101,37 @@ const CHAT_ALIGNS: readonly SegmentedOption<ReadingPrefs["textAlign"]>[] = [
   { value: "justified", label: "Justified" },
 ];
 
+/** Human names for the backdrop fields (Theme.shader -> what you see), so the
+ *  Backdrop row can say what this theme draws. One entry per mode in
+ *  DitherBackground's SHADER_MODE table; "mist" is the default when a theme
+ *  names no shader. */
+const SHADER_LABEL: Record<ShaderVariant, string> = {
+  mist: "Aetheric mist",
+  rain: "Code rain",
+  horizon: "Retro horizon",
+  grain: "Paper grain",
+  dial: "Instrument dial",
+  slipstream: "Slipstream",
+  trellis: "Trellis",
+  bars: "Rebus bars",
+  network: "City lights",
+  snow: "Snowfall",
+  moon: "Moonlit",
+  glitch: "Glitch",
+  orbit: "Orbits",
+  contrib: "Contribution wall",
+  corona: "Corona",
+  steam: "Steam",
+  phosphor: "Phosphor",
+  blueprint: "Blueprint",
+  crt: "CRT",
+  camo: "Camouflage",
+};
+
+/** Paper grain is the one still field (DitherBackground holds it at t=0);
+ *  every other mode animates. */
+const STATIC_SHADERS: readonly ShaderVariant[] = ["grain"];
+
 const ACCENT_OPTIONS: readonly SegmentedOption<ReadingPrefs["accent"]>[] = [
   { value: "theme", label: "Theme" },
   { value: "system", label: "System accent" },
@@ -135,7 +173,7 @@ export function ChatTab() {
   const lengthHint = CHAT_LENGTHS.find((length) => length.id === chatConfig.length)?.hint;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         {currentId ? (
           <>
@@ -235,7 +273,7 @@ export function PersonalizationTab() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         Personalization is added to chat and document prompts and is sent only to your configured model. Changes save automatically.
       </p>
@@ -302,38 +340,70 @@ export function AppearanceTab() {
   const themeName =
     theme === SYSTEM_THEME ? "System" : THEMES[resolveThemeId(theme)].label;
   const [themesOpen, setThemesOpen] = useState(false);
+  // The four blocks of the swatch strip, from the same theme table the
+  // picker reads: background, surface-2, foreground, primary.
+  const resolved = THEMES[resolveThemeId(theme)];
+  const swatch = [
+    resolved.vars.background,
+    resolved.vars["surface-2"],
+    resolved.vars.foreground,
+    resolved.vars.primary,
+  ];
+  const shader: ShaderVariant = resolved.shader ?? "mist";
+  const backdropName =
+    SHADER_LABEL[shader] +
+    (STATIC_SHADERS.includes(shader) ? "" : " \u00b7 moves");
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <FormGroup
         caption="Theme"
         footer="37 themes, each with its own backdrop. System accent follows the color you chose in macOS settings."
       >
         {/* The swatch grid is 38 entries tall, so it folds behind the row
-            (a disclosure, the System Settings way) and opens on demand;
-            the row itself names the current theme. Closed by default so
-            Selection color and Glass stay on screen. */}
-        <button
-          type="button"
-          onClick={() => setThemesOpen((open) => !open)}
-          aria-expanded={themesOpen}
-          className="flex w-full min-w-0 items-center justify-between gap-4 px-3 py-2 text-left transition-colors hover:bg-surface-2"
-        >
-          <span className="text-body text-foreground">Theme</span>
-          <span className="flex items-center gap-1.5 text-caption text-muted-foreground">
+            (a disclosure, the System Settings way) and opens on demand; the
+            row names the current theme and shows its palette. Two triggers,
+            one fold: the strip and the pop-up both open it, the way a
+            System Settings row's every affordance leads to the same sheet.
+            Closed by default so Backdrop, Selection color and Glass stay on
+            screen. */}
+        <FormRow label="Theme">
+          <button
+            type="button"
+            onClick={() => setThemesOpen((open) => !open)}
+            aria-expanded={themesOpen}
+            aria-label={`${themeName} palette \u2014 choose a theme`}
+            className="flex overflow-hidden rounded shadow-[inset_0_0_0_0.5px_var(--border-strong)] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {swatch.map((color, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="h-3.5 w-2.5"
+                style={{ backgroundColor: color }}
+              />
+            ))}
+          </button>
+          <PopupButton
+            onClick={() => setThemesOpen((open) => !open)}
+            aria-expanded={themesOpen}
+          >
             {themeName}
-            <ChevronDown
-              className={cn(
-                "h-3.5 w-3.5 transition-transform",
-                themesOpen && "rotate-180",
-              )}
-            />
-          </span>
-        </button>
+          </PopupButton>
+        </FormRow>
         {themesOpen && (
           <div className="px-3 py-2.5">
             <ThemePicker />
           </div>
         )}
+        <FormRow label="Backdrop">
+          <span className="text-caption text-muted-foreground">
+            {backdropName}
+          </span>
+          <Switch
+            checked={reading.backdropMotion}
+            onChange={(backdropMotion) => setReading({ backdropMotion })}
+          />
+        </FormRow>
         <FormRow label="Selection color">
           <Segmented
             label="Selection color"
@@ -361,6 +431,15 @@ export function AppearanceTab() {
                 ? setReading({ glass: false })
                 : setReading({ glass: true, glassStyle: style })
             }
+          />
+        </FormRow>
+        {/* Off means opaque everywhere, so there is nothing for this to do;
+            it stays visible and dimmed rather than disappearing. */}
+        <FormRow label="Sidebars show through to the desktop">
+          <Switch
+            checked={reading.glassSidebars}
+            disabled={!reading.glass}
+            onChange={(glassSidebars) => setReading({ glassSidebars })}
           />
         </FormRow>
       </FormGroup>

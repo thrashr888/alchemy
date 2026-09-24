@@ -230,6 +230,14 @@ html[data-accent="system"] {
   --primary-foreground: AccentColorText !important;
   --ring: AccentColor !important;
   --selection: color-mix(in srgb, AccentColor 35%, transparent) !important;
+  /* Links and citation text are chrome too: a citation marker in the accent
+     is the same affordance as a selected row in it. Lifted toward the
+     foreground so the raw accent stays legible as small type on either
+     scheme (the per-theme citations are all a shade off their primary for
+     the same reason). `.slide-surface` re-points --citation at the deck's
+     own accent on the element itself, which outranks this inherited value,
+     so slide decks keep their document palette. */
+  --citation: color-mix(in srgb, AccentColor 88%, var(--foreground)) !important;
 }
 
 /* Markdown rendering inside chat + notes. */
@@ -605,6 +613,18 @@ html[data-glass="clear"] .side-card {
 }
 html[data-glass="clear"] .side-pane {
   background: color-mix(in srgb, var(--surface) 58%, transparent);
+}
+/* Appearance -> Glass -> "Sidebars show through to the desktop", off
+   (ReadingPrefs.glassSidebars). The toolbar and the sheet keep their glass
+   rules; only the two side panes go back to their opaque at-rest tone, for
+   a window that is translucent where the chrome is and solid where the
+   lists are. Must stay AFTER the .glass rules above: same specificity, so
+   source order decides. */
+html[data-glass-sidebars="off"] .side-pane {
+  background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
+}
+html[data-glass-sidebars="off"][data-scheme="light"] .side-pane {
+  background: var(--surface);
 }
 .toolbar {
   background: var(--chrome);

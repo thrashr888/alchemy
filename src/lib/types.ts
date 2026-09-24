@@ -1081,6 +1081,15 @@ export interface ReadingPrefs {
   glass: boolean;
   /** Glass opacity level, mirroring macOS's Clear/Tinted styles. */
   glassStyle: "tinted" | "clear";
+  /** Under glass, let the desktop show through the Sources and Studio panes.
+   *  Off puts `data-glass-sidebars="off"` on <html>, where index.css puts the
+   *  two side panes back to their opaque tone; the toolbar and the sheet keep
+   *  their glass rules either way. */
+  glassSidebars: boolean;
+  /** Whether the shader backdrop animates. Off freezes it at t=0 (the same
+   *  still field paper-grain themes always show). The OS
+   *  `prefers-reduced-motion` setting freezes it whatever this says. */
+  backdropMotion: boolean;
   /** Where the selection and primary-button color comes from: the theme's own
    *  accent, or the one the user picked in macOS System Settings. "system"
    *  puts `data-accent="system"` on <html>, where index.css swaps the primary
@@ -1096,5 +1105,7 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   showRelated: true,
   glass: false,
   glassStyle: "tinted",
+  glassSidebars: true,
+  backdropMotion: true,
   accent: "theme",
 };
