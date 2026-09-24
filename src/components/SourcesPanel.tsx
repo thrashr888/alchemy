@@ -43,6 +43,8 @@ import {
   type SourceKind,
 } from "@/lib/sourceFacets";
 import { CloudMark } from "./CloudMarks";
+import { GROUP_COLOR } from "@/lib/sourceGroups";
+import { CHROME_BUTTON } from "./SidebarRails";
 import {
   HYGIENE_LABEL,
   growthAttention,
@@ -57,7 +59,6 @@ import {
   ChevronRight,
   FileText,
   Globe,
-  LayoutGrid,
   Plus,
   PanelLeftClose,
   Trash2,
@@ -78,6 +79,22 @@ import {
 // target the eval fence covers, so the bar reads as "where you are in the
 // verified operating range", going red only near its edge.
 const SCALE_TARGET_CHARS = 10_000_000;
+
+// The gauge is a caption until the notebook is near the edge of the verified
+// range; past this the bar appears, because that is the only point at which
+// "where you are" is worth a picture.
+const SCALE_BAR_FROM_PCT = 80;
+
+/** Tags carry no color in the model (`Source.tags` is a string), so the dot
+ *  beside one is a stable hash over the app's one categorical palette —
+ *  stated once in src/lib/sourceGroups.ts, never a fresh hex in a
+ *  component. Same tag, same dot, in every theme. */
+const TAG_HUES = Object.values(GROUP_COLOR);
+function tagHue(tag: string): string {
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) | 0;
+  return TAG_HUES[Math.abs(h) % TAG_HUES.length];
+}
 
 // Folder tree open/closed state persists across restarts, keyed by folder
 // source id (only ids the user has explicitly toggled are stored; unseen
@@ -432,6 +449,13 @@ export function SourcesPanel() {
     () => countTags(sources, liveTag),
     [sources, liveTag],
   );
+  // The Tags block under the list: the notebook's busiest tags as rows, each
+  // one a facet. Capped at eight — the rest stay reachable as chips behind
+  // the filter toggle, which is where the long tail belongs.
+  const tagRows = useMemo(() => countTags(sources, liveTag, 8), [
+    sources,
+    liveTag,
+  ]);
 
   const q = query.trim().toLowerCase();
   const filterActive = !!q || !!liveKind || !!liveTag || !!liveFresh;
@@ -572,7 +596,10 @@ export function SourcesPanel() {
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => listRef.current,
-    estimateSize: () => 44,
+    // 28px row + the 1px between rows. Heights are measured anyway (error
+    // and proposal rows carry a second line), so this only has to be right
+    // for the common row, which is one line now.
+    estimateSize: () => 29,
     overscan: 12,
     getItemKey: (i) => {
       const r = rows[i];
@@ -710,14 +737,16 @@ export function SourcesPanel() {
   const reviewCount = growthVisible.length + attention.length;
 
   return (
+    // One pane, 260px, 10px of padding, 12px between its blocks, one
+    // hairline toward the center (docs/RFC-mac-chrome.md, "Sources pane").
     <div
       style={{ width }}
-      className="side-pane relative flex shrink-0 flex-col border-r border-border"
+      className="side-pane relative flex shrink-0 flex-col gap-3 border-r border-border p-2.5"
     >
       <ResizeHandle
         edge="right"
         width={width}
-        defaultWidth={280}
+        defaultWidth={260}
         onResize={(w) => setPanelWidth("sources", w)}
         label="Resize sources panel"
       />
@@ -732,84 +761,105 @@ export function SourcesPanel() {
           </span>
         </div>
       )}
-      <div className="flex items-center px-4 h-12 border-b border-border">
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+      {/* Header: the caps label with the live count beside it, then the
+          pane's three verbs as icon buttons. The gallery is not among them —
+          it is a face of the center column now, reached from the toolbar's
+          mode tabs, so the pane no longer keeps a second door to it. */}
+      {/* pl-2 and no right padding: the caps label lines up with the row
+          titles below it, the buttons with the pane's trailing edge — the
+          way Notes and Mail hang a sidebar header. */}
+      <div className="flex shrink-0 items-center gap-1.5 pl-2">
+        <span className="text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground">
           Sources
         </span>
-        <span className="ml-2 text-micro text-subtle-foreground">
+        <span className="text-caption text-muted-foreground">
           {sources.length}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() =>
-              useStore.setState((st) => ({
-                galleryOpen: !st.galleryOpen,
-                growOpen: false,
-              }))
-            }
+          {/* The chip rows fold behind this toggle (macOS puts a filter
+              behind a button, not a strip). A filter that is on keeps its
+              row visible whatever the toggle says, so it can be switched
+              off. */}
+          <button
+            type="button"
+            aria-pressed={facetsOpen}
+            onClick={() => setFacetsOpen((o) => !o)}
             disabled={!currentId}
-            title="Browse source gallery"
-            aria-label="Browse source gallery"
+            title={
+              facetsOpen ? "Hide filters" : "Filter by kind, tag or condition"
+            }
+            aria-label={facetsOpen ? "Hide filters" : "Show filters"}
+            className={cn(
+              CHROME_BUTTON,
+              "min-w-6 p-0",
+              (facetsOpen || filterActive) && "bg-surface-2 text-foreground",
+            )}
           >
-            <LayoutGrid className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
+            <ListFilter className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
             onClick={() => openAddSource()}
             disabled={!currentId}
             title="Add source"
             aria-label="Add source"
+            className={cn(CHROME_BUTTON, "min-w-6 p-0")}
           >
-            <Plus className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
             onClick={toggleSources}
-            title="Collapse sources"
+            title="Collapse sources (⌘1)"
             aria-label="Collapse sources"
+            className={cn(CHROME_BUTTON, "min-w-6 p-0")}
           >
-            <PanelLeftClose className="h-4 w-4" />
-          </Button>
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
-      {/* Notebook capacity gauge. Hovering or focusing it opens the
-          composition card: the same notebook split by source type. */}
+      {/* How big this notebook is, as one line. It was a gauge with its own
+          bordered block, which put a chart where a caption does the work:
+          the number only matters near the edge of the verified retrieval
+          range, so the bar appears at 80% and not before. Hovering or
+          focusing the line opens the composition card either way: the same
+          notebook split by source type. */}
       {sources.length > 0 && (
         <div
           {...breakdownTrigger}
-          className="border-b border-border px-4 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+          className="-my-1 shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         >
-          <div className="mb-1.5 flex items-center justify-between text-micro">
-            <span className="text-muted-foreground">
+          <div className="flex items-baseline gap-1.5 px-2 text-micro text-subtle-foreground">
+            <span className="truncate">
               {Intl.NumberFormat().format(totalChars)} chars
             </span>
-            <span className="text-subtle-foreground">
+            <span className="ml-auto shrink-0">
               {pct < 1 ? "<1" : Math.round(pct)}% of 10M
             </span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-            {/* The notebook's color carries into its gauge — the one place the
-                color lives inside the workspace besides the title dot. */}
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                // Fallback fill: a notebook with no color (imports, fixtures)
-                // must still draw a bar — primary, not transparent.
-                pct > 90 ? "bg-destructive" : !notebookColor && "bg-primary",
-              )}
-              style={{
-                width: `${Math.max(2, pct)}%`,
-                ...(pct <= 90 && notebookColor
-                  ? { backgroundColor: notebookColor }
-                  : {}),
-              }}
-            />
-          </div>
+          {pct >= SCALE_BAR_FROM_PCT && (
+            <div className="mx-2 mt-1 h-0.5 overflow-hidden rounded-full bg-surface-2">
+              {/* The notebook's color carries into its gauge — the one place
+                  the color lives inside the workspace besides the title
+                  tile. Past 90% it goes to the warning tone: that is the
+                  edge of the range the evals fence. */}
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  // Fallback fill: a notebook with no color (imports,
+                  // fixtures) must still draw a bar — primary, not nothing.
+                  pct > 90 ? "bg-destructive" : !notebookColor && "bg-primary",
+                )}
+                style={{
+                  width: `${Math.max(2, pct)}%`,
+                  ...(pct <= 90 && notebookColor
+                    ? { backgroundColor: notebookColor }
+                    : {}),
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -820,34 +870,19 @@ export function SourcesPanel() {
           past that threshold used to take the only way to switch it off
           along with it. */}
       {currentId && (sources.length > 8 || filterActive) && (
-        <div className="flex flex-col gap-1.5 border-b border-border px-3 py-2">
-          <div className="flex items-center gap-1">
-            <SearchField
-              value={query}
-              onValueChange={setQuery}
-              placeholder="Filter sources…"
-              aria-label="Filter sources"
-              autoCapitalize="none"
-              className="flex-1"
-            />
-            {/* The chip rows fold behind this toggle (macOS puts a filter
-                behind a button, not a strip). A filter that is on keeps its
-                row visible whatever the toggle says, so it can be switched
-                off. */}
-            <button
-              type="button"
-              aria-pressed={facetsOpen}
-              onClick={() => setFacetsOpen((o) => !o)}
-              title={facetsOpen ? "Hide filters" : "Filter by kind, tag or condition"}
-              aria-label={facetsOpen ? "Hide filters" : "Show filters"}
-              className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground",
-                (facetsOpen || filterActive) && "bg-surface-2 text-foreground",
-              )}
-            >
-              <ListFilter className="h-3.5 w-3.5" />
-            </button>
-          </div>
+        <div className="flex shrink-0 flex-col gap-1.5">
+          {/* The field spec (docs/RFC-mac-chrome.md, "Shared"): 26px, radius
+              8, surface-2 under an inset hairline. A 2,487-source notebook is
+              navigated by typing, so the field stays visible and only the
+              chips fold. */}
+          <SearchField
+            value={query}
+            onValueChange={setQuery}
+            placeholder="Filter sources…"
+            aria-label="Filter sources"
+            autoCapitalize="none"
+            inputClassName="h-[26px] rounded-lg border-transparent bg-surface-2 text-body shadow-[inset_0_0_0_0.5px_var(--border)]"
+          />
           {(facetsOpen || filterActive) && (
           <div className="flex flex-wrap gap-1">
             {[...kindCounts.entries()]
@@ -905,6 +940,31 @@ export function SourcesPanel() {
         </div>
       )}
 
+      {/* Master selection row: which sources feed chat & Studio. Its own
+          block above the list rather than the list's first row — scrolled
+          away, the one control that says "these thirty are what the model
+          reads" was gone. Always labeled: a bare checkbox over empty space
+          read as a blank, menu-less source row in every notebook. */}
+      {currentId && contentSources.length > 0 && (
+        <div className="-mb-1 flex h-[26px] shrink-0 items-center gap-2 px-2">
+          <span className="truncate text-caption text-muted-foreground">
+            {allSelected
+              ? "All selected"
+              : `${selectedCount} of ${contentSources.length} selected`}
+          </span>
+          <div className="ml-auto">
+            <SelectBox
+              checked={allSelected}
+              indeterminate={selectedCount > 0 && !allSelected}
+              onToggle={() => setAllSourcesSelected(!allSelected)}
+              label={
+                allSelected ? "Deselect all sources" : "Select all sources"
+              }
+            />
+          </div>
+        </div>
+      )}
+
       <div
         ref={listRef}
         onPointerDown={marqueeDown}
@@ -912,7 +972,7 @@ export function SourcesPanel() {
         // rubber-band drag paints a native text highlight across every
         // title it crosses (the "Copy text" menu items are how text
         // leaves this app, not selection).
-        className="flex-1 select-none overflow-y-auto p-2"
+        className="min-h-0 flex-1 select-none overflow-y-auto"
       >
         {/* Active upload queue. Imports run one at a time, so a dozen files
             used to stack a dozen near-identical spinner rows and push the
@@ -1023,53 +1083,6 @@ export function SourcesPanel() {
           </EmptyState>
         ) : (
           <>
-            {/* Master selection row: which sources feed chat & Studio. Always
-                labeled — a bare checkbox over empty space read as a blank,
-                menu-less source row in every notebook. */}
-            <div className="mb-0.5 flex items-center gap-2 px-2 py-1.5">
-              <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-                {allSelected
-                  ? "All selected"
-                  : `${selectedCount} of ${contentSources.length} selected`}
-              </span>
-              <div className="ml-auto">
-                <SelectBox
-                  checked={allSelected}
-                  indeterminate={selectedCount > 0 && !allSelected}
-                  onToggle={() => setAllSourcesSelected(!allSelected)}
-                  label={
-                    allSelected ? "Deselect all sources" : "Select all sources"
-                  }
-                />
-              </div>
-            </div>
-            {/* One door to the Grow surface (RFC-living-notebook):
-                growth proposals and needs-attention flags together, with
-                an activity dot when anything is waiting. */}
-            {reviewCount > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  useStore.setState({
-                    growOpen: true,
-                    galleryOpen: false,
-                  })
-                }
-                className="mb-1 flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/60 px-2 py-1.5 text-left hover:bg-surface-2"
-              >
-                <Sprout className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate text-caption text-foreground">
-                  Grow this notebook
-                </span>
-                <span
-                  aria-hidden
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                />
-                <span className="ml-auto shrink-0 text-caption text-subtle-foreground">
-                  {reviewCount} · Review
-                </span>
-              </button>
-            )}
             {filterActive && rows.length === 0 && (
               <EmptyState title="No sources match">
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
@@ -1103,9 +1116,9 @@ export function SourcesPanel() {
                       data-index={vi.index}
                       ref={rowVirtualizer.measureElement}
                       style={itemStyle}
-                      className="pb-0.5"
+                      className="pb-px"
                     >
-                      <div className="group relative flex items-center gap-2 rounded-md px-2 py-2 hover:bg-surface-2">
+                      <div className="group relative flex h-7 items-center gap-2 rounded-md px-2 hover:bg-surface-2">
                         <button
                           type="button"
                           onClick={() =>
@@ -1189,13 +1202,22 @@ export function SourcesPanel() {
                 const kidsOn = kids.filter((k) => isSelected(k.id)).length;
                 const isPicked = pickedIds.has(s.id);
                 const isOpen = openSourceId === s.id;
+                // One line per row is the spec. Four states earn a second
+                // one, because each is the row asking for something: a
+                // deletion someone proposed, an import still running, an
+                // import that failed, a file still in the cloud.
+                const twoLine =
+                  !!proposals[s.id] ||
+                  importing ||
+                  s.status === "error" ||
+                  s.status === "placeholder";
                 return (
                   <div
                     key={vi.key}
                     data-index={vi.index}
                     ref={rowVirtualizer.measureElement}
                     style={itemStyle}
-                    className="pb-0.5"
+                    className="pb-px"
                   >
                   <div
                     data-pick-id={s.id}
@@ -1208,11 +1230,17 @@ export function SourcesPanel() {
                     className={cn(
                       // content of the rows after it (they'd paint over the
                       // dropdown otherwise — later DOM order wins at equal z).
-                      "group relative flex items-start gap-2 rounded-md px-2 py-2 hover:bg-surface-2 [content-visibility:auto] [contain-intrinsic-size:auto_44px]",
+                      "group relative flex gap-2 rounded-md px-2 hover:bg-surface-2 [content-visibility:auto] [contain-intrinsic-size:auto_29px]",
+                      // The shared row spec: 28px, one line. A row with a
+                      // second line grows and hangs its glyph off the top.
+                      twoLine
+                        ? "min-h-7 items-start py-1.5"
+                        : "min-h-7 items-center",
                       s.status === "error" && "bg-destructive/5",
-                      // Selection is a quiet tinted wash (DESIGN §2 — color
-                      // only when it means something; never a left border).
-                      isPicked && "bg-primary/10 hover:bg-primary/15",
+                      // Selection is the theme's own selection wash (DESIGN
+                      // §2 — color only when it means something; never a
+                      // left border).
+                      isPicked && "bg-[var(--selection)]",
                       // Open in the reader: a quiet surface wash under a
                       // bolder title (below), distinct from the selection tint.
                       isOpen && !isPicked && "bg-surface-2",
@@ -1278,7 +1306,10 @@ export function SourcesPanel() {
                             ? `Show ${kids.length} files in ${s.title}`
                             : `Hide files in ${s.title}`
                         }
-                        className="pointer-events-auto relative z-20 mt-0.5 shrink-0 cursor-pointer"
+                        className={cn(
+                          "pointer-events-auto relative z-20 shrink-0 cursor-pointer",
+                          twoLine && "mt-0.5",
+                        )}
                       >
                         <span className="group-hover:hidden group-focus-within:hidden">
                           {sourceIcon(s.sourceType, s.url)}
@@ -1291,7 +1322,12 @@ export function SourcesPanel() {
                         />
                       </button>
                     ) : (
-                      <div className="pointer-events-none relative z-10 mt-0.5">
+                      <div
+                        className={cn(
+                          "pointer-events-none relative z-10 shrink-0",
+                          twoLine && "mt-0.5",
+                        )}
+                      >
                         {importing || s.status === "processing" ? (
                           <Spinner className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : s.status === "error" ? (
@@ -1317,7 +1353,21 @@ export function SourcesPanel() {
                               : "text-foreground",
                             isOpen && "font-semibold",
                           )}
-                          title={visibleTitle(s.title) || s.url || "Untitled"}
+                          // The domain (and a folder's path, and how much it
+                          // contributes) used to be a second line under the
+                          // title; the row is one line now, so they live in
+                          // the tooltip and the hover card instead.
+                          title={[
+                            visibleTitle(s.title) || "Untitled",
+                            s.url || null,
+                            isFolder
+                              ? `${childCount(s.id)} files · ${compactNumber(
+                                  folderChars(s.id),
+                                )} chars · stays in sync`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join("\n")}
                         >
                           {/* A source can arrive with a blank or zero-width
                               title (a page with no real <title>); the row must
@@ -1347,6 +1397,23 @@ export function SourcesPanel() {
                           >
                             from {s.originDevice}
                           </Badge>
+                        )}
+                        {/* Where a synced folder lives, as the provider's
+                            mark alone — the label was a chip on a second
+                            line, and the row has one line. */}
+                        {cloud && (
+                          <CloudMark
+                            provider={cloud.key}
+                            className="h-3 w-3 shrink-0 text-muted-foreground"
+                          />
+                        )}
+                        {/* A folder's contribution, as the trailing count
+                            the domain rollups already use. The sizes and the
+                            "stays in sync" note are on the hover card. */}
+                        {isFolder && !twoLine && (
+                          <span className="shrink-0 text-micro text-subtle-foreground">
+                            {childCount(s.id)}
+                          </span>
                         )}
                         {!importing && (
                           <RowMenu
@@ -1398,37 +1465,6 @@ export function SourcesPanel() {
                         >
                           Online-only — not downloaded
                         </div>
-                      ) : isFolder ? (
-                        // The folder's contribution to the notebook. Its
-                        // auto-refresh behavior moves to the tooltip — a folder
-                        // staying in sync isn't something the reader must watch.
-                        // A cloud-provider chip (derived from the path) shows
-                        // where a synced folder lives.
-                        <div
-                          className="flex items-center gap-1.5 text-micro text-subtle-foreground"
-                          title={`${s.url}\nStays in sync — auto-refreshes`}
-                        >
-                          {cloud && (
-                            <span className="flex shrink-0 items-center gap-1 rounded bg-surface-2 px-1.5 py-px text-caption text-muted-foreground">
-                              <CloudMark
-                                provider={cloud.key}
-                                className="h-3 w-3"
-                              />
-                              {cloud.label}
-                            </span>
-                          )}
-                          <span className="truncate">
-                            {childCount(s.id)} files ·{" "}
-                            {compactNumber(folderChars(s.id))} chars
-                          </span>
-                        </div>
-                      ) : s.sourceType === "url" && s.url ? (
-                        <div
-                          className="truncate text-micro text-citation"
-                          title={s.url}
-                        >
-                          {hostname(s.url)}
-                        </div>
                       ) : null}
                       {/* What a bundle says about this concept's standing
                           (RFC-okf-live §4). Renders nothing for every source
@@ -1465,6 +1501,82 @@ export function SourcesPanel() {
           </>
         )}
       </div>
+
+      {/* Tags, under the list: the notebook's own vocabulary as rows with a
+          count, each one a facet. Clicking applies the same tag filter the
+          chips behind the filter toggle do, so there is one filter state and
+          two ways to reach it. */}
+      {currentId && tagRows.length > 0 && (
+        <div className="shrink-0">
+          <div className="px-2 pt-1 pb-1.5 text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground">
+            Tags
+          </div>
+          <div className="flex max-h-40 flex-col overflow-y-auto">
+            {tagRows.map(([tag, n]) => (
+              <button
+                key={tag}
+                type="button"
+                aria-pressed={liveTag === tag}
+                onClick={() => setTagFacet(liveTag === tag ? null : tag)}
+                title={
+                  liveTag === tag
+                    ? `Stop filtering by #${tag}`
+                    : `Show only sources tagged #${tag}`
+                }
+                className={cn(
+                  "mb-px flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-left text-body transition-colors",
+                  liveTag === tag
+                    ? "bg-[var(--selection)] text-foreground"
+                    : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: tagHue(tag) }}
+                />
+                <span className="min-w-0 flex-1 truncate">{tag}</span>
+                <span className="shrink-0 text-caption text-subtle-foreground">
+                  {n}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* One door to the Grow surface (RFC-living-notebook): growth proposals
+          and needs-attention flags together. Pinned to the foot of the pane —
+          it is the notebook's standing offer, not the list's first row, where
+          it used to push the sources down and scroll away. */}
+      {reviewCount > 0 && (
+        <button
+          type="button"
+          onClick={() =>
+            useStore.setState({
+              growOpen: true,
+              galleryOpen: false,
+            })
+          }
+          className="flex h-8 w-full shrink-0 items-center gap-2 rounded-md bg-surface-2 px-2 text-left shadow-[inset_0_0_0_0.5px_var(--border)] transition-colors outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Sprout className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-body text-foreground">
+            Grow this notebook
+          </span>
+          {/* The pending-review dot and its count read as one trailing unit,
+              which also buys the label room at the pane's spec width. */}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full bg-warning"
+            />
+            <span className="text-caption text-muted-foreground">
+              {reviewCount} to review
+            </span>
+          </span>
+        </button>
+      )}
 
       {actions.modals}
 

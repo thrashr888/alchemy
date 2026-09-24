@@ -563,7 +563,8 @@ export const useStore = create<AppState>((rawSet, get) => {
     })(),
     sourcesWidth: clampPanel(
       "sources",
-      Number(localStorage.getItem("sourcesWidth")) || 280,
+      // 260px is the Sources pane's spec width (docs/RFC-mac-chrome.md).
+      Number(localStorage.getItem("sourcesWidth")) || 260,
     ),
     studioWidth: clampPanel(
       "studio",

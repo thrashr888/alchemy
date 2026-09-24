@@ -11,10 +11,28 @@ import {
 } from "lucide-react";
 
 /**
+ * The chrome's icon button (docs/RFC-mac-chrome.md, "Shared": 24px high,
+ * min-width 28, padding 0 7px, radius 6, 12px, muted; hover surface-2 +
+ * foreground). Stated as a class rather than taken from `Button`, whose
+ * `size="icon"` is a 28px square: the chrome's buttons are shorter than they
+ * are wide, so a row of them reads as one strip rather than a row of keys.
+ * Lives here because it is the one module the toolbar, the Sources pane and
+ * the rails all sit downstream of; it belongs in `ui.tsx` as `tb` once that
+ * file's own pass lands.
+ */
+export const CHROME_BUTTON =
+  "inline-flex h-6 min-w-7 shrink-0 items-center justify-center rounded-md px-[7px] text-caption font-medium text-muted-foreground transition-colors outline-none hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40";
+
+/** The same button squeezed into a 48px rail: 24px square, no min-width. */
+const RAIL_BUTTON =
+  "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40";
+
+/**
  * Thin icon rail shown when the Sources panel is collapsed — mirrors
  * NotebookLM: each source's type icon stacked vertically; click anything to
  * reopen the panel. The + opens the add-source modal (a global surface, so
- * the panel can stay collapsed).
+ * the panel can stay collapsed). Padding matches the pane it stands in for,
+ * so nothing shifts vertically when the pane opens.
  */
 export function SourcesRail() {
   const sources = useStore((s) => s.sources);
@@ -23,28 +41,32 @@ export function SourcesRail() {
   const openAddSource = useStore((s) => s.openAddSource);
 
   return (
-    <div className="side-pane relative flex w-12 shrink-0 flex-col items-center border-r border-border py-2">
+    <div className="side-pane relative flex w-12 shrink-0 flex-col items-center gap-0.5 border-r border-border p-2.5">
       <button
+        type="button"
         onClick={toggleSources}
-        title="Show sources"
-        className="rounded-md p-1.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        title="Show sources (⌘1)"
+        aria-label="Show sources"
+        className={RAIL_BUTTON}
       >
         <PanelLeft className="h-4 w-4" />
       </button>
-      <div className="my-1.5 h-px w-6 bg-border" />
+      <div className="my-1 h-px w-5 shrink-0 bg-border" />
       <button
+        type="button"
         onClick={() => openAddSource()}
         disabled={!currentId}
         title="Add source"
         aria-label="Add source"
-        className="rounded-md p-1.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40"
+        className={RAIL_BUTTON}
       >
         <Plus className="h-4 w-4" />
       </button>
-      <div className="flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto pt-0.5">
         {sources.map((s) => (
           <button
             key={s.id}
+            type="button"
             onClick={toggleSources}
             title={s.title}
             // Every icon here opens the panel, so the source it stands for is
@@ -55,7 +77,7 @@ export function SourcesRail() {
                 ? `Show sources. ${s.title} failed to import.`
                 : `Show sources. ${s.title}`
             }
-            className="relative rounded-md p-1.5 transition-colors hover:bg-surface-2"
+            className={cn(RAIL_BUTTON, "relative")}
           >
             {sourceIcon(s.sourceType, s.url)}
             {s.status === "error" && (
@@ -76,31 +98,30 @@ export function StudioRail() {
   const notes = useStore((s) => s.notes);
   const toggleStudio = useStore((s) => s.toggleStudio);
   return (
-    <div className="side-pane relative flex w-12 shrink-0 flex-col items-center border-l border-border py-2">
+    <div className="side-pane relative flex w-12 shrink-0 flex-col items-center gap-0.5 border-l border-border p-2.5">
       <button
+        type="button"
         onClick={toggleStudio}
-        title="Show studio"
-        className="rounded-md p-1.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        title="Show studio (⌘2)"
+        aria-label="Show studio"
+        className={RAIL_BUTTON}
       >
         <PanelRight className="h-4 w-4" />
       </button>
-      <div className="my-1.5 h-px w-6 bg-border" />
+      <div className="my-1 h-px w-5 shrink-0 bg-border" />
       <button
+        type="button"
         onClick={toggleStudio}
         title="Generate documents"
-        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        className={RAIL_BUTTON}
       >
         <Wand2 className="h-4 w-4" />
       </button>
       <button
+        type="button"
         onClick={toggleStudio}
         title={`Notes${notes.length ? ` (${notes.length})` : ""}`}
-        className={cn(
-          "relative rounded-md p-1.5 transition-colors hover:bg-surface-2",
-          notes.length
-            ? "text-muted-foreground hover:text-foreground"
-            : "text-subtle-foreground",
-        )}
+        className={cn(RAIL_BUTTON, "relative")}
       >
         <StickyNote className="h-4 w-4" />
         {notes.length > 0 && (
@@ -110,9 +131,11 @@ export function StudioRail() {
         )}
       </button>
       <button
+        type="button"
         onClick={toggleStudio}
         title="Add note"
-        className="mt-auto rounded-md p-1.5 text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        aria-label="Add note"
+        className={cn(RAIL_BUTTON, "mt-auto")}
       >
         <Plus className="h-4 w-4" />
       </button>

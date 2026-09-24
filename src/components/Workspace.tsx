@@ -8,16 +8,18 @@ import { GalleryPane } from "./GalleryPane";
 import { GrowPane } from "./GrowPane";
 import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
-import { SourcesRail, StudioRail } from "./SidebarRails";
+import { CHROME_BUTTON, SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
-import { Button, RowMenu, useConfirm, type RowMenuItem } from "./ui";
+import { RowMenu, useConfirm, type RowMenuItem } from "./ui";
 import { NavButtons } from "./NavButtons";
 import { NotebookEditModal } from "./NotebookEditModal";
-import { shortcutBlocked } from "@/lib/utils";
+import { cn, shortcutBlocked } from "@/lib/utils";
 import type { Notebook } from "@/lib/types";
 import {
   ChevronDown,
   Library,
+  PanelLeft,
+  PanelRight,
   Search,
   Settings,
 } from "lucide-react";
@@ -41,6 +43,8 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   }, []);
   const sourcesOpen = useStore((s) => s.sourcesOpen);
   const studioOpen = useStore((s) => s.studioOpen);
+  const toggleSources = useStore((s) => s.toggleSources);
+  const toggleStudio = useStore((s) => s.toggleStudio);
   const theme = useStore((s) => s.theme);
   const glassOn = useStore((s) => s.reading.glass);
   // Blank chat = no messages and nothing streaming (ChatPanel's own test).
@@ -52,7 +56,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const subtitle = [
     `${sourceCount} ${sourceCount === 1 ? "source" : "sources"}`,
     binding ? (binding.shared ? "Shared" : "On disk") : null,
-    binding?.lastWriteAt ? `written ${wroteAgo(binding.lastWriteAt)}` : null,
+    // A bound notebook is a folder something else may also be writing, so
+    // the clock reads "synced": the last time this app and that folder
+    // agreed. An unbound notebook has no folder and no third segment.
+    binding?.lastWriteAt ? `synced ${wroteAgo(binding.lastWriteAt)}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -106,145 +113,206 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
       })
     : [];
 
+  const TitleIcon = notebookIcon(notebook?.icon);
+  // The notebook's color rides the title tile: a 22% wash of it behind its
+  // own glyph. With no color set the tile is the primary wash and the glyph
+  // the citation tone — the toolbar's one spot of color either way.
+  const tint = notebook?.color;
+
   return (
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* One 52px strip that is also the title bar (docs/RFC-mac-chrome.md,
+          "Toolbar"): the traffic-light gutter, the window's own controls and
+          the title pill on the leading edge, the mode tabs centered in what
+          those leave, then search and the inspector toggle trailing. */}
       <header
         data-tauri-drag-region
-        className="toolbar flex h-[52px] shrink-0 items-center gap-2 pl-[84px] pr-3"
+        className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[84px] pr-3.5"
       >
-        <NavButtons />
-        <div className="mx-1 h-4 w-px bg-border" />
-        {/* A destination, not a direction: the chevron this button used to
-            carry read as a second Back arrow next to the real one. The
-            Library glyph is the app's one icon for "your notebooks" — the
-            Notebooks tab on Home wears it too. */}
-        {/* No `title`: the button already says "Notebooks", so the tooltip
-            only restated it — and a native tooltip raised from inside a
-            `data-tauri-drag-region` header outlives the drag. Move the
-            window while it is up and macOS leaves it painted at its old
-            screen point, which is how "Your notebooks" ended up floating
-            over the Studio list. */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={close}
-          aria-label="All notebooks"
-        >
-          <Library className="h-4 w-4" />
-        </Button>
-        <div className="mx-1 h-4 w-px bg-border" />
-        {/* `group`: the name cluster is a right-clickable object — the title
-            RowMenu binds contextmenu to this div, carrying the same verbs as
-            a notebook row on Home (color lives in Rename's dialog) plus the
-            switcher. The name is chrome, not copy — no text selection. */}
-        <div className="group relative flex select-none items-center gap-1.5 min-w-0">
-          {/* One menu off the name, shaped the way the HIG shapes a pop-up:
-              the choices are the body — the other notebooks, most recently
-              touched first, the current one ticked — with the notebook's own
-              verbs folded into a "Notebook" submenu (the menu bar has the
-              same menu) and the Library behind a divider at the end.
-              Archived and system notebooks stay out of the list; they are
-              not places someone jumps to mid-thought. */}
-          <RowMenu
-            alwaysVisible
-            label={notebook ? `Options for ${notebook.title}` : "Switch notebook"}
-            tooltip={false}
-            trigger={
-              <span className="flex min-w-0 items-center gap-2">
-                {/* The icon wears the notebook's color and sits inside the
-                    pill, so the hover covers the whole title cluster. */}
-                {(() => {
-                  const Icon = notebookIcon(notebook?.icon);
-                  return (
-                    <Icon
-                      className="h-4 w-4 shrink-0 text-primary"
-                      style={notebook?.color ? { color: notebook.color } : undefined}
-                    />
-                  );
-                })()}
-                <span className="flex min-w-0 flex-col items-start leading-tight">
+        <div className="flex min-w-0 shrink items-center gap-3">
+          {/* Show/hide the Sources pane: the Finder position, left of
+              Back/Forward, and the same command as ⌘1. */}
+          <button
+            type="button"
+            onClick={toggleSources}
+            aria-pressed={sourcesOpen}
+            title={sourcesOpen ? "Hide sources (⌘1)" : "Show sources (⌘1)"}
+            aria-label={sourcesOpen ? "Hide sources" : "Show sources"}
+            className={cn(
+              CHROME_BUTTON,
+              sourcesOpen && "bg-surface-2 text-foreground",
+            )}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+          <NavButtons />
+          {/* `group`: the name cluster is a right-clickable object — the title
+              RowMenu binds contextmenu to this div, carrying the same verbs as
+              a notebook row on Home (color lives in Rename's dialog) plus the
+              switcher. The name is chrome, not copy — no text selection. */}
+          <div className="group relative flex min-w-0 select-none items-center">
+            {/* One menu off the name, shaped the way the HIG shapes a pop-up:
+                the choices are the body — the other notebooks, most recently
+                touched first, the current one ticked — with the notebook's own
+                verbs folded into a "Notebook" submenu (the menu bar has the
+                same menu) and the Library behind a divider at the end.
+                Archived and system notebooks stay out of the list; they are
+                not places someone jumps to mid-thought. */}
+            <RowMenu
+              alwaysVisible
+              label={
+                notebook ? `Options for ${notebook.title}` : "Switch notebook"
+              }
+              tooltip={false}
+              trigger={
+                <>
+                  {/* The tile wears the notebook's color and sits inside the
+                      pill, so the hover wash covers the whole cluster with
+                      even padding on every side. */}
                   <span
-                    className="truncate text-body font-semibold"
-                    title={notebook?.title}
+                    aria-hidden
+                    className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md"
+                    style={{
+                      background: `color-mix(in srgb, ${tint ?? "var(--primary)"} 22%, transparent)`,
+                    }}
                   >
-                    {notebook?.title ?? "Notebook"}
+                    <TitleIcon
+                      className="h-3.5 w-3.5 text-citation"
+                      style={tint ? { color: tint } : undefined}
+                    />
                   </span>
-                  {/* The window's subtitle, the way Notes and Mail put the
-                      count under the title: what is here, where it is kept,
-                      when it was last written. The old "On disk" chip is
-                      this line now; Show Bundle in Finder is in the menu. */}
-                  <span className="truncate text-micro text-muted-foreground">
-                    {subtitle}
+                  <span className="flex min-w-0 flex-col items-start">
+                    <span
+                      className="max-w-full truncate text-body font-semibold leading-4"
+                      title={notebook?.title}
+                    >
+                      {notebook?.title ?? "Notebook"}
+                    </span>
+                    {/* The window's subtitle, the way Notes and Mail put the
+                        count under the title: what is here, where it is kept,
+                        when it last agreed with that folder. The old "On disk"
+                        chip is this line now; Show Bundle in Finder is in the
+                        menu. */}
+                    <span className="max-w-full truncate text-micro leading-[13px] text-muted-foreground">
+                      {subtitle}
+                    </span>
                   </span>
-                </span>
-                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-              </span>
-            }
-            triggerClassName="flex min-w-0 items-center rounded-lg px-2 py-1 transition-colors hover:bg-surface-2"
-            menuClassName="w-64"
-            align="left"
-            items={[
-              ...(notebook
-                ? [
-                    { label: "Notebook", items: verbs, onClick: () => {} },
-                    { label: "", separator: true, onClick: () => {} },
-                  ]
-                : []),
-              ...[...notebooks]
-                .filter((n) => n.status === "")
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-                .slice(0, 12)
-                .map((n) => {
-                  const Icon = notebookIcon(n.icon);
-                  return {
-                    label: n.title,
-                    icon: <Icon className="h-3.5 w-3.5" />,
-                    iconColor: n.color || undefined,
-                    checked: n.id === currentId,
-                    onClick: () => {
-                      if (n.id !== currentId)
-                        void useStore.getState().selectNotebook(n.id);
-                    },
-                  };
-                }),
-              { label: "", separator: true, onClick: () => {} },
-              {
-                label: "All Notebooks…",
-                symbol: "books.vertical",
-                icon: <Library className="h-3.5 w-3.5" />,
-                onClick: close,
-              },
-            ]}
-          />
+                  <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+                </>
+              }
+              triggerClassName="flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-surface-2"
+              menuClassName="w-64"
+              align="left"
+              items={[
+                ...(notebook
+                  ? [
+                      { label: "Notebook", items: verbs, onClick: () => {} },
+                      { label: "", separator: true, onClick: () => {} },
+                    ]
+                  : []),
+                ...[...notebooks]
+                  .filter((n) => n.status === "")
+                  .sort((a, b) => b.updatedAt - a.updatedAt)
+                  .slice(0, 12)
+                  .map((n) => {
+                    const Icon = notebookIcon(n.icon);
+                    return {
+                      label: n.title,
+                      icon: <Icon className="h-3.5 w-3.5" />,
+                      iconColor: n.color || undefined,
+                      checked: n.id === currentId,
+                      onClick: () => {
+                        if (n.id !== currentId)
+                          void useStore.getState().selectNotebook(n.id);
+                      },
+                    };
+                  }),
+                { label: "", separator: true, onClick: () => {} },
+                {
+                  label: "All Notebooks…",
+                  symbol: "books.vertical",
+                  icon: <Library className="h-3.5 w-3.5" />,
+                  onClick: close,
+                },
+              ]}
+            />
+          </div>
         </div>
-        <div className="mx-2">
+
+        {/* The mode tabs sit centered in what the two clusters leave: this
+            column grows into the free space but never shrinks below the
+            track, so at the window's minimum width (1040) it is the title's
+            subtitle that truncates, not a navigation control that clips. */}
+        <div className="flex shrink-0 grow basis-auto justify-center">
           <CenterModeTabs />
         </div>
-        <div className="ml-auto flex items-center gap-1">
+
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Left of the DEV pill in dev builds, and the same slot in
               release builds: one place, in every window, that says a model
               is working. */}
           <InferenceActivity />
           <DevBadge />
           <UpdateBadge />
-          <Button
-            variant="ghost"
-            size="icon"
+          {/* The mock's 200×26 search field, shaped as the door it actually
+              is: the command menu is the app's one search surface (sources,
+              notes, notebooks, commands), so this opens that instead of
+              holding a second query with a second result list. */}
+          <button
+            type="button"
             onClick={() => useStore.getState().setPaletteOpen(true)}
             title="Search & commands (⌘K)"
-            aria-label="Open the command menu"
+            aria-label="Search and commands"
+            className="flex h-[26px] w-[200px] shrink-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
           >
-            <Search className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
+            <Search aria-hidden className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Search</span>
+            <span aria-hidden className="ml-auto shrink-0 text-micro">
+              ⌘K
+            </span>
+          </button>
+          {/* A destination, not a direction: the chevron this button used to
+              carry read as a second Back arrow next to the real one. The
+              Library glyph is the app's one icon for "your notebooks" — the
+              Notebooks tab on Home wears it too. */}
+          {/* No `title`: the button already says "Notebooks", so the tooltip
+              only restated it — and a native tooltip raised from inside a
+              `data-tauri-drag-region` header outlives the drag. Move the
+              window while it is up and macOS leaves it painted at its old
+              screen point, which is how "Your notebooks" ended up floating
+              over the Studio list. */}
+          <button
+            type="button"
+            onClick={close}
+            aria-label="All notebooks"
+            className={CHROME_BUTTON}
+          >
+            <Library className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={onOpenSettings}
             title="Settings"
             aria-label="Open settings"
+            className={CHROME_BUTTON}
           >
             <Settings className="h-4 w-4" />
-          </Button>
+          </button>
+          {/* The inspector toggle sits at the trailing edge, where Finder,
+              Mail and Notes keep theirs, and reads pressed while it is up. */}
+          <button
+            type="button"
+            onClick={toggleStudio}
+            aria-pressed={studioOpen}
+            title={studioOpen ? "Hide studio (⌘2)" : "Show studio (⌘2)"}
+            aria-label={studioOpen ? "Hide studio" : "Show studio"}
+            className={cn(
+              CHROME_BUTTON,
+              studioOpen && "bg-surface-2 text-foreground",
+            )}
+          >
+            <PanelRight className="h-4 w-4" />
+          </button>
         </div>
       </header>
 
@@ -295,7 +363,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 }
 
-/** "written 2 min ago" for the title's subtitle — the same clock the On
+/** "synced 2 min ago" for the title's subtitle — the same clock the On
  *  disk chip kept, in fewer words. */
 function wroteAgo(ms: number): string {
   const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
