@@ -29,10 +29,11 @@ import {
   Zap,
 } from "lucide-react";
 
-/* Home's Steward sidebars (RFC-v12-steward UI §2, as sidebars rather than
- * pages): Staff on the left mirroring the reports feed's side-card idiom,
- * the Brief as the top-right card above Latest Reports. Registry joins when
- * its pillar exists. */
+/* The Steward's surfaces (RFC-v12-steward UI §2). Written as Home's left
+ * and right sidebars; since the Library (docs/RFC-mac-chrome.md, "Home")
+ * they are center sections the Library's sidebar selects, so each one's
+ * collapse control is optional and the notebook workspace still mounts
+ * them as cards. The markup is unchanged either way. */
 
 /** The Brief card: the arrival point. Collapsing it swaps the whole card for
  *  a 48px icon rail, the way Staff and Chats collapse on the other side. */
@@ -42,16 +43,23 @@ export function BriefSidebar({
   schedules,
   unread,
   onRan,
+  bare = false,
   className,
   style,
   resizeHandle,
 }: {
-  onCollapse: () => void;
+  /** Fold the card down to its rail. Absent on the Library, where the
+   *  Brief is a center section chosen from the sidebar rather than a card
+   *  beside it — there is nothing to fold it into. */
+  onCollapse?: () => void;
   /** Report-kind notes from the Briefs notebook, newest first. */
   briefs: Note[];
   schedules: ReportSchedule[];
   unread: boolean;
   onRan: () => void;
+  /** Drop the card frame: on the Library the Brief IS the sheet's content,
+   *  and a rounded card inside the sheet is a box in a box. */
+  bare?: boolean;
   className?: string;
   style?: React.CSSProperties;
   /** The reading column's width handle, rendered on this card's edge. */
@@ -85,7 +93,11 @@ export function BriefSidebar({
 
   return (
     <section
-      className={cn("side-card relative flex min-h-0 flex-col", className)}
+      className={cn(
+        "relative flex min-h-0 flex-col",
+        !bare && "side-card",
+        className,
+      )}
       style={style}
     >
       {resizeHandle}
@@ -119,15 +131,17 @@ export function BriefSidebar({
               )}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onCollapse}
-            title="Collapse the brief"
-            aria-label="Collapse the brief"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-          >
-            <PanelRightClose className="h-4 w-4" />
-          </button>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse the brief"
+              aria-label="Collapse the brief"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -174,7 +188,9 @@ export function StaffSidebar({
   onOpenNotebook: (notebookId: string) => void;
   onOpenEvent: (event: SourceEvent) => void;
   onRan: () => void;
-  onCollapse: () => void;
+  /** Fold the sidebar down to its rail; absent on the Library, where Staff
+   *  is a center section rather than a card beside the shelf. */
+  onCollapse?: () => void;
 }) {
   const pushToast = useStore((s) => s.pushToast);
   const [status, setStatus] = useState<NightShiftStatus | null>(null);
@@ -259,15 +275,17 @@ export function StaffSidebar({
               )}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onCollapse}
-            title="Collapse Staff"
-            aria-label="Collapse the Staff sidebar"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </button>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse Staff"
+              aria-label="Collapse the Staff sidebar"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -535,7 +553,12 @@ export function useNightShiftTone() {
   return nightShiftTone(status);
 }
 
-/** The collapsed rails: one icon that reopens its sidebar. */
+/** The collapsed rails: one icon that reopens its sidebar.
+ *
+ *  Nothing mounts this since the Library: Home has one sidebar with one
+ *  toggle in the toolbar, so there is no pair of stacked cards to fold down
+ *  to an icon. Kept because the shape is the answer if a surface here ever
+ *  becomes a card beside the sheet again. */
 export function SidebarRail({
   icon,
   title,

@@ -35,7 +35,8 @@ it is the paper. Optional **glass mode** (Settings → Appearance: Off, Tinted,
 Clear) makes the window transparent behind macOS Liquid Glass: the toolbar
 and panes go translucent — tinted with the theme's own surface, never
 system gray — the center goes fully transparent, and content cards carry
-their own opaque surfaces. Home keeps its inset `side-card` regions for now.
+their own opaque surfaces. Home wears the same three parts — toolbar, one
+`.side-pane` sidebar, one sheet (§9, "Home is a library").
 
 Empty chat may use the animated dithered "aetheric mist" WebGL background
 (`DitherBackground`) — the app's primary decorative element: behind content,
@@ -382,6 +383,23 @@ What each clause means here:
   text restore on relaunch. Quitting is not losing your place.
 
 When a rule here conflicts with a web idiom, the Mac wins.
+
+**Home is a library.** One toolbar, one 220px sidebar (`.side-pane`), one
+sheet — Photos and Music, not a dashboard. The sidebar is three blocks of
+28px rows (Library, Registry, Tags), each row a place with its count, its
+6px dot, or its `--primary` count badge; the selected row is washed in
+`--selection`. Choosing a row changes what the sheet shows, so every
+surface Home holds — the shelf, the corpus conversation, the Registry, the
+timeline, the night shift's Staff, the Brief, the nightly reports — is a
+section of one center column rather than a card stacked around it. Shared
+and Archived are the same shelf, narrowed. The shelf groups notebooks by
+recency (Today, Last 7 days, Earlier) and draws each as a 212px card whose
+thumb stands in for the notebook: its color, its name in caps, and ruled
+lines whose widths come from its id so the page never shimmers. The sheet's
+footer is one line of what last night's run did, with the Brief a link away.
+The toolbar carries the collection's controls for every section — the
+grid/table switch, the sort pop-up, the filter field — so no section draws
+a second search box (`HomeViewControls`' `chrome="own"`).
 
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar: a filter field over twelve rows, each row a 20px colored icon tile
