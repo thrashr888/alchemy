@@ -17,6 +17,7 @@ import type {
   NoteKind,
   Notebook,
   NotebookPreview,
+  CorpusTag,
   OkfBinding,
   OkfLifecycle,
   ReadingPrefs,
@@ -77,7 +78,8 @@ export interface NavEntry {
   /** The Home conversation that was open, for `section: "chat"`. */
   thread?: string | null;
   /** The Registry card that was open, for `section: "registry"` — a card
-   *  is a page of its own, and back from one returns to the cast. */
+   *  is a page of its own, and back from one returns to the cast. A
+   *  suggestion has no page, so `section: "suggested"` never carries one. */
   card?: string | null;
 }
 
@@ -86,7 +88,13 @@ export interface NavEntry {
  *  be rails or cards around it (docs/RFC-mac-chrome.md, "Home"). */
 export type HomeSection =
   | "notebooks"
+  /** The Registry's accepted cards — the cast, with its own sort and
+   *  filters. Visiting it does NOT clear the Suggested badge: looking at
+   *  who is already cast is not a ruling on who was proposed. */
   | "registry"
+  /** The suggestion queue on its own, accept/dismiss and nothing else. The
+   *  sidebar's badge and `registrySeenAt` belong to this row alone. */
+  | "suggested"
   | "chat"
   | "timeline"
   | "staff"
@@ -191,6 +199,15 @@ export interface AppState {
    *  notebook really is empty, and the card says so. That distinction is why
    *  the backend returns a row for every notebook. */
   notebookPreviews: Record<string, NotebookPreview>;
+  /** The corpus's busiest tags, for the Library sidebar's Tags block. Read
+   *  on the same leash as the previews (`refreshNotebookPreviews`): both are
+   *  corpus rollups, both are only on screen at Home, so they travel
+   *  together rather than on two debounces that could drift apart. */
+  corpusTags: CorpusTag[];
+  /** The tag row the Library's sidebar has selected, or null. A scope on the
+   *  Notebooks shelf, like `homeScope` — narrowing the shelf to the
+   *  notebooks that tag's sources sit in, not a place of its own. */
+  homeTagFilter: string | null;
   currentId: string | null;
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
@@ -414,10 +431,13 @@ export interface AppState {
   init: () => Promise<void>;
   bindGlobalListeners: () => void;
   refreshNotebooks: () => Promise<void>;
-  /** Re-read what every notebook holds. One backend call for the whole
-   *  shelf, and only ever called from Home — inside a notebook the cards
-   *  aren't on screen, so the scan would be work for nobody. */
+  /** Re-read what the Library's shelf draws: what every notebook holds, and
+   *  the corpus's busiest tags. Two backend calls for the whole shelf, and
+   *  only ever called from Home — inside a notebook neither is on screen, so
+   *  the scans would be work for nobody. */
   refreshNotebookPreviews: () => Promise<void>;
+  /** Pick a tag row, or clear it by passing the one already on. */
+  setHomeTagFilter: (tag: string | null) => void;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
   navBack: () => void;

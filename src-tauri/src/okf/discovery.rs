@@ -172,6 +172,7 @@ pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<S
                 source_count: 0,
                 note_count: 0,
                 report_count: 0,
+                built_in: false,
             },
             binding_id: new_id(),
             phase: Phase::Reserved,

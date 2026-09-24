@@ -380,6 +380,10 @@ let notebooksRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // appeared five seconds ago is still news, and an agent importing in a loop
 // must not turn the shelf into a scan storm.
 const PREVIEWS_DEBOUNCE_MS = 5_000;
+/** How many tag rows the Library's sidebar asks for. A block of places, not
+ *  a tag browser — the Sources pane shows five under one list, and a corpus
+ *  can carry far more without the sidebar becoming a second scroller. */
+const TAG_ROWS = 8;
 let previewsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // True while navBack/navForward replays a history entry, so the location
 // subscriber doesn't record the replay as a fresh navigation.
@@ -526,6 +530,10 @@ export const useStore = create<AppState>((rawSet, get) => {
   return {
     notebooks: [],
     notebookPreviews: {},
+    corpusTags: [],
+    // Persisted like homeScope: the sidebar's selection is a place you were,
+    // and relaunching into an unfiltered shelf loses it.
+    homeTagFilter: localStorage.getItem("homeTagFilter") || null,
     currentId: null,
     sources: [],
     selectedSourceIds: null,
@@ -1444,6 +1452,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             [
               "notebooks",
               "registry",
+              "suggested",
               "chat",
               "timeline",
               "staff",
@@ -1540,18 +1549,33 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     refreshNotebookPreviews: async () => {
-      try {
-        const rows = await api.notebookPreviews();
+      // Both rollups, one leash. Asked for together and settled separately:
+      // a Tags block that failed to load must not cost the cards their
+      // contents, and neither is the reason the shelf renders.
+      const [previews, tags] = await Promise.allSettled([
+        api.notebookPreviews(),
+        api.corpusTags(TAG_ROWS),
+      ]);
+      if (previews.status === "fulfilled") {
         set({
           notebookPreviews: Object.fromEntries(
-            rows.map((p) => [p.notebookId, p]),
+            previews.value.map((p) => [p.notebookId, p]),
           ),
         });
-      } catch {
-        // The cards keep whatever they already drew, and an unpreviewed
-        // notebook keeps its ruled lines. Contents are a hint, never the
-        // reason a shelf renders — a failed read must not blank it.
       }
+      // The cards keep whatever they already drew, and an unpreviewed
+      // notebook keeps its ruled lines. Contents are a hint, never the
+      // reason a shelf renders — a failed read must not blank it.
+      if (tags.status === "fulfilled") set({ corpusTags: tags.value });
+    },
+
+    setHomeTagFilter: (tag) => {
+      // Pressing the row that is already on clears it — one control, two
+      // directions, the way every other facet here works.
+      const next = get().homeTagFilter === tag ? null : tag;
+      if (next) localStorage.setItem("homeTagFilter", next);
+      else localStorage.removeItem("homeTagFilter");
+      set({ homeTagFilter: next });
     },
 
     selectNotebook: async (id) => {

@@ -1682,6 +1682,7 @@ async fn insert_notebook(
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     db.create_notebook(&nb).await?;
     for p in prepared {
@@ -1856,6 +1857,7 @@ mod tests {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         db.create_notebook(&nb).await.expect("create notebook");
 

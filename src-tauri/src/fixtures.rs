@@ -147,6 +147,7 @@ async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     })
     .await
     .expect("create fixture notebook");

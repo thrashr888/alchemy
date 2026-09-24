@@ -2,7 +2,7 @@
 //! notebooks, sources, chunks (with vectors), messages, and notes — each its own
 //! Lance table. We filter by `notebook_id` instead of joining.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 mod deletions;
@@ -23,7 +23,7 @@ use lancedb::Connection;
 
 use crate::growth::SuggestedSource;
 use crate::models::{
-    Citation, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
+    Citation, CorpusTag, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
     NotebookPreview, PreviewNote, PreviewSource, RegistryCard, ReportSchedule, RunReceipt, Source,
     SourceEvent,
 };
@@ -667,6 +667,7 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    built_in: false,
                 });
                 idx += 1;
             }
@@ -1212,6 +1213,13 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    // Derived here rather than stored: `seed_notebook` already
+                    // recognizes its own examples by title, so the title is
+                    // the contract (every Mac seeds its copy under a fresh
+                    // random id), and a Lance column on a shared dev/prod
+                    // store is a release-timing hazard for a fact two callers
+                    // read (`examples::STARTER_TITLES`).
+                    built_in: crate::examples::is_starter_title(title.value(i)),
                 });
             }
         }
@@ -1461,6 +1469,7 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    built_in: false,
                 });
             }
         }
@@ -3698,6 +3707,57 @@ impl Db {
         let mut ids: Vec<String> = shelf.into_keys().collect();
         ids.sort();
         Ok(group_notebook_previews(&ids, sources, notes, questions))
+    }
+
+    /// The corpus's busiest tags, for the Library sidebar's third block
+    /// (DESIGN.md §9, docs/RFC-mac-chrome.md "Home").
+    ///
+    /// Tags live on the source (`Source.tags`, space-separated), so a
+    /// corpus-wide list is a rollup. Two projected scans for the whole
+    /// corpus — notebooks for `id`/`status`, sources for `notebook_id`/
+    /// `tags` — never `list_sources` once per notebook, which is the
+    /// DataFusion scan stacking behind the 1000% CPU (docs/ARCHITECTURE.md,
+    /// "Lance scan storms"). `notebook_previews` above is the same shape.
+    ///
+    /// Grouping is `group_corpus_tags`, kept pure so the ordering and the
+    /// cap are testable without a database.
+    pub async fn corpus_tags(&self, limit: usize) -> Result<Vec<CorpusTag>> {
+        let (notebook_batches, source_batches) = tokio::try_join!(
+            self.collect_cols(T_NOTEBOOKS, None, &["id", "status"]),
+            self.collect_cols(T_SOURCES, None, &["notebook_id", "tags"]),
+        )?;
+
+        // Same "active row wins" rule the shelf applies: a double import has
+        // appended a notebook twice, and an id counts as shelf-visible when
+        // any of its rows is active. Archived and "system" (Briefs) never
+        // contribute a tag, because neither is a place the shelf can go.
+        let mut shelf: HashMap<String, bool> = HashMap::new();
+        for b in &notebook_batches {
+            let id = str_col(b, "id")?;
+            let status = str_col(b, "status")?;
+            for i in 0..b.num_rows() {
+                let active = status.value(i).is_empty();
+                let seen = shelf.entry(id.value(i).to_string()).or_insert(false);
+                *seen = *seen || active;
+            }
+        }
+        shelf.retain(|_, active| *active);
+
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for b in &source_batches {
+            let nb = str_col(b, "notebook_id")?;
+            let tags = str_col(b, "tags")?;
+            for i in 0..b.num_rows() {
+                // An untagged source is most of the corpus; skipping it here
+                // keeps the pure half working on the few rows that matter.
+                if tags.value(i).is_empty() || !shelf.contains_key(nb.value(i)) {
+                    continue;
+                }
+                rows.push((nb.value(i).to_string(), tags.value(i).to_string()));
+            }
+        }
+
+        Ok(group_corpus_tags(rows, limit))
     }
 
     /// BM25-only search across every notebook — no embedding round-trip, so
@@ -6221,6 +6281,46 @@ pub(crate) fn group_notebook_previews(
     out
 }
 
+/// Roll `(notebook_id, tags)` rows up into the corpus's busiest tags — the
+/// pure half of `Db::corpus_tags`, where the ordering and the cap live.
+///
+/// A tag string is the same space-separated, already-normalized form
+/// `commands::normalize_tags` writes, so this splits rather than re-parses;
+/// a source that repeats a token still counts once. Busiest first, the tag
+/// itself as the tie-break, so a sidebar of equal counts reads down
+/// alphabetically instead of reshuffling between calls.
+pub(crate) fn group_corpus_tags(rows: Vec<(String, String)>, limit: usize) -> Vec<CorpusTag> {
+    // BTreeMap for both: the outer one gives the alphabetical tie-break for
+    // free, the inner one keeps each tag's notebook ids sorted and deduped.
+    let mut by_tag: BTreeMap<&str, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    for (notebook_id, tags) in &rows {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for tag in tags.split_whitespace() {
+            // One source counts once per tag however often the string
+            // repeats it — the count is "sources wearing this", not tokens.
+            if !seen.insert(tag) {
+                continue;
+            }
+            let entry = by_tag.entry(tag).or_default();
+            entry.0 += 1;
+            entry.1.insert(notebook_id.as_str());
+        }
+    }
+
+    let mut out: Vec<CorpusTag> = by_tag
+        .into_iter()
+        .map(|(tag, (count, notebooks))| CorpusTag {
+            tag: tag.to_string(),
+            count,
+            notebook_ids: notebooks.into_iter().map(str::to_string).collect(),
+        })
+        .collect();
+    // Stable sort over an alphabetical vector: equal counts keep that order.
+    out.sort_by_key(|a| std::cmp::Reverse(a.count));
+    out.truncate(limit);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6476,6 +6576,7 @@ mod tests {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         db.create_notebook(&nb).await.expect("first row");
         assert!(
@@ -7567,6 +7668,49 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
+    }
+
+    /// The whole contract of the sidebar's Tags block in one pass: busiest
+    /// first, ties alphabetical, notebook ids sorted and deduped, a repeated
+    /// token counted once per source, and the cap honored.
+    #[test]
+    fn corpus_tags_group_busiest_first_deduped_and_capped() {
+        let rows = vec![
+            ("nb-1".to_string(), "finance taxes".to_string()),
+            // The same notebook again: `finance` gains a count, not a second
+            // notebook id.
+            ("nb-1".to_string(), "finance".to_string()),
+            ("nb-2".to_string(), "finance rust".to_string()),
+            // A source whose string repeats a token counts once for it.
+            ("nb-2".to_string(), "rust rust".to_string()),
+            // Extra whitespace is not a tag.
+            ("nb-3".to_string(), "  taxes   ".to_string()),
+            ("nb-3".to_string(), "zephyr".to_string()),
+        ];
+
+        let out = group_corpus_tags(rows.clone(), 8);
+        assert_eq!(
+            out.iter()
+                .map(|t| (t.tag.as_str(), t.count))
+                .collect::<Vec<_>>(),
+            [("finance", 3), ("rust", 2), ("taxes", 2), ("zephyr", 1)],
+            "busiest first; equal counts read down alphabetically"
+        );
+        assert_eq!(
+            out[0].notebook_ids,
+            ["nb-1", "nb-2"],
+            "one id per notebook, sorted — not one per source"
+        );
+        assert_eq!(out[1].notebook_ids, ["nb-2"], "a repeat is still one row");
+
+        // The cap takes the busiest, never a prefix of the alphabet.
+        let top = group_corpus_tags(rows, 2);
+        assert_eq!(
+            top.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>(),
+            ["finance", "rust"]
+        );
+
+        assert!(group_corpus_tags(vec![], 8).is_empty());
     }
 
     /// A long question is cut to the cap, ellipsis counted inside it.

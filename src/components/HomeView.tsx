@@ -40,6 +40,7 @@ import {
   strayTypingKey,
 } from "@/lib/utils";
 import { sourceGlyph } from "@/lib/sourceIcon";
+import { tagHue } from "@/lib/sourceGroups";
 import type {
   Note,
   Notebook,
@@ -66,6 +67,7 @@ import {
   Share2,
   Square,
   StickyNote,
+  Users,
 } from "lucide-react";
 import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
 import {
@@ -128,6 +130,50 @@ const NOTEBOOK_SORTS: { key: string; dir: SortDir; label: string }[] = [
   { key: "notes", dir: "desc", label: "Notes" },
   { key: "reports", dir: "desc", label: "Reports" },
 ];
+
+/** What a shared notebook says about who it is shared with.
+ *
+ *  The binding records devices, not people: nothing on disk names an owner,
+ *  because macOS marks a shared item through Foundation resource keys that
+ *  neither `mdls` nor an xattr exposes (docs/RFC-shared-notebook.md §1). So
+ *  one peer is named and more are counted, and a folder nobody else has
+ *  written to yet says only that it is shared.
+ *
+ *  The serial in a device name ("Anne's MacBook (C02ABC)") is there to tell
+ *  two Macs called "MacBook Pro" apart in a record; it is not what anybody
+ *  calls the machine, so it comes off before the name reaches a card. */
+function peerName(device: string): string {
+  return device.replace(/\s*\([^()]*\)\s*$/, "").trim() || device;
+}
+
+function sharedLabel(peers: string[] | undefined): string {
+  const named = (peers ?? []).map(peerName).filter(Boolean);
+  if (named.length === 1) return `Shared with ${named[0]}`;
+  if (named.length > 1) return `Shared with ${named.length} devices`;
+  return "Shared";
+}
+
+/** The two-person mark on a shared notebook, wherever the shelf names one.
+ *
+ *  Monochrome and 12px on purpose: "shared" is a fact about where the
+ *  notebook lives, not a state asking to be acted on, and DESIGN.md spends
+ *  color only where it means something. `shrink-0` so a long title truncates
+ *  before the mark does — the name can survive being cut, the mark cannot. */
+function SharedMark({ label }: { label: string }) {
+  // The span carries the tooltip and the name: a lucide icon takes neither
+  // a `title` child nor a `title` prop, so hanging them on the glyph itself
+  // gives a mark nothing can read and nothing can hover.
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className="flex shrink-0 items-center text-muted-foreground"
+    >
+      <Users className="h-3 w-3" aria-hidden />
+    </span>
+  );
+}
 
 /** Order the shelf's rows. Every column breaks its ties on the title, so a
  *  column of equal counts still reads down alphabetically instead of
@@ -199,7 +245,9 @@ function thumbLines(id: string): number[] {
  *  down columns instead of across cards. */
 function NotebookTable({
   notebooks,
+  builtIns,
   unreadByNb,
+  sharedLabelOf,
   rowMenu,
   pickedIds,
   onRowClick,
@@ -208,7 +256,14 @@ function NotebookTable({
   onSort,
 }: {
   notebooks: Notebook[];
+  /** The notebooks Alchemy ships, gathered under their own caps row at the
+   *  foot of the same table. A second `<table>` would be a second set of
+   *  column widths beside the first; a group row keeps one grid. */
+  builtIns: Notebook[];
   unreadByNb: Map<string, number>;
+  /** "Shared with Anne's MacBook", or null when the notebook is not shared
+   *  — the same string the card's meta line and its mark carry. */
+  sharedLabelOf: (nb: Notebook) => string | null;
   /** Per-row menu, so the table has the same verbs (and the same
    *  right-click) as the cards — it had neither. */
   rowMenu: (nb: Notebook) => React.ReactNode;
@@ -222,71 +277,93 @@ function NotebookTable({
   sort: TableSort;
   onSort: (key: string, natural: SortDir) => void;
 }) {
+  const row = (nb: Notebook) => {
+    const shared = sharedLabelOf(nb);
+    return (
+      <tr
+        key={nb.id}
+        data-pick-id={nb.id}
+        tabIndex={0}
+        onClick={(e) => onRowClick(e, nb)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && e.target === e.currentTarget) {
+            e.preventDefault();
+            onRowOpen(nb);
+          }
+        }}
+        className={cn(
+          "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
+          pickedIds.has(nb.id) && "bg-primary/10 hover:bg-primary/15",
+        )}
+      >
+        <td className="relative px-3 py-2">
+          <span className="flex items-center gap-2">
+            {(() => {
+              const Icon = notebookIcon(nb.icon);
+              return (
+                <Icon
+                  className="h-3.5 w-3.5 shrink-0"
+                  style={{ color: nb.color || NOTEBOOK_PALETTE[0] }}
+                  aria-hidden
+                />
+              );
+            })()}
+            <span className="truncate font-medium">{nb.title}</span>
+            {shared && <SharedMark label={shared} />}
+            {(unreadByNb.get(nb.id) ?? 0) > 0 && (
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                title={`${unreadByNb.get(nb.id)} unread`}
+              />
+            )}
+          </span>
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+          {nb.sourceCount}
+        </td>
+        {/* Zero reads as nothing: a column of 0s is noise, and the eye
+            should land on the notebooks that actually have material. */}
+        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+          {nb.noteCount || ""}
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+          {nb.reportCount || ""}
+        </td>
+        <td className="px-3 py-2 text-caption text-muted-foreground">
+          {relativeTime(nb.updatedAt)}
+        </td>
+        {/* The menu column: right-clicking the row opens the same menu
+            (RowMenu binds to the nearest .group), which the table had no
+            way to offer before. */}
+        <td
+          className="w-8 px-1 py-2 text-right"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {rowMenu(nb)}
+        </td>
+      </tr>
+    );
+  };
+
   return (
     <HomeTable columns={[...NOTEBOOK_COLUMNS]} sort={{ ...sort, onSort }}>
-      {notebooks.map((nb) => (
-        <tr
-          key={nb.id}
-          data-pick-id={nb.id}
-          tabIndex={0}
-          onClick={(e) => onRowClick(e, nb)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && e.target === e.currentTarget) {
-              e.preventDefault();
-              onRowOpen(nb);
-            }
-          }}
-          className={cn(
-            "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
-            pickedIds.has(nb.id) && "bg-primary/10 hover:bg-primary/15",
-          )}
-        >
-          <td className="relative px-3 py-2">
-            <span className="flex items-center gap-2">
-              {(() => {
-                const Icon = notebookIcon(nb.icon);
-                return (
-                  <Icon
-                    className="h-3.5 w-3.5 shrink-0"
-                    style={{ color: nb.color || NOTEBOOK_PALETTE[0] }}
-                    aria-hidden
-                  />
-                );
-              })()}
-              <span className="truncate font-medium">{nb.title}</span>
-              {(unreadByNb.get(nb.id) ?? 0) > 0 && (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
-                  title={`${unreadByNb.get(nb.id)} unread`}
-                />
-              )}
-            </span>
-          </td>
-          <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-            {nb.sourceCount}
-          </td>
-          {/* Zero reads as nothing: a column of 0s is noise, and the eye
-              should land on the notebooks that actually have material. */}
-          <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-            {nb.noteCount || ""}
-          </td>
-          <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-            {nb.reportCount || ""}
-          </td>
-          <td className="px-3 py-2 text-caption text-muted-foreground">
-            {relativeTime(nb.updatedAt)}
-          </td>
-          {/* The menu column: right-clicking the row opens the same menu
-              (RowMenu binds to the nearest .group), which the table had no
-              way to offer before. */}
-          <td
-            className="w-8 px-1 py-2 text-right"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {rowMenu(nb)}
-          </td>
-        </tr>
-      ))}
+      {notebooks.map(row)}
+      {builtIns.length > 0 && (
+        <>
+          {/* The same caps label the grid draws over its Built in shelf,
+              carried across the table's full width so the group reads as a
+              section rather than as more rows. */}
+          <tr>
+            <td
+              colSpan={NOTEBOOK_COLUMNS.length}
+              className={cn(CAPS, "px-3 pb-1.5 pt-5")}
+            >
+              Built in
+            </td>
+          </tr>
+          {builtIns.map(row)}
+        </>
+      )}
     </HomeTable>
   );
 }
@@ -358,6 +435,52 @@ function LibraryRow({
   );
 }
 
+/** One tag in the Library's sidebar. The same 28px row as everywhere else in
+ *  that sidebar, with the dot in the tag's place: tags carry no color in the
+ *  model, so it is a stable hash over the app's one categorical palette
+ *  (`tagHue`, src/lib/sourceGroups.ts) — the same dot the Sources pane
+ *  draws for the same tag, in every theme. */
+function TagRow({
+  tag,
+  count,
+  selected,
+  onClick,
+}: {
+  tag: string;
+  count: number;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={
+        selected
+          ? `Showing notebooks tagged #${tag} — click to clear`
+          : `Show notebooks tagged #${tag}`
+      }
+      aria-pressed={selected}
+      className={cn(
+        ROW,
+        selected
+          ? "bg-[var(--selection)] font-medium text-foreground"
+          : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className="h-2 w-2 shrink-0 rounded-full"
+        style={{ background: tagHue(tag) }}
+      />
+      <span className="min-w-0 flex-1 truncate">{tag}</span>
+      <span className="shrink-0 text-micro tabular-nums text-subtle-foreground">
+        {count}
+      </span>
+    </button>
+  );
+}
+
 function SidebarBlock({
   title,
   children,
@@ -417,7 +540,9 @@ function NotebookCard({
   nb: Notebook;
   preview: NotebookPreview | undefined;
   unread: number;
-  shared: boolean;
+  /** "Shared with Anne's MacBook", "Shared with 2 devices", "Shared" — or
+   *  null when this notebook is not shared with anyone. */
+  shared: string | null;
   picked: boolean;
   onOpen: (e: React.MouseEvent) => void;
   menu: React.ReactNode;
@@ -467,10 +592,10 @@ function NotebookCard({
           }
         : null;
   const metaTail = [
-    // Whose share it is would read better than "Shared", but the binding
-    // only records THAT a folder is shared, never with whom — no peer name
-    // reaches the front end yet (docs/RFC-shared-notebook.md).
-    shared && "Shared",
+    // The mark beside the name already says "shared", so the meta line only
+    // spends a word on it when it has something the mark cannot carry —
+    // who. "Shared" alone would be the icon said twice.
+    shared && shared !== "Shared" && shared,
     relativeTime(nb.updatedAt),
   ].filter(Boolean) as string[];
   const counts = [
@@ -556,6 +681,7 @@ function NotebookCard({
           <span className="truncate text-body font-semibold text-foreground">
             {nb.title}
           </span>
+          {shared && <SharedMark label={shared} />}
           {unread > 0 && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
@@ -593,6 +719,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
   const registryCounts = useStore((s) => s.registryCounts);
+  const corpusTags = useStore((s) => s.corpusTags);
+  const homeTagFilter = useStore((s) => s.homeTagFilter);
+  const setHomeTagFilter = useStore((s) => s.setHomeTagFilter);
   const theme = useStore((s) => s.theme);
   const homeSection = useStore((s) => s.homeSection);
   const homeView = useStore((s) => s.homeView);
@@ -646,7 +775,35 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const okfBindings = useStore((s) => s.okfBindings);
   const okfBinding = useStore((s) => s.okfBinding);
   const isShared = (id: string) => !!okfBindings[id]?.shared;
+  /** What this notebook says about who it is shared with, or null. */
+  const sharedOf = (nb: Notebook) =>
+    isShared(nb.id) ? sharedLabel(okfBindings[nb.id]?.peers) : null;
+  // Shared is a scope on the shelf, not a shelf of its own: a collaborative
+  // notebook is still one of your notebooks, so it stays in the main list
+  // and this narrows to it rather than moving it out.
   const sharedNotebooks = activeNotebooks.filter((n) => isShared(n.id));
+
+  // A tag row narrows the shelf to the notebooks that tag's sources sit in.
+  // The ids travel with the tag (`corpus_tags`), so this costs no call — and
+  // a tag that has gone (its last source retagged) narrows to nothing rather
+  // than silently showing everything, which would read as a broken filter.
+  const activeTag = homeTagFilter
+    ? (corpusTags.find((t) => t.tag === homeTagFilter) ?? {
+        tag: homeTagFilter,
+        count: 0,
+        notebookIds: [] as string[],
+      })
+    : null;
+  /** The rows the Tags block draws: the corpus's busiest, plus the one that
+   *  is on if the top eight no longer hold it. DESIGN.md's rule for the
+   *  Sources pane, and for the same reason — a filter that is running must
+   *  stay visible so it can always be switched off. The selection survives a
+   *  relaunch, so without this a tag whose last source was retagged would
+   *  leave the shelf empty with nothing on screen to clear. */
+  const tagRows =
+    activeTag && !corpusTags.some((t) => t.tag === activeTag.tag)
+      ? [...corpusTags, activeTag]
+      : corpusTags;
 
   const scoped =
     scope === "archived"
@@ -654,9 +811,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       : scope === "shared"
         ? sharedNotebooks
         : activeNotebooks;
-  // The toolbar's filter narrows whichever scope is on screen.
-  const filteredNotebooks = scoped.filter((n) =>
-    matchesHomeQuery(homeQuery, n.title),
+  // The toolbar's filter narrows whichever scope is on screen; the tag row
+  // narrows it further, because both are the same question asked two ways.
+  const filteredNotebooks = scoped.filter(
+    (n) =>
+      matchesHomeQuery(homeQuery, n.title) &&
+      (!activeTag || activeTag.notebookIds.includes(n.id)),
   );
   const { sort: nbSort, toggle: toggleNbSort } = useTableSort(
     "homeTableSort",
@@ -666,6 +826,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // One order for both shapes: the grid's recency groups decide which shelf
   // a notebook sits on, the sort decides the order within it.
   const shownNotebooks = sortNotebooks(filteredNotebooks, nbSort);
+  // The notebooks Alchemy ships leave the recency groups and gather at the
+  // foot of the shelf. They are real notebooks — same card, same verbs — but
+  // they arrived with the app rather than from your work, and mixing them
+  // into "Today" makes the shelf answer the wrong question. Archived keeps
+  // its own rows, so the split is for the shelf proper.
+  const isBuiltIn = (nb: Notebook) => !!nb.builtIn && scope !== "archived";
+  const ownNotebooks = shownNotebooks.filter((nb) => !isBuiltIn(nb));
+  const builtInNotebooks = shownNotebooks.filter(isBuiltIn);
   const sortLabel =
     NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ??
     "Recently updated";
@@ -687,7 +855,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   useEffect(() => {
     if (homeSection === "chat" && chatUnread)
       useStore.setState({ homeChatUnread: false });
-    if (homeSection === "registry") useStore.getState().markRegistrySeen();
+    // The badge counts proposals waiting on an answer, so only the queue
+    // clears it: looking at who is already cast is not a ruling on who was
+    // proposed, and visiting Cards used to silence the badge anyway.
+    if (homeSection === "suggested") useStore.getState().markRegistrySeen();
   }, [homeSection, chatUnread, registrySignal]);
   // What the cards draw, asked for when the shelf comes on screen. Four
   // corpus scans is not something to run from a notebook or from the Brief,
@@ -742,7 +913,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   // ---- Shelf selection (docs/RFC-multi-select.md) ----------------------
-  const pick = usePickList("notebooks", shownNotebooks.map((n) => n.id));
+  // In render order, not sort order: shift-click selects the range you see,
+  // and the built-ins sit at the foot of the shelf whatever the sort says.
+  const pick = usePickList(
+    "notebooks",
+    [...ownNotebooks, ...builtInNotebooks].map((n) => n.id),
+  );
   const titleOf = (id: string) =>
     notebooks.find((n) => n.id === id)?.title ?? "Untitled";
 
@@ -1064,7 +1240,19 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const shelfSummary = () => {
     if (scope === "archived")
       return `${archivedNotebooks.length} archived · data intact`;
-    const n = scope === "shared" ? sharedNotebooks.length : activeNotebooks.length;
+    // While a tag is on, the line counts what the tag narrowed to and names
+    // it — the heading is where a filter says it is running, so the shelf
+    // never looks mysteriously short. The corpus totals are about the whole
+    // corpus, so they stand down rather than describe a subset.
+    if (activeTag) {
+      const n = filteredNotebooks.length;
+      return `${n} ${n === 1 ? "notebook" : "notebooks"} · #${activeTag.tag}`;
+    }
+    // Built-ins are not counted as yours — they are the shelf's own section
+    // with its own count, and "22 active" meaning "16 of them mine" was the
+    // number quietly disagreeing with the shelf.
+    const own = activeNotebooks.filter((n) => !n.builtIn).length;
+    const n = scope === "shared" ? sharedNotebooks.length : own;
     const head = scope === "shared" ? `${n} shared` : `${n} active`;
     if (!stats) return `${head} · most recently used first`;
     return [
@@ -1101,6 +1289,15 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             New card
           </Button>
         ),
+      };
+    if (homeSection === "suggested")
+      return {
+        title: "Suggested",
+        summary:
+          (registrySignal?.shown ?? 0) > 0
+            ? `${registrySignal!.shown} waiting for a yes or no`
+            : "Cards Alchemy proposed as it read your notebooks.",
+        actions: null,
       };
     if (homeSection === "timeline")
       return {
@@ -1214,10 +1411,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         archivedRows
       ) : homeView === "table" ? (
         <NotebookTable
-          notebooks={shownNotebooks}
+          notebooks={ownNotebooks}
+          builtIns={builtInNotebooks}
           sort={nbSort}
           onSort={toggleNbSort}
           unreadByNb={unreadByNb}
+          sharedLabelOf={sharedOf}
           pickedIds={pick.pickedIds}
           onRowClick={(e, nb) => {
             if (justEnded()) return;
@@ -1228,7 +1427,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         />
       ) : (
         <div className="flex flex-col gap-[18px]">
-          {recencyGroups(shownNotebooks).map((group) => (
+          {[
+            ...recencyGroups(ownNotebooks),
+            // After Earlier, and last whatever the sort says: the shipped
+            // notebooks are a shelf of their own, with their own count.
+            ...(builtInNotebooks.length > 0
+              ? [{ label: "Built in", rows: builtInNotebooks }]
+              : []),
+          ].map((group) => (
             <section key={group.label}>
               <div className={cn(CAPS, "pb-2.5")}>{group.label}</div>
               <div className="flex flex-wrap gap-5">
@@ -1238,7 +1444,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                     nb={nb}
                     preview={notebookPreviews[nb.id]}
                     unread={unreadByNb.get(nb.id) ?? 0}
-                    shared={isShared(nb.id)}
+                    shared={sharedOf(nb)}
                     picked={pick.pickedIds.has(nb.id)}
                     onOpen={(e) => {
                       if (justEnded()) return;
@@ -1256,7 +1462,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <p className="py-8 text-center text-body text-muted-foreground">
           {homeQuery.trim()
             ? `No notebook matches “${homeQuery.trim()}”.`
-            : scope === "shared"
+            : activeTag
+              ? `Nothing is tagged #${activeTag.tag} any more.`
+              : scope === "shared"
               ? "No notebook is shared yet. Share one from its own menu."
               : scope === "archived"
                 ? "Nothing archived."
@@ -1284,7 +1492,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         </div>
       );
-    if (homeSection === "registry") return <RegistrySection />;
+    if (homeSection === "registry") return <RegistrySection view="cards" />;
+    if (homeSection === "suggested")
+      return <RegistrySection view="suggested" />;
     if (homeSection === "timeline") return <TimelineSection />;
     if (homeSection === "staff")
       return (
@@ -1713,17 +1923,38 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   // the volume changes.
                   count={registrySignal?.shown ?? 0}
                   badge={suggestedCount || undefined}
-                  selected={false}
+                  selected={homeSection === "suggested"}
                   title="Cards waiting for a yes or no"
-                  onClick={() => goSection("registry")}
+                  onClick={() => goSection("suggested")}
                 />
               </SidebarBlock>
 
-              {/* Tags belong here (RFC-mac-chrome "Home") and are not built:
-                  tags are a per-source field, so a corpus-wide tag list means
-                  either a backend rollup or reading every notebook's sources
-                  on every render — the scan-storm lesson. The block appears
-                  when a corpus tag count exists. */}
+              {/* The third block (RFC-mac-chrome "Home"). Tags are a
+                  per-source field, so a corpus-wide list is a rollup — one
+                  projected scan in Rust (`corpus_tags`) on the same leash as
+                  the cards' contents, never a read of every notebook's
+                  sources on every render (the scan-storm lesson). The block
+                  is absent until something is tagged, rather than standing
+                  there empty. */}
+              {tagRows.length > 0 && (
+                <SidebarBlock title="Tags">
+                  {tagRows.map((t) => (
+                    <TagRow
+                      key={t.tag}
+                      tag={t.tag}
+                      count={t.count}
+                      selected={homeTagFilter === t.tag}
+                      onClick={() => {
+                        // A tag narrows the shelf, so choosing one goes to
+                        // the shelf — from the Registry or the Brief it
+                        // would otherwise filter a page you cannot see.
+                        setHomeTagFilter(t.tag);
+                        if (homeSection !== "notebooks") goShelf("all");
+                      }}
+                    />
+                  ))}
+                </SidebarBlock>
+              )}
             </nav>
           )}
 

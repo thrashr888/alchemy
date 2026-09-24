@@ -1217,6 +1217,7 @@ async fn eval_router() {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         })
         .await
         .expect("create notebook");
@@ -3187,6 +3188,7 @@ async fn eval_outline_escalation() {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     })
     .await
     .expect("create notebook");
@@ -3270,6 +3272,7 @@ async fn eval_section_gists_model() {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     })
     .await
     .expect("create notebook");

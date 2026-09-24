@@ -43,7 +43,7 @@ import {
   type SourceKind,
 } from "@/lib/sourceFacets";
 import { CloudMark } from "./CloudMarks";
-import { GROUP_COLOR } from "@/lib/sourceGroups";
+import { tagHue } from "@/lib/sourceGroups";
 import { CHROME_BUTTON } from "./SidebarRails";
 import {
   HYGIENE_LABEL,
@@ -84,17 +84,6 @@ const SCALE_TARGET_CHARS = 10_000_000;
 // range; past this the bar appears, because that is the only point at which
 // "where you are" is worth a picture.
 const SCALE_BAR_FROM_PCT = 80;
-
-/** Tags carry no color in the model (`Source.tags` is a string), so the dot
- *  beside one is a stable hash over the app's one categorical palette —
- *  stated once in src/lib/sourceGroups.ts, never a fresh hex in a
- *  component. Same tag, same dot, in every theme. */
-const TAG_HUES = Object.values(GROUP_COLOR);
-function tagHue(tag: string): string {
-  let h = 0;
-  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) | 0;
-  return TAG_HUES[Math.abs(h) % TAG_HUES.length];
-}
 
 // Folder tree open/closed state persists across restarts, keyed by folder
 // source id (only ids the user has explicitly toggled are stored; unseen

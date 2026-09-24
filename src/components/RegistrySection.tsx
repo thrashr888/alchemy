@@ -250,10 +250,18 @@ function receipt(a: CardAttachment) {
   return `matched ${a.matched}`;
 }
 
-export function RegistrySection() {
+/** The Registry has two surfaces, and the sidebar has always had two rows
+ *  for them. `cards` is the cast — the accepted cards, with the sort and
+ *  filters that belong to a collection. `suggested` is the queue: proposals
+ *  waiting for a yes or a no, and nothing else on the page, because a
+ *  ruling is the only thing to do there. */
+export type RegistryView = "cards" | "suggested";
+
+export function RegistrySection({ view = "cards" }: { view?: RegistryView }) {
   const registryBump = useStore((s) => s.registryBump);
   const openCardId = useStore((s) => s.openCardId);
-  const view = useStore((s) => s.homeView);
+  /** Grid or table — the toolbar's shape switch, not the section's view. */
+  const shape = useStore((s) => s.homeView);
   const query = useStore((s) => s.homeQuery);
   const [cards, setCards] = useState<RegistryCard[]>([]);
   const [kind, setKind] = useState<string>("all");
@@ -369,10 +377,10 @@ export function RegistrySection() {
       }
       return true;
     });
-    return view === "table"
+    return shape === "table"
       ? sortCardRows(filtered, tableSort)
       : sortCards(filtered, sort);
-  }, [mine, kind, notebook, nbTitle, query, sort, tableSort, view]);
+  }, [mine, kind, notebook, nbTitle, query, sort, tableSort, shape]);
 
   // ---- Index selection (docs/RFC-multi-select.md) ----------------------
   const pick = usePickList("cards", shown.map((c) => c.id));
@@ -465,6 +473,43 @@ export function RegistrySection() {
     }
   };
 
+  // The queue on its own. No sort, no filters, no grid: every control on
+  // the cards page is for navigating a collection, and a proposal is not
+  // part of the collection until it is ruled on. A suggestion has no page
+  // of its own either, so the detail branch below is the cards view's.
+  if (view === "suggested") {
+    return (
+      <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
+          {suggested.length > 0 ? (
+            <SuggestionStrip
+              bare
+              cards={suggested}
+              waiting={waiting}
+              onChanged={load}
+            />
+          ) : (
+            <EmptyState
+              icon={<Sparkles className="h-5 w-5" />}
+              title="Nothing suggested"
+              hint="Alchemy proposes cards as it reads your notebooks. Ask for a pass now, or let the night shift do it."
+            >
+              <Button
+                variant="primary"
+                className="mt-3"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+              >
+                <Sparkles className="h-4 w-4" />
+                Suggest
+              </Button>
+            </EmptyState>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const open = cards.find((c) => c.id === openCardId) ?? null;
   if (openCardId && open) {
     return (
@@ -517,7 +562,7 @@ export function RegistrySection() {
             // only what is the Registry's own.
             chrome="own"
             sort={
-              view === "table"
+              shape === "table"
                 ? undefined
                 : { value: sort, options: SORTS, onChange: changeSort }
             }
@@ -587,7 +632,7 @@ export function RegistrySection() {
                 New card
               </Button>
             </EmptyState>
-          ) : view === "table" ? (
+          ) : shape === "table" ? (
             <CardTable
               cards={shown}
               nbTitle={nbTitle}
@@ -1062,12 +1107,17 @@ function SuggestionStrip({
   cards,
   waiting,
   onChanged,
+  bare,
 }: {
   /** The surfaced suggestions — the backend's pick of the likeliest keeps. */
   cards: RegistryCard[];
   /** How many more wait unseen for a slot. */
   waiting: number;
   onChanged: () => void;
+  /** On its own page the section heading already says "Suggested"; the caps
+   *  label and the margin under it are for the cards page, where the strip
+   *  sits above a grid and has to name itself. */
+  bare?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
@@ -1126,11 +1176,13 @@ function SuggestionStrip({
   };
 
   return (
-    <section className="mb-6">
+    <section className={bare ? undefined : "mb-6"}>
       <div className="flex items-center gap-2">
-        <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
-          Suggested
-        </h2>
+        {!bare && (
+          <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+            Suggested
+          </h2>
+        )}
         {/* A sweep verdict only earns its place once ruling one-by-one is a
             chore; a single suggestion keeps the single pair of buttons. */}
         {cards.length > 1 && (
