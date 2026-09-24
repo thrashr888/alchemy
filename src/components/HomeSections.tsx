@@ -42,6 +42,7 @@ export function BriefSidebar({
   briefs,
   schedules,
   unread,
+  lastNight,
   onRan,
   bare = false,
   className,
@@ -56,6 +57,10 @@ export function BriefSidebar({
   briefs: Note[];
   schedules: ReportSchedule[];
   unread: boolean;
+  /** What the night shift did, one line — the sidebar's Brief row wears the
+   *  same string as its tooltip; here it is the quiet second line under the
+   *  header, since the Library's footer no longer carries it (DESIGN.md §9). */
+  lastNight?: string;
   onRan: () => void;
   /** Drop the card frame: on the Library the Brief IS the sheet's content,
    *  and a rounded card inside the sheet is a box in a box. */
@@ -103,17 +108,29 @@ export function BriefSidebar({
       {resizeHandle}
       {/* Run and collapse both persist. Running the brief by hand is the
           card's one verb — a brief you can only run by finding the button
-          under the pointer is a brief you re-run by waiting for tomorrow. */}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
-        {/* The same icon the collapsed rail shows, so folding a card down
-            and back doesn't change what it is called. Staff and Chats on the
-            left already read this way; the right pair now matches. */}
-        <Sun className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Brief
-        </span>
-        {unread && (
-          <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="New brief" />
+          under the pointer is a brief you re-run by waiting for tomorrow.
+          Bare (the Library): the "Brief" title and the unread dot live in
+          the sidebar row and the outer heading now, so this row keeps only
+          what a title can't say — the run verb. */}
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border px-6",
+          bare ? "h-9" : "h-12",
+        )}
+      >
+        {!bare && (
+          <>
+            {/* The same icon the collapsed rail shows, so folding a card down
+                and back doesn't change what it is called. Staff and Chats on
+                the left already read this way; the right pair now matches. */}
+            <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              Brief
+            </span>
+            {unread && (
+              <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="New brief" />
+            )}
+          </>
         )}
         <div className="ml-auto flex items-center gap-1">
           {briefSchedule && (
@@ -145,6 +162,12 @@ export function BriefSidebar({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        {/* The quiet second line the footer used to carry: what last night's
+            run did, so the section that explains it is the section that
+            says it (DESIGN.md §9). */}
+        {bare && lastNight && (
+          <p className="mb-3 text-caption text-subtle-foreground">{lastNight}</p>
+        )}
         {!brief ? (
           <p className="text-caption text-subtle-foreground">
             No brief yet. It runs each morning; press play above to run it now.
@@ -177,6 +200,7 @@ export function StaffSidebar({
   onOpenEvent,
   onRan,
   onCollapse,
+  bare = false,
 }: {
   schedules: ReportSchedule[];
   reports: Note[];
@@ -191,6 +215,10 @@ export function StaffSidebar({
   /** Fold the sidebar down to its rail; absent on the Library, where Staff
    *  is a center section rather than a card beside the shelf. */
   onCollapse?: () => void;
+  /** Drop the "Staff" title: the Library's own heading row already carries
+   *  it (DESIGN.md §9), so the section's own header keeps only the status
+   *  dot and the pause verb — the parts a title can't say. */
+  bare?: boolean;
 }) {
   const pushToast = useStore((s) => s.pushToast);
   const [status, setStatus] = useState<NightShiftStatus | null>(null);
@@ -253,11 +281,20 @@ export function StaffSidebar({
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <Moon className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Staff
-        </span>
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border px-4",
+          bare ? "h-9" : "h-12",
+        )}
+      >
+        {!bare && (
+          <>
+            <Moon className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              Staff
+            </span>
+          </>
+        )}
         <span className={cn("h-1.5 w-1.5 rounded-full", dot)} title={statusLabel} />
         <div className="ml-auto flex items-center gap-1">
           {status?.backgroundEnabled && (

@@ -156,19 +156,30 @@ surface-2, inset hairline, 12px, `Instructions for the next generation…`.
 
 ### Home
 
-Sidebar 220px, padding 10, gap 14: Library (Notebooks with count, Chats
-with a 6px primary dot when unread, Shared, Nightly Reports, Archived),
-Registry (Cards with count, Suggested with a primary count badge 11px/600
-radius 9 padding 1px 6px), Tags (dots). Main: padding 22px 28px, gap 18;
-h1 26px/700 tracking -.01em with `22 active · 3,760 sources` 13px muted
-on the baseline; sections by recency (Today, Last 7 days, Earlier) with
-caps and 10px below; cards 212 wide, 20px apart, gap 10 inside: thumb
-140px high radius 10 surface with a strong inset hairline and padding 14
-(a 10px color dot + 10px caps name, then 6px rounded lines), name
-13px/600, meta 12px muted (`7 sources · 7 notes · 2 min ago`). Footer
-pinned bottom: hairline above, padding-top 12, 12px muted `Last night: 2
-reports written, 14 sources refreshed, 1 duplicate set aside.` with
-"Read the Brief" as a link on the right.
+Sidebar 220px, padding 10, gap 14. The Brief sits first, above everything
+else and with no caps label of its own — 28px row, `px-2 rounded-md gap-2
+text-body`, icon + "Brief" + a 6px primary dot when last night's run is
+unread, selected wash `bg-[var(--selection)]` like every other row — then
+Library (Notebooks with count, Chats with a 6px primary dot when unread,
+Shared, Nightly Reports, Archived, Staff), Registry (Cards with count,
+Suggested with a primary count badge 11px/600 radius 9 padding 1px 6px),
+Tags (dots). Main: padding 22px 28px, gap 18; heading row is the h1 alone
+(26px/700 tracking -.01em) plus, on Notebooks only, the "Since you were
+away" line below it — every other section's trailing controls (Registry's
+sort/suggest, Reports' Mark all read) sit beside the h1 instead of a second
+line. Sections by recency (Today, Last 7 days, Earlier) with caps and 10px
+below; cards 212 wide, 20px apart, gap 6 between thumb and caption (not 10):
+thumb 140px high radius 10 surface with a strong inset hairline and padding
+14 (a 10px color dot + 10px caps name, then 6px rounded lines); caption
+inset `px-1` so the 13px/600 name lines up with the thumb's rounded edge,
+meta 12px muted (`7 sources · 7 notes · 2 min ago`) below it. Footer is a
+Finder-style status bar on every section, not just the shelf: hairline
+above, padding-top 12, one centered 12px muted line of what the section on
+screen holds — `18 notebooks · 4,067 sources · 620 notes` (narrowed to
+`12 notebooks · #finance` under a tag), `4 conversations`, `13 reports · 2
+unread`, `224 cards`, `10 waiting`. The Brief carries nothing here: what
+last night's run did is the Brief row's tooltip and a quiet second line
+inside the Brief section, not the footer's job any more.
 
 **Thumb contents.** The canvas drew the thumb's body as rounded bars; built,
 those bars are only the skeleton, and the body is the notebook's real
@@ -186,22 +197,37 @@ title — then `· Shared · 2 min ago`; the counts move to the card's `title`
 tooltip (`7 sources · 29 notes`) and stay as they were in the table.
 
 **Every row has a menu item and a key.** The View menu's Home group is the
-sidebar, one item per row in sidebar order — Notebooks, Chats, Shared,
-Nightly Reports, Archived, Staff, then Registry Cards and Suggested, then
-the Brief and the Timeline — and ⌘1–⌘9 run down the first nine. The items
-carry no native accelerator, because a key equivalent is global to the
+sidebar, one item per row in menu order — Notebooks, Chats, Shared, Nightly
+Reports, Archived, Staff, then Registry Cards and Suggested, then the Brief
+and the Timeline — and ⌘1–⌘9 run down the first nine. The Brief's key stays
+⌘9 even though the Brief now sits first in the sidebar: a key equivalent is
+muscle memory, not a position, so moving the row didn't move its digit. The
+items carry no native accelerator, because a key equivalent is global to the
 process and the same digits mean a notebook's panels inside one; the
 frontend reads the view and dispatches, and `set_menu_context` greys out
 whichever group is not on screen. One table on each side
-(`menu.rs`'s registry, `src/lib/homeNav.ts`) so the sidebar, the menu and
-the keys cannot drift, and all three land through `goHomePlace` — which
-leaves an open notebook first and records the pair as one history entry.
+(`menu.rs`'s registry, `src/lib/homeNav.ts`) so the menu and the keys cannot
+drift from each row's identity, and all three land through `goHomePlace` —
+which leaves an open notebook first and records the pair as one history
+entry.
 
 **A place on Home is restorable.** Back and forward carry the shelf's scope
 and its tag row along with the section, so opening a notebook from a shelf
 filtered to `invoices` and pressing Back returns to that filtered shelf.
 Grid versus table stays out: that is how the shelf is drawn, not where the
 user is.
+
+**Registry Cards flows like the shelf.** No `mx-auto max-w-[960px]` column:
+the same `px-7`, 18px-between-blocks padding as Notebooks, cards in a
+wrapping grid that uses the full width. Its own sort menu and the
+suggest/orphan-cleanup verbs report into the heading row's trailing slot —
+the same slot Notebooks' Add source/Import occupy — through a portal node
+`HomeView` holds there, rather than drawing a second toolbar inside the
+section. Suggestion remnants (Keep all/Dismiss all, the "N waiting" banner,
+inline suggestion rows) render only on the Suggested queue now; Cards shows
+cast members and nothing else. Suggested keeps its own narrower width — it
+reads as a queue to rule on, not a collection to browse — but matches
+Cards' `px-7` side padding for consistency.
 
 ### Settings
 

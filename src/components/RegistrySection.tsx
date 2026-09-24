@@ -9,6 +9,7 @@
    files without showing its reason is one you stop trusting on the first
    mistake. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import { restoreRegistryCards } from "@/lib/registryRestore";
 import { useStore } from "@/lib/store";
@@ -29,16 +30,12 @@ import {
   Modal,
   RowMenu,
   type RowMenuItem,
+  SortMenu,
   useMarquee,
   useConfirm,
 } from "./ui";
 import { FilterBar, rankByCount } from "./FilterBar";
-import {
-  HomeTable,
-  HomeViewControls,
-  matchesHomeQuery,
-  useTableSort,
-} from "./HomeViewControls";
+import { HomeTable, matchesHomeQuery, useTableSort } from "./HomeViewControls";
 import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
 import { cn, relativeTime } from "@/lib/utils";
 import {
@@ -257,7 +254,19 @@ function receipt(a: CardAttachment) {
  *  ruling is the only thing to do there. */
 export type RegistryView = "cards" | "suggested";
 
-export function RegistrySection({ view = "cards" }: { view?: RegistryView }) {
+export function RegistrySection({
+  view = "cards",
+  actionsPortal,
+}: {
+  view?: RegistryView;
+  /** Where the cards view's own sort/suggest/orphan-cleanup controls render:
+   *  a node HomeView holds inside the heading row's trailing slot, beside
+   *  "New card" — the same slot Notebooks' Add source/Import occupy. Portaled
+   *  rather than drawn here so the section has one toolbar, not two
+   *  (DESIGN.md §9 "Home is a library"). Absent on the Suggested view, which
+   *  has no controls of its own. */
+  actionsPortal?: HTMLDivElement | null;
+}) {
   const registryBump = useStore((s) => s.registryBump);
   const openCardId = useStore((s) => s.openCardId);
   /** Grid or table — the toolbar's shape switch, not the section's view. */
@@ -480,7 +489,10 @@ export function RegistrySection({ view = "cards" }: { view?: RegistryView }) {
   if (view === "suggested") {
     return (
       <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
+        {/* The queue reads better narrow — a column of proposals, not a
+            grid — so it keeps its own width; only the side padding matches
+            the shelf's (px-7) for consistency with the rest of Home. */}
+        <div className="mx-auto w-full max-w-[960px] px-7 pb-10">
           {suggested.length > 0 ? (
             <SuggestionStrip
               bare
@@ -547,133 +559,129 @@ export function RegistrySection({ view = "cards" }: { view?: RegistryView }) {
       <div
         ref={indexRef}
         onPointerDown={indexMarqueeDown}
-        className="relative z-10 min-h-0 flex-1 select-none overflow-y-auto"
+        className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px]"
       >
-        <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
-          <SuggestionStrip cards={suggested} waiting={waiting} onChanged={load} />
-          {/* Unconditional, like the notebook shelf's: gating this on
-              "are there confirmed cards" made the whole row — filter AND
-              view toggle — vanish whenever the cast was empty or held only
-              suggestions, which reads as the control disappearing. */}
-          <HomeViewControls
-            placeholder="Filter cards by name or identifier…"
-            // The Library's toolbar holds the filter field and the
-            // grid/table switch for every Home section, so this row keeps
-            // only what is the Registry's own.
-            chrome="own"
-            sort={
-              shape === "table"
-                ? undefined
-                : { value: sort, options: SORTS, onChange: changeSort }
-            }
-            trailing={
-              <>
-                {orphans.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void cleanUpOrphans()}
-                    title={ORPHAN_HINT}
-                  >
-                    Clean up orphans ({orphans.length})
-                  </Button>
-                )}
+        {/* The cards view's own controls — sort, and the suggest/orphan verbs
+            — report into the heading row's trailing slot next to "New card"
+            (`actionsPortal`, set by HomeView) instead of drawing a second
+            toolbar in this column. Suggestions belong to their own queue
+            page now: nothing suggestion-shaped renders here any more. */}
+        {actionsPortal &&
+          createPortal(
+            <>
+              {shape !== "table" && (
+                <SortMenu
+                  label="Sort order"
+                  value={sort}
+                  options={SORTS}
+                  onChange={changeSort}
+                  className="shrink-0"
+                />
+              )}
+              {orphans.length > 0 && (
                 <Button
                   size="sm"
-                  variant="secondary"
-                  onClick={() => void suggestNow()}
-                  loading={suggesting}
-                  title="Read your notebooks and suggest cards worth tracking"
+                  variant="ghost"
+                  onClick={() => void cleanUpOrphans()}
+                  title={ORPHAN_HINT}
                 >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Suggest
+                  Clean up orphans ({orphans.length})
                 </Button>
-              </>
-            }
-          />
-          {/* Kind groups and notebook chips sit inside the content column,
-              under the controls — full-bleed they drew a band across the
-              pane with dead clickable space beside them. */}
-          <FilterBar
-            bare
-            groups={kinds}
-            group={kinds.some((k) => k.value === kind) ? kind : "all"}
-            onGroup={setKind}
-            chips={nbChips}
-            chip={
-              notebook !== null && nbChips.includes(notebook) ? notebook : null
-            }
-            onChip={setNotebook}
-            chipAllLabel="All notebooks"
-            chipPrefix=""
-          />
-          {loaded && loadError ? (
-            <EmptyState
-              icon={<Package className="h-5 w-5" />}
-              title="The registry didn't load"
-              hint={loadError}
-            >
-              <Button variant="primary" className="mt-3" onClick={() => void load()}>
-                Try again
-              </Button>
-            </EmptyState>
-          ) : loaded && mine.length === 0 ? (
-            <EmptyState
-              icon={<Package className="h-5 w-5" />}
-              title="No cards yet"
-              hint="A card is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
-            >
+              )}
               <Button
-                variant="primary"
-                className="mt-3"
-                onClick={() => setCreating(true)}
+                size="sm"
+                variant="secondary"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+                title="Read your notebooks and suggest cards worth tracking"
               >
-                <Plus className="h-4 w-4" />
-                New card
+                <Sparkles className="h-3.5 w-3.5" />
+                Suggest
               </Button>
-            </EmptyState>
-          ) : shape === "table" ? (
-            <CardTable
-              cards={shown}
-              nbTitle={nbTitle}
-              sort={tableSort}
-              onSort={toggleTableSort}
-              onChanged={load}
-              pickedIds={pick.pickedIds}
-              onRowClick={(e, id) => {
-                if (justEnded()) return;
-                if (!pick.handleClick(e, id))
-                  useStore.setState({ openCardId: id });
-              }}
-              onContextItems={(id) => () =>
-                pick.contextItems(id, cardBatchItems)}
-            />
-          ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-              {shown.map((c) => (
-                <CardTile
-                  key={c.id}
-                  card={c}
-                  onOpen={() => useStore.setState({ openCardId: c.id })}
-                  onChanged={load}
-                  picked={pick.pickedIds}
-                  onActivate={(e) => {
-                    if (justEnded()) return true;
-                    return pick.handleClick(e, c.id) || undefined;
-                  }}
-                  onContextItems={() => pick.contextItems(c.id, cardBatchItems)}
-                />
-              ))}
-            </div>
+            </>,
+            actionsPortal,
           )}
-          {shown.length === 0 && mine.length > 0 && (
-            <EmptyState
-              compact
-              title={`No card matches \u201c${query.trim()}\u201d`}
-              hint="The filter looks at names and identifiers."
-            />
-          )}
-        </div>
+        {/* Kind groups and notebook chips, full width now like the shelf's
+            own recency groups. */}
+        <FilterBar
+          bare
+          groups={kinds}
+          group={kinds.some((k) => k.value === kind) ? kind : "all"}
+          onGroup={setKind}
+          chips={nbChips}
+          chip={
+            notebook !== null && nbChips.includes(notebook) ? notebook : null
+          }
+          onChip={setNotebook}
+          chipAllLabel="All notebooks"
+          chipPrefix=""
+        />
+        {loaded && loadError ? (
+          <EmptyState
+            icon={<Package className="h-5 w-5" />}
+            title="The registry didn't load"
+            hint={loadError}
+          >
+            <Button variant="primary" className="mt-3" onClick={() => void load()}>
+              Try again
+            </Button>
+          </EmptyState>
+        ) : loaded && mine.length === 0 ? (
+          <EmptyState
+            icon={<Package className="h-5 w-5" />}
+            title="No cards yet"
+            hint="A card is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
+          >
+            <Button
+              variant="primary"
+              className="mt-3"
+              onClick={() => setCreating(true)}
+            >
+              <Plus className="h-4 w-4" />
+              New card
+            </Button>
+          </EmptyState>
+        ) : shape === "table" ? (
+          <CardTable
+            cards={shown}
+            nbTitle={nbTitle}
+            sort={tableSort}
+            onSort={toggleTableSort}
+            onChanged={load}
+            pickedIds={pick.pickedIds}
+            onRowClick={(e, id) => {
+              if (justEnded()) return;
+              if (!pick.handleClick(e, id))
+                useStore.setState({ openCardId: id });
+            }}
+            onContextItems={(id) => () =>
+              pick.contextItems(id, cardBatchItems)}
+          />
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+            {shown.map((c) => (
+              <CardTile
+                key={c.id}
+                card={c}
+                onOpen={() => useStore.setState({ openCardId: c.id })}
+                onChanged={load}
+                picked={pick.pickedIds}
+                onActivate={(e) => {
+                  if (justEnded()) return true;
+                  return pick.handleClick(e, c.id) || undefined;
+                }}
+                onContextItems={() => pick.contextItems(c.id, cardBatchItems)}
+              />
+            ))}
+          </div>
+        )}
+        {shown.length === 0 && mine.length > 0 && (
+          <EmptyState
+            compact
+            title={`No card matches \u201c${query.trim()}\u201d`}
+            hint="The filter looks at names and identifiers."
+          />
+        )}
       </div>
       {indexMarquee}
       <NewCardModal

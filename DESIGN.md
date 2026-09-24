@@ -478,26 +478,48 @@ The rules that are easy to lose:
   reads as one strip; `Button size="icon"` is a 28px square and is not it.
 
 **Home is a library.** One toolbar, one 220px sidebar (`.side-pane`), one
-sheet — Photos and Music, not a dashboard. The sidebar is three blocks of
-28px rows (Library, Registry, Tags), each row a place with its count, its
-6px dot, or its `--primary` count badge; the selected row is washed in
-`--selection`. Choosing a row changes what the sheet shows, so every
-surface Home holds — the shelf, the corpus conversation, the Registry, the
-timeline, the night shift's Staff, the Brief, the nightly reports — is a
-section of one center column rather than a card stacked around it. Shared
-and Archived are the same shelf, narrowed. The shelf groups notebooks by
-recency (Today, Last 7 days, Earlier) and draws each as a 212px card whose
-thumb stands in for the notebook: its color, its name in caps, and then what
-is actually inside — two or three of its newest source titles behind their
-type glyphs, the newest note among them, and its lead images as a strip of
-three tiles along the bottom — with the counts moved to the tooltip, because
-a card has room to say what a notebook holds and the table already says how
-much. Until `notebook_previews` lands, id-derived ruled lines hold the space
-so the page never shimmers. The sheet's
-footer is one line of what last night's run did, with the Brief a link away.
-The toolbar carries the collection's controls for every section — the
-grid/table switch, the sort pop-up, the filter field — so no section draws
-a second search box (`HomeViewControls`' `chrome="own"`).
+sheet — Photos and Music, not a dashboard. The Brief sits alone at the
+sidebar's top, no caps label of its own, the way Mail's Inbox sits above its
+account blocks: an icon, "Brief", and a 6px dot when last night's run is
+unread. Below it the sidebar is three blocks of 28px rows (Library, Registry,
+Tags), each row a place with its count, its 6px dot, or its `--primary` count
+badge; the selected row is washed in `--selection`. Choosing a row changes
+what the sheet shows, so every surface Home holds — the shelf, the corpus
+conversation, the Registry, the timeline, the night shift's Staff, the Brief,
+the nightly reports — is a section of one center column rather than a card
+stacked around it. Shared and Archived are the same shelf, narrowed. The
+shelf groups notebooks by recency (Today, Last 7 days, Earlier) and draws
+each as a 212px card whose thumb stands in for the notebook: its color, its
+name in caps, and then what is actually inside — two or three of its newest
+source titles behind their type glyphs, the newest note among them, and its
+lead images as a strip of three tiles along the bottom — with the counts
+moved to the tooltip, because a card has room to say what a notebook holds
+and the table already says how much. Until `notebook_previews` lands,
+id-derived ruled lines hold the space so the page never shimmers. The
+caption below the thumb sits 6px under it, inset 4px so the name lines up
+with the thumb's rounded edge rather than reading as flush against nothing,
+the way a Photos caption sits under its tile.
+
+Every section's **heading row** carries only its h1 title (26px/700,
+tracking -.01em) and, when the section has one, its trailing controls —
+Notebooks' Add source/Import, Registry's sort and suggest verbs (reported
+into the same slot by `RegistrySection` rather than drawn as a second
+toolbar), Nightly Reports' Mark all read. Notebooks alone keeps a second
+line, "Since you were away", because that line is about the visit rather
+than a count. What a section holds moved out of the heading and into a
+Finder-style **status bar**: one centered line in the sheet's footer,
+present on every section — `18 notebooks · 4,067 sources · 620 notes`,
+narrowed to `12 notebooks · #finance` under a tag; `4 conversations`;
+`13 reports · 2 unread`; `224 cards`; `10 waiting`. The Brief carries
+nothing there — what last night's run did is now the Brief's own line,
+read from the sidebar row's tooltip and repeated as a quiet second line
+inside the Brief section itself, since that is the surface it is actually
+about. The toolbar carries the collection's controls for every section —
+the grid/table switch, the sort pop-up, the filter field — so no section
+draws a second search box (`HomeViewControls`' `chrome="own"`). Registry
+Cards flows like the shelf now too: full-width at the shelf's own padding
+(`px-7`, 18px between blocks), no suggestion remnants (Keep all/Dismiss
+all and the waiting banner belong to the Suggested queue alone).
 
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar: a filter field over twelve rows, each row a 20px colored icon tile
