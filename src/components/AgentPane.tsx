@@ -33,12 +33,30 @@ import type { AcpEntry as Entry } from "@/lib/storeTypes";
 const COMPOSER_MAX_H = 200;
 const NO_ENTRIES: Entry[] = [];
 
+/** The agent composer's pill row wears the chat composer's model-pill shape
+ *  (docs/RFC-mac-chrome.md, "Sheet (chat)"): 24px, fully round, surface-2
+ *  under an inset hairline. */
+const PANE_PILL = cn(
+  "inline-flex h-6 items-center gap-1 rounded-full bg-surface-2 px-2.5 text-caption",
+  "text-muted-foreground shadow-[inset_0_0_0_0.5px_var(--border)]",
+  "transition-colors hover:text-foreground disabled:opacity-60",
+);
+
 export function AgentPane({
   notebookId,
   visible = true,
+  onExit,
+  onClearSession,
 }: {
   notebookId: string;
   visible?: boolean;
+  /** Back to the notebook chat. The chat sheet has no toolbar row any more
+   *  (docs/RFC-mac-chrome.md), and its composer — which holds the way in —
+   *  is not on screen while this pane fronts, so the way out lives here. */
+  onExit?: () => void;
+  /** Clear this agent's transcript and end its session. Owned by the caller
+   *  so the confirmation and the chat's own Clear read the same. */
+  onClearSession?: () => void;
 }) {
   const [agents, setAgents] = useState<AcpAgentInfo[] | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -351,7 +369,7 @@ export function AgentPane({
       </div>
 
       <div className="relative z-10 border-t border-border px-5 py-3">
-        <div className="mx-auto max-w-[720px]">
+        <div className="mx-auto max-w-[680px]">
           <Textarea
             ref={composerRef}
             value={draft}
@@ -387,9 +405,26 @@ export function AgentPane({
             {running && (
               <button
                 onClick={() => void api.acpStop(notebookId).catch(() => {})}
-                className="inline-flex items-center rounded-md border border-border bg-surface-2 px-2 py-1 text-micro text-muted-foreground transition-colors hover:text-foreground"
+                className={PANE_PILL}
               >
                 End session
+              </button>
+            )}
+            {onClearSession && (
+              <button
+                onClick={onClearSession}
+                className={PANE_PILL}
+              >
+                Clear
+              </button>
+            )}
+            {onExit && (
+              <button
+                onClick={onExit}
+                className={PANE_PILL}
+                title="Back to the notebook's own chat"
+              >
+                Chat
               </button>
             )}
             {starting && (
@@ -733,11 +768,11 @@ function AgentPicker({
             ? "End the session to switch agents"
             : "Choose which agent to run"
         }
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+        className={PANE_PILL}
       >
-        <Bot className="h-3 w-3" />
+        <Bot className="h-3 w-3 shrink-0" />
         {current?.label ?? "Agent"}
-        <ChevronDown className="h-3 w-3" />
+        <ChevronDown className="h-2.5 w-2.5 shrink-0" />
       </button>
       {open && (
         <>

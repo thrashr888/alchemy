@@ -45,13 +45,10 @@ import type {
   SuggestedSource,
 } from "@/lib/types";
 import {
-  Bot,
-  MessageSquare,
   Wrench,
   ArrowDown,
   ArrowUp,
   Square,
-  Eraser,
   Quote,
   StickyNote,
   Sparkles,
@@ -62,7 +59,7 @@ import {
   CornerDownRight,
   ExternalLink,
   FileText,
-  SlidersHorizontal,
+  Paperclip,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
@@ -210,6 +207,46 @@ export function ChatPanel() {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  /** A suggested question fills the composer instead of firing immediately —
+   *  the user can tweak it, or just hit Enter. */
+  function askSuggested(q: string) {
+    setDraft(q);
+    inputRef.current?.focus();
+  }
+
+  /** Clear the notebook conversation — a row in the composer's model pill
+   *  now that the chat toolbar is gone. Unrecoverable bulk loss, so this is
+   *  one of the few places a confirmation earns its keep (DESIGN.md §9). */
+  async function clearConversation() {
+    if (
+      await confirm({
+        title: "Clear this conversation?",
+        confirmLabel: "Clear",
+        danger: true,
+      })
+    )
+      clearChat();
+  }
+
+  /** The Agent view's own Clear, handed to `AgentPane`'s pill row. Clearing
+   *  the transcript also ends the session: the two together mean "start
+   *  over", and a live agent quietly keeping the cleared context would
+   *  belie the empty pane. */
+  async function clearAgentSession() {
+    if (!currentId) return;
+    if (
+      !(await confirm({
+        title: "Clear this session?",
+        confirmLabel: "Clear",
+        danger: true,
+      }))
+    )
+      return;
+    void api.acpStop(currentId).catch(() => {});
+    const showing = useStore.getState().acpPanes[currentId]?.agentId;
+    if (showing) useStore.getState().clearAcpPane(currentId, showing);
+  }
 
   // Restore the saved draft for this notebook (refresh/restart survival),
   // then keep the mirror current. Restore runs first and stamps `draftNb`;
@@ -758,12 +795,7 @@ export function ChatPanel() {
         return;
       }
       case "clear": {
-        const ok = await confirm({
-          title: "Clear this conversation?",
-          confirmLabel: "Clear",
-          danger: true,
-        });
-        if (ok) void s.clearChat();
+        await clearConversation();
         return;
       }
     }
@@ -774,83 +806,11 @@ export function ChatPanel() {
       <LiveRegion announcements={announcements} />
       {/* The blank-state shader lives in Workspace now — behind the side
           panels, not just this column. */}
-      <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
-        {hostedAgent ? (
-          <Bot className="h-4 w-4 text-muted-foreground" />
-        ) : (
-          <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        )}
-        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          {hostedAgent ? "Agent" : "Chat"}
-        </span>
-        <div className="ml-auto flex items-center gap-1">
-          {/* Open In lives in the notebook's title menu now (the toolbar's
-              pop-up on the name), the one place for the notebook's verbs. */}
-          {currentId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setHostedAgent((v) => !v)}
-              title={
-                hostedAgent
-                  ? "Back to notebook chat"
-                  : "Run your own coding agent against this notebook"
-              }
-            >
-              {hostedAgent ? (
-                <MessageSquare className="h-3.5 w-3.5" />
-              ) : (
-                <Bot className="h-3.5 w-3.5" />
-              )}
-              {hostedAgent ? "Chat" : "Agent"}
-            </Button>
-          )}
-          {!hostedAgent && messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                if (await confirm({ title: "Clear this conversation?", confirmLabel: "Clear", danger: true }))
-                  clearChat();
-              }}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              Clear
-            </Button>
-          )}
-          {hostedAgent && currentId && agentHistory && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                // Clearing the transcript also ends the session: the two
-                // together mean "start over", and a live agent quietly
-                // keeping the cleared context would belie the empty pane.
-                if (await confirm({ title: "Clear this session?", confirmLabel: "Clear", danger: true })) {
-                  void api.acpStop(currentId).catch(() => {});
-                  const showing =
-                    useStore.getState().acpPanes[currentId]?.agentId;
-                  if (showing)
-                    useStore.getState().clearAcpPane(currentId, showing);
-                }
-              }}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              Clear
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => useStore.getState().openSettings("chat")}
-            title="Chat settings (style, length, custom prompt)"
-            aria-label="Chat settings"
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
+      {/* No chat toolbar row (docs/RFC-mac-chrome.md, "Sheet (chat)"): the
+          notebook's verbs — Open In, Share — live in the title pop-up, and
+          the chat's own tuning, the Agent view and Clear conversation hang
+          off the composer's model pill. A label over the sheet named the
+          column the window title already names. */}
       {/* The agent pane stays mounted (hidden) while Chat is in front: its
           session is a live subprocess, and toggling views must not kill it
           or drop the streamed transcript. It unmounts — and stops its
@@ -862,7 +822,15 @@ export function ChatPanel() {
             !hostedAgent && "hidden",
           )}
         >
-          <AgentPane notebookId={currentId} visible={hostedAgent} />
+          {/* With the toolbar row gone, the way back out of the Agent view
+              and its own Clear ride the agent composer's pill row — the
+              chat's model pill is not on screen here to hold them. */}
+          <AgentPane
+            notebookId={currentId}
+            visible={hostedAgent}
+            onExit={() => setHostedAgent(false)}
+            onClearSession={agentHistory ? clearAgentSession : undefined}
+          />
         </div>
       )}
       {!(hostedAgent && currentId) && (
@@ -870,10 +838,19 @@ export function ChatPanel() {
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div
           className={cn(
-            "mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6",
-            // Blank state: fill the scroll area exactly so the centered hero
-            // never overflows it by a hair and summons a scrollbar.
-            isBlank && "min-h-full",
+            // 680 is the sheet's one measure: the transcript and the composer
+            // share the box, and the 16px inset matches the composer's own
+            // pl-4, so an answer's first character sits directly above the
+            // question's (RFC-mac-chrome, "Sheet (chat)").
+            "mx-auto flex max-w-[680px] flex-col px-4",
+            // Blank sheet: a top-aligned 26px rhythm — card, sigil, pills —
+            // not a vertically centred hero. Everything centres across.
+            isBlank && "items-center gap-[26px] pb-6 pt-[26px]",
+            // With nothing to stack (no notebook, or no sources yet, so no
+            // summary card) the rhythm has one element in it and reads as a
+            // sigil stranded at the top: centre that one case the way it was.
+            isBlank && !canChat && "min-h-full justify-center",
+            !isBlank && "gap-6 py-6",
             chatReadingClass(reading),
           )}
         >
@@ -904,6 +881,26 @@ export function ChatPanel() {
               hasSources={sources.length > 0}
               compact={canChat && !!summary}
             />
+          )}
+
+          {/* Questions to start from, as pills under the sigil (RFC-mac-chrome,
+              "Sheet (chat)"). Wrapping within 560 so a row of three short
+              questions centres and a long one gets its own line. */}
+          {isBlank && followups.length > 0 && (
+            <div className="flex max-w-[560px] flex-wrap justify-center gap-2">
+              {followups.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => askSuggested(q)}
+                  className={cn(
+                    "flex h-7 items-center rounded-full bg-surface-2 px-3 text-caption text-foreground",
+                    "shadow-[inset_0_0_0_0.5px_var(--border)] transition-colors hover:bg-elevated",
+                  )}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
           )}
 
           {messagesHasMore && (
@@ -960,12 +957,7 @@ export function ChatPanel() {
               {followups.map((q, i) => (
                 <button
                   key={i}
-                  onClick={() => {
-                    // Fill the composer instead of firing immediately — the
-                    // user can tweak the question, or just hit Enter.
-                    setDraft(q);
-                    inputRef.current?.focus();
-                  }}
+                  onClick={() => askSuggested(q)}
                   className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-body text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
                 >
                   <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -994,8 +986,8 @@ export function ChatPanel() {
       </div>
 
       {answersElsewhere && currentId ? (
-        <div className="relative z-10 px-5 pb-5 pt-2">
-          <div className="mx-auto flex max-w-[720px] items-center gap-3 rounded-lg border border-border-strong bg-surface px-4 py-3">
+        <div className="relative z-10 px-5 pb-[18px] pt-2">
+          <div className="mx-auto flex max-w-[680px] items-center gap-3 rounded-lg border border-border-strong bg-surface px-4 py-3">
             <Share className="h-4 w-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <div className="text-body text-foreground">
@@ -1023,11 +1015,16 @@ export function ChatPanel() {
           </div>
         </div>
       ) : (
-      <div className="relative z-10 px-5 pb-5 pt-2">
-        <div className="mx-auto max-w-[720px]">
+      <div className="relative z-10 px-5 pb-[18px] pt-2">
+        <div className="mx-auto max-w-[680px]">
           <div
             className={cn(
-              "relative rounded-lg border border-border-strong bg-surface p-2.5 shadow-md transition-colors",
+              // The composer floats over the sheet (RFC-mac-chrome, "Sheet
+              // (chat)"): 680 wide, radius 22, the menus' frosted material
+              // so the words behind it stay legible under glass, a strong
+              // hairline and a deep shadow to lift it off the transcript.
+              "menu-glass relative rounded-[22px] border border-border-strong transition-colors",
+              "pt-2.5 pr-2.5 pb-2 pl-4 shadow-[0_12px_32px_rgba(0,0,0,.45)]",
               "focus-within:border-ring/60",
             )}
           >
@@ -1050,7 +1047,10 @@ export function ChatPanel() {
             <Textarea
               ref={inputRef}
               rows={1}
-              className="border-0 bg-transparent focus:ring-0 min-h-[24px] max-h-[180px] px-1.5 py-1"
+              // 14px: the one place in the app where the user's own words are
+              // bigger than the chrome around them. The composer's own
+              // padding places the text, so the field adds none.
+              className="border-0 bg-transparent p-0 text-[14px] focus:ring-0 min-h-[24px] max-h-[180px]"
               placeholder={
                 canChat
                   ? "Ask anything — / for commands, @ to ask about one source…"
@@ -1169,20 +1169,71 @@ export function ChatPanel() {
                 title in the tools row squeezed the pills and wrapped. */}
             {activeMentions.length > 0 && (
               <div
-                className="min-w-0 truncate px-1.5 pt-1 text-micro text-subtle-foreground"
+                className="min-w-0 truncate pt-1 text-micro text-subtle-foreground"
                 title={activeMentions.map((m) => m.title).join(", ")}
               >
                 Searching only:{" "}
                 {activeMentions.map((m) => m.title).join(", ")}
               </div>
             )}
-            <div className="flex items-center gap-1.5 px-1.5 pt-1">
-              <ModelPill deepResearch />
+            <div className="mt-2 flex items-center gap-1.5">
+              <ModelPill
+                deepResearch
+                // The sheet has no toolbar, so the chat's own controls hang
+                // off this pop-up: how answers are made, where they happen,
+                // and the one destructive verb.
+                extraRows={(close) => (
+                  <>
+                    <MenuRow
+                      label="Chat settings…"
+                      muted
+                      onPick={() => {
+                        close();
+                        useStore.getState().openSettings("chat");
+                      }}
+                    />
+                    {currentId && (
+                      <MenuRow
+                        label="Run my own coding agent"
+                        muted
+                        onPick={() => {
+                          close();
+                          setHostedAgent(true);
+                        }}
+                      />
+                    )}
+                    {messages.length > 0 && (
+                      <MenuRow
+                        label="Clear conversation…"
+                        muted
+                        onPick={() => {
+                          close();
+                          void clearConversation();
+                        }}
+                      />
+                    )}
+                  </>
+                )}
+              />
+              {/* Attach: the notebook's own Add Source, where a chat app
+                  would put a paperclip — what you attach here is a source. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full"
+                disabled={!currentId}
+                onClick={() => useStore.getState().openAddSource()}
+                title="Add a source to this notebook"
+                aria-label="Add a source"
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </Button>
               <span className="flex-1" />
               {sending ? (
                 <Button
                   variant="secondary"
                   size="icon"
+                  className="rounded-full"
                   onClick={() => cancelGeneration("chat")}
                   title="Stop"
                   aria-label="Stop generating"
@@ -1193,6 +1244,7 @@ export function ChatPanel() {
                 <Button
                   variant="primary"
                   size="icon"
+                  className="rounded-full"
                   onClick={submit}
                   disabled={!draft.trim() || !canChat}
                   title="Send"
@@ -1226,26 +1278,36 @@ function SummaryBanner({
   /** Blank notebook: the chip sits under the centered hero, so center it. */
   centered?: boolean;
 }) {
+  // One card shape for both states (RFC-mac-chrome, "Sheet (chat)"): 640
+  // wide on the blank sheet, radius 10, a strong inset hairline that costs
+  // no layout. The "generate" state was a dashed chip — the dash read as a
+  // drop target, and the summary's absence is not a different kind of thing
+  // from its presence, so it wears the same card with one quiet row inside.
+  const card = cn(
+    "rounded-[10px] shadow-[inset_0_0_0_0.5px_var(--border-strong)]",
+    "px-[18px] py-4 text-body leading-[1.5]",
+    centered && "w-full max-w-[640px] self-center",
+  );
+  const capsLabel =
+    "text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground";
   if (!summary && !loading) {
     return (
-      <button
-        onClick={onRefresh}
-        className={cn(
-          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground",
-          centered ? "self-center" : "self-start",
-        )}
-      >
-        <Sparkles className="mr-1.5 inline h-3 w-3" />
-        Generate notebook summary
-      </button>
+      <div className={card}>
+        <div className={cn(capsLabel, "mb-2")}>Notebook summary</div>
+        <button
+          onClick={onRefresh}
+          className="flex items-center gap-1.5 text-body text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Sparkles className="h-3 w-3" />
+          Generate notebook summary
+        </button>
+      </div>
     );
   }
   return (
-    <div className="rounded-lg border border-border bg-surface/60 p-3.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-          Notebook summary
-        </span>
+    <div className={card}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className={capsLabel}>Notebook summary</span>
         <button
           onClick={onRefresh}
           className="text-muted-foreground transition-colors hover:text-foreground"
@@ -1255,9 +1317,9 @@ function SummaryBanner({
         </button>
       </div>
       {loading && !summary ? (
-        <div className="text-body text-muted-foreground">Summarizing sources…</div>
+        <div className="text-muted-foreground">Summarizing sources…</div>
       ) : (
-        <div className="text-body leading-relaxed text-foreground/90 selectable">
+        <div className="text-foreground/90 selectable">
           {/* Single newlines become markdown hard breaks so the model's line
               breaks survive; double newlines stay paragraphs. */}
           <Markdown>{summary.replace(/\n(?!\n)/g, "  \n")}</Markdown>
@@ -2190,10 +2252,10 @@ function ChatHero({
     <div
       className={cn(
         "flex flex-col items-center gap-4 text-center transition-all duration-200",
-        // Non-compact fills the column's spare height (the wrapper is
-        // min-h-full on a blank notebook) instead of guessing with vh —
-        // a guess that overflowed short windows into a scrollbar.
-        compact ? "pt-1" : "flex-1 justify-center",
+        // The sigil sits in the blank sheet's 26px rhythm now — card, sigil,
+        // pills, read from the top — so it no longer claims the column's
+        // spare height to centre itself in.
+        compact && "pt-1",
       )}
     >
       <AlchemySymbol
@@ -2208,7 +2270,7 @@ function ChatHero({
       />
       {!compact && (
         <>
-          <div className="text-section font-semibold text-foreground/90">
+          <div className="text-body font-semibold text-foreground/90">
             {!hasNotebook
               ? "Create a notebook to begin"
               : !hasSources
@@ -2272,10 +2334,17 @@ const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
 export function ModelPill({
   scope = "this notebook",
   deepResearch = false,
+  extraRows,
 }: {
   scope?: string;
   /** Show the Deep research row (notebook chat; Home's corpus chat has none). */
   deepResearch?: boolean;
+  /** Surface-specific rows for the last section — the notebook chat hangs
+   *  its Chat settings, the Agent view and Clear conversation here, because
+   *  this pop-up is the only chrome the sheet has (RFC-mac-chrome). Called
+   *  with `close` so a row can dismiss the menu the way the built-in rows
+   *  do; Home's corpus chat passes nothing. */
+  extraRows?: (close: () => void) => React.ReactNode;
 }) {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
@@ -2456,6 +2525,7 @@ export function ModelPill({
           openSettings("models");
         }}
       />
+      {extraRows?.(() => setOpen(false))}
     </MenuPill>
   );
 }
@@ -2492,12 +2562,18 @@ export function MenuPill({
         aria-haspopup="menu"
         title={title}
         className={cn(
-          "inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro transition-colors hover:text-foreground",
+          // The composer's model pill (RFC-mac-chrome, "Sheet (chat)"): 24px
+          // tall, fully round, surface-2 under an inset hairline so the edge
+          // costs no layout inside the composer's own padding.
+          "inline-flex h-6 items-center gap-1 rounded-full bg-surface-2 px-2.5 text-caption transition-colors",
+          "shadow-[inset_0_0_0_0.5px_var(--border)] hover:text-foreground",
           muted ? "text-subtle-foreground" : "text-muted-foreground",
         )}
       >
-        {label}
-        <ChevronDown className="h-3 w-3" />
+        {/* A provider · model · effort · Deep research label can outgrow the
+            composer; clip it rather than push the send button off the row. */}
+        <span className="max-w-[260px] truncate">{label}</span>
+        <ChevronDown className="h-2.5 w-2.5 shrink-0" />
       </button>
       {open && (
         <>

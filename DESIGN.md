@@ -275,8 +275,14 @@ Justified exceptions, kept on purpose:
   label.
 - **The reader's title field** and the command palette's input are
   transparent, unbordered inputs by design: the text *is* the surface.
-- **The chat composer** is its own component: a growing textarea with its
-  toolbar, not an `Input`.
+- **The chat composer** is its own component: a growing textarea over a pill
+  row, not an `Input`. It floats on the sheet — 680 wide, radius 22, the
+  menus' frosted material, a strong hairline and a deep shadow — and its
+  model pill's pop-up is the only chrome the chat has: how answers are made,
+  Chat settings, the Agent view, Clear conversation. There is no chat
+  toolbar row, because a strip over the sheet would only have labelled the
+  column the window title already names; the notebook's own verbs (Open In,
+  Share) belong to the title pop-up, not beside the transcript.
 - **Pickers that show the thing they pick** — the notebook color swatches
   and icon grid (`NotebookEditModal`), the theme strips and the big
   icon-and-label tiles in Appearance (`SettingsTabs`) — are not chips: the
