@@ -337,6 +337,7 @@ async fn a_nightly_record_that_swapped_folders_with_a_twin_heals_on_the_next_cop
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     })
     .await
     .unwrap();

@@ -29,6 +29,12 @@ export interface Notebook {
   noteCount: number;
   /** Report-kind notes (scheduled runs, briefs). */
   reportCount: number;
+  /** One of the notebooks Alchemy ships rather than one you made. Computed
+   *  at list time from the title (`examples::STARTER_TITLES`), never stored:
+   *  every Mac seeds its own copy under its own id. The shelf gathers these
+   *  under "Built in" instead of scattering them through the recency
+   *  groups, and the active count leaves them out. */
+  builtIn?: boolean;
 }
 
 /** One document in the notebook link graph. */
@@ -64,6 +70,13 @@ export interface OkfBinding {
   /** The folder is shared with another person (docs/RFC-shared-notebook.md).
    *  Their deletions arrive as proposals rather than removals. */
   shared?: boolean;
+  /** The OTHER Macs that have written into this notebook, by their device
+   *  name ("Anne's MacBook (C02ABC)"). Derived at read time from the
+   *  provenance sidecar, never stored on the binding; empty for a folder
+   *  nobody else has written to yet, and for every binding that is not
+   *  shared. Nothing on disk records a person's name or an iCloud share
+   *  owner, so the device is the truest thing a card can say. */
+  peers?: string[];
 }
 
 /** One deletion the other person in a shared notebook made, waiting on an
@@ -679,6 +692,18 @@ export interface NotebookPreview {
   /** Newest user question, whitespace collapsed and cut to 120 chars. */
   lastQuestion: string;
   lastQuestionAt: number;
+}
+
+/** One tag as the Library's sidebar names it. Mirrors `models::CorpusTag`.
+ *  Tags are a per-source field, so this is a corpus-wide rollup built by one
+ *  projected scan in Rust — never a read of every notebook's sources. */
+export interface CorpusTag {
+  tag: string;
+  /** Sources wearing this tag, across every active notebook. */
+  count: number;
+  /** The notebooks those sources sit in, sorted — enough to narrow the shelf
+   *  without a second round trip. */
+  notebookIds: string[];
 }
 
 /** The Registry's kinds (RFC-registry). */

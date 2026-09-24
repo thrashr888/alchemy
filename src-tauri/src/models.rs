@@ -33,6 +33,14 @@ pub struct Notebook {
     /// Report-kind notes (scheduled runs, briefs).
     #[serde(default)]
     pub report_count: i64,
+    /// Is this one of the notebooks Alchemy ships (`examples::STARTER_TITLES`)
+    /// rather than one the reader made? Computed on list queries from the
+    /// title, never stored: a starter carries no marker of its own, and it
+    /// should not grow a Lance column for a fact two callers read
+    /// (`examples.rs`, `STARTER_TITLES`). Every Mac seeds its own copy under
+    /// its own random id, so the title is the only stable handle.
+    #[serde(default)]
+    pub built_in: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -820,4 +828,22 @@ pub struct NotebookPreview {
     /// collapsed and trimmed to 120 chars; "" when nothing was ever asked.
     pub last_question: String,
     pub last_question_at: i64,
+}
+
+/// One tag as the Library's sidebar names it: the token, how many sources
+/// wear it across the whole corpus, and which notebooks those sources sit
+/// in — so clicking the row can narrow the shelf without a second call.
+///
+/// Tags are a per-source field (`Source.tags`, space-separated normalized
+/// tokens), so the corpus-wide list is a rollup, not a table. It is built
+/// by one projected scan (`Db::corpus_tags`), never by reading each
+/// notebook's sources in turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorpusTag {
+    pub tag: String,
+    /// Sources carrying this tag, across every active notebook.
+    pub count: usize,
+    /// The notebooks those sources sit in, sorted, deduped.
+    pub notebook_ids: Vec<String>,
 }

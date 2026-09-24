@@ -27,6 +27,7 @@ import type {
   GrepHit,
   HomeActivity,
   NotebookPreview,
+  CorpusTag,
   ActivityItem,
   HygieneIssue,
   KokoroStatus,
@@ -486,6 +487,10 @@ export const api = {
    *  the whole shelf — four projected scans in Rust, never one per card. */
   notebookPreviews: () =>
     run(query<NotebookPreview[]>("notebook_previews")),
+  /** The corpus's busiest tags, for the Library sidebar's Tags block. Two
+   *  projected scans in Rust, capped — a sidebar block, not a tag browser. */
+  corpusTags: (limit?: number) =>
+    run(query<CorpusTag[]>("corpus_tags", { limit })),
   newWindow: (notebookId?: string, noteId?: string) =>
     run(cmd<void>("new_window", { notebookId, noteId })),
   rebuildAppMenu: () => run(cmd<void>("rebuild_app_menu")),

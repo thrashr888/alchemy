@@ -1114,6 +1114,7 @@ pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Note
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     e(state.db.create_notebook(&nb).await)?;
     // A notebook lives in the Notebooks folder from the moment it exists
@@ -11858,6 +11859,7 @@ pub async fn seed_scale_fixture(
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     e(state.db.create_notebook(&nb).await)?;
 
@@ -13085,6 +13087,20 @@ pub async fn notebook_previews(
     e(state.db.notebook_previews().await)
 }
 
+/// The corpus's busiest tags, for the Library sidebar's Tags block
+/// (DESIGN.md §9). Two projected scans for the whole corpus, capped at
+/// `limit` (default 8) — a sidebar block, not a tag browser. Each row
+/// carries the notebooks its sources sit in, so clicking one narrows the
+/// shelf without a second round trip.
+#[tauri::command]
+pub async fn corpus_tags(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<crate::models::CorpusTag>, String> {
+    let limit = limit.unwrap_or(8).max(1) as usize;
+    e(state.db.corpus_tags(limit).await)
+}
+
 /// The corpus by arrival, batched per notebook (docs/RFC-timeline.md).
 /// Read-only, computed fresh per call from `created_at`; `with_items`
 /// false returns batch shapes and sample titles only.
@@ -13505,6 +13521,7 @@ pub(crate) async fn import_bundle(
                 source_count: 0,
                 note_count: 0,
                 report_count: 0,
+                built_in: false,
             };
             e(state.db.create_notebook(&nb).await)?;
             nb
@@ -16124,6 +16141,7 @@ mod tool_tests {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         let books = vec![
             nb("a", "Japan"),
