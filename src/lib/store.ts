@@ -563,11 +563,11 @@ export const useStore = create<AppState>((rawSet, get) => {
     })(),
     sourcesWidth: clampPanel(
       "sources",
-      Number(localStorage.getItem("sourcesWidth")) || 280,
+      Number(localStorage.getItem("sourcesWidth")) || 260,
     ),
     studioWidth: clampPanel(
       "studio",
-      Number(localStorage.getItem("studioWidth")) || 320,
+      Number(localStorage.getItem("studioWidth")) || 300,
     ),
     onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
     settingsOpen: false,
