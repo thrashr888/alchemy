@@ -71,6 +71,7 @@ import {
   Sprout,
   Tag,
   ListFilter,
+  ChevronDown,
 } from "lucide-react";
 
 // Reference scale for the "how big is this notebook" gauge. Not a capacity —
@@ -452,7 +453,13 @@ export function SourcesPanel() {
   // The Tags block under the list: the notebook's busiest tags as rows, each
   // one a facet. Capped at eight — the rest stay reachable as chips behind
   // the filter toggle, which is where the long tail belongs.
-  const tagRows = useMemo(() => countTags(sources, liveTag, 8), [
+  const [tagsOpen, setTagsOpen] = useState(
+    () => localStorage.getItem("sourcesTags") !== "false",
+  );
+  useEffect(() => {
+    localStorage.setItem("sourcesTags", String(tagsOpen));
+  }, [tagsOpen]);
+  const tagRows = useMemo(() => countTags(sources, liveTag, 5), [
     sources,
     liveTag,
   ]);
@@ -1508,10 +1515,24 @@ export function SourcesPanel() {
           two ways to reach it. */}
       {currentId && tagRows.length > 0 && (
         <div className="shrink-0">
-          <div className="px-2 pt-1 pb-1.5 text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground">
+          {/* A Finder-style section: the caps header folds the block, so a
+              short window keeps its source rows. Five tags, no inner
+              scroller; the filter toggle holds the full vocabulary. */}
+          <button
+            type="button"
+            onClick={() => setTagsOpen((open) => !open)}
+            aria-expanded={tagsOpen}
+            className="flex w-full items-center justify-between px-2 pt-1 pb-1.5 text-left text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground transition-colors hover:text-foreground"
+          >
             Tags
-          </div>
-          <div className="flex max-h-40 flex-col overflow-y-auto">
+            <ChevronDown
+              className={cn(
+                "h-3 w-3 transition-transform",
+                !tagsOpen && "-rotate-90",
+              )}
+            />
+          </button>
+          <div className={cn("flex flex-col", !tagsOpen && "hidden")}>
             {tagRows.map(([tag, n]) => (
               <button
                 key={tag}
