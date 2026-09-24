@@ -186,11 +186,16 @@ add height (cards, modals, table frames).
   `surface-2` fill under an inset hairline — not a border — and the chosen
   segment is a raised tile: the `elevated` tone, a strong inset hairline and
   one soft `0 1px 2px` shadow, which is the only fill a segment ever
-  carries. `sm` is the spec (26px track, 22px buttons, 12px medium labels);
-  `md` exists for the one segmented control that is navigation, the
-  toolbar's view switcher, which sits among 32px chrome. Icon-only segments
-  lose the label padding and carry `hint` as their name. More than four
-  options, or long names: a `PopupButton` or a `Select`.
+  carries. Two sizes, and the choice is about what the control *is*: `sm` is
+  the spec (26px track radius 7, 22px buttons, padding 0 10px, 12px medium
+  labels) and belongs to everything that filters, sorts or configures — the
+  Studio's tabs, Settings, Home's grid/table, the gallery. `md` is for a
+  segmented control that is **navigation**, which in this app is exactly one:
+  the toolbar's view switcher (32px track radius 8, 28px buttons, padding 0
+  12px, 13px labels, 14px icons). A place you go all day is a control; at
+  filter size it reads as a hint beside the title. Icon-only segments lose
+  the label padding and carry `hint` as their name. More than four options,
+  or long names: a `PopupButton` or a `Select`.
 - **Pop-up buttons** (`ui.PopupButton`): the macOS control that *names its
   current value* and opens a menu or a fold to change it — the theme in
   Appearance, the sort order on Home, the model on the composer. 22px, the

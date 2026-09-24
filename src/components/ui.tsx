@@ -1857,9 +1857,10 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   /** Accessible name for the group ("View", "Sort"). */
   label: string;
-  /** `sm` is the spec (22px buttons in a 26px track, 12px labels). `md`
-   *  keeps 26px buttons for the one segmented control that is navigation —
-   *  the toolbar's view switcher, which sits among 32px chrome. */
+  /** `sm` is the spec (22px buttons in a 26px track, 12px labels). `md` is
+   *  the one segmented control that is navigation — the toolbar's view
+   *  switcher: 28px buttons in a 32px track, 13px labels, padding 0 12px.
+   *  A destination someone picks all day reads as a control, not a hint. */
   size?: "sm" | "md";
   className?: string;
 }) {
@@ -1871,8 +1872,12 @@ export function Segmented<T extends string>({
       // shadow does not add to the box, so the 22px buttons + 2px padding
       // come out at exactly 26px (docs/RFC-mac-chrome.md, shared table).
       className={cn(
-        "flex shrink-0 items-center gap-0.5 rounded-[7px] bg-surface-2 p-0.5",
+        "flex shrink-0 items-center gap-0.5 bg-surface-2 p-0.5",
         "shadow-[inset_0_0_0_0.5px_var(--border)]",
+        // 2px padding either way: 22 + 4 = 26, 28 + 4 = 32. The radius
+        // follows the button it wraps, so the track's corner stays
+        // concentric with the raised tile inside it.
+        size === "md" ? "rounded-lg" : "rounded-[7px]",
         className,
       )}
     >
@@ -1888,9 +1893,17 @@ export function Segmented<T extends string>({
             title={option.hint}
             aria-label={option.label ? undefined : option.hint}
             className={cn(
-              "inline-flex items-center justify-center gap-1 rounded-[5px] text-caption font-medium transition-colors",
-              size === "md" ? "h-[26px]" : "h-[22px]",
-              option.label ? "px-2.5" : "px-2",
+              "inline-flex items-center justify-center gap-1 font-medium transition-colors",
+              size === "md"
+                ? "h-[28px] rounded-md text-body"
+                : "h-[22px] rounded-[5px] text-caption",
+              option.label
+                ? size === "md"
+                  ? "px-3"
+                  : "px-2.5"
+                : size === "md"
+                  ? "px-2.5"
+                  : "px-2",
               // The chosen segment is a raised tile: the elevated tone, a
               // stronger inset hairline and one soft shadow — the macOS
               // NSSegmentedControl read, and the only place a segment

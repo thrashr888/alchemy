@@ -60,7 +60,6 @@ import {
   FileText,
   Globe,
   Plus,
-  PanelLeftClose,
   Trash2,
   Upload,
   Check,
@@ -245,7 +244,6 @@ export function SourcesPanel() {
   const openAddSource = useStore((s) => s.openAddSource);
   const folderScan = useStore((s) => s.folderScan);
   const draggingFiles = useStore((s) => s.draggingFiles);
-  const toggleSources = useStore((s) => s.toggleSources);
   const openSourceViewer = useStore((s) => s.openSourceViewer);
   const selectedSourceIds = useStore((s) => s.selectedSourceIds);
   const toggleSourceSelected = useStore((s) => s.toggleSourceSelected);
@@ -407,6 +405,14 @@ export function SourcesPanel() {
       // per-viewer convenience only
     }
   }, [facetsOpen]);
+  // Opening the fold puts the caret in the filter field, so the click has an
+  // effect you feel and not only one you look for.
+  const filterRef = useRef<HTMLInputElement>(null);
+  const toggleFacets = () => {
+    const next = !facetsOpen;
+    setFacetsOpen(next);
+    if (next) requestAnimationFrame(() => filterRef.current?.focus());
+  };
   const [kindFacet, setKindFacet] = useState<SourceKind | null>(null);
   const [tagFacet, setTagFacet] = useState<string | null>(null);
   const [freshFacet, setFreshFacet] = useState<FreshFacet | null>(null);
@@ -466,6 +472,19 @@ export function SourcesPanel() {
 
   const q = query.trim().toLowerCase();
   const filterActive = !!q || !!liveKind || !!liveTag || !!liveFresh;
+  // Is there anything behind the filter button? A kind is only a choice when
+  // there is a second kind to choose instead; a tag or a Missing chip is one
+  // on its own; and the four freshness chips are a fixed set, so past a
+  // handful of sources they are always worth offering. Below all of that the
+  // button opened an empty block, which is why it read as doing nothing.
+  const kindChoices = [...kindCounts.values()].filter((n) => n > 0).length;
+  const canFilter =
+    !!currentId &&
+    sources.length > 0 &&
+    (sources.length > 8 ||
+      kindChoices > 1 ||
+      tagChips.length > 0 ||
+      missingIds.size > 0);
   const clearFilters = () => {
     setQuery("");
     setKindFacet(null);
@@ -787,13 +806,21 @@ export function SourcesPanel() {
               behind a button, not a strip). A filter that is on keeps its
               row visible whatever the toggle says, so it can be switched
               off. */}
+          {/* Disabled rather than hidden when there is nothing to narrow: a
+              button that vanishes on a small notebook is a button you stop
+              looking for, and one that does nothing when clicked is worse
+              than one that says why. */}
           <button
             type="button"
             aria-pressed={facetsOpen}
-            onClick={() => setFacetsOpen((o) => !o)}
-            disabled={!currentId}
+            onClick={toggleFacets}
+            disabled={!canFilter}
             title={
-              facetsOpen ? "Hide filters" : "Filter by kind, tag or condition"
+              !canFilter
+                ? "One kind of source and no tags — nothing to filter yet"
+                : facetsOpen
+                  ? "Hide filters"
+                  : "Filter by kind, tag or condition"
             }
             aria-label={facetsOpen ? "Hide filters" : "Show filters"}
             className={cn(
@@ -814,15 +841,9 @@ export function SourcesPanel() {
           >
             <Plus className="h-3.5 w-3.5" />
           </button>
-          <button
-            type="button"
-            onClick={toggleSources}
-            title="Collapse sources (⌘1)"
-            aria-label="Collapse sources"
-            className={cn(CHROME_BUTTON, "min-w-6 p-0")}
-          >
-            <PanelLeftClose className="h-3.5 w-3.5" />
-          </button>
+          {/* No collapse button: the toolbar's sidebar toggle is visible
+              whether this pane is open or shut, and ⌘1 works from anywhere.
+              Two controls for one state is the thing the toolbar was for. */}
         </div>
       </div>
 
@@ -876,13 +897,18 @@ export function SourcesPanel() {
           themselves — but never while a filter is on: removing sources down
           past that threshold used to take the only way to switch it off
           along with it. */}
-      {currentId && (sources.length > 8 || filterActive) && (
+      {currentId &&
+        (sources.length > 8 || filterActive || (facetsOpen && canFilter)) && (
         <div className="flex shrink-0 flex-col gap-1.5">
           {/* The field spec (docs/RFC-mac-chrome.md, "Shared"): 26px, radius
               8, surface-2 under an inset hairline. A 2,487-source notebook is
               navigated by typing, so the field stays visible and only the
-              chips fold. */}
+              chips fold. `facetsOpen && canFilter` is in the test above
+              because otherwise a smaller notebook swallowed the toggle
+              whole — and a remembered `open` must not raise an empty block
+              on a notebook that has since lost what it was filtering. */}
           <SearchField
+            ref={filterRef}
             value={query}
             onValueChange={setQuery}
             placeholder="Filter sources…"

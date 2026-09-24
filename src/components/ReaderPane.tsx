@@ -575,11 +575,14 @@ export function CenterModeTabs() {
       useStore.setState({ galleryOpen: false, growOpen: true });
     }
   };
-  // The one segmented control that is navigation: the same track and size
-  // as every other (docs/RFC-mac-chrome.md, "Toolbar"), with Reader dimmed
-  // until there is something to read.
+  // The one segmented control that is navigation, and the only one at `md`
+  // (docs/RFC-mac-chrome.md, "Toolbar"): 28px buttons, 13px labels. At the
+  // 22px filter size it read as a hint beside the title rather than the
+  // four places this window goes. Reader stays dimmed until there is
+  // something to read.
   return (
     <Segmented
+      size="md"
       label="Center"
       value={active}
       onChange={show}
