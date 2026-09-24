@@ -59,3 +59,118 @@ sidebars and toolbar stay the translucent material (78% / 58% surface,
 tone for the same reason. The desktop shows through where the chrome is,
 not where the words are, which is also how Finder, Mail and Notes draw
 it.
+
+## Measurements (the spec, from the iteration-2 mocks)
+
+Every number below is read off the approved canvas (`Main2`, `Home2`,
+`Settings2`, `Welcome2`). Build to these; divergence needs a reason in
+the ledger. Tokens: 13px is `text-body`, 12px `text-caption`, 11px
+`text-micro`. "Hairline" is `--border`; "strong hairline" is
+`--border-strong`. "Inset hairline" is `box-shadow: inset 0 0 0 0.5px`
+(a group edge that does not add to the box), "wash" is `--selection`.
+
+### Shared
+
+| element | spec |
+| --- | --- |
+| caps label | 11px, 600, uppercase, tracking .04em, subtle color |
+| list row | 28px high, padding 0 8px, radius 6, gap 8, 13px; selected = wash; 1px between rows |
+| icon button (`tb`) | 24px high, min-width 28, padding 0 7px, radius 6, 12px, muted; hover surface-2 + foreground |
+| segmented track | padding 2, radius 7, surface-2, inset hairline |
+| segmented button | 22px high, padding 0 10px (0 8px icon-only), radius 5, 12px/500, muted; on = elevated bg + strong inset hairline + 0 1px 2px shadow, foreground |
+| grouped list (`group`) | radius 10, surface-2, inset hairline, rows split by hairlines |
+| group row | 38px high (Settings: 40px), padding 0 12px, gap 10, 13px, 16px icon, trailing count 11px subtle |
+| footnote | 11px, muted, padding 6px 12px 0 |
+| pop-up button | 22px high, padding 0 6px 0 10px, radius 6, elevated bg, strong inset hairline, 12px, 10px chevron |
+| field (search/filter/instructions) | 26px high (instructions 30), padding 0 8px, radius 8, surface-2, inset hairline, 13px (12 in the inspector), subtle icon 16px |
+| switch | 26×16 track, 12px knob, primary when on |
+| tag dot | 8px, 4px side margins |
+
+### Toolbar (Workspace and Home)
+
+52px high, padding 0 14px, gap 12, hairline below. Traffic-light gutter
+60px. Sidebar toggle, then Back/Forward with 2px between. Title pill:
+32px high, radius 8, padding 0 8px, gap 8; a 22px icon tile radius 6 in
+a 22% primary wash; name 13px/600 line-height 16; subtitle 11px muted
+line-height 13 (`7 sources · On disk · synced 2 min ago`); 10px chevron.
+View segmented centered in the remaining width. Right side: search field
+200×26, inspector toggle (surface-2 when the inspector is open). Home
+swaps the title pill for the sigil + "Alchemy" 13px/600 and carries
+grid/table segmented, sort pop-up (26px, surface-2, "Recently updated"),
+search 200×26, and a primary "New Notebook" 26px radius 8.
+
+### Sources pane
+
+260px, padding 10, gap 12 between blocks, hairline right. Header: caps
+"Sources" with the count 12px normal-case beside it, then filter and add
+icon buttons (24px, min-width 24). "All selected" row 26px, 12px muted,
+14px checkbox. Source rows per the shared row spec, 1px apart, title
+13px, checkbox 14px radius 4 (primary when on). Tags block: caps padding
+4px 8px 6px, rows with an 8px dot and a 12px count. Grow row pinned to
+the bottom: 32px, surface-2, inset hairline, radius 6, then a 6px amber
+dot and "1 to review" 12px.
+
+### Sheet (chat)
+
+Center column, padding-top 26, 26px between blocks, everything centered.
+Summary card 640 wide: radius 10, strong inset hairline, padding 16px
+18px, 13px/1.5, caps label with 8px below. Sigil. Suggested-question
+pills: 28px, radius 14, padding 0 12px, surface-2, inset hairline,
+foreground, 8px apart, wrapping within 560px. Composer: 680 wide, radius
+22, glass over the sheet, strong hairline + 0 12px 32px shadow, padding
+10px 10px 8px 16px, 8px between the input and the button row; input 14px;
+row = model pill (24px, radius 12, padding 0 10px, surface-2, inset
+hairline, `Claude Code · Balanced` with a chevron), attach (24px round,
+icon only), send (28px circle, primary, white glyph) pushed right; 18px
+below the composer to the window edge. No chat toolbar row: Open In and
+Share live in the title pop-up, Clear and tuning in the composer's menu.
+
+### Inspector (Studio)
+
+300px, padding 10px 12px, gap 12, hairline left. Segmented stretched
+(each button flex 1, centered) with counts in the label: `Notes 7`,
+`Reports 1`, count 11px normal weight. Shelves: caps with padding 0 4px
+(8px above the second shelf on), grouped lists per the shared spec, rows
+38px; each shelf shows its top rows and folds the rest into one
+disclosure row (`FAQ, Timeline, Data table, 4 more` muted, chevron
+right). Instructions field pinned to the bottom: 30px, radius 8,
+surface-2, inset hairline, 12px, `Instructions for the next generation…`.
+
+### Home
+
+Sidebar 220px, padding 10, gap 14: Library (Notebooks with count, Chats
+with a 6px primary dot when unread, Shared, Nightly Reports, Archived),
+Registry (Cards with count, Suggested with a primary count badge 11px/600
+radius 9 padding 1px 6px), Tags (dots). Main: padding 22px 28px, gap 18;
+h1 26px/700 tracking -.01em with `22 active · 3,760 sources` 13px muted
+on the baseline; sections by recency (Today, Last 7 days, Earlier) with
+caps and 10px below; cards 212 wide, 20px apart, gap 10 inside: thumb
+140px high radius 10 surface with a strong inset hairline and padding 14
+(a 10px color dot + 10px caps name, then 6px rounded lines), name
+13px/600, meta 12px muted (`7 sources · 7 notes · 2 min ago`). Footer
+pinned bottom: hairline above, padding-top 12, 12px muted `Last night: 2
+reports written, 14 sources refreshed, 1 duplicate set aside.` with
+"Read the Brief" as a link on the right.
+
+### Settings
+
+Sidebar 200px, padding 12px 8px, 2px between rows; search 26px radius 7;
+rows 28px padding 0 6px radius 6 with a 20px tile radius 5 (surface-2;
+primary when selected) holding a 12px glyph; selected row = wash. Pane
+header 52px, padding 0 20px, hairline below, title 15px/600. Content
+padding 18px 20px, 18px between sections; caps padding 0 12px 6px; group
+rows 40px; footnotes 11px. Appearance: Theme row = swatch strip (4×10×14
+radius 4) + pop-up button naming the theme; Backdrop row = its name and
+"moves" 12px muted + a switch; Selection color segmented; Glass = Window
+material segmented + "Sidebars show through to the desktop" switch;
+Text = Chat font, Text size segmented.
+
+### First run
+
+Brand pane 300 wide; sigil 150; "Alchemy" 20px/700; tagline 12px muted.
+Right pane padding 34px 28px 0, gap 16; step chip 20px radius 10 11px;
+title 20px/700; body 12px/1.45 muted; grouped radio list rows min 54px,
+padding 9px 12px, gap 12, 16px radio (1.5px ring, primary when on with a
+white 8px dot), 18px icon, title 13px/600 + hint 11px muted, status chip
+right. Footer padding 14px 20px, hairline above, 12px preview text left,
+buttons 28px radius 7 right.
