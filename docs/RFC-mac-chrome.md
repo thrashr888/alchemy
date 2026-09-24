@@ -47,10 +47,15 @@ Verified in the dev app on Night City (glass tinted and off) and Midnight.
 - Sidebars honoring the macOS accent color is an Appearance option to add,
   not a default: themes decide selection color.
 
-## Known tension
+## Contrast floor (was: known tension)
 
-Under glass with a bright desktop the transparent center column reads
-light and the theme's text loses contrast (visible on Home with Night
-City). That predates this work; the fix is either a floor on the center's
-opacity under glass or a note in Appearance that glass wants a dark
-desktop. Decide before glass becomes a default anywhere.
+Under glass with a bright desktop the transparent center column read
+light and the theme's text lost contrast (visible on Home with Night
+City). Resolved on the side of reading: the center column is the
+**sheet** (`.sheet` in `src/index.css`) and keeps a floor under glass —
+the theme background at 86% for Tinted, 72% for Clear — while the
+sidebars and toolbar stay the translucent material (78% / 58% surface,
+55% / 0% chrome). Menus (`.menu-glass`) floor at 84% of the elevated
+tone for the same reason. The desktop shows through where the chrome is,
+not where the words are, which is also how Finder, Mail and Notes draw
+it.

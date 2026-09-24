@@ -1143,7 +1143,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
             </div>
           )}
-          <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="sheet relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {/* Heading + ask box stay put; only the shelves (or the
             conversation) below scroll. */}
             <div

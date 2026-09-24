@@ -592,12 +592,28 @@ html[data-glass="clear"] .side-pane {
 html[data-glass="clear"] .toolbar {
   background: transparent;
 }
+/* The sheet: the center content column. Opaque at rest (it inherits the
+   window background). Under glass it keeps a legibility floor: the
+   sidebars and toolbar are where the desktop shows through; the sheet
+   stays near-opaque so text never fights the wallpaper — the tension in
+   docs/RFC-mac-chrome.md, resolved on the side of reading. Tinted keeps
+   the theme's background at 86%; Clear lets more through but still
+   floors it. */
+.glass .sheet {
+  background: color-mix(in srgb, var(--background) 86%, transparent);
+}
+html[data-glass="clear"] .sheet {
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+}
 
 /* Floating menus and popovers: frosted like native macOS menus —
    a translucent elevated tone over a backdrop blur of whatever sits
    beneath, in or out of glass mode. */
 .menu-glass {
-  background: color-mix(in srgb, var(--elevated) 72%, transparent);
+  /* 84%: the floor at which menu text stays legible over a bright
+     desktop under glass; below ~75% the wallpaper reads through the
+     labels. */
+  background: color-mix(in srgb, var(--elevated) 84%, transparent);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
 }

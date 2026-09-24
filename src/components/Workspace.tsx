@@ -273,7 +273,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="flex min-w-0 flex-1 overflow-hidden">
+        <div className="sheet flex min-w-0 flex-1 overflow-hidden">
           {growOpen ? (
             <GrowPane />
           ) : galleryOpen ? (
