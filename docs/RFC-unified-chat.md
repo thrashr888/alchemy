@@ -290,15 +290,46 @@ data.
 
 ## Phasing
 
-1. **Catalog, loop, tool search, receipts.** Home only, read tools plus the
-   seven writes that already exist. Round-limited turns keep their
-   exchanges. Provider capability gate with the classifier as fallback.
+1. **Catalog, loop, tool search.** Home only, read tools plus the writes
+   Home already had. Round-limited turns keep their exchanges. Provider
+   capability gate with the classifier as fallback. *Built — see "What
+   phase 1 shipped" below.*
 2. **Permission classes, proposals for destructive and outside tools, undo
    journal.** The full write surface opens here, not before.
 3. **Renderable tool results** (`RFC-artifact-renderers`).
 4. **One thread, two brains** — fold `AgentPane` into the thread, delete the
    toggle and the second transcript.
 5. **Field notes.**
+
+## What phase 1 shipped
+
+`commands/chatloop.rs`, plus `chat_tools` on the Ollama and gateway engines
+and `supports_tools` on `ChatEngine`. Two things differ from the draft above,
+both discovered in the building:
+
+**The catalog is not yet read off the MCP routers.** rmcp's `Peer::new` is
+`pub(crate)`, so a `ToolRouter` cannot be called without a live MCP session:
+`ToolCallContext` needs a `RequestContext`, which needs a `Peer`, which we
+cannot construct. `list_all()` for *definitions* works fine — it is what
+`tool_catalog()` already does — but dispatch does not. So phase 1 has two
+lists after all: the advertised catalog and the `dispatch` match. A test
+(`catalog_is_covered`) fails when they drift, which catches the problem at CI
+instead of preventing it by construction. Phase 2's real work is extracting
+each tool body into a plain function both callers share, which also settles
+open question 1 — the extracted body takes an actor rather than a context.
+
+**Global queries skip the loop.** RFC-infinite-context's gist route answers
+"which notebooks mention X" from whole-corpus coverage; the loop would reach
+for a top-12 chunk search and answer it worse. `is_global_query` keeps those
+on the specialized path, and they pay no loop round.
+
+**The cost to watch.** An ordinary Home question now pays one extra
+non-streaming round before retrieval — the round where the model decides
+*what* to search for, which is the point, but it is not free on a local 27b.
+Every run writes `rounds_used`, `wall_ms`, `settled` and `empty` to
+`traces/chatloop.jsonl`; decision 6 is waiting on those numbers from real
+hardware. If the median is bad, the lever is a cost-control toggle in
+Settings, default on.
 
 ## Decisions
 

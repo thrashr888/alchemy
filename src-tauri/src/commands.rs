@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 mod brief;
+mod chatloop;
 mod diagnostics;
 mod handoff;
 mod registry;
@@ -14605,6 +14606,50 @@ pub async fn ask_everything(
         ToolRoute::Fallthrough => {}
     }
 
+    // The tool loop (docs/RFC-unified-chat.md §1). It runs where retrieval
+    // used to and does retrieval's job with more than one move available:
+    // search, search again with different words, read the note it found, and
+    // only then stop. It does NOT answer — the evidence it gathers flows into
+    // the same synthesis below, so citations and streaming are unchanged.
+    //
+    // An engine that can't tool-call, a provider error, or a question that
+    // needs no tools all leave it empty, and the ordinary retrieval path runs
+    // exactly as before. Worst case is today's behavior plus one model call.
+    //
+    // Global/enumerative questions are the exception: RFC-infinite-context's
+    // gist route answers "which notebooks mention X" from whole-corpus
+    // coverage, and a top-12 chunk search — which is what the loop would
+    // reach for — answers it worse. Those keep the specialized path they
+    // already had, and pay no loop round for the privilege.
+    let loop_ev = if rag::is_global_query(&question) {
+        chatloop::LoopEvidence::default()
+    } else {
+        chatloop::run(
+            &app,
+            &state,
+            window.label(),
+            thread_id.as_deref().unwrap_or_default(),
+            &question,
+            history.as_deref().unwrap_or(&[]),
+            &cancel,
+        )
+        .await
+    };
+    if loop_ev.cancelled {
+        return Ok(MetaAnswer::chat(String::new(), vec![]));
+    }
+    // A turn that only DID things has nothing to synthesize from: answer with
+    // what it did, the way the classifier route answers a command. Synthesis
+    // over "Added 2 sources to Japan" would only paraphrase it, slower.
+    if !loop_ev.replies.is_empty() && loop_ev.citations.is_empty() && loop_ev.facts.is_empty() {
+        return Ok(MetaAnswer {
+            answer: loop_ev.replies.join("\n\n"),
+            citations: vec![],
+            kind: "tool".into(),
+            effect: loop_ev.effect,
+        });
+    }
+
     // Retrieval runs under the cancel scope, not just synthesis. Both legs
     // below can call a model — the global route summarizes gists, and deep
     // search reranks candidates source by source ("Reading 6 sources in
@@ -14614,7 +14659,16 @@ pub async fn ask_everything(
     // is a read, so dropping the future mid-flight costs only the work done;
     // cancelling yields the same empty-handed answer the synthesis select
     // produces, which here means no text and no citations.
-    let retrieved = tokio::select! {
+    let retrieved = if !loop_ev.citations.is_empty() {
+        // The loop already retrieved, under the same cancel scope and with
+        // the same `retrieve_everything` underneath. Running it again here
+        // would pay twice for the same passages.
+        Some((
+            loop_ev.citations.clone(),
+            chatloop::passages(&loop_ev.citations),
+        ))
+    } else {
+        tokio::select! {
         r = async {
             // Deep search (wide pool + model rerank) defaults on for gateway
             // models, where the extra rerank call is fast and cheap; local
@@ -14675,6 +14729,7 @@ pub async fn ask_everything(
             Ok((citations, passages))
         } => Some(r?),
         _ = cancel.cancelled() => None,
+        }
     };
     let (mut citations, mut passages) = match retrieved {
         Some(v) => v,
@@ -14715,7 +14770,16 @@ pub async fn ask_everything(
             ai.profile(crate::inference::Role::Chat),
         )
     };
-    let extra = chat_style_instruction(&config.unwrap_or_default());
+    let mut extra = chat_style_instruction(&config.unwrap_or_default());
+    // Tool output that isn't a passage — a notebook listing, a receipt, the
+    // error log — is context the answer may use but must not cite, so it
+    // rides the instruction block rather than the numbered excerpts. Keeping
+    // it out of `passages` is what stops "list_notebooks: …" from appearing
+    // as citation [4].
+    if !loop_ev.facts.is_empty() {
+        extra.push_str("\n\nTools reported the following. Use it where it answers the question, but cite only the numbered excerpts:\n");
+        extra.push_str(&loop_ev.facts.join("\n"));
+    }
     let messages = rag::build_meta_messages(
         history.as_deref().unwrap_or(&[]),
         &question,
@@ -14777,7 +14841,19 @@ pub async fn ask_everything(
     state.record_chat_stats(&model, stats);
     state.record_ttft(&model, "ask-everything", "", &ttft, None);
 
-    Ok(MetaAnswer::chat(answer, citations))
+    // A loop that both acted and answered says what it did first: a write is
+    // never something the user has to infer from prose.
+    let answer = if loop_ev.replies.is_empty() {
+        answer
+    } else {
+        format!("{}\n\n{answer}", loop_ev.replies.join("\n\n"))
+    };
+    Ok(MetaAnswer {
+        answer,
+        citations,
+        kind: "chat".into(),
+        effect: loop_ev.effect,
+    })
 }
 
 /// One global-search result for the command menu.

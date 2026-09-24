@@ -1138,6 +1138,26 @@ impl Ai {
         self.router.chat_engine(Role::Chat).chat(messages).await
     }
 
+    /// Can the Chat-role engine run a tool loop? The Home loop asks before
+    /// it builds a catalog; a `false` keeps the classifier path.
+    pub fn chat_supports_tools(&self) -> bool {
+        self.router.chat_engine(Role::Chat).supports_tools()
+    }
+
+    /// One tool round on the Chat-role engine
+    /// (docs/RFC-unified-chat.md §1).
+    pub async fn chat_tools(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        round: usize,
+    ) -> Result<crate::inference::ToolOutcome> {
+        self.router
+            .chat_engine(Role::Chat)
+            .chat_tools(messages, tools, round)
+            .await
+    }
+
     /// Is there a distinct Small-role engine, or does `chat_role(Small)`
     /// route to the chat engine by configuration? Evals comparing the two
     /// roles need to know the difference is real before reporting a

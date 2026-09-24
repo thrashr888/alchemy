@@ -323,6 +323,71 @@ impl Ollama {
         self.run_stream(body, |_| {}).await
     }
 
+    /// One non-streaming `/api/chat` round with tools offered
+    /// (docs/RFC-unified-chat.md §1).
+    ///
+    /// Non-streaming on purpose: a tool round's text is preamble the loop
+    /// discards, and streaming it would put "Let me search for that" into the
+    /// answer buffer before the answer exists. `stream: false` also means
+    /// `tool_calls` arrive whole instead of assembled from deltas.
+    ///
+    /// The deadline is a plain request timeout rather than the first-token /
+    /// stall pair `run_stream` uses, because there is no token cadence to
+    /// watch. It is generous: a cold 27b model can take a minute to answer
+    /// the first round at all.
+    pub async fn chat_tools(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        round: usize,
+    ) -> Result<super::ToolOutcome> {
+        let mut body = json!({
+            "model": self.config.chat_model,
+            "messages": messages,
+            "tools": tools,
+            "stream": false,
+        });
+        self.apply_keep_alive(&mut body);
+        let mut attempt = 0;
+        let resp = loop {
+            let sent = tokio::time::timeout(
+                Self::FIRST_TOKEN_COLD,
+                self.http.post(self.url("/api/chat")).json(&body).send(),
+            )
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "ollama: {} did not answer a tool round within {}s",
+                    self.config.chat_model,
+                    Self::FIRST_TOKEN_COLD.as_secs()
+                )
+            })?;
+            let resp = sent.context("ollama tool request failed")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("ollama chat {}: {}", status, body));
+        }
+        let value: serde_json::Value = resp.json().await.context("invalid ollama response")?;
+        Ok(super::ToolOutcome {
+            text: value["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            calls: super::parse_tool_calls(&value["message"]["tool_calls"], round),
+            stats: Some(super::GenStats {
+                eval_count: value["eval_count"].as_u64().unwrap_or(0),
+                eval_duration_ns: value["eval_duration"].as_u64().unwrap_or(0),
+            }),
+            cost_usd: None,
+        })
+    }
+
     /// Streaming chat. `on_token` is called for each content delta as it arrives.
     /// Returns the full concatenated assistant message.
     pub async fn chat_stream<F>(&self, messages: &[ChatTurn], on_token: F) -> Result<ChatOutcome>
@@ -579,6 +644,100 @@ impl Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A full `chat_tools` round against a server that answers the way
+    /// Ollama does: `stream: false`, the tools array echoed in the request,
+    /// and `message.tool_calls` with an arguments OBJECT.
+    #[tokio::test]
+    async fn tool_round_sends_tools_and_reads_calls_back() {
+        use axum::{routing::post, Router};
+        let app = Router::new().route(
+            "/api/chat",
+            post(|body: String| async move {
+                let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                // The loop must never stream a tool round: tool_calls arrive
+                // whole, and the preamble is not the answer.
+                assert_eq!(body["stream"], false);
+                assert_eq!(body["tools"][0]["function"]["name"], "search_corpus");
+                json!({
+                    "message": {
+                        "content": "Let me look.",
+                        "tool_calls": [{
+                            "function": { "name": "search_corpus", "arguments": { "query": "SNDK" } }
+                        }]
+                    },
+                    "eval_count": 12,
+                    "eval_duration": 1_000_000_000u64,
+                })
+                .to_string()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let engine = Ollama::new(OllamaConfig {
+            base_url: format!("http://{address}"),
+            chat_model: "test".into(),
+            ..Default::default()
+        });
+        let tools = vec![json!({
+            "type": "function",
+            "function": { "name": "search_corpus", "parameters": { "type": "object" } }
+        })];
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.chat_tools(
+                &[json!({"role":"user","content":"where is the SNDK data"})],
+                &tools,
+                0,
+            ),
+        )
+        .await
+        .unwrap()
+        .expect("tool round");
+        assert_eq!(out.text, "Let me look.");
+        assert_eq!(out.calls.len(), 1);
+        assert_eq!(out.calls[0].name, "search_corpus");
+        assert_eq!(out.calls[0].arguments["query"], "SNDK");
+        // Round stats are kept: loop rounds are generations and count toward
+        // the model's measured throughput.
+        assert_eq!(out.stats.expect("stats").eval_count, 12);
+        server.abort();
+    }
+
+    /// An answer with no tool calls is how the model says it is done. The
+    /// loop reads that as "settled", so an empty array must not look like a
+    /// malformed response.
+    #[tokio::test]
+    async fn tool_round_with_no_calls_is_a_plain_answer() {
+        use axum::{routing::post, Router};
+        let app = Router::new().route(
+            "/api/chat",
+            post(|| async { json!({ "message": { "content": "I have enough." } }).to_string() }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let engine = Ollama::new(OllamaConfig {
+            base_url: format!("http://{address}"),
+            chat_model: "test".into(),
+            ..Default::default()
+        });
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.chat_tools(&[], &[], 0),
+        )
+        .await
+        .unwrap()
+        .expect("tool round");
+        assert!(out.calls.is_empty());
+        assert_eq!(out.text, "I have enough.");
+        server.abort();
+    }
 
     #[test]
     fn diagram_budget_is_local_and_does_not_raise_a_stricter_limit() {
