@@ -146,6 +146,18 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             <PanelLeft className="h-4 w-4" />
           </button>
           <NavButtons />
+          {/* The way back to the shelf sits with the other "where am I"
+              controls on the left, where the hand goes for it (Paul kept
+              reaching left). Finder puts its path controls there too. */}
+          <button
+            type="button"
+            onClick={close}
+            aria-label="All notebooks"
+            title="All notebooks"
+            className={CHROME_BUTTON}
+          >
+            <Library className="h-4 w-4" />
+          </button>
           {/* `group`: the name cluster is a right-clickable object — the title
               RowMenu binds contextmenu to this div, carrying the same verbs as
               a notebook row on Home (color lives in Rename's dialog) plus the
@@ -302,14 +314,6 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               window while it is up and macOS leaves it painted at its old
               screen point, which is how "Your notebooks" ended up floating
               over the Studio list. */}
-          <button
-            type="button"
-            onClick={close}
-            aria-label="All notebooks"
-            className={CHROME_BUTTON}
-          >
-            <Library className="h-4 w-4" />
-          </button>
           <button
             type="button"
             onClick={onOpenSettings}

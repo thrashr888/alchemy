@@ -643,6 +643,26 @@ html[data-glass="clear"] .toolbar {
    docs/RFC-mac-chrome.md, resolved on the side of reading. Tinted keeps
    the theme's background at 86%; Clear lets more through but still
    floors it. */
+/* Glass widgets: under glass the sheet's and panes' raised surfaces (the
+   composer, message bubbles, cards, grouped lists, pills) would otherwise
+   stay opaque and read as black slabs on a frosted window. They become
+   frosted layers themselves — the theme's own surface at partial alpha
+   over the already-blurred material, the way Messages' compose field
+   sits on its vibrant window. The mixes are computed on <html> from the
+   theme's inline values (no self-reference), then handed down to the
+   regions that draw widgets; menus keep their own `.menu-glass` recipe. */
+html.glass {
+  --glass-surface: color-mix(in srgb, var(--surface) 70%, transparent);
+  --glass-surface-2: color-mix(in srgb, var(--surface-2) 68%, transparent);
+  --glass-elevated: color-mix(in srgb, var(--elevated) 76%, transparent);
+}
+.glass .sheet,
+.glass .side-pane,
+.glass .toolbar {
+  --surface: var(--glass-surface);
+  --surface-2: var(--glass-surface-2);
+  --elevated: var(--glass-elevated);
+}
 .glass .sheet {
   background: color-mix(in srgb, var(--background) 86%, transparent);
 }
