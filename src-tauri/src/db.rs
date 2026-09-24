@@ -1213,13 +1213,13 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
-                    // Derived here rather than stored: `seed_notebook` already
-                    // recognizes its own examples by title, so the title is
-                    // the contract (every Mac seeds its copy under a fresh
-                    // random id), and a Lance column on a shared dev/prod
-                    // store is a release-timing hazard for a fact two callers
-                    // read (`examples::STARTER_TITLES`).
-                    built_in: crate::examples::is_starter_title(title.value(i)),
+                    // Derived, not stored: `seed_notebook` recognizes its own
+                    // examples by title (every Mac seeds its copy under a
+                    // fresh random id), and a Lance column on a shared
+                    // dev/prod store is a release-timing hazard. Settled
+                    // below once the source count is known — a starter the
+                    // user has grown past its seed is theirs.
+                    built_in: false,
                 });
             }
         }
@@ -1244,6 +1244,7 @@ impl Db {
                         n.source_count = s;
                         n.note_count = no;
                         n.report_count = r;
+                        n.built_in = crate::examples::is_built_in(&n.title, s);
                     }
                     notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
                     return Ok(notebooks);
@@ -1293,6 +1294,9 @@ impl Db {
             n.source_count = counts.get(&n.id).copied().unwrap_or(0);
             n.note_count = note_counts.get(&n.id).copied().unwrap_or(0);
             n.report_count = report_counts.get(&n.id).copied().unwrap_or(0);
+            // Needs the count, so it lands here and not with the row decode:
+            // a starter the user has grown past its seed is theirs.
+            n.built_in = crate::examples::is_built_in(&n.title, n.source_count);
         }
         // Store under the versions read BEFORE the scan: a write that landed
         // mid-scan leaves the cache keyed to the older version, so the next
