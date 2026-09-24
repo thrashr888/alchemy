@@ -96,20 +96,32 @@ the ledger. Tokens: 13px is `text-body`, 12px `text-caption`, 11px
 
 52px high, padding 0 14px, gap 12, hairline below. Traffic-light gutter
 60px. Sidebar toggle, then Back/Forward with 2px between. Title pill:
-32px high, radius 8, padding 0 8px, gap 8; a 22px icon tile radius 6 in
+36px high, radius 8, padding 0 12px, gap 10; a 22px icon tile radius 6 in
 a 22% primary wash; name 13px/600 line-height 16; subtitle 11px muted
 line-height 13 (`7 sources · On disk · synced 2 min ago`); 10px chevron.
-View segmented centered in the remaining width. Right side: search field
-200×26, inspector toggle (surface-2 when the inspector is open). Home
-swaps the title pill for the sigil + "Alchemy" 13px/600 and carries
+View segmented, `md`: 28px buttons, 13px/500 labels, padding 0 12px,
+14px icons, in a 32px track (padding 2, radius 8) — centered in the
+remaining width. Right side: model-activity slot 54px (a fixed width,
+running or idle), search field 200×26 shrinking to 120 at the window's
+1040 minimum, inspector toggle (surface-2 when the inspector is open).
+Home swaps the title pill for the sigil + "Alchemy" 13px/600 and carries
 grid/table segmented, sort pop-up (26px, surface-2, "Recently updated"),
 search 200×26, and a primary "New Notebook" 26px radius 8.
+
+**Built, not drawn.** The pill grew 32 → 36 with 12px sides (at 8 the tile
+touched the edge and the hover wash read as a box around the icon), and the
+view switcher moved from the shared 22px segmented to `md` — it is the only
+segmented control that is navigation, and at filter size it read as a hint.
 
 ### Sources pane
 
 260px, padding 10, gap 12 between blocks, hairline right. Header: caps
 "Sources" with the count 12px normal-case beside it, then filter and add
-icon buttons (24px, min-width 24). "All selected" row 26px, 12px muted,
+icon buttons (24px, min-width 24) — no collapse button, because the
+toolbar's sidebar toggle is visible whether the pane is open or shut. The
+filter button is disabled when the notebook has one kind of source, no
+tags and nothing missing: there is nothing behind it to open. "All
+selected" row 26px, 12px muted,
 14px checkbox. Source rows per the shared row spec, 1px apart, title
 13px, checkbox 14px radius 4 (primary when on). Tags block: caps padding
 4px 8px 6px, rows with an 8px dot and a 12px count. Grow row pinned to

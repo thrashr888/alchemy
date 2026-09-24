@@ -200,7 +200,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
                 </>
               }
-              triggerClassName="flex h-8 min-w-0 items-center gap-2 rounded-[8px] px-2 transition-colors hover:bg-surface-2"
+              // 36px tall with 12px sides: at 32/8 the 22px tile all but
+              // touched the pill's leading edge, so the hover wash read as a
+              // box drawn around the icon rather than around the name. The
+              // tile and the two text lines are unchanged.
+              triggerClassName="flex h-9 min-w-0 items-center gap-2.5 rounded-[8px] px-3 transition-colors hover:bg-surface-2"
               menuClassName="w-64"
               align="left"
               items={[
@@ -250,27 +254,44 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Left of the DEV pill in dev builds, and the same slot in
               release builds: one place, in every window, that says a model
-              is working. */}
+              is working. It holds its width whether or not anything is
+              running, so nothing left of it moves when a model starts. */}
           <InferenceActivity />
           <DevBadge />
           <UpdateBadge />
-          {/* The mock's 200×26 search field, shaped as the door it actually
-              is: the command menu is the app's one search surface (sources,
-              notes, notebooks, commands), so this opens that instead of
-              holding a second query with a second result list. */}
-          <button
-            type="button"
-            onClick={() => useStore.getState().setPaletteOpen(true)}
-            title="Search & commands (⌘K)"
-            aria-label="Search and commands"
-            className="flex h-[26px] w-[200px] shrink-0 items-center gap-1.5 rounded-[8px] bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-          >
-            <Search aria-hidden className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">Search</span>
-            <span aria-hidden className="ml-auto shrink-0 text-micro">
-              ⌘K
-            </span>
-          </button>
+        </div>
+
+        {/* The mock's 200×26 search field, shaped as the door it actually
+            is: the command menu is the app's one search surface (sources,
+            notes, notebooks, commands), so this opens that instead of
+            holding a second query with a second result list.
+
+            It is a child of the toolbar rather than of the trailing cluster
+            for a layout reason: the whole right side used to be one
+            `shrink-0` group, so at the window's 1040 minimum the title pill
+            paid for everything and gave up its name entirely. Nesting can't
+            fix that — a flex item with a definite width contributes that
+            width to its parent's min-content however low its `min-width`
+            goes, so the group refuses to narrow at all. As a toolbar item
+            its own `min-width` is what flexbox honours, and it is the one
+            thing up here that narrows: 200 at rest, 120 at the floor, where
+            the word and the shortcut hint still both fit. `-ml-1.5` pulls
+            the toolbar's 12px gap back to the 6px this cluster uses. */}
+        <button
+          type="button"
+          onClick={() => useStore.getState().setPaletteOpen(true)}
+          title="Search & commands (⌘K)"
+          aria-label="Search and commands"
+          className="-ml-1.5 flex h-[26px] w-[200px] min-w-[120px] shrink items-center gap-1.5 rounded-[8px] bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Search aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Search</span>
+          <span aria-hidden className="ml-auto shrink-0 text-micro">
+            ⌘K
+          </span>
+        </button>
+
+        <div className="-ml-1.5 flex shrink-0 items-center gap-1.5">
           {/* A destination, not a direction: the chevron this button used to
               carry read as a second Back arrow next to the real one. The
               Library glyph is the app's one icon for "your notebooks" — the
