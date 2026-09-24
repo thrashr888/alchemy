@@ -806,7 +806,7 @@ export function StudioPanel() {
                 onChange={(e) => setInstructions(e.target.value)}
                 disabled={!hasSources}
                 placeholder="Instructions for the next generation…"
-                className="h-[30px] rounded-lg border-transparent bg-surface-2 pl-8 pr-2 text-caption shadow-[inset_0_0_0_0.5px_var(--border)] disabled:opacity-50"
+                className="h-[30px] rounded-[8px] border-transparent bg-surface-2 pl-8 pr-2 text-caption shadow-[inset_0_0_0_0.5px_var(--border)] disabled:opacity-50"
               />
             </div>
           </div>

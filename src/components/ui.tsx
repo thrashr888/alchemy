@@ -2025,7 +2025,7 @@ export function SearchField({
             : // 26px with an inset hairline instead of a border, so the box
               // measures exactly 26 and lines up with the 22px controls
               // beside it. pl-7 clears the 16px glass at left-2.
-              "h-[26px] rounded-lg border-0 bg-surface-2 pl-7 text-body shadow-[inset_0_0_0_0.5px_var(--border)]",
+              "h-[26px] rounded-[8px] border-0 bg-surface-2 pl-7 text-body shadow-[inset_0_0_0_0.5px_var(--border)]",
           inputClassName,
         )}
         {...props}

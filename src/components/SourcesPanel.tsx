@@ -888,7 +888,7 @@ export function SourcesPanel() {
             placeholder="Filter sources…"
             aria-label="Filter sources"
             autoCapitalize="none"
-            inputClassName="h-[26px] rounded-lg border-transparent bg-surface-2 text-body shadow-[inset_0_0_0_0.5px_var(--border)]"
+            inputClassName="h-[26px] rounded-[8px] border-transparent bg-surface-2 text-body shadow-[inset_0_0_0_0.5px_var(--border)]"
           />
           {(facetsOpen || filterActive) && (
           <div className="flex flex-wrap gap-1">

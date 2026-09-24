@@ -127,7 +127,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           those leave, then search and the inspector toggle trailing. */}
       <header
         data-tauri-drag-region
-        className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[84px] pr-3.5"
+        className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[88px] pr-3.5"
       >
         <div className="flex min-w-0 shrink items-center gap-3">
           {/* Show/hide the Sources pane: the Finder position, left of
@@ -200,7 +200,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
                 </>
               }
-              triggerClassName="flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-surface-2"
+              triggerClassName="flex h-8 min-w-0 items-center gap-2 rounded-[8px] px-2 transition-colors hover:bg-surface-2"
               menuClassName="w-64"
               align="left"
               items={[
@@ -263,7 +263,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             onClick={() => useStore.getState().setPaletteOpen(true)}
             title="Search & commands (⌘K)"
             aria-label="Search and commands"
-            className="flex h-[26px] w-[200px] shrink-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="flex h-[26px] w-[200px] shrink-0 items-center gap-1.5 rounded-[8px] bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <Search aria-hidden className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">Search</span>

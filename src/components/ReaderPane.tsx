@@ -575,12 +575,12 @@ export function CenterModeTabs() {
       useStore.setState({ galleryOpen: false, growOpen: true });
     }
   };
-  // The one segmented control that is navigation: the same track as every
-  // other, one size up, with Reader dimmed until there is something to read.
+  // The one segmented control that is navigation: the same track and size
+  // as every other (docs/RFC-mac-chrome.md, "Toolbar"), with Reader dimmed
+  // until there is something to read.
   return (
     <Segmented
       label="Center"
-      size="md"
       value={active}
       onChange={show}
       options={[

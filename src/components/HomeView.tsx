@@ -1321,7 +1321,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           the spec's 14px plus the 60px traffic-light gutter. */}
       <header
         data-tauri-drag-region
-        className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[74px] pr-3.5"
+        className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[88px] pr-3.5"
       >
         <Button
           variant="ghost"
