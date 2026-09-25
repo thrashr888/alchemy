@@ -66,8 +66,8 @@ import {
 } from "lucide-react";
 import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
 import {
-  HomeChatList,
   HomeChatMenu,
+  HomeChatSidebarThreads,
   HomeChatThread,
   useHomeChat,
 } from "./HomeChat";
@@ -428,6 +428,91 @@ function LibraryRow({
         </span>
       )}
     </button>
+  );
+}
+
+/** The Library's Chats row, drawn as a disclosure rather than a plain
+ *  `LibraryRow` — Finder's sidebar folders and Mail's mailbox tree, not a
+ *  single link (DESIGN.md §9, "Chats is a `NavigationSplitView`"). The
+ *  chevron opens and closes the sessions nested beneath it independently of
+ *  selection; the row itself still opens Chats, and the trailing `+` starts
+ *  a new conversation without leaving the sidebar to find one. */
+function ChatsRow({
+  open,
+  onToggle,
+  selected,
+  sectionActive,
+  dot,
+  onSelect,
+  onNewChat,
+  title,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  /** Washes the row: true only when Chats is open AND the open conversation
+   *  is the blank one, so a chosen session's own row can wash instead. */
+  selected: boolean;
+  /** True whenever Chats is the section on screen, blank or not — widens
+   *  the `+` button's visibility past hover/focus. */
+  sectionActive: boolean;
+  dot: boolean;
+  onSelect: () => void;
+  onNewChat: () => void;
+  title?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "group/chats relative flex h-7 w-full items-center gap-0.5 rounded-md pr-1 transition-colors",
+        selected ? "bg-[var(--selection)]" : "hover:bg-surface-2",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={open ? "Collapse Chats" : "Expand Chats"}
+        title={open ? "Collapse Chats" : "Expand Chats"}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronDown
+          className={cn("h-3 w-3 transition-transform", !open && "-rotate-90")}
+        />
+      </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        title={title ?? "Ask across every notebook"}
+        aria-current={selected ? "page" : undefined}
+        className={cn(
+          "flex h-full min-w-0 flex-1 items-center gap-2 text-left text-body",
+          selected ? "font-medium text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <MessagesSquare className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">Chats</span>
+        {dot && (
+          <span
+            aria-hidden
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+          />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onNewChat}
+        aria-label="New chat"
+        title="New chat"
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
+          sectionActive
+            ? "opacity-100"
+            : "opacity-0 group-hover/chats:opacity-100 group-focus-within/chats:opacity-100",
+        )}
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+    </div>
   );
 }
 
@@ -996,6 +1081,25 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (chatOpen && !chat.loading) askRef.current?.focus();
   }, [chatOpen, chat.loading, homeThreadId]);
 
+  // The Chats row's disclosure — its sessions nest under it in the sidebar
+  // now, Mail-mailbox style, and whether that sub-list is open persists like
+  // the Sources pane's own Tags fold does. Open by default, so the sessions
+  // are one glance away the first time a reader meets the sidebar.
+  const [chatsSidebarOpen, setChatsSidebarOpen] = useState(
+    () => localStorage.getItem("homeChatsOpen") !== "false",
+  );
+  const toggleChatsSidebar = () => {
+    const v = !chatsSidebarOpen;
+    localStorage.setItem("homeChatsOpen", String(v));
+    setChatsSidebarOpen(v);
+  };
+  // "Blank" means the open conversation hasn't earned a row yet (RFC-mac-chrome
+  // "Home": nothing is written until a turn settles) — the parent row keeps
+  // the wash only then, the way Mail's Inbox row stays selected until a
+  // message underneath it is, and a chosen session washes instead once one
+  // exists.
+  const chatBlank = !homeThreads.some((t) => t.id === homeThreadId);
+
   // "Since you were away": what landed since the last time home was open.
   const [prevVisit] = useState<number>(() =>
     Number(localStorage.getItem("lastHomeVisit") ?? 0),
@@ -1183,12 +1287,9 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
    *  themselves; the shelf counts notebooks and, unfiltered, the whole
    *  corpus; the Brief carries nothing here because its line lives in the
    *  section itself (the tooltip and the quiet line below, both fed by
-   *  `lastNight`). */
+   *  `lastNight`). Chats has no footer at all (see `footer`) — its count
+   *  lives on the sidebar's Chats row instead. */
   const footerLine = (): string => {
-    if (homeSection === "chat") {
-      const n = homeThreads.length;
-      return `${n} ${n === 1 ? "conversation" : "conversations"}`;
-    }
     if (homeSection === "staff") {
       const n = allReports.length;
       return n > 0
@@ -1306,28 +1407,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </Button>
           ) : null,
       };
-    if (homeSection === "chat")
-      return {
-        title: "Chats",
-        // The list column carries no header of its own (RFC-mac-chrome,
-        // "Home"): New chat lives here, the same trailing slot Notebooks
-        // gives Add source/Import. Disabled only when the empty
-        // conversation already on screen IS what New chat would open —
-        // from anywhere else it always has somewhere to take you.
-        actions: (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-[26px] rounded-lg"
-            disabled={!homeThreads.some((t) => t.id === homeThreadId)}
-            onClick={() => void navAtomic(() => openHomeThread(null))}
-            title="Start a new conversation"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New chat
-          </Button>
-        ),
-      };
+    // Chats draws no heading row at all: the sheet is transcript + composer
+    // only. New chat moved to the Library sidebar's Chats row (a small `+`
+    // beside it), and the count that used to sit in this row's trailing
+    // slot already lives on that sidebar row.
+    if (homeSection === "chat") return null;
     if (homeSection !== "notebooks") return null;
     return {
       title: shelfTitle,
@@ -1500,21 +1584,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const body = (() => {
     if (chatOpen)
       return (
-        // Three columns, the NavigationSplitView way (RFC-mac-chrome,
-        // "Home"): the Library sidebar (outside this function), the
-        // conversation list, and the transcript as detail. The composer
-        // pins to the bottom of the detail column, 18px above the footer's
-        // hairline — never between the transcript and the footer, and
-        // never below the footer either.
-        <div className="relative z-10 flex min-h-0 flex-1">
-          <HomeChatList className="hidden w-[260px] shrink-0 xl:flex" />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <HomeChatThread chat={chat} />
-            <div className="relative z-10 w-full shrink-0 px-6 pb-[18px] pt-2">
-              <div className="mx-auto w-full max-w-[680px]">
-                {askComposer}
-              </div>
-            </div>
+        // The sessions list moved into the Library sidebar's Chats
+        // disclosure (a sub-list, Mail-mailbox style), so the sheet is just
+        // transcript + composer now — full width, no second column, no
+        // narrow-width collapse to carry. The composer sits 18px above the
+        // sheet's bottom edge; there is no footer on this section to dock
+        // above instead (see `footerLine`).
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+          <HomeChatThread chat={chat} />
+          <div className="relative z-10 w-full shrink-0 px-6 pb-[18px] pt-2">
+            <div className="mx-auto w-full max-w-[680px]">{askComposer}</div>
           </div>
         </div>
       );
@@ -1640,10 +1719,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 
   /** The Library's footer: a Finder-style status bar, one centered line of
-   *  what the section on screen holds. Every section gets one now, the
-   *  conversation included — its composer docks below it, the way a Finder
-   *  window keeps its status bar under whatever toolbar it carries. */
-  const footer = (
+   *  what the section on screen holds. Every section gets one except Chats:
+   *  the sessions list that used to need "4 conversations" said here now
+   *  lives as the sidebar's own count, and a status bar under the composer
+   *  with nothing left to say was a hairline that added nothing — the
+   *  composer sits 18px above the sheet's bottom edge instead, like the
+   *  notebook's own chat. */
+  const footer = homeSection === "chat" ? null : (
     <div className="relative z-10 flex shrink-0 items-center justify-center border-t border-border px-7 pb-3.5 pt-3 text-center text-caption text-muted-foreground">
       {/* A failed activity read used to be reported as the whole footer. The
           counts on sections fed by that same read say so instead of showing
@@ -1884,19 +1966,22 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   selected={homeSection === "notebooks" && scope === "all"}
                   onClick={() => goShelf("all")}
                 />
-                <LibraryRow
-                  icon={<MessagesSquare className="h-3.5 w-3.5" />}
-                  label="Chats"
-                  count={homeThreads.length}
-                  dot={chatUnread}
-                  selected={chatOpen}
-                  title="Ask across every notebook"
-                  onClick={() =>
-                    void useStore
-                      .getState()
-                      .openHomeThread(useStore.getState().homeChat.threadId)
-                  }
-                />
+                <div className="flex flex-col">
+                  <ChatsRow
+                    open={chatsSidebarOpen}
+                    onToggle={toggleChatsSidebar}
+                    selected={chatOpen && chatBlank}
+                    sectionActive={chatOpen}
+                    dot={chatUnread}
+                    onSelect={() =>
+                      void useStore
+                        .getState()
+                        .openHomeThread(useStore.getState().homeChat.threadId)
+                    }
+                    onNewChat={() => void navAtomic(() => openHomeThread(null))}
+                  />
+                  {chatsSidebarOpen && <HomeChatSidebarThreads />}
+                </div>
                 <LibraryRow
                   icon={<Share2 className="h-3.5 w-3.5" />}
                   label="Shared"

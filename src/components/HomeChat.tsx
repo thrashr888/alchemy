@@ -185,119 +185,122 @@ export function HomeChatMenu() {
   );
 }
 
-/** The conversation-list column — the second of the three, between the
- *  Library sidebar and the transcript, the way Mail's message list sits
- *  between its account tree and the reading pane (RFC-mac-chrome, "Home").
- *  260px, `side-pane` toned with a hairline on its right; each row is a
- *  two-line Messages-style entry, 44px, title then a muted second line
- *  (`8/29/2026 · 14 turns`).
+/** How many threads the Chats disclosure shows before folding the rest
+ *  behind "Show N more…" — a long history must not push Registry and Tags
+ *  off the bottom of a 220px sidebar. */
+const CHATS_SIDEBAR_CAP = 12;
+
+/** Sessions nested under the Library's Chats row, Mail-mailbox style
+ *  (DESIGN.md §9, "Chats is a NavigationSplitView" — now a sidebar
+ *  disclosure rather than a second column). Each is a 28px indented row;
+ *  the date/turn-count detail that used to be a second line lives in the
+ *  row's tooltip now, since a sidebar row has no room for two lines.
  *
- *  No header of its own: the count already lives in the Library sidebar's
- *  Chats row, and New chat lives in the heading row beside "Chats" (both in
- *  `HomeView`) — a third place to find either would just be a third place to
- *  look. Picking a row switches sections on its way — `openHomeThread` does
- *  both, and `navAtomic` keeps it to one entry in the back stack. */
-export function HomeChatList({
-  className,
-  style,
-}: {
-  className?: string;
-  style?: React.CSSProperties;
-}) {
+ *  Picking a row switches sections on its way — `openHomeThread` does both,
+ *  and `navAtomic` keeps it to one entry in the back stack. The parent
+ *  Chats row (drawn by `HomeView`) owns the disclosure's open/closed state
+ *  and the New chat button; this component only draws what is open. */
+export function HomeChatSidebarThreads() {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
+  const chatSelected = useStore((s) => s.homeSection === "chat");
   const runningId = useStore((s) => s.homeRun?.threadId ?? null);
   const openThread = useStore((s) => s.openHomeThread);
   const removeThread = useStore((s) => s.deleteHomeThread);
   const { confirm, dialog } = useConfirm();
+  const [expanded, setExpanded] = useState(false);
+
+  if (threads.length === 0) {
+    return (
+      <p className="px-8 py-1 text-caption text-subtle-foreground">
+        No conversations yet.
+      </p>
+    );
+  }
+
+  const shown = expanded ? threads : threads.slice(0, CHATS_SIDEBAR_CAP);
+  const hidden = threads.length - shown.length;
 
   return (
-    <section
-      className={cn(
-        "side-pane flex min-h-0 flex-col border-r border-border",
-        className,
-      )}
-      style={style}
-    >
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2.5">
-        {threads.length === 0 ? (
-          <p className="px-2 py-2 text-caption text-subtle-foreground">
-            No conversations yet.
-          </p>
-        ) : (
-          threads.map((t) => (
-            <div
-              key={t.id}
+    <div className="flex flex-col gap-px">
+      {shown.map((t) => {
+        const selected = chatSelected && t.id === openId;
+        return (
+          <div
+            key={t.id}
+            className={cn(
+              "group relative flex h-7 shrink-0 items-center rounded-md pl-8 pr-2 transition-colors",
+              selected ? "bg-[var(--selection)]" : "hover:bg-surface-2",
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => void navAtomic(() => openThread(t.id))}
+              // The row shows the short name the small model gave the
+              // conversation; the tooltip keeps what was actually asked and
+              // when, which is what a truncated title is always a lossy
+              // stand-in for.
+              title={
+                runningId === t.id
+                  ? t.question || t.title
+                  : `${t.question || t.title} — ${new Date(
+                      t.updatedAt,
+                    ).toLocaleDateString()} · ${t.turnCount} ${
+                      t.turnCount === 1 ? "turn" : "turns"
+                    }`
+              }
+              aria-current={selected}
               className={cn(
-                "group relative flex h-11 shrink-0 items-center rounded-md pl-2 pr-1 transition-colors",
-                t.id === openId
-                  ? "bg-[var(--selection)]"
-                  : "hover:bg-surface-2",
+                "min-w-0 flex-1 truncate text-left text-body",
+                selected
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground",
               )}
             >
-              <button
-                type="button"
-                onClick={() => void navAtomic(() => openThread(t.id))}
-                // The row shows the short name the small model gave the
-                // conversation; the tooltip keeps what was actually asked,
-                // which is what a name is always a lossy stand-in for.
-                title={t.question || t.title}
-                aria-current={t.id === openId}
-                className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 text-left"
-              >
-                <span
-                  className={cn(
-                    "block truncate text-body",
-                    t.id === openId
-                      ? "font-medium text-foreground"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {t.title}
-                </span>
-                <span className="block truncate text-micro text-subtle-foreground">
-                  {/* A run keeps going in the thread it was asked in, so the
-                      list says which conversation is still being answered. */}
-                  {runningId === t.id ? (
-                    <span className="text-muted-foreground">Answering…</span>
-                  ) : (
-                    <>
-                      {new Date(t.updatedAt).toLocaleDateString()} ·{" "}
-                      {t.turnCount} {t.turnCount === 1 ? "turn" : "turns"}
-                    </>
-                  )}
-                </span>
-              </button>
-              <RowMenu
-                label={`Options for ${t.title}`}
-                items={[
-                  {
-                    label: "Delete…",
-                    symbol: "trash",
-                    icon: <Trash2 className="h-3.5 w-3.5" />,
-                    danger: true,
-                    onClick: async () => {
-                      if (
-                        await confirm({
-                          title: "Delete this conversation?",
-                          message: `"${t.title}" and its ${t.turnCount} ${
-                            t.turnCount === 1 ? "turn" : "turns"
-                          } are deleted permanently.`,
-                          confirmLabel: "Delete",
-                          danger: true,
-                        })
-                      )
-                        void removeThread(t.id);
-                    },
+              {runningId === t.id ? (
+                <span className="text-muted-foreground">Answering…</span>
+              ) : (
+                t.title
+              )}
+            </button>
+            <RowMenu
+              label={`Options for ${t.title}`}
+              items={[
+                {
+                  label: "Delete…",
+                  symbol: "trash",
+                  icon: <Trash2 className="h-3.5 w-3.5" />,
+                  danger: true,
+                  onClick: async () => {
+                    if (
+                      await confirm({
+                        title: "Delete this conversation?",
+                        message: `"${t.title}" and its ${t.turnCount} ${
+                          t.turnCount === 1 ? "turn" : "turns"
+                        } are deleted permanently.`,
+                        confirmLabel: "Delete",
+                        danger: true,
+                      })
+                    )
+                      void removeThread(t.id);
                   },
-                ]}
-              />
-            </div>
-          ))
-        )}
-      </div>
+                },
+              ]}
+            />
+          </div>
+        );
+      })}
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex h-7 w-full shrink-0 items-center rounded-md pl-8 pr-2 text-left text-body text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        >
+          Show {hidden} more…
+        </button>
+      )}
       {dialog}
-    </section>
+    </div>
   );
 }
 
