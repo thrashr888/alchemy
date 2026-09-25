@@ -132,6 +132,9 @@ const TABS = [
   },
   {
     id: "about",
+    // About is its own hero (icon, version, links); a second header on top
+    // of it would say the same thing twice.
+    header: false,
     label: "About",
     icon: Info,
     description: "Version, release notes, and where the project lives.",
@@ -427,7 +430,9 @@ export function SettingsDialog({
           {/* Header block: centered tile, title and one-sentence description —
               the shape System Settings' own General page uses. 18px below it
               (the block's own pb) before the first group, so scrolled
-              content never starts flush under it. */}
+              content never starts flush under it. A tab that carries its own
+              hero (About) opts out with `header: false`. */}
+          {activeTab.header !== false && (
           <div className="flex shrink-0 flex-col items-center gap-2 pb-0 pt-4 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2">
               <activeTab.icon className="h-7 w-7 text-foreground" />
@@ -441,6 +446,7 @@ export function SettingsDialog({
               </p>
             </div>
           </div>
+          )}
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
           {tab === "sources" && <SourcesTab />}
