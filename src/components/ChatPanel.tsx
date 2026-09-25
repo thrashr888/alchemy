@@ -8,13 +8,13 @@ import {
   LiveRegion,
   RowMenu,
   StepTrail,
-  Textarea,
   useConfirm,
 } from "./ui";
 import { useSourceActions } from "./SourceMenu";
 import { Favicon } from "./SourcesPanel";
 import { Markdown } from "./Markdown";
 import { LiveCards } from "./LiveCards";
+import { Composer } from "./Composer";
 import {
   cn,
   chatReadingClass,
@@ -47,8 +47,6 @@ import type {
 import {
   Wrench,
   ArrowDown,
-  ArrowUp,
-  Square,
   Quote,
   StickyNote,
   Sparkles,
@@ -59,16 +57,12 @@ import {
   CornerDownRight,
   ExternalLink,
   FileText,
-  Paperclip,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
   Share,
   X,
 } from "lucide-react";
-
-/** Composer autosize ceiling — past this the textarea scrolls instead. */
-const COMPOSER_MAX_H = 180;
 
 /** Fuzzy match for the @ picker: every query character (spaces ignored) must
  *  appear in order in the title. Substring hits outrank scattered ones, and
@@ -302,15 +296,9 @@ export function ChatPanel() {
     }, 0);
   }, [pendingInput]);
 
-  // Autosize from the draft, not from onChange: sending, a slash reset, a
-  // follow-up click and retry-after-failure all set the text programmatically,
-  // so keying off the value is what makes the box shrink back as well as grow.
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
-  }, [draft]);
+  // Growing the textarea with what's typed is Composer's job now (it owns
+  // the same effect, keyed on the value it's handed) — sending, a slash
+  // reset, a follow-up click and retry-after-failure still just set `draft`.
 
   // Streaming token/step listeners live in the store's global listeners now
   // (bindGlobalListeners): they must keep accumulating while the user is on
@@ -1017,166 +1005,158 @@ export function ChatPanel() {
       ) : (
       <div className="relative z-10 px-5 pb-[18px] pt-2">
         <div className="mx-auto max-w-[680px]">
-          <div
-            className={cn(
-              // The composer floats over the sheet (RFC-mac-chrome, "Sheet
-              // (chat)"): 680 wide, radius 22, the menus' frosted material
-              // so the words behind it stay legible under glass, a strong
-              // hairline and a deep shadow to lift it off the transcript.
-              "menu-glass relative rounded-[22px] border border-border-strong transition-colors",
-              "pt-2.5 pr-2.5 pb-2 pl-4 shadow-[0_12px_32px_rgba(0,0,0,.45)]",
-              "focus-within:border-ring/60",
-            )}
-          >
-            {slashOpen && (
-              <SlashPicker
-                results={slashResults}
-                selected={slashSel}
-                onHover={setSlashSel}
-                onPick={activateSlash}
-              />
-            )}
-            {mentionOpen && !slashOpen && (
-              <MentionPicker
-                results={mentionResults}
-                selected={mentionSel}
-                onHover={setMentionSel}
-                onPick={pickMention}
-              />
-            )}
-            <Textarea
-              ref={inputRef}
-              rows={1}
-              // 14px: the one place in the app where the user's own words are
-              // bigger than the chrome around them. The composer's own
-              // padding places the text, so the field adds none.
-              className="border-0 bg-transparent p-0 text-[14px] focus:ring-0 min-h-[24px] max-h-[180px]"
-              placeholder={
-                canChat
-                  ? "Ask anything — / for commands, @ to ask about one source…"
-                  : currentId
-                    ? "Add a source to start chatting"
-                    : "Select or create a notebook"
-              }
-              value={draft}
-              disabled={!canChat}
-              role="combobox"
-              aria-expanded={slashOpen}
-              aria-controls={slashOpen ? "slash-picker" : undefined}
-              aria-activedescendant={
-                slashOpen && slashResults[slashSel]
-                  ? `slash-${slashResults[slashSel].name}`
-                  : undefined
-              }
-              onChange={(e) => {
-                // First keystroke of a draft: start loading the models now,
-                // so a cold local model's load overlaps the typing instead
-                // of following Send. Throttled backend-side (10 min).
-                if (!draft && e.target.value) void api.warmChatModels().catch(() => {});
-                setDraft(e.target.value);
-                // Any edit re-opens the picker (Esc/blur only dismiss the
-                // current text) and resets the highlight to the top match.
-                setSlashDismissed(false);
-                setSlashSel(0);
-                setMentionDismissed(false);
-              }}
-              // Clicking outside (Send button, model pill, transcript) closes
-              // the pickers; row clicks use onMouseDown+preventDefault so
-              // focus never leaves and this doesn't fire.
-              onBlur={() => {
-                setSlashDismissed(true);
-                setMentionDismissed(true);
-              }}
-              onKeyDown={(e) => {
-                // isComposing: don't act mid-IME-composition (CJK input).
-                if (e.nativeEvent.isComposing) return;
-                if (slashOpen) {
-                  const c = slashResults[slashSel];
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSlashSel((i) =>
-                      slashResults.length ? (i + 1) % slashResults.length : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashSel((i) =>
-                      slashResults.length
-                        ? (i - 1 + slashResults.length) % slashResults.length
-                        : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSlashDismissed(true);
-                    return;
-                  }
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    if (c) completeSlash(c);
-                    return;
-                  }
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    if (c) activateSlash(c);
-                    else submit(); // no match → send as a plain message
-                    return;
-                  }
-                  // Other keys type through and re-filter the picker.
+          <Composer
+            value={draft}
+            textareaRef={inputRef}
+            disabled={!canChat}
+            sending={sending}
+            onSubmit={submit}
+            onStop={() => cancelGeneration("chat")}
+            placeholder={
+              canChat
+                ? "Ask anything — / for commands, @ to ask about one source…"
+                : currentId
+                  ? "Add a source to start chatting"
+                  : "Select or create a notebook"
+            }
+            role="combobox"
+            ariaExpanded={slashOpen}
+            ariaControls={slashOpen ? "slash-picker" : undefined}
+            ariaActiveDescendant={
+              slashOpen && slashResults[slashSel]
+                ? `slash-${slashResults[slashSel].name}`
+                : undefined
+            }
+            onChange={(value) => {
+              // First keystroke of a draft: start loading the models now,
+              // so a cold local model's load overlaps the typing instead
+              // of following Send. Throttled backend-side (10 min).
+              if (!draft && value) void api.warmChatModels().catch(() => {});
+              setDraft(value);
+              // Any edit re-opens the picker (Esc/blur only dismiss the
+              // current text) and resets the highlight to the top match.
+              setSlashDismissed(false);
+              setSlashSel(0);
+              setMentionDismissed(false);
+            }}
+            // Clicking outside (Send button, model pill, transcript) closes
+            // the pickers; row clicks use onMouseDown+preventDefault so
+            // focus never leaves and this doesn't fire.
+            onBlur={() => {
+              setSlashDismissed(true);
+              setMentionDismissed(true);
+            }}
+            onKeyDown={(e) => {
+              // isComposing: don't act mid-IME-composition (CJK input).
+              if (e.nativeEvent.isComposing) return;
+              if (slashOpen) {
+                const c = slashResults[slashSel];
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSlashSel((i) =>
+                    slashResults.length ? (i + 1) % slashResults.length : 0,
+                  );
                   return;
                 }
-                if (mentionOpen) {
-                  const m = mentionResults[mentionSel];
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setMentionSel((i) =>
-                      mentionResults.length ? (i + 1) % mentionResults.length : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setMentionSel((i) =>
-                      mentionResults.length
-                        ? (i - 1 + mentionResults.length) % mentionResults.length
-                        : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setMentionDismissed(true);
-                    return;
-                  }
-                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-                    e.preventDefault();
-                    if (m) pickMention(m);
-                    return;
-                  }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashSel((i) =>
+                    slashResults.length
+                      ? (i - 1 + slashResults.length) % slashResults.length
+                      : 0,
+                  );
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSlashDismissed(true);
+                  return;
+                }
+                if (e.key === "Tab") {
+                  e.preventDefault();
+                  if (c) completeSlash(c);
                   return;
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  submit();
+                  if (c) activateSlash(c);
+                  else submit(); // no match → send as a plain message
+                  return;
                 }
-              }}
-            />
-            {/* Named sources ride on their own line above the tools: a long
-                title in the tools row squeezed the pills and wrapped. */}
-            {activeMentions.length > 0 && (
-              <div
-                className="min-w-0 truncate pt-1 text-micro text-subtle-foreground"
-                title={activeMentions.map((m) => m.title).join(", ")}
-              >
-                Searching only:{" "}
-                {activeMentions.map((m) => m.title).join(", ")}
-              </div>
-            )}
-            <div className="mt-2 flex items-center gap-1.5">
+                // Other keys type through and re-filter the picker.
+                return;
+              }
+              if (mentionOpen) {
+                const m = mentionResults[mentionSel];
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionSel((i) =>
+                    mentionResults.length ? (i + 1) % mentionResults.length : 0,
+                  );
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionSel((i) =>
+                    mentionResults.length
+                      ? (i - 1 + mentionResults.length) % mentionResults.length
+                      : 0,
+                  );
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMentionDismissed(true);
+                  return;
+                }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                  e.preventDefault();
+                  if (m) pickMention(m);
+                  return;
+                }
+                return;
+              }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            pickers={
+              <>
+                {slashOpen && (
+                  <SlashPicker
+                    results={slashResults}
+                    selected={slashSel}
+                    onHover={setSlashSel}
+                    onPick={activateSlash}
+                  />
+                )}
+                {mentionOpen && !slashOpen && (
+                  <MentionPicker
+                    results={mentionResults}
+                    selected={mentionSel}
+                    onHover={setMentionSel}
+                    onPick={pickMention}
+                  />
+                )}
+              </>
+            }
+            // Named sources ride on their own line above the tools: a long
+            // title in the tools row squeezed the pills and wrapped.
+            note={
+              activeMentions.length > 0 && (
+                <div
+                  className="min-w-0 truncate pt-1 text-micro text-subtle-foreground"
+                  title={activeMentions.map((m) => m.title).join(", ")}
+                >
+                  Searching only:{" "}
+                  {activeMentions.map((m) => m.title).join(", ")}
+                </div>
+              )
+            }
+            menu={
               <ModelPill
                 deepResearch
                 // The sheet has no toolbar, so the chat's own controls hang
@@ -1215,46 +1195,11 @@ export function ChatPanel() {
                   </>
                 )}
               />
-              {/* Attach: the notebook's own Add Source, where a chat app
-                  would put a paperclip — what you attach here is a source. */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 rounded-full"
-                disabled={!currentId}
-                onClick={() => useStore.getState().openAddSource()}
-                title="Add a source to this notebook"
-                aria-label="Add a source"
-              >
-                <Paperclip className="h-3.5 w-3.5" />
-              </Button>
-              <span className="flex-1" />
-              {sending ? (
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  className="rounded-full"
-                  onClick={() => cancelGeneration("chat")}
-                  title="Stop"
-                  aria-label="Stop generating"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  size="icon"
-                  className="rounded-full"
-                  onClick={submit}
-                  disabled={!draft.trim() || !canChat}
-                  title="Send"
-                  aria-label="Send message"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
+            }
+            onAttach={() => useStore.getState().openAddSource()}
+            attachDisabled={!currentId}
+            attachTitle="Add a source to this notebook"
+          />
         </div>
       </div>
       )}
