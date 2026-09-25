@@ -195,10 +195,10 @@ const CMD: &[Command] = &[
     },
     Command {
         id: "menu-home-cards",
-        menu_label: "Registry Cards",
+        menu_label: "Registry Entries",
         accelerator: None,
         keys: "⌘ 7",
-        label: "Go to Registry Cards",
+        label: "Go to Registry Entries",
         context: "Home",
     },
     Command {

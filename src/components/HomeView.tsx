@@ -1306,7 +1306,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
     if (homeSection === "registry") {
       const n = registryCounts?.total ?? 0;
-      return `${n} ${n === 1 ? "card" : "cards"}`;
+      return `${n} ${n === 1 ? "entry" : "entries"}`;
     }
     if (homeSection === "suggested") {
       const n = registrySignal?.shown ?? 0;
@@ -1363,7 +1363,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const heading = (() => {
     if (homeSection === "registry")
       return {
-        title: "Cards",
+        title: "Entries",
         actions: (
           <>
             <div ref={setRegistryActionsEl} className="flex items-center gap-2" />
@@ -1374,7 +1374,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               onClick={() => useStore.setState({ registryCreating: true })}
             >
               <Plus className="h-3.5 w-3.5" />
-              New card
+              New entry
             </Button>
           </>
         ),
@@ -1840,7 +1840,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   }
                 }}
                 placeholder={
-                  homeSection === "registry" ? "Filter cards…" : "Filter notebooks…"
+                  homeSection === "registry" ? "Filter entries…" : "Filter notebooks…"
                 }
                 className="w-[200px] shrink-0"
                 inputClassName="h-[26px] rounded-lg"
@@ -2027,7 +2027,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               <SidebarBlock title="Registry">
                 <LibraryRow
                   icon={<Package className="h-3.5 w-3.5" />}
-                  label="Cards"
+                  label="Entries"
                   count={registryCounts?.total ?? 0}
                   selected={homeSection === "registry"}
                   title="The things your documents are about"
@@ -2042,7 +2042,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   count={registrySignal?.shown ?? 0}
                   badge={suggestedCount || undefined}
                   selected={homeSection === "suggested"}
-                  title="Cards waiting for a yes or no"
+                  title="Entries waiting for a yes or no"
                   onClick={() => goSection("suggested")}
                 />
               </SidebarBlock>

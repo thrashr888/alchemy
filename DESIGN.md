@@ -510,16 +510,17 @@ than a count. What a section holds moved out of the heading and into a
 Finder-style **status bar**: one centered line in the sheet's footer,
 present on every section — `18 notebooks · 4,067 sources · 620 notes`,
 narrowed to `12 notebooks · #finance` under a tag; `4 conversations`;
-`13 reports · 2 unread`; `224 cards`; `10 waiting`. The Brief carries
+`13 reports · 2 unread`; `224 entries`; `10 waiting`. The Brief carries
 nothing there — what last night's run did is now the Brief's own line,
 read from the sidebar row's tooltip and repeated as a quiet second line
 inside the Brief section itself, since that is the surface it is actually
 about. The toolbar carries the collection's controls for every section —
 the grid/table switch, the sort pop-up, the filter field — so no section
-draws a second search box (`HomeViewControls`' `chrome="own"`). Registry
-Cards flows like the shelf now too: full-width at the shelf's own padding
-(`px-7`, 18px between blocks), no suggestion remnants (Keep all/Dismiss
-all and the waiting banner belong to the Suggested queue alone).
+draws a second search box (`HomeViewControls`' `chrome="own"`). The
+Registry's entries (registry cards in the model) flow like the shelf now
+too: full-width at the shelf's own padding (`px-7`, 18px between blocks),
+no suggestion remnants (Keep all/Dismiss all and the waiting banner
+belong to the Suggested queue alone).
 
 **Chats' sessions live in the sidebar**, Finder-folder/Mail-mailbox style,
 not in a second column: the Library's Chats row is a disclosure
@@ -788,7 +789,7 @@ not rendered — recorded as found, not as it ought to be.
 | Notebook shelf (`HomeView`) | `AlchemyHero` branch; filter-empty line | none | `activityError` row + Retry (activity feed only) | `HealthBanner` |
 | Home Staff + Brief (`HomeSections`) | `StaffQuiet` per group; "No brief yet" | `StaffQuiet` "Loading…" (watchers only) | none — toasts, and `FiledGroup` catches into an empty list | "Night Shift is off" button |
 | Latest reports (`HomeReportsFeed`) | "You're all caught up"; `EmptyState` in `HomeView` | "Loading reports…" in `HomeView` | `EmptyState` "Reports unavailable" + Retry | none |
-| Registry (`RegistrySection`) | `EmptyState` "No cards yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
+| Registry (`RegistrySection`) | `EmptyState` "No entries yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
 | Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | one "Indexing n of m documents" card with a `ProgressBar`; single imports keep their own row | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
 | Chat (`ChatPanel`) | `ChatHero`; disabled composer | `ThinkingDots`, `StepTrail`, streaming markdown | `ChatMessage` error branch + Retry + `FallbackOffers` | `ModelPill` "unavailable" rows; `HealthBanner` via `Workspace` |
 | Agent pane (`AgentPane`) | `AgentBlankSlate` | `AgentBlankSlate` "Looking for agents…" | `FailureNotice` + Terminal + Retry | "Running without notebook access" notice |
