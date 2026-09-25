@@ -412,11 +412,23 @@ export function SettingsDialog({
               </button>
             </div>
           </div>
+          {/* The scroll cap MUST stay a definite height on this column (see
+              the note above the sidebar). 6.75rem = the pane bar (3.25rem)
+              + the Models tab's Save footer (3.5rem: 24px padding + a 32px
+              button) — one constant, sized for the tab that carries a
+              footer. The header block scrolls WITH the page as System
+              Settings' does, so it is not part of the cap. key={tab}: the
+              scroll position lives on this div, so switching tabs would
+              otherwise keep the old tab's scroll offset. */}
+          <div
+            key={tab}
+            className="flex max-h-[calc(92vh-6.75rem)] min-w-0 flex-col gap-[18px] overflow-y-auto px-5 pb-[18px]"
+          >
           {/* Header block: centered tile, title and one-sentence description —
               the shape System Settings' own General page uses. 18px below it
               (the block's own pb) before the first group, so scrolled
               content never starts flush under it. */}
-          <div className="flex shrink-0 flex-col items-center gap-2 px-5 pb-[18px] pt-5 text-center">
+          <div className="flex shrink-0 flex-col items-center gap-2 pb-0 pt-4 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2">
               <activeTab.icon className="h-7 w-7 text-foreground" />
             </span>
@@ -429,21 +441,6 @@ export function SettingsDialog({
               </p>
             </div>
           </div>
-          {/* The scroll cap MUST stay a definite height on this column (see
-              the note above the sidebar). 17.25rem = the pane bar (3.25rem)
-              + the header block above (~10.5rem: 20px top padding + the 56px
-              tile + 8px gap + a 20px title line + 4px gap + up to two 12px
-              description lines (~40px) + the block's own 18px bottom
-              padding) + the Models tab's Save footer (3.5rem: 24px padding +
-              a 32px button) — one constant, sized for the tab that carries
-              both a footer and the longest description, with the usual
-              slack for tabs that carry neither. key={tab}: the scroll
-              position lives on this div, so switching tabs would otherwise
-              keep the old tab's scroll offset. */}
-          <div
-            key={tab}
-            className="flex max-h-[calc(92vh-17.25rem)] min-w-0 flex-col gap-[18px] overflow-y-auto px-5 pb-[18px]"
-          >
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
           {tab === "sources" && <SourcesTab />}
@@ -490,7 +487,7 @@ function SidebarIdentity() {
   const theme = useStore((s) => s.theme);
   const { version, status } = useUpdateStatus();
   return (
-    <div className="flex items-center gap-2 px-1.5 pb-3">
+    <div className="flex items-center gap-2.5 px-1.5 pb-5 pt-3">
       <AlchemySymbol
         className="h-7 w-7 shrink-0 text-citation/70"
         preferred={THEMES[resolveThemeId(theme)]?.sigil}
