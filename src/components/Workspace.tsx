@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { notebookVerbs } from "@/lib/notebookMenu";
 import { SourcesPanel } from "./SourcesPanel";
@@ -12,6 +12,7 @@ import { CHROME_BUTTON, SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
 import { RowMenu, useConfirm, type RowMenuItem } from "./ui";
 import { NavButtons } from "./NavButtons";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { NotebookEditModal } from "./NotebookEditModal";
 import { cn, shortcutBlocked } from "@/lib/utils";
 import type { Notebook } from "@/lib/types";
@@ -36,6 +37,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
   const growOpen = useStore((s) => s.growOpen);
   const notebooks = useStore((s) => s.notebooks);
   const close = useStore((s) => s.closeNotebook);
+  // Press-and-move on the title pill drags the window (see the pill).
+  const titleDrag = useRef<{ x: number; y: number; dragged: boolean } | null>(
+    null,
+  );
   const binding = useStore((s) => s.okfBinding);
   const desktopApps = useStore((s) => s.desktopApps);
   useEffect(() => {
@@ -162,7 +167,35 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               RowMenu binds contextmenu to this div, carrying the same verbs as
               a notebook row on Home (color lives in Rename's dialog) plus the
               switcher. The name is chrome, not copy — no text selection. */}
-          <div className="group relative flex min-w-0 select-none items-center">
+          <div
+            className="group relative flex min-w-0 select-none items-center"
+            // The name is also a handle: press and move, and the window moves
+            // with it, as a real title does. A plain click still opens the
+            // pop-up — the drag starts only past a few pixels, and the click
+            // that would follow a drag is swallowed. The header's own
+            // `data-tauri-drag-region` cannot reach inside a button.
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              titleDrag.current = { x: e.clientX, y: e.clientY, dragged: false };
+            }}
+            onPointerMove={(e) => {
+              const d = titleDrag.current;
+              if (!d || d.dragged) return;
+              if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+              d.dragged = true;
+              void getCurrentWebviewWindow().startDragging();
+            }}
+            onPointerUp={() => {
+              // Let the click event see `dragged` before the slate is wiped.
+              setTimeout(() => (titleDrag.current = null), 0);
+            }}
+            onClickCapture={(e) => {
+              if (titleDrag.current?.dragged) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
+          >
             {/* One menu off the name, shaped the way the HIG shapes a pop-up:
                 the choices are the body — the other notebooks, most recently
                 touched first, the current one ticked — with the notebook's own
@@ -217,6 +250,9 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               // box drawn around the icon rather than around the name. The
               // tile and the two text lines are unchanged.
               triggerClassName="flex h-9 min-w-0 items-center gap-2.5 rounded-[8px] px-3 transition-colors hover:bg-surface-2"
+              // The menu's wrapper must be allowed to give way, or the pill
+              // holds its full width and the centered switcher lands on it.
+              className="min-w-0 !shrink"
               menuClassName="w-64"
               align="left"
               items={[

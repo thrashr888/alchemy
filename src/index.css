@@ -128,6 +128,9 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Chrome is not copy: a drag across the window must move nothing but
+     the window. WKWebView still reads the prefixed property. */
+  -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
 }
@@ -180,6 +183,7 @@ textarea,
 [contenteditable],
 .selectable,
 .prose {
+  -webkit-user-select: text;
   user-select: text;
 }
 
@@ -634,7 +638,10 @@ html[data-glass-sidebars="off"][data-scheme="light"] .side-pane {
   background: color-mix(in srgb, var(--chrome) 55%, transparent);
 }
 html[data-glass="clear"] .toolbar {
-  background: transparent;
+  /* Clear keeps a thin floor too: with none, the toolbar's glyphs vanished
+     against a light desktop (they are the theme's foreground, drawn for
+     the theme's chrome, not for the wallpaper). */
+  background: color-mix(in srgb, var(--chrome) 32%, transparent);
 }
 /* The sheet: the center content column. Opaque at rest (it inherits the
    window background). Under glass it keeps a legibility floor: the
@@ -681,11 +688,19 @@ html.glass {
   --surface-2: var(--glass-surface-2);
   --elevated: var(--glass-elevated);
 }
+/* Clear lets more of the material through the widgets as well: at the
+   Tinted mixes they read as grey slabs on a light desktop, because the
+   theme's dark surface is doing all the work the material should. */
+html[data-glass="clear"] {
+  --glass-surface: color-mix(in srgb, var(--surface) 44%, transparent);
+  --glass-surface-2: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  --glass-elevated: color-mix(in srgb, var(--elevated) 50%, transparent);
+}
 .glass .sheet {
   background: color-mix(in srgb, var(--background) 86%, transparent);
 }
 html[data-glass="clear"] .sheet {
-  background: color-mix(in srgb, var(--background) 72%, transparent);
+  background: color-mix(in srgb, var(--background) 62%, transparent);
 }
 
 /* Floating menus and popovers: frosted like native macOS menus —
