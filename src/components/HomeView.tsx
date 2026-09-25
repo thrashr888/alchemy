@@ -79,6 +79,7 @@ import { TimelineSection } from "./TimelineSection";
 import {
   HOME_VIEWS,
   HomeTable,
+  HomeTableHead,
   matchesHomeQuery,
   setHomeView,
   useFindFocus,
@@ -105,10 +106,12 @@ const POPUP =
 /** The shelf's columns, and which way each one first reads. */
 const NOTEBOOK_COLUMNS = [
   { key: "title", label: "Title", sort: "asc" },
-  { key: "sources", label: "Sources", className: "text-right", sort: "desc" },
-  { key: "notes", label: "Notes", className: "text-right", sort: "desc" },
-  { key: "reports", label: "Reports", className: "text-right", sort: "desc" },
-  { key: "updated", label: "Updated", sort: "desc" },
+  // Fixed widths: the head and the body are two tables over one colgroup,
+  // so every column but the title names its width.
+  { key: "sources", label: "Sources", className: "w-24 text-right", sort: "desc" },
+  { key: "notes", label: "Notes", className: "w-24 text-right", sort: "desc" },
+  { key: "reports", label: "Reports", className: "w-24 text-right", sort: "desc" },
+  { key: "updated", label: "Updated", className: "w-32", sort: "desc" },
   { key: "menu", label: "", className: "w-8" },
 ] as const satisfies TableColumn[];
 
@@ -248,8 +251,6 @@ function NotebookTable({
   pickedIds,
   onRowClick,
   onRowOpen,
-  sort,
-  onSort,
 }: {
   notebooks: Notebook[];
   /** The notebooks Alchemy ships, gathered under their own caps row at the
@@ -268,10 +269,6 @@ function NotebookTable({
   /** Keyboard path: Tab reaches each row, Enter opens it (bypassing the
    *  pointer-only selection logic in onRowClick). */
   onRowOpen: (nb: Notebook) => void;
-  /** The rows arrive already ordered — the shelf sorts them upstream so the
-   *  selection's range order matches what's on screen. */
-  sort: TableSort;
-  onSort: (key: string, natural: SortDir) => void;
 }) {
   const row = (nb: Notebook) => {
     const shared = sharedLabelOf(nb);
@@ -342,7 +339,7 @@ function NotebookTable({
   };
 
   return (
-    <HomeTable columns={[...NOTEBOOK_COLUMNS]} sort={{ ...sort, onSort }}>
+    <HomeTable columns={[...NOTEBOOK_COLUMNS]}>
       {notebooks.map(row)}
       {builtIns.length > 0 && (
         <>
@@ -1518,8 +1515,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         <NotebookTable
           notebooks={ownNotebooks}
           builtIns={builtInNotebooks}
-          sort={nbSort}
-          onSort={toggleNbSort}
           unreadByNb={unreadByNb}
           sharedLabelOf={sharedOf}
           pickedIds={pick.pickedIds}
@@ -1681,13 +1676,27 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     // The Library. The heading is pinned above (as it is for the Registry
     // and the Timeline); only the shelves scroll.
     return (
-      <div
-        ref={shelfRef}
-        onPointerDown={marqueeDown}
-        className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px]"
-      >
-        {shelf}
-      </div>
+      <>
+        {/* Table mode's column headers live above the scroller, on the
+            sheet: nothing scrolls under them, so they need no background
+            and no sticky. The right padding matches the scroller's
+            reserved scrollbar gutter so both grids share one width. */}
+        {scope !== "archived" && homeView === "table" && ownNotebooks.length > 0 && (
+          <div className="relative z-10 shrink-0 pl-7 pr-[calc(1.75rem+10px)]">
+            <HomeTableHead
+              columns={[...NOTEBOOK_COLUMNS]}
+              sort={{ ...nbSort, onSort: toggleNbSort }}
+            />
+          </div>
+        )}
+        <div
+          ref={shelfRef}
+          onPointerDown={marqueeDown}
+          className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px] [scrollbar-gutter:stable]"
+        >
+          {shelf}
+        </div>
+      </>
     );
   })();
 

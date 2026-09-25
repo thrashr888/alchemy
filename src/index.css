@@ -662,12 +662,17 @@ html[data-glass="clear"] .toolbar {
      ghosted through the header. The background is near-opaque anyway. */
   background: var(--background);
 }
-/* Opaque under glass as well, on purpose. A sticky header's one job is
-   to hide what scrolls beneath it, and WKWebView paints a translucent
-   sticky table cell in plain cell order — the rows' text came through a
-   98% background while a 100% one covered them (measured on screen, not
-   in the bridge). Mail draws its column headers opaque over the material
-   too. */
+/* Under glass these (Grow's section bars, the reader's outline, the
+   timeline's day labels — plain blocks, not table cells) sit a shade
+   above the sheet's own floor so what scrolls under them is covered
+   without a black band. Table heads no longer stick at all: see
+   HomeTableHead. */
+.glass .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+}
+html[data-glass="clear"] .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+}
 
 /* Glass widgets: under glass the sheet's and panes' raised surfaces (the
    composer, message bubbles, cards, grouped lists, pills) would otherwise

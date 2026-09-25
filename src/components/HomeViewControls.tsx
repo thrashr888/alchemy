@@ -195,109 +195,115 @@ export function useTableSort(
   return { sort, toggle };
 }
 
-/** The shared table shell: a hairline header row and hoverable body rows,
-    matching the design system's no-tonal-fill rule. A column that names a
-    natural direction becomes a real sort button, with the arrow drawn on
-    the active one and a faint one on hover elsewhere. */
-export function HomeTable({
+/** The shared table shell, in two halves so the column headers can sit
+    OUTSIDE the scroller — on the sheet, with nothing scrolling under them,
+    the way Finder's list view keeps its header row — while the rows scroll
+    beneath. `HomeTableHead` and `HomeTable` each draw a fixed-layout table
+    over the same `<colgroup>`, so the two grids line up to the pixel; the
+    scroller reserves its scrollbar gutter (`scrollbar-gutter: stable`,
+    10px in index.css) and the head's wrapper pads the same width. A column
+    that names a natural direction becomes a real sort button, with the
+    arrow drawn on the active one and a faint one on hover elsewhere.
+    Sticky heads inside the scroller were tried first: WKWebView paints a
+    translucent sticky cell in cell order, so rows ghosted through, and an
+    opaque one read as a black band on the glass sheet. */
+function TableCols({ columns }: { columns: TableColumn[] }) {
+  return (
+    <colgroup>
+      {columns.map((c) => (
+        <col key={c.key} className={c.className} />
+      ))}
+    </colgroup>
+  );
+}
+
+const TABLE_CLASS = "w-full table-fixed border-collapse text-body";
+
+export function HomeTableHead({
   columns,
   sort,
-  fixed = false,
-  children,
+  className,
 }: {
   columns: TableColumn[];
   /** Current order plus the click handler, from `useTableSort`. Omit it and
    *  the headers stay plain labels. */
   sort?: TableSort & { onSort: (key: string, natural: SortDir) => void };
-  /** Fixed layout: every column but one carries a width class, and the one
-   *  without takes the rest. Auto layout sizes columns by their widest
-   *  cell, so a long unbreakable name defeats `truncate` and pushes the
-   *  table past its wrapper, where the last column clips. Use fixed for a
-   *  table with multi-valued or free-text cells. */
-  fixed?: boolean;
+  className?: string;
+}) {
+  return (
+    <table className={cn(TABLE_CLASS, className)}>
+      <TableCols columns={columns} />
+      <thead>
+        <tr className="border-b border-border text-left">
+          {columns.map((c) => {
+            const natural = sort && c.sort;
+            const active = natural !== undefined && sort!.key === c.key;
+            const Arrow =
+              active && sort!.dir === "asc" ? ChevronUp : ChevronDown;
+            return (
+              <th
+                key={c.key}
+                scope="col"
+                aria-sort={
+                  !natural
+                    ? undefined
+                    : !active
+                      ? "none"
+                      : sort!.dir === "asc"
+                        ? "ascending"
+                        : "descending"
+                }
+                className={cn(
+                  "px-3 py-2 text-caption font-medium text-subtle-foreground",
+                  c.className,
+                )}
+              >
+                {natural ? (
+                  <button
+                    type="button"
+                    onClick={() => sort!.onSort(c.key, natural)}
+                    title={`Sort by ${c.label.toLowerCase()}`}
+                    className={cn(
+                      "group/sort -mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:text-foreground",
+                      active && "text-foreground",
+                    )}
+                  >
+                    {c.label}
+                    <Arrow
+                      aria-hidden
+                      className={cn(
+                        "h-3 w-3 shrink-0 transition-opacity",
+                        // Focus shows the hint too: an affordance that
+                        // only answers the mouse is invisible by keyboard.
+                        active
+                          ? "opacity-100"
+                          : "opacity-0 group-hover/sort:opacity-40 group-focus-visible/sort:opacity-40",
+                      )}
+                    />
+                  </button>
+                ) : (
+                  c.label
+                )}
+              </th>
+            );
+          })}
+        </tr>
+      </thead>
+    </table>
+  );
+}
+
+export function HomeTable({
+  columns,
+  children,
+}: {
+  columns: TableColumn[];
   children: React.ReactNode;
 }) {
   return (
-    // `overflow-x-clip`, not `-auto`: an overflow-auto wrapper would become
-    // the sticky head's containing block, and the head would never stick
-    // to the sheet's scroller. Clip does not make a scroll container.
-    <div className="overflow-x-clip">
-      <table
-        className={cn(
-          "w-full border-collapse text-body",
-          fixed && "table-fixed",
-        )}
-      >
-        {/* The column headers pin below whatever sticky block sits above
-            the table in the same scroller (the Entries filter bar sets
-            `--sticky-offset` to its height; the Notebooks shelf has none,
-            so the head pins at the top). The cells are what stick, each
-            with its own background: WKWebView does not reliably paint a
-            sticky <thead>'s background over a collapsed table's rows, so
-            row text ghosted through and a hairline peeked above. The
-            bottom hairline lives on the cells too (a border on a sticky
-            row does not travel with it), and a 1px shadow above covers the
-            collapsed border's half-pixel. */}
-        <thead>
-          <tr className="text-left">
-            {columns.map((c) => {
-              const natural = sort && c.sort;
-              const active = natural !== undefined && sort!.key === c.key;
-              const Arrow =
-                active && sort!.dir === "asc" ? ChevronUp : ChevronDown;
-              return (
-                <th
-                  key={c.key}
-                  scope="col"
-                  aria-sort={
-                    !natural
-                      ? undefined
-                      : !active
-                        ? "none"
-                        : sort!.dir === "asc"
-                          ? "ascending"
-                          : "descending"
-                  }
-                  style={{ top: "var(--sticky-offset, 0px)" }}
-                  className={cn(
-                    "sheet-sticky sticky z-20 px-3 py-2 text-caption font-medium text-subtle-foreground",
-                    "shadow-[inset_0_-1px_0_var(--border),0_-1px_0_var(--background)]",
-                    c.className,
-                  )}
-                >
-                  {natural ? (
-                    <button
-                      type="button"
-                      onClick={() => sort!.onSort(c.key, natural)}
-                      title={`Sort by ${c.label.toLowerCase()}`}
-                      className={cn(
-                        "group/sort -mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:text-foreground",
-                        active && "text-foreground",
-                      )}
-                    >
-                      {c.label}
-                      <Arrow
-                        aria-hidden
-                        className={cn(
-                          "h-3 w-3 shrink-0 transition-opacity",
-                          // Focus shows the hint too: an affordance that
-                          // only answers the mouse is invisible by keyboard.
-                          active
-                            ? "opacity-100"
-                            : "opacity-0 group-hover/sort:opacity-40 group-focus-visible/sort:opacity-40",
-                        )}
-                      />
-                    </button>
-                  ) : (
-                    c.label
-                  )}
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
+    <table className={TABLE_CLASS}>
+      <TableCols columns={columns} />
+      <tbody>{children}</tbody>
+    </table>
   );
 }

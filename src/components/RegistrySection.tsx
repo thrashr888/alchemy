@@ -21,22 +21,15 @@ import type {
   RegistryCard,
   Source,
 } from "@/lib/types";
-import {
-  Badge,
-  Button,
-  CardAction,
-  EmptyState,
-  Input,
-  Modal,
-  RowMenu,
-  type RowMenuItem,
-  SortMenu,
-  useMarquee,
-  useConfirm,
-} from "./ui";
+import { Badge, Button, CardAction, EmptyState, Input, Modal, RowMenu, type RowMenuItem, SortMenu, useMarquee, useConfirm } from "./ui";
 import { FilterBar, rankByCount } from "./FilterBar";
-import { HomeTable, matchesHomeQuery, useTableSort } from "./HomeViewControls";
-import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
+import {
+  HomeTable,
+  HomeTableHead,
+  matchesHomeQuery,
+  useTableSort,
+} from "./HomeViewControls";
+import type { TableColumn, TableSort } from "./HomeViewControls";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -550,24 +543,6 @@ export function RegistrySection({
     );
   }
 
-  // The list's column headers pin just under this filter block: publish
-  // the block's height (it wraps to two rows on narrow sheets) as a CSS
-  // variable on the scroller, which `HomeTable`'s sticky head reads.
-  const filtersRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = filtersRef.current;
-    const scroller = el?.parentElement;
-    if (!el || !scroller) return;
-    const apply = () =>
-      scroller.style.setProperty("--sticky-offset", `${el.offsetHeight}px`);
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      scroller.style.removeProperty("--sticky-offset");
-    };
-  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -579,10 +554,38 @@ export function RegistrySection({
           border — which is why the toggle alone went invisible, and only
           when a collapsed sidebar shortened the header enough to slide the
           row up into the banner. */}
+      {/* Kind groups and notebook chips sit above the scroller, on the
+          sheet, with the list's column headers under them in list mode:
+          nothing scrolls beneath either, so neither is sticky nor carries
+          a background. The head pads the scroller's reserved scrollbar
+          gutter so the two grids share one width. */}
+      <div className="relative z-10 shrink-0 border-b border-border px-7 py-2">
+        <FilterBar
+          bare
+          groups={kinds}
+          group={kinds.some((k) => k.value === kind) ? kind : "all"}
+          onGroup={setKind}
+          chips={nbChips}
+          chip={
+            notebook !== null && nbChips.includes(notebook) ? notebook : null
+          }
+          onChip={setNotebook}
+          chipAllLabel="All notebooks"
+          chipPrefix=""
+          />
+      </div>
+      {shape === "table" && loaded && !loadError && mine.length > 0 && (
+        <div className="relative z-10 shrink-0 pr-[10px]">
+          <HomeTableHead
+            columns={[...CARD_COLUMNS]}
+            sort={{ ...tableSort, onSort: toggleTableSort }}
+          />
+        </div>
+      )}
       <div
         ref={indexRef}
         onPointerDown={indexMarqueeDown}
-        className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px]"
+        className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px] [scrollbar-gutter:stable]"
       >
         {/* The cards view's own controls — sort, and the suggest/orphan verbs
             — report into the heading row's trailing slot next to "New card"
@@ -624,30 +627,6 @@ export function RegistrySection({
             </>,
             actionsPortal,
           )}
-        {/* Kind groups and notebook chips, full width now like the shelf's
-            own recency groups — and sticky, so the filter stays put while
-            the list scrolls under it instead of scrolling away with it.
-            -mx-7/px-7 bleeds it to the sheet's edges like CardDetail's own
-            sticky header, so it reaches as wide as the list's full-bleed
-            rows in list mode. */}
-        <div
-          ref={filtersRef}
-          className="sheet-sticky sticky top-0 z-20 -mx-7 border-b border-border px-7 py-2"
-        >
-          <FilterBar
-            bare
-            groups={kinds}
-            group={kinds.some((k) => k.value === kind) ? kind : "all"}
-            onGroup={setKind}
-            chips={nbChips}
-            chip={
-              notebook !== null && nbChips.includes(notebook) ? notebook : null
-            }
-            onChip={setNotebook}
-            chipAllLabel="All notebooks"
-            chipPrefix=""
-          />
-        </div>
         {loaded && loadError ? (
           <EmptyState
             icon={<Package className="h-5 w-5" />}
@@ -677,8 +656,6 @@ export function RegistrySection({
           <CardTable
             cards={shown}
             nbTitle={nbTitle}
-            sort={tableSort}
-            onSort={toggleTableSort}
             onChanged={load}
             pickedIds={pick.pickedIds}
             onRowClick={(e, id) => {
@@ -1005,8 +982,6 @@ function CardTable({
   pickedIds,
   onRowClick,
   onContextItems,
-  sort,
-  onSort,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
@@ -1015,10 +990,6 @@ function CardTable({
   pickedIds: Set<string>;
   onRowClick: (e: React.MouseEvent, id: string) => void;
   onContextItems: (id: string) => () => RowMenuItem[] | null;
-  /** The rows arrive already ordered; the section sorts them so the
-   *  selection's range order matches what's drawn. */
-  sort: TableSort;
-  onSort: (key: string, natural: SortDir) => void;
 }) {
   const archivedIds = useArchivedIds();
   return (
@@ -1027,7 +998,7 @@ function CardTable({
     // on the outer columns keep the text lined up with the heading above).
     <div className="-mx-7">
       {/* No "New card" button here — the header's covers both views. */}
-      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }} fixed>
+      <HomeTable columns={[...CARD_COLUMNS]}>
         {cards.map((c) => {
           const notebooks = [
             ...new Set(
