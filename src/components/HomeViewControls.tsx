@@ -218,14 +218,24 @@ export function HomeTable({
   children: React.ReactNode;
 }) {
   return (
-    <div className="overflow-x-auto">
+    // `overflow-x-clip`, not `-auto`: an overflow-auto wrapper would become
+    // the sticky head's containing block, and the head would never stick
+    // to the sheet's scroller. Clip does not make a scroll container.
+    <div className="overflow-x-clip">
       <table
         className={cn(
           "w-full border-collapse text-body",
           fixed && "table-fixed",
         )}
       >
-        <thead>
+        {/* The column headers pin below whatever sticky block sits above
+            the table in the same scroller (the Entries filter bar sets
+            `--sticky-offset` to its height; the Notebooks shelf has none,
+            so the head pins at the top). */}
+        <thead
+          className="sheet-sticky sticky z-10"
+          style={{ top: "var(--sticky-offset, 0px)" }}
+        >
           <tr className="border-b border-border text-left">
             {columns.map((c) => {
               const natural = sort && c.sort;

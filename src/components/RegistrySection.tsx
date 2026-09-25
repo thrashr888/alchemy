@@ -550,6 +550,25 @@ export function RegistrySection({
     );
   }
 
+  // The list's column headers pin just under this filter block: publish
+  // the block's height (it wraps to two rows on narrow sheets) as a CSS
+  // variable on the scroller, which `HomeTable`'s sticky head reads.
+  const filtersRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = filtersRef.current;
+    const scroller = el?.parentElement;
+    if (!el || !scroller) return;
+    const apply = () =>
+      scroller.style.setProperty("--sticky-offset", `${el.offsetHeight}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      scroller.style.removeProperty("--sticky-offset");
+    };
+  });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* relative z-10, like the notebook shelf's scroller: Home paints a
@@ -611,7 +630,10 @@ export function RegistrySection({
             -mx-7/px-7 bleeds it to the sheet's edges like CardDetail's own
             sticky header, so it reaches as wide as the list's full-bleed
             rows in list mode. */}
-        <div className="sheet-sticky sticky top-0 z-10 -mx-7 border-b border-border px-7 py-2">
+        <div
+          ref={filtersRef}
+          className="sheet-sticky sticky top-0 z-10 -mx-7 border-b border-border px-7 py-2"
+        >
           <FilterBar
             bare
             groups={kinds}
