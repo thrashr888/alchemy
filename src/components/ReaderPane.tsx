@@ -3787,7 +3787,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
             )
           ) : (
             <>
-              <div className="sticky top-0 z-10 -ml-1 flex items-center gap-2 bg-background/85 py-1 pl-1 backdrop-blur">
+              <div className="sheet-sticky sticky top-0 z-10 -ml-1 flex items-center gap-2 py-1 pl-1">
                 <RepoBreadcrumb
                   repoTitle={source.title}
                   rel={selRel ?? ""}

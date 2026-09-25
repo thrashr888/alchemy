@@ -643,6 +643,24 @@ html[data-glass="clear"] .toolbar {
    docs/RFC-mac-chrome.md, resolved on the side of reading. Tinted keeps
    the theme's background at 86%; Clear lets more through but still
    floors it. */
+/* Sticky section headers inside the sheet (Grow's Feeds / Needs attention,
+   the Registry's filter bar, the reader's outline, the timeline's day
+   labels). They must hide what scrolls under them, so they carry the
+   sheet's own floor — opaque at rest, and under glass the same partial
+   mix the sheet uses plus a blur, so they never read as black bars on a
+   frosted window. */
+.sheet-sticky {
+  background: color-mix(in srgb, var(--background) 95%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.glass .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 62%, transparent);
+}
+html[data-glass="clear"] .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 48%, transparent);
+}
+
 /* Glass widgets: under glass the sheet's and panes' raised surfaces (the
    composer, message bubbles, cards, grouped lists, pills) would otherwise
    stay opaque and read as black slabs on a frosted window. They become

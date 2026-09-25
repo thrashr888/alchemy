@@ -1701,7 +1701,7 @@ function CardDetail({
         {/* Sticky: flush against the scroller's top edge the button was
             clipped by the header above it, and scrolling a long document
             list used to carry the only way out off-screen. */}
-        <div className="sticky top-0 z-10 -mx-6 mb-3 bg-background/95 px-6 pb-3 pt-4 backdrop-blur">
+        <div className="sheet-sticky sticky top-0 z-10 -mx-6 mb-3 px-6 pb-3 pt-4">
           <Button variant="secondary" size="sm" onClick={onBack}>
             <ArrowLeft className="h-3.5 w-3.5" />
             All cards
