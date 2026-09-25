@@ -521,27 +521,36 @@ Cards flows like the shelf now too: full-width at the shelf's own padding
 (`px-7`, 18px between blocks), no suggestion remnants (Keep all/Dismiss
 all and the waiting banner belong to the Suggested queue alone).
 
-**Chats is a `NavigationSplitView`**, the way Mail and Messages read: the
-Library sidebar, a 260px conversation list (`HomeChatList`), and the
-transcript as detail — not a stacked side-card over a shelf. The list
-column is `.side-pane` toned with a hairline on its right and carries no
-header of its own; the count already lives in the sidebar's Chats row, and
-New chat sits in the heading row beside the h1, the same trailing slot
-Notebooks gives Add source/Import. Each row is a two-line Messages entry,
-44px, `px-2 rounded-md` — title, then a muted `8/29/2026 · 14 turns` —
-selected washed in `--selection` like every other row. The transcript and
-composer are the notebook's Chat page's own, not a redrawn copy: both
-share one `Composer` component (`src/components/Composer.tsx`), so the 680
-measure, the radius-22 frosted composer, the one model pop-up and the
-blank state (sigil + a line, no summary card — a notebook summary doesn't
-apply to the whole corpus) all read identically wherever they're asked.
-Home's own style and length choices fold into sections of that one
-pop-up, `ModelPill`'s `extraRows`, exactly as the notebook composer hangs
-Chat settings and Clear conversation off it — three pills and an Ask
-button became one pop-up and the circle send. The footer's status bar
-(`4 conversations`) still sits at the very bottom of the sheet, under the
-composer, never between it and the transcript: the composer belongs to
-the detail column, not the section frame around it.
+**Chats' sessions live in the sidebar**, Finder-folder/Mail-mailbox style,
+not in a second column: the Library's Chats row is a disclosure
+(`ChatsRow` in `HomeView.tsx`), and its sessions nest beneath it as
+indented child rows (`HomeChatSidebarThreads` in `HomeChat.tsx`) — newest
+first, 28px, `pl-8 pr-2 rounded-md text-body`, title truncated to one line.
+The two-line Messages entry this used to be (title, then a muted `8/29/2026
+· 14 turns`) is one line now; that detail moved to the row's `title`
+tooltip, since a sidebar row has no room for a second line. A chevron on
+the Chats row opens and closes the sub-list independently of selection
+(persisted, `localStorage.homeChatsOpen`, open by default); a small `+` at
+the row's trailing edge, visible on hover/focus or while Chats is the
+section on screen, starts a new conversation without a trip to the sheet.
+The selected session washes `bg-[var(--selection)]`; the parent Chats row
+washes only when the open conversation is the blank one nothing has been
+asked into yet, the way Mail's Inbox row stays selected until a message
+underneath it is. The list caps at 12 sessions with a final `Show N more…`
+row, so a long history can't push Registry and Tags off the sidebar's
+bottom. With the list gone from the sheet, Chats draws no heading row at
+all — no title, no New chat button, nothing above the transcript — and no
+footer either, so the composer sits 18px above the sheet's bottom edge,
+exactly like the notebook's own chat. The transcript and composer are the
+notebook's Chat page's own, not a redrawn copy: both share one `Composer`
+component (`src/components/Composer.tsx`), so the 680 measure, the
+radius-22 frosted composer, the one model pop-up and the blank state
+(sigil + a line, no summary card — a notebook summary doesn't apply to the
+whole corpus) all read identically wherever they're asked. Home's own
+style and length choices fold into sections of that one pop-up,
+`ModelPill`'s `extraRows`, exactly as the notebook composer hangs Chat
+settings and Clear conversation off it — three pills and an Ask button
+became one pop-up and the circle send.
 
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar. The sidebar leads with an identity block — the app sigil,
