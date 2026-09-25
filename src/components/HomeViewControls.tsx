@@ -233,7 +233,7 @@ export function HomeTable({
             `--sticky-offset` to its height; the Notebooks shelf has none,
             so the head pins at the top). */}
         <thead
-          className="sheet-sticky sticky z-10"
+          className="sheet-sticky sticky z-20"
           style={{ top: "var(--sticky-offset, 0px)" }}
         >
           <tr className="border-b border-border text-left">

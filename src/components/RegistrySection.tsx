@@ -632,7 +632,7 @@ export function RegistrySection({
             rows in list mode. */}
         <div
           ref={filtersRef}
-          className="sheet-sticky sticky top-0 z-10 -mx-7 border-b border-border px-7 py-2"
+          className="sheet-sticky sticky top-0 z-20 -mx-7 border-b border-border px-7 py-2"
         >
           <FilterBar
             bare
