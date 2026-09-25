@@ -1970,7 +1970,10 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   <ChatsRow
                     open={chatsSidebarOpen}
                     onToggle={toggleChatsSidebar}
-                    selected={chatOpen && chatBlank}
+                    // The parent washes when it is the visible selection:
+                    // a blank new conversation, or an open thread whose
+                    // own row is hidden behind a folded sub-list.
+                    selected={chatOpen && (chatBlank || !chatsSidebarOpen)}
                     sectionActive={chatOpen}
                     dot={chatUnread}
                     onSelect={() =>

@@ -2257,10 +2257,19 @@ export const useStore = create<AppState>((rawSet, get) => {
       try {
         const cards = await api.listRegistry();
         const shown = cards.filter((c) => c.origin === "auto" && c.surfaced);
+        // The sidebar's Cards count rides on this same read, so it is right
+        // from the first paint and not only after the Cards page has been
+        // visited (the page's own effect refines the per-kind split).
+        const mine = cards.filter((c) => !c.origin).length;
+        const prior = get().registryCounts;
         set({
           registrySignal: {
             shown: shown.length,
             newest: shown.reduce((m, c) => Math.max(m, c.createdAt), 0),
+          },
+          registryCounts: {
+            total: mine,
+            kinds: prior?.total === mine ? prior.kinds : [],
           },
         });
       } catch {
