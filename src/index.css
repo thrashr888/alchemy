@@ -657,19 +657,17 @@ html[data-glass="clear"] .toolbar {
    mix the sheet uses plus a blur, so they never read as black bars on a
    frosted window. */
 .sheet-sticky {
+  /* No backdrop-filter here: on a sticky element WKWebView composites the
+     filtered backdrop from a stale scroll offset, and the rows beneath
+     ghosted through the header. The background is near-opaque anyway. */
   background: var(--background);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
 }
-/* A sticky header's one job is to hide what scrolls beneath it, so under
-   glass it stays close to opaque — rows ghosting through a filter bar
-   read as a bug, not as material. The blur softens what little shows. */
-.glass .sheet-sticky {
-  background: color-mix(in srgb, var(--background) 98%, transparent);
-}
-html[data-glass="clear"] .sheet-sticky {
-  background: color-mix(in srgb, var(--background) 94%, transparent);
-}
+/* Opaque under glass as well, on purpose. A sticky header's one job is
+   to hide what scrolls beneath it, and WKWebView paints a translucent
+   sticky table cell in plain cell order — the rows' text came through a
+   98% background while a 100% one covered them (measured on screen, not
+   in the bridge). Mail draws its column headers opaque over the material
+   too. */
 
 /* Glass widgets: under glass the sheet's and panes' raised surfaces (the
    composer, message bubbles, cards, grouped lists, pills) would otherwise

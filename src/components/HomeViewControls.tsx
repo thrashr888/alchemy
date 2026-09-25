@@ -231,12 +231,15 @@ export function HomeTable({
         {/* The column headers pin below whatever sticky block sits above
             the table in the same scroller (the Entries filter bar sets
             `--sticky-offset` to its height; the Notebooks shelf has none,
-            so the head pins at the top). */}
-        <thead
-          className="sheet-sticky sticky z-20"
-          style={{ top: "var(--sticky-offset, 0px)" }}
-        >
-          <tr className="border-b border-border text-left">
+            so the head pins at the top). The cells are what stick, each
+            with its own background: WKWebView does not reliably paint a
+            sticky <thead>'s background over a collapsed table's rows, so
+            row text ghosted through and a hairline peeked above. The
+            bottom hairline lives on the cells too (a border on a sticky
+            row does not travel with it), and a 1px shadow above covers the
+            collapsed border's half-pixel. */}
+        <thead>
+          <tr className="text-left">
             {columns.map((c) => {
               const natural = sort && c.sort;
               const active = natural !== undefined && sort!.key === c.key;
@@ -255,8 +258,10 @@ export function HomeTable({
                           ? "ascending"
                           : "descending"
                   }
+                  style={{ top: "var(--sticky-offset, 0px)" }}
                   className={cn(
-                    "px-3 py-2 text-caption font-medium text-subtle-foreground",
+                    "sheet-sticky sticky z-20 px-3 py-2 text-caption font-medium text-subtle-foreground",
+                    "shadow-[inset_0_-1px_0_var(--border),0_-1px_0_var(--background)]",
                     c.className,
                   )}
                 >
