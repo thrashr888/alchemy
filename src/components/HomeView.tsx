@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { navAtomic, useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
 import { DevBadge } from "./DevBadge";
@@ -60,18 +60,18 @@ import {
   FolderInput,
   Library,
   Share2,
-  Square,
   StickyNote,
   Sun,
   Users,
 } from "lucide-react";
 import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
 import {
-  HomeChatControls,
+  HomeChatList,
+  HomeChatMenu,
   HomeChatThread,
-  HomeThreadsSidebar,
   useHomeChat,
 } from "./HomeChat";
+import { Composer } from "./Composer";
 import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
 import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
@@ -966,20 +966,20 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // The conversation: one thread over the WHOLE corpus (meta-chat,
   // docs/RFC-meta-chat.md). Its composer lives in the Chat section, where the
   // answers are; the Library reaches it through the Chats row, the Chats
-  // sidebar's thread list, ⌘K's ask mode, or by simply typing (below).
-  const askRef = useRef<HTMLInputElement>(null);
+  // list's rows, ⌘K's ask mode, or by simply typing (below).
+  const askRef = useRef<HTMLTextAreaElement>(null);
   const chat = useHomeChat();
   const chatOpen = homeSection === "chat";
   // Half-typed text belongs to the conversation it was typed in, not to the
   // box: switching threads to check something and coming back finds it still
   // there.
   const homeThreadId = useStore((s) => s.homeChat.threadId);
+  const openHomeThread = useStore((s) => s.openHomeThread);
   const draftKey = homeDraftKey(chatOpen, homeThreadId);
   const ask = useStore((s) => s.homeDrafts[draftKey] ?? "");
   const setHomeDraft = useStore((s) => s.setHomeDraft);
   const setAsk = (text: string) => setHomeDraft(draftKey, text);
-  function submitAsk(e: React.FormEvent) {
-    e.preventDefault();
+  function submitAsk() {
     const q = ask.trim();
     // A question asked over the top of a running one supersedes it (askHome
     // winds the old one down and keeps its partial), so only a run in THIS
@@ -1128,57 +1128,30 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const searchRef = useRef<HTMLInputElement>(null);
   useFindFocus(searchRef);
 
-  /** The follow-up composer, docked under the conversation the way a
-   *  notebook's is: the thread scrolls, this stays. */
+  /** The follow-up composer, docked under the conversation the way the
+   *  notebook's Chat page docks its own (`Composer`, shared with
+   *  `ChatPanel`) — 680 wide, radius 22, one pop-up for how the answer gets
+   *  made. No slash commands or @-mentions here (nothing to attach to, and
+   *  a corpus question doesn't name one source), so Home wires only Enter
+   *  to send. */
   const askComposer = (
     <>
-      <form
+      <Composer
+        value={ask}
+        onChange={setAsk}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submitAsk();
+          }
+        }}
+        textareaRef={askRef}
+        placeholder="Ask across everything…"
+        sending={chat.loading}
         onSubmit={submitAsk}
-        className="min-w-0 rounded-xl border border-border bg-surface/80 p-1.5 shadow-sm backdrop-blur transition-colors focus-within:border-primary/50"
-      >
-        <div className="flex min-w-0 items-center gap-1.5">
-          <input
-            ref={askRef}
-            value={ask}
-            onChange={(e) => setAsk(e.target.value)}
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            {...({ writingsuggestions: "false" } as Record<string, string>)}
-            placeholder="Ask a follow-up…"
-            aria-label="Ask a follow-up across all notebooks"
-            className="h-8 min-w-0 flex-1 bg-transparent pl-2.5 pr-1.5 text-body text-foreground outline-none placeholder:text-subtle-foreground"
-          />
-          {chat.loading ? (
-            // Stop keeps whatever streamed — the backend resolves a
-            // cancelled run with the partial answer and its citations.
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={chat.stop}
-              title="Stop answering (Esc)"
-            >
-              <Square className="h-3 w-3 fill-current" />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              disabled={!ask.trim()}
-            >
-              Ask
-            </Button>
-          )}
-        </div>
-        {/* Style, length, and model — they describe the answer being
-            written, so they live with the composer. */}
-        <div className="flex items-center gap-1.5 px-1 pt-1.5">
-          <HomeChatControls />
-        </div>
-      </form>
+        onStop={chat.stop}
+        menu={<HomeChatMenu />}
+      />
       {activityError && (
         <div
           role="alert"
@@ -1333,7 +1306,28 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             </Button>
           ) : null,
       };
-    if (homeSection === "chat") return { title: "Chats", actions: null };
+    if (homeSection === "chat")
+      return {
+        title: "Chats",
+        // The list column carries no header of its own (RFC-mac-chrome,
+        // "Home"): New chat lives here, the same trailing slot Notebooks
+        // gives Add source/Import. Disabled only when the empty
+        // conversation already on screen IS what New chat would open —
+        // from anywhere else it always has somewhere to take you.
+        actions: (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-[26px] rounded-lg"
+            disabled={!homeThreads.some((t) => t.id === homeThreadId)}
+            onClick={() => void navAtomic(() => openHomeThread(null))}
+            title="Start a new conversation"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New chat
+          </Button>
+        ),
+      };
     if (homeSection !== "notebooks") return null;
     return {
       title: shelfTitle,
@@ -1506,16 +1500,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const body = (() => {
     if (chatOpen)
       return (
-        // The conversation surface: the list of conversations beside the one
-        // you are in. It was the left rail's top card; a thread list is part
-        // of the chat, not of the shelf, so it travels with it.
+        // Three columns, the NavigationSplitView way (RFC-mac-chrome,
+        // "Home"): the Library sidebar (outside this function), the
+        // conversation list, and the transcript as detail. The composer
+        // pins to the bottom of the detail column, 18px above the footer's
+        // hairline — never between the transcript and the footer, and
+        // never below the footer either.
         <div className="relative z-10 flex min-h-0 flex-1">
-          <HomeThreadsSidebar
-            bare
-            className="hidden w-[220px] shrink-0 border-r border-border xl:flex"
-          />
+          <HomeChatList className="hidden w-[260px] shrink-0 xl:flex" />
           <div className="flex min-w-0 flex-1 flex-col">
             <HomeChatThread chat={chat} />
+            <div className="relative z-10 w-full shrink-0 px-6 pb-[18px] pt-2">
+              <div className="mx-auto w-full max-w-[680px]">
+                {askComposer}
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -1993,11 +1992,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             {headingBlock}
             {body}
             {footer}
-            {chatOpen && (
-              <div className="relative z-10 w-full shrink-0 px-6 pb-5 pt-2">
-                <div className="mx-auto w-full max-w-[760px]">{askComposer}</div>
-              </div>
-            )}
           </div>
         </div>
       )}

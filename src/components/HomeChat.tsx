@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { openMetaCitation } from "@/lib/citations";
 import { runForThread } from "@/lib/homeChatRun";
 import { navAtomic, useStore } from "@/lib/store";
-import { cn, chatReadingClass, relativeTime } from "@/lib/utils";
+import { cn, chatReadingClass } from "@/lib/utils";
 import type { MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
 import {
   CitationsToggle,
   GrammarActions,
-  MenuPill,
   MenuRow,
   ModelPill,
   ToolRow,
@@ -16,22 +15,14 @@ import {
   copyAction,
   type TurnAction,
 } from "./ChatPanel";
+import { AlchemySymbol } from "./AlchemyHero";
+import { THEMES, resolveThemeId } from "@/lib/themes";
 import { CHAT_LENGTHS, CHAT_STYLES } from "./settings/SettingsTabs";
-import {
-  Button,
-  EmptyState,
-  RowMenu,
-  StepTrail,
-  Textarea,
-  useConfirm,
-} from "./ui";
+import { RowMenu, StepTrail, Textarea, useConfirm } from "./ui";
 import {
   AlertTriangle,
   FileText,
-  MessagesSquare,
   Package,
-  PanelLeftClose,
-  Plus,
   RefreshCw,
   Sparkles,
   SquarePen,
@@ -117,52 +108,53 @@ export function useHomeChat(): HomeChat {
   };
 }
 
-/** Home composer controls: how the answer is written, how long it runs, and
- *  which model writes it — the same three-pill grammar the notebook composer
- *  uses, so the two chats are operated the same way.
+/** The composer's one section-label heading, styled exactly like `ModelPill`'s
+ *  own "Model"/"Effort" headers — duplicated rather than exported from
+ *  ChatPanel because it's three lines of class names, not a component. */
+function menuSection(text: string) {
+  return (
+    <div className="px-2.5 pb-0.5 pt-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
+      {text}
+    </div>
+  );
+}
+
+/** Home's composer pop-up: how the answer is written, how long it runs, and
+ *  which model writes it — folded into sections of `ModelPill`'s one menu
+ *  (RFC-mac-chrome, "Sheet (chat)"), the same way the notebook composer
+ *  hangs Chat settings and Clear conversation off it. Three separate pills
+ *  used to carry these; one pill does now, matching the notebook page.
  *
  *  Style and length are Home's OWN (`homeChatConfig`, persisted per surface):
  *  asking across everything is a different job from asking inside one
  *  notebook, and neither should quietly reset the other. The model is the
  *  app's single choice — `ModelPill` writes `AiConfig`, exactly as it does in
  *  a notebook — so picking here is picking everywhere, as it already was. */
-export function HomeChatControls() {
+export function HomeChatMenu() {
   const config = useStore((s) => s.homeChatConfig);
   const setConfig = useStore((s) => s.setHomeChatConfig);
-  const [open, setOpen] = useState<null | "style" | "length">(null);
-  const style = CHAT_STYLES.find((s) => s.id === config.style);
-  const length = CHAT_LENGTHS.find((l) => l.id === config.length);
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      <MenuPill
-        label={style?.label ?? "Default"}
-        muted={config.style === "default"}
-        open={open === "style"}
-        onToggle={() => setOpen((o) => (o === "style" ? null : "style"))}
-        onClose={() => setOpen(null)}
-        title="How answers across your notebooks are written"
-        menuLabel="Style"
-        // The custom prompt needs a field wide enough to read back.
-        wide={config.style === "custom"}
-      >
-        {CHAT_STYLES.map((s) => (
-          <MenuRow
-            key={s.id}
-            label={s.label}
-            selected={config.style === s.id}
-            autoFocus={s.id === config.style}
-            onPick={() => {
-              setConfig({ ...config, style: s.id });
-              // Custom needs somewhere to type; every other pick is done.
-              if (s.id !== "custom") setOpen(null);
-            }}
-          />
-        ))}
-        {config.style === "custom" && (
-          <>
-            <div className="mx-2 my-1 h-px bg-border" />
-            <div className="px-2 pb-1.5">
+    <ModelPill
+      scope="every notebook"
+      extraRows={(close) => (
+        <>
+          <div className="mx-2 my-1 h-px bg-border" />
+          {menuSection("Style")}
+          {CHAT_STYLES.map((s) => (
+            <MenuRow
+              key={s.id}
+              label={s.label}
+              selected={config.style === s.id}
+              onPick={() => {
+                setConfig({ ...config, style: s.id });
+                // Custom needs somewhere to type; every other pick is done.
+                if (s.id !== "custom") close();
+              }}
+            />
+          ))}
+          {config.style === "custom" && (
+            <div className="px-2 pb-1.5 pt-1">
               <Textarea
                 rows={3}
                 aria-label="Custom conversational style"
@@ -173,140 +165,74 @@ export function HomeChatControls() {
                 }
               />
             </div>
-          </>
-        )}
-      </MenuPill>
+          )}
 
-      <MenuPill
-        label={length?.label ?? "Balanced"}
-        muted={config.length === "default"}
-        open={open === "length"}
-        onToggle={() => setOpen((o) => (o === "length" ? null : "length"))}
-        onClose={() => setOpen(null)}
-        title="How long those answers run"
-        menuLabel="Length"
-      >
-        {CHAT_LENGTHS.map((l) => (
-          <MenuRow
-            key={l.id}
-            label={l.label}
-            selected={config.length === l.id}
-            autoFocus={l.id === config.length}
-            onPick={() => {
-              setConfig({ ...config, length: l.id });
-              setOpen(null);
-            }}
-          />
-        ))}
-      </MenuPill>
-
-      <ModelPill scope="every notebook" />
-    </span>
+          {menuSection("Length")}
+          {CHAT_LENGTHS.map((l) => (
+            <MenuRow
+              key={l.id}
+              label={l.label}
+              selected={config.length === l.id}
+              onPick={() => {
+                setConfig({ ...config, length: l.id });
+                close();
+              }}
+            />
+          ))}
+        </>
+      )}
+    />
   );
 }
 
-/** Past conversations, as the first card of Home's left rail — the same
- *  stacked side-card the Brief and the reports feed make on the right, over
- *  Staff rather than beside the answer. What you asked, when, and how far it
- *  went; clicking one reopens it in the center column.
+/** The conversation-list column — the second of the three, between the
+ *  Library sidebar and the transcript, the way Mail's message list sits
+ *  between its account tree and the reading pane (RFC-mac-chrome, "Home").
+ *  260px, `side-pane` toned with a hairline on its right; each row is a
+ *  two-line Messages-style entry, 44px, title then a muted second line
+ *  (`8/29/2026 · 14 turns`).
  *
- *  It stands on every section, not just the Chat tab: a conversation is about
- *  the whole corpus, so it is as reachable from the shelf or the registry as
- *  from the tab it opens into. Picking a row (or New chat) switches sections
- *  on its way — `openHomeThread` does both, and `navAtomic` keeps it to one
- *  entry in the back stack. */
-export function HomeThreadsSidebar({
+ *  No header of its own: the count already lives in the Library sidebar's
+ *  Chats row, and New chat lives in the heading row beside "Chats" (both in
+ *  `HomeView`) — a third place to find either would just be a third place to
+ *  look. Picking a row switches sections on its way — `openHomeThread` does
+ *  both, and `navAtomic` keeps it to one entry in the back stack. */
+export function HomeChatList({
   className,
   style,
-  resizeHandle,
-  onCollapse,
-  bare = false,
 }: {
   className?: string;
   style?: React.CSSProperties;
-  /** Drop the card frame: inside the Library's sheet the thread list is a
-   *  column of the conversation surface, not a card floating on it. */
-  bare?: boolean;
-  /** The left column's width handle, rendered on this card's edge. */
-  resizeHandle?: React.ReactNode;
-  /** Fold the card down to the rail, as Staff below it and Brief opposite. */
-  onCollapse?: () => void;
 }) {
   const threads = useStore((s) => s.homeThreads);
   const openId = useStore((s) => s.homeChat.threadId);
-  const section = useStore((s) => s.homeSection);
   const runningId = useStore((s) => s.homeRun?.threadId ?? null);
   const openThread = useStore((s) => s.openHomeThread);
   const removeThread = useStore((s) => s.deleteHomeThread);
   const { confirm, dialog } = useConfirm();
 
-  // The open thread may not be in the list yet (nothing asked into it), and
-  // that's the state the New-chat button leaves you in — so it reads as
-  // pressed only when there is genuinely nothing to go back to AND that
-  // empty conversation is the thing on screen. From the shelf or the
-  // registry, New chat still has somewhere to take you.
-  const nothingNewToMint =
-    section === "chat" && !threads.some((t) => t.id === openId);
-
   return (
     <section
       className={cn(
-        "relative flex min-h-0 flex-col",
-        !bare && "side-card",
+        "side-pane flex min-h-0 flex-col border-r border-border",
         className,
       )}
       style={style}
     >
-      {resizeHandle}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <MessagesSquare className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Chats
-        </span>
-        {threads.length > 0 && (
-          <span className="text-micro tabular-nums text-subtle-foreground">
-            {threads.length}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={nothingNewToMint}
-            onClick={() => void navAtomic(() => openThread(null))}
-            title="Start a new conversation"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New chat
-          </Button>
-          {onCollapse && (
-            <button
-              type="button"
-              onClick={onCollapse}
-              title="Collapse Chats"
-              aria-label="Collapse the Chats sidebar"
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
-      {/* Rows were flush against each other, which read as one block of text
-          rather than a list. A gap (the reports feed's idiom) separates them
-          without adding a rule between every pair. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2.5">
         {threads.length === 0 ? (
-          <p className="px-1 py-3 text-caption text-subtle-foreground">
-            Past conversations are listed here.
+          <p className="px-2 py-2 text-caption text-subtle-foreground">
+            No conversations yet.
           </p>
         ) : (
           threads.map((t) => (
             <div
               key={t.id}
               className={cn(
-                "group relative flex shrink-0 items-start rounded-md transition-colors",
-                t.id === openId ? "bg-surface-2" : "hover:bg-surface-2",
+                "group relative flex h-11 shrink-0 items-center rounded-md pl-2 pr-1 transition-colors",
+                t.id === openId
+                  ? "bg-[var(--selection)]"
+                  : "hover:bg-surface-2",
               )}
             >
               <button
@@ -317,7 +243,7 @@ export function HomeThreadsSidebar({
                 // which is what a name is always a lossy stand-in for.
                 title={t.question || t.title}
                 aria-current={t.id === openId}
-                className="min-w-0 flex-1 px-2 py-2 text-left"
+                className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 text-left"
               >
                 <span
                   className={cn(
@@ -329,45 +255,43 @@ export function HomeThreadsSidebar({
                 >
                   {t.title}
                 </span>
-                <span className="mt-0.5 block truncate text-micro text-subtle-foreground">
+                <span className="block truncate text-micro text-subtle-foreground">
                   {/* A run keeps going in the thread it was asked in, so the
                       list says which conversation is still being answered. */}
                   {runningId === t.id ? (
                     <span className="text-muted-foreground">Answering…</span>
                   ) : (
                     <>
-                      {relativeTime(t.updatedAt)} · {t.turnCount}{" "}
-                      {t.turnCount === 1 ? "turn" : "turns"}
+                      {new Date(t.updatedAt).toLocaleDateString()} ·{" "}
+                      {t.turnCount} {t.turnCount === 1 ? "turn" : "turns"}
                     </>
                   )}
                 </span>
               </button>
-              <div className="pr-1 pt-1">
-                <RowMenu
-                  label={`Options for ${t.title}`}
-                  items={[
-                    {
-                      label: "Delete…",
-                      symbol: "trash",
-                      icon: <Trash2 className="h-3.5 w-3.5" />,
-                      danger: true,
-                      onClick: async () => {
-                        if (
-                          await confirm({
-                            title: "Delete this conversation?",
-                            message: `"${t.title}" and its ${t.turnCount} ${
-                              t.turnCount === 1 ? "turn" : "turns"
-                            } are deleted permanently.`,
-                            confirmLabel: "Delete",
-                            danger: true,
-                          })
-                        )
-                          void removeThread(t.id);
-                      },
+              <RowMenu
+                label={`Options for ${t.title}`}
+                items={[
+                  {
+                    label: "Delete…",
+                    symbol: "trash",
+                    icon: <Trash2 className="h-3.5 w-3.5" />,
+                    danger: true,
+                    onClick: async () => {
+                      if (
+                        await confirm({
+                          title: "Delete this conversation?",
+                          message: `"${t.title}" and its ${t.turnCount} ${
+                            t.turnCount === 1 ? "turn" : "turns"
+                          } are deleted permanently.`,
+                          confirmLabel: "Delete",
+                          danger: true,
+                        })
+                      )
+                        void removeThread(t.id);
                     },
-                  ]}
-                />
-              </div>
+                  },
+                ]}
+              />
             </div>
           ))
         )}
@@ -381,6 +305,7 @@ export function HomeThreadsSidebar({
  *  the composer docked below it. */
 export function HomeChatThread({ chat }: { chat: HomeChat }) {
   const reading = useStore((s) => s.reading);
+  const theme = useStore((s) => s.theme);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Follow the answer down. Streaming updates are already batched per frame,
@@ -389,14 +314,26 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [chat.turns.length, chat.streaming, chat.steps.length, chat.waiting]);
 
+  // The same blank state the notebook's Chat page shows on a truly empty
+  // transcript (`ChatHero`, isBlank): the sigil and one line, no summary
+  // card — there's no per-notebook summary to show here anyway.
   if (chat.turns.length === 0 && !chat.loading) {
     return (
-      <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-6 pb-10">
-        <EmptyState
-          icon={<MessagesSquare className="h-5 w-5" />}
-          title="Ask across everything"
-          hint="One question, every notebook. Answers cite the notebook and source they came from, and the conversation is kept."
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 pb-10">
+        <AlchemySymbol
+          className="h-16 w-16 text-citation/60"
+          strokeWidth={1}
+          preferred={THEMES[resolveThemeId(theme)]?.sigil}
         />
+        <div className="flex max-w-[360px] flex-col items-center gap-1.5 text-center">
+          <div className="text-body font-semibold text-foreground/90">
+            Ask across everything
+          </div>
+          <p className="text-body text-muted-foreground">
+            One question, every notebook. Answers cite the notebook and
+            source they came from, and the conversation is kept.
+          </p>
+        </div>
       </div>
     );
   }
@@ -405,7 +342,7 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
     <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
       <div
         className={cn(
-          "mx-auto flex w-full max-w-[760px] flex-col gap-6 px-6 pb-10 pt-1",
+          "mx-auto flex w-full max-w-[680px] flex-col gap-6 px-4 py-6",
           chatReadingClass(reading),
         )}
       >

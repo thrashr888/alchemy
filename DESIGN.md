@@ -521,6 +521,28 @@ Cards flows like the shelf now too: full-width at the shelf's own padding
 (`px-7`, 18px between blocks), no suggestion remnants (Keep all/Dismiss
 all and the waiting banner belong to the Suggested queue alone).
 
+**Chats is a `NavigationSplitView`**, the way Mail and Messages read: the
+Library sidebar, a 260px conversation list (`HomeChatList`), and the
+transcript as detail — not a stacked side-card over a shelf. The list
+column is `.side-pane` toned with a hairline on its right and carries no
+header of its own; the count already lives in the sidebar's Chats row, and
+New chat sits in the heading row beside the h1, the same trailing slot
+Notebooks gives Add source/Import. Each row is a two-line Messages entry,
+44px, `px-2 rounded-md` — title, then a muted `8/29/2026 · 14 turns` —
+selected washed in `--selection` like every other row. The transcript and
+composer are the notebook's Chat page's own, not a redrawn copy: both
+share one `Composer` component (`src/components/Composer.tsx`), so the 680
+measure, the radius-22 frosted composer, the one model pop-up and the
+blank state (sigil + a line, no summary card — a notebook summary doesn't
+apply to the whole corpus) all read identically wherever they're asked.
+Home's own style and length choices fold into sections of that one
+pop-up, `ModelPill`'s `extraRows`, exactly as the notebook composer hangs
+Chat settings and Clear conversation off it — three pills and an Ask
+button became one pop-up and the circle send. The footer's status bar
+(`4 conversations`) still sits at the very bottom of the sheet, under the
+composer, never between it and the transcript: the composer belongs to
+the detail column, not the section frame around it.
+
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar: a filter field over twelve rows, each row a 20px colored icon tile
 beside its name, the selected row washed in `--selection` with the tile
