@@ -134,7 +134,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
         data-tauri-drag-region
         className="toolbar flex h-[52px] shrink-0 items-center gap-3 pl-[88px] pr-3.5"
       >
-        <div className="flex min-w-0 shrink items-center gap-3">
+        {/* No `min-w-0` here: the cluster may shrink, but not below what its
+            controls and the pill's 150px floor need — otherwise the pill
+            spills out of it and under the centered switcher. The search
+            field is what gives after that (it shrinks to 96px). */}
+        <div className="flex shrink items-center gap-3">
           {/* Show/hide the Sources pane: the Finder position, left of
               Back/Forward, and the same command as ⌘1. */}
           <button
@@ -252,7 +256,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               triggerClassName="flex h-9 min-w-0 items-center gap-2.5 rounded-[8px] px-3 transition-colors hover:bg-surface-2"
               // The menu's wrapper must be allowed to give way, or the pill
               // holds its full width and the centered switcher lands on it.
-              className="min-w-0 !shrink"
+              className="min-w-[150px] !shrink"
               menuClassName="w-64"
               align="left"
               items={[
@@ -330,7 +334,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           onClick={() => useStore.getState().setPaletteOpen(true)}
           title="Search & commands (⌘K)"
           aria-label="Search and commands"
-          className="-ml-1.5 flex h-[26px] w-[200px] min-w-[120px] shrink items-center gap-1.5 rounded-[8px] bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="-ml-1.5 flex h-[26px] w-[200px] min-w-[96px] shrink items-center gap-1.5 rounded-[8px] bg-surface-2 px-2 text-left text-body text-subtle-foreground shadow-[inset_0_0_0_0.5px_var(--border)] outline-none transition-colors hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           <Search aria-hidden className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">Search</span>
