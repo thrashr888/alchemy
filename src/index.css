@@ -657,15 +657,18 @@ html[data-glass="clear"] .toolbar {
    mix the sheet uses plus a blur, so they never read as black bars on a
    frosted window. */
 .sheet-sticky {
-  background: color-mix(in srgb, var(--background) 95%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--background) 96%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
 }
+/* A sticky header's one job is to hide what scrolls beneath it, so under
+   glass it stays close to opaque — rows ghosting through a filter bar
+   read as a bug, not as material. The blur softens what little shows. */
 .glass .sheet-sticky {
-  background: color-mix(in srgb, var(--background) 62%, transparent);
+  background: color-mix(in srgb, var(--background) 92%, transparent);
 }
 html[data-glass="clear"] .sheet-sticky {
-  background: color-mix(in srgb, var(--background) 48%, transparent);
+  background: color-mix(in srgb, var(--background) 86%, transparent);
 }
 
 /* Glass widgets: under glass the sheet's and panes' raised surfaces (the
