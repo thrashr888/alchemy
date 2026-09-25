@@ -434,7 +434,7 @@ export function CommandPalette() {
         id: "home-registry",
         group: "Navigate",
         label: "Go to registry",
-        keywords: "cards people places things entities identifiers",
+        keywords: "entries cards people places things entities identifiers",
         icon: <Package className="h-3.5 w-3.5" />,
         run: () => goPlace("menu-home-cards"),
       },

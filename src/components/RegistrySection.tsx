@@ -64,7 +64,7 @@ async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   const label =
     cards.length === 1
       ? `Deleted “${cards[0].name}” — click to undo`
-      : `Deleted ${cards.length} cards — click to undo`;
+      : `Deleted ${cards.length} entries — click to undo`;
   useStore.getState().pushToast("success", label, () =>
     void (async () => {
       try {
@@ -170,8 +170,12 @@ const touched = (c: RegistryCard) => Math.max(c.updatedAt, c.createdAt);
     entry looks like a sort without being one.
     Fixed layout (see `HomeTable`): the short columns take set widths, the
     two lists take a share, and Name takes what is left and truncates. */
+/* Name and menu carry pl-7/pr-7 (28px, matching the sheet's own px-7): the
+   list mode rows bleed edge to edge (RegistrySection's -mx-7 wrapper), so
+   the header's text needs its own inset to keep lining up with the body
+   cells' matching pl-7/pr-7 and with the page heading above. */
 const CARD_COLUMNS = [
-  { key: "name", label: "Name", sort: "asc" },
+  { key: "name", label: "Name", className: "pl-7", sort: "asc" },
   { key: "kind", label: "Kind", className: "w-24", sort: "asc" },
   {
     key: "docs",
@@ -182,7 +186,7 @@ const CARD_COLUMNS = [
   { key: "nb", label: "Notebooks", className: "w-[20%]" },
   { key: "id", label: "Identifiers", className: "w-[13%]" },
   { key: "updated", label: "Updated", className: "w-24", sort: "desc" },
-  { key: "menu", label: "", className: "w-8" },
+  { key: "menu", label: "", className: "w-8 pr-7" },
 ] as const satisfies TableColumn[];
 
 /** Notebook names shown in a row before the cell folds the rest into a
@@ -415,7 +419,7 @@ export function RegistrySection({
    *  checked against. */
   const cardBatchItems = (ids: string[]): RowMenuItem[] => [
     {
-      label: `Delete ${ids.length} Cards…`,
+      label: `Delete ${ids.length} Entries…`,
       symbol: "trash",
       icon: <Trash2 className="h-3.5 w-3.5" />,
       danger: true,
@@ -439,9 +443,9 @@ export function RegistrySection({
   );
   const cleanUpOrphans = async () => {
     const ok = await confirm({
-      title: `Remove ${orphans.length} orphaned card${orphans.length === 1 ? "" : "s"}?`,
+      title: `Remove ${orphans.length} orphaned entr${orphans.length === 1 ? "y" : "ies"}?`,
       message:
-        "These cards have no documents left, or none outside archived notebooks — " +
+        "These entries have no documents left, or none outside archived notebooks — " +
         "rematching found nothing. Identifiers and facts on them go too.",
       // Named, not just counted: "4 orphaned cards" is impossible to check
       // against, and this is the one screen where the user can still say no.
@@ -469,7 +473,7 @@ export function RegistrySection({
           out.alreadyRunning
             ? "A suggest pass is already running"
             : out.created.length > 0
-              ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
+              ? `Suggested ${out.created.length} entr${out.created.length === 1 ? "y" : "ies"}`
               : out.queueFull
                 ? "The queue is full — rule on the suggestions shown and more will follow"
                 : "Nothing new to suggest",
@@ -504,7 +508,7 @@ export function RegistrySection({
             <EmptyState
               icon={<Sparkles className="h-5 w-5" />}
               title="Nothing suggested"
-              hint="Alchemy proposes cards as it reads your notebooks. Ask for a pass now, or let the night shift do it."
+              hint="Alchemy proposes entries as it reads your notebooks. Ask for a pass now, or let the night shift do it."
             >
               <Button
                 variant="primary"
@@ -593,7 +597,7 @@ export function RegistrySection({
                 variant="secondary"
                 onClick={() => void suggestNow()}
                 loading={suggesting}
-                title="Read your notebooks and suggest cards worth tracking"
+                title="Read your notebooks and suggest entries worth tracking"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 Suggest
@@ -602,20 +606,26 @@ export function RegistrySection({
             actionsPortal,
           )}
         {/* Kind groups and notebook chips, full width now like the shelf's
-            own recency groups. */}
-        <FilterBar
-          bare
-          groups={kinds}
-          group={kinds.some((k) => k.value === kind) ? kind : "all"}
-          onGroup={setKind}
-          chips={nbChips}
-          chip={
-            notebook !== null && nbChips.includes(notebook) ? notebook : null
-          }
-          onChip={setNotebook}
-          chipAllLabel="All notebooks"
-          chipPrefix=""
-        />
+            own recency groups — and sticky, so the filter stays put while
+            the list scrolls under it instead of scrolling away with it.
+            -mx-7/px-7 bleeds it to the sheet's edges like CardDetail's own
+            sticky header, so it reaches as wide as the list's full-bleed
+            rows in list mode. */}
+        <div className="sheet-sticky sticky top-0 z-10 -mx-7 border-b border-border px-7 py-2">
+          <FilterBar
+            bare
+            groups={kinds}
+            group={kinds.some((k) => k.value === kind) ? kind : "all"}
+            onGroup={setKind}
+            chips={nbChips}
+            chip={
+              notebook !== null && nbChips.includes(notebook) ? notebook : null
+            }
+            onChip={setNotebook}
+            chipAllLabel="All notebooks"
+            chipPrefix=""
+          />
+        </div>
         {loaded && loadError ? (
           <EmptyState
             icon={<Package className="h-5 w-5" />}
@@ -629,8 +639,8 @@ export function RegistrySection({
         ) : loaded && mine.length === 0 ? (
           <EmptyState
             icon={<Package className="h-5 w-5" />}
-            title="No cards yet"
-            hint="A card is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
+            title="No entries yet"
+            hint="An entry is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
           >
             <Button
               variant="primary"
@@ -638,7 +648,7 @@ export function RegistrySection({
               onClick={() => setCreating(true)}
             >
               <Plus className="h-4 w-4" />
-              New card
+              New entry
             </Button>
           </EmptyState>
         ) : shape === "table" ? (
@@ -678,7 +688,7 @@ export function RegistrySection({
         {shown.length === 0 && mine.length > 0 && (
           <EmptyState
             compact
-            title={`No card matches \u201c${query.trim()}\u201d`}
+            title={`No entry matches \u201c${query.trim()}\u201d`}
             hint="The filter looks at names and identifiers."
           />
         )}
@@ -906,7 +916,7 @@ export function AttachToCardModal({
     <Modal
       open={!!sourceId}
       onClose={onClose}
-      title="File under a card"
+      title="File under an entry"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
@@ -917,12 +927,12 @@ export function AttachToCardModal({
     >
       <div className="flex flex-col gap-3">
         <p className="text-caption text-muted-foreground">
-          Groups &ldquo;{sourceTitle}&rdquo; under a card. Filing changes
+          Groups &ldquo;{sourceTitle}&rdquo; under an entry. Filing changes
           nothing in the document.
         </p>
         <Input
           autoFocus
-          placeholder="Find or name a card…"
+          placeholder="Find or name an entry…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -947,14 +957,14 @@ export function AttachToCardModal({
             >
               <Plus className="h-4 w-4 text-muted-foreground" />
               <span className="text-body">
-                New asset card &ldquo;{q.trim()}&rdquo;
+                New asset entry &ldquo;{q.trim()}&rdquo;
               </span>
             </button>
           )}
           {shown.length === 0 && !q.trim() && (
             <EmptyState
               compact
-              title="No cards yet"
+              title="No entries yet"
               hint="Type a name above to create one."
             />
           )}
@@ -990,7 +1000,10 @@ function CardTable({
 }) {
   const archivedIds = useArchivedIds();
   return (
-    <>
+    // -mx-7 bleeds the rows edge to edge of the sheet, Finder's list view
+    // rather than a card grid's own side margins (CARD_COLUMNS' pl-7/pr-7
+    // on the outer columns keep the text lined up with the heading above).
+    <div className="-mx-7">
       {/* No "New card" button here — the header's covers both views. */}
       <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }} fixed>
         {cards.map((c) => {
@@ -1017,11 +1030,11 @@ function CardTable({
                 }
               }}
               className={cn(
-                "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
+                "group h-10 cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
                 pickedIds.has(c.id) && "bg-primary/10 hover:bg-primary/15",
               )}
             >
-              <td className="px-3 py-2">
+              <td className="py-2 pl-7 pr-3">
                 <span className="flex items-center gap-2">
                   <span className="shrink-0 text-muted-foreground">
                     {kindIcon(c.kind)}
@@ -1080,7 +1093,7 @@ function CardTable({
               <td className="truncate px-3 py-2 text-caption text-muted-foreground">
                 {relativeTime(touched(c))}
               </td>
-              <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              <td className="py-2 pl-2 pr-7" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
                   contextItems={onContextItems(c.id)}
                   items={[
@@ -1090,7 +1103,7 @@ function CardTable({
                     },
                     { label: "", separator: true, onClick: () => {} },
                     {
-                      label: "Delete Card",
+                      label: "Delete Entry",
                       symbol: "trash",
                       danger: true,
                       onClick: () => void deleteCardsUndoable([c], onChanged),
@@ -1102,7 +1115,7 @@ function CardTable({
           );
         })}
       </HomeTable>
-    </>
+    </div>
   );
 }
 
@@ -1326,7 +1339,7 @@ function CardTile({
       )}
     >
       <CardAction
-        label={`Open card ${card.name}`}
+        label={`Open entry ${card.name}`}
         onClick={(e) => onActivate?.(e) ?? onOpen()}
       />
       <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">
@@ -1367,7 +1380,7 @@ function CardTile({
             { label: "Open", onClick: onOpen },
             { label: "", separator: true, onClick: () => {} },
             {
-              label: "Delete Card",
+              label: "Delete Entry",
               symbol: "trash",
               danger: true,
               onClick: () => void deleteCardsUndoable([card], onChanged),
@@ -1416,7 +1429,7 @@ function NewCardModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="New card"
+      title="New entry"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
@@ -1704,7 +1717,7 @@ function CardDetail({
         <div className="sheet-sticky sticky top-0 z-10 -mx-6 mb-3 px-6 pb-3 pt-4">
           <Button variant="secondary" size="sm" onClick={onBack}>
             <ArrowLeft className="h-3.5 w-3.5" />
-            All cards
+            All entries
           </Button>
         </div>
 
@@ -1744,7 +1757,7 @@ function CardDetail({
               Waiting for you
             </h2>
             <p className="mt-1 text-caption text-muted-foreground">
-              These matched this card&rsquo;s name, which is a guess, not proof.
+              These matched this entry&rsquo;s name, which is a guess, not proof.
               Confirming only files the document here. Filing changes nothing
               in the document.
             </p>

@@ -161,7 +161,7 @@ else and with no caps label of its own — 28px row, `px-2 rounded-md gap-2
 text-body`, icon + "Brief" + a 6px primary dot when last night's run is
 unread, selected wash `bg-[var(--selection)]` like every other row — then
 Library (Notebooks with count, Chats with a 6px primary dot when unread,
-Shared, Nightly Reports, Archived, Staff), Registry (Cards with count,
+Shared, Nightly Reports, Archived, Staff), Registry (Entries with count,
 Suggested with a primary count badge 11px/600 radius 9 padding 1px 6px),
 Tags (dots). Main: padding 22px 28px, gap 18; heading row is the h1 alone
 (26px/700 tracking -.01em) plus, on Notebooks only, the "Since you were
@@ -177,7 +177,7 @@ Finder-style status bar on every section, not just the shelf: hairline
 above, padding-top 12, one centered 12px muted line of what the section on
 screen holds — `18 notebooks · 4,067 sources · 620 notes` (narrowed to
 `12 notebooks · #finance` under a tag), `4 conversations`, `13 reports · 2
-unread`, `224 cards`, `10 waiting`. The Brief carries nothing here: what
+unread`, `224 entries`, `10 waiting`. The Brief carries nothing here: what
 last night's run did is the Brief row's tooltip and a quiet second line
 inside the Brief section, not the footer's job any more.
 
@@ -198,7 +198,7 @@ tooltip (`7 sources · 29 notes`) and stay as they were in the table.
 
 **Every row has a menu item and a key.** The View menu's Home group is the
 sidebar, one item per row in menu order — Notebooks, Chats, Shared, Nightly
-Reports, Archived, Staff, then Registry Cards and Suggested, then the Brief
+Reports, Archived, Staff, then Registry Entries and Suggested, then the Brief
 and the Timeline — and ⌘1–⌘9 run down the first nine. The Brief's key stays
 ⌘9 even though the Brief now sits first in the sidebar: a key equivalent is
 muscle memory, not a position, so moving the row didn't move its digit. The
@@ -217,17 +217,18 @@ filtered to `invoices` and pressing Back returns to that filtered shelf.
 Grid versus table stays out: that is how the shelf is drawn, not where the
 user is.
 
-**Registry Cards flows like the shelf.** No `mx-auto max-w-[960px]` column:
-the same `px-7`, 18px-between-blocks padding as Notebooks, cards in a
+**The Registry's entries (registry cards in the model) flow like the
+shelf.** No `mx-auto max-w-[960px]` column: the same `px-7`,
+18px-between-blocks padding as Notebooks, cards in a
 wrapping grid that uses the full width. Its own sort menu and the
 suggest/orphan-cleanup verbs report into the heading row's trailing slot —
 the same slot Notebooks' Add source/Import occupy — through a portal node
 `HomeView` holds there, rather than drawing a second toolbar inside the
 section. Suggestion remnants (Keep all/Dismiss all, the "N waiting" banner,
-inline suggestion rows) render only on the Suggested queue now; Cards shows
+inline suggestion rows) render only on the Suggested queue now; Entries shows
 cast members and nothing else. Suggested keeps its own narrower width — it
 reads as a queue to rule on, not a collection to browse — but matches
-Cards' `px-7` side padding for consistency.
+Entries' `px-7` side padding for consistency.
 
 ### Settings
 
