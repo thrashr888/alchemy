@@ -3,20 +3,20 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { dragFormat, noteDragProps } from "@/lib/dragOut";
 import {
-  Button,
-  Input,
-  Textarea,
-  Modal,
-  EmptyState,
-  LoadingState,
   Badge,
+  Button,
+  CardAction,
+  EmptyState,
+  Input,
+  LoadingState,
+  Modal,
   ResizeHandle,
   RowMenu,
-  type RowMenuItem,
+  SearchField,
+  Segmented,
   SortMenu,
   Spinner,
-  CardAction,
-  SearchField,
+  type RowMenuItem,
   useHoverCard,
   useMarquee,
 } from "./ui";
@@ -39,6 +39,7 @@ import {
   kindIcon,
   studioArtifacts,
   type Artifact,
+  type ArtifactGroup,
 } from "./studioArtifacts";
 import {
   FileDown,
@@ -47,12 +48,15 @@ import {
   Trash2,
   StickyNote,
   Square,
-  PanelRightClose,
   Copy,
   ShieldCheck,
   FolderOpen,
   ChevronDown,
-  ChevronUp, RotateCw } from "lucide-react";
+  ChevronRight,
+  ChevronUp,
+  RotateCw,
+  Sparkles,
+} from "lucide-react";
 
 /** How the notes list is ordered. Recency is the default because the list is
  *  mostly a record of what was just made; the other two are for finding a
@@ -63,6 +67,39 @@ const NOTE_SORTS: { value: NoteSort; label: string }[] = [
   { value: "title", label: "Title" },
   { value: "type", label: "Type" },
 ];
+
+/** Shelves the reader has unfolded, from the last session. */
+function readOpenShelves(): Set<ArtifactGroup> {
+  try {
+    const raw = localStorage.getItem("studioShelvesOpen");
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed as ArtifactGroup[]);
+    }
+  } catch {
+    // Quota, private mode, or a stale value: start folded.
+  }
+  return new Set();
+}
+
+function readLocalFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** What a shelf's disclosure row says: the next few names, then how many
+ *  more — `FAQ, Timeline, Data table, 4 more`. Names rather than a bare
+ *  count, so the row itself tells you whether the thing you want is in
+ *  there. */
+function foldSummary(folded: Artifact[]): string {
+  const NAMED = 3;
+  const names = folded.slice(0, NAMED).map((a) => a.label);
+  const rest = folded.length - names.length;
+  return [...names, ...(rest > 0 ? [`${rest} more`] : [])].join(", ");
+}
 
 function readNoteSort(): NoteSort {
   try {
@@ -111,10 +148,6 @@ const TINT_BY_FAMILY: Record<Artifact["family"], Tint> = {
 const TINT_TEMPLATES: Tint = {
   tile: "border-border bg-artifact-template/5 hover:border-artifact-template/25 hover:bg-artifact-template/10",
   icon: "text-artifact-template",
-};
-const TINT_DISCLOSURE: Tint = {
-  tile: "border-border bg-surface-2 hover:border-border-strong hover:bg-elevated",
-  icon: "text-muted-foreground",
 };
 
 /** Wiki pages are numerous by design — one per registry entity plus the
@@ -262,7 +295,6 @@ export function StudioPanel() {
       await useStore.getState().generateArtifact(n.kind, full.prompt);
     })().catch((error) => useStore.getState().pushToast("error", String(error)));
   };
-  const toggleStudio = useStore((s) => s.toggleStudio);
   const createNote = useStore((s) => s.createNote);
   const deleteNote = useStore((s) => s.deleteNote);
   const justCreatedNoteId = useStore((s) => s.justCreatedNoteId);
@@ -471,14 +503,68 @@ export function StudioPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [currentId]);
   const [instructions, setInstructions] = useState("");
-  const [showInstructions, setShowInstructions] = useState(false);
-  // Keep the common generators visible; the long tail and custom templates
-  // share one progressive-disclosure control.
-  const [moreOpen, setMoreOpen] = useState(false);
-  const { primary: primaryArtifacts, groups: artifactGroups } =
-    studioArtifacts(kokoroReady);
-  const moreCount =
-    artifactGroups.reduce((n, g) => n + g.artifacts.length, 0) + templates.length;
+  // The inspector's three faces. Generate is the first thing a fresh
+  // notebook needs; a notebook with notes opens on them. The choice sticks.
+  const [studioTab, setStudioTab] = useState<StudioTab>(() => {
+    try {
+      const saved = localStorage.getItem("studioTab");
+      if (saved === "generate" || saved === "notes" || saved === "reports") return saved;
+    } catch {
+      // no storage: fall through to the default
+    }
+    return "notes";
+  });
+  const changeTab = (tab: StudioTab) => {
+    setStudioTab(tab);
+    try {
+      localStorage.setItem("studioTab", tab);
+    } catch {
+      // per-viewer convenience only
+    }
+  };
+  // How many notes of each kind this notebook already has — the count a
+  // generator row shows, the way Mail shows a mailbox's count.
+  const kindCounts = useMemo(() => {
+    const counts: Partial<Record<string, number>> = {};
+    for (const n of notes) {
+      if (n.status === "archived") continue;
+      counts[n.kind] = (counts[n.kind] ?? 0) + 1;
+    }
+    return counts;
+  }, [notes]);
+  // The shelves, ordered by what this notebook actually makes, and split into
+  // the rows shown at rest and the rows behind the fold.
+  const artifactShelves = useMemo(
+    () => studioArtifacts(kokoroReady, kindCounts),
+    [kokoroReady, kindCounts],
+  );
+  // Which shelves the reader unfolded, and whether their own templates are
+  // showing. Per-viewer convenience, remembered like the tab.
+  const [openShelves, setOpenShelves] = useState<Set<ArtifactGroup>>(readOpenShelves);
+  const toggleShelf = (id: ArtifactGroup) => {
+    setOpenShelves((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      try {
+        localStorage.setItem("studioShelvesOpen", JSON.stringify([...next]));
+      } catch {
+        // The fold holds for this session either way.
+      }
+      return next;
+    });
+  };
+  const [templatesOpen, setTemplatesOpenState] = useState(
+    () => readLocalFlag("studioTemplatesOpen"),
+  );
+  const setTemplatesOpen = (open: boolean) => {
+    setTemplatesOpenState(open);
+    try {
+      localStorage.setItem("studioTemplatesOpen", open ? "1" : "0");
+    } catch {
+      // per-viewer convenience only
+    }
+  };
+  const reportCount = useStore((s) => s.reportSchedules.length);
 
   const hasSources = sources.length > 0;
   const width = useStore((s) => s.studioWidth);
@@ -487,234 +573,256 @@ export function StudioPanel() {
   return (
     <div
       style={{ width }}
-      className="side-card relative mx-2 mb-2 mt-1 flex shrink-0 flex-col"
+      className="side-pane relative flex shrink-0 flex-col border-l border-border"
     >
       <ResizeHandle
         edge="left"
         width={width}
-        defaultWidth={320}
+        defaultWidth={300}
         onResize={(w) => setPanelWidth("studio", w)}
         label="Resize studio panel"
       />
-      <div className="flex items-center px-4 h-12 border-b border-border">
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Studio
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ml-auto"
-          onClick={toggleStudio}
-          title="Collapse studio"
-          aria-label="Collapse studio"
-        >
-          <PanelRightClose className="h-4 w-4" />
-        </Button>
+      {/* No STUDIO caps line and no collapse button: the toolbar's inspector
+          toggle and ⌘2 already close the pane, and a second control saying
+          the same thing in the pane's own header is one too many. The
+          segmented control is the first thing here, inside the pane's own
+          padding; the blocks below carry the 12px between them
+          (docs/RFC-mac-chrome.md, Inspector). */}
+      <div className="px-3 pt-2.5">
+        {/* An inspector, not a stack: Generate, Notes and Reports are three
+            faces of one pane (macOS inspectors do this with a segmented
+            control at the top), so a tall generator list never pins the
+            notes below the fold and the notes never bury the generators.
+            The counts ride in the `icon` slot with `order-last`, which puts
+            them after the word whatever order `Segmented` renders its two
+            children in; they are aria-hidden because the tab's tooltip says
+            the same thing in words. */}
+        <Segmented
+          label="Studio"
+          value={studioTab}
+          onChange={changeTab}
+          className="w-full [&>button]:flex-1 [&>button]:justify-center"
+          options={[
+            { value: "generate", label: "Generate", hint: "Generators and templates" },
+            {
+              value: "notes",
+              label: "Notes",
+              icon: <TabCount n={shownNotes.length} />,
+              hint:
+                shownNotes.length > 0
+                  ? `Notes (${shownNotes.length}) — this notebook's notes`
+                  : "This notebook's notes",
+            },
+            {
+              value: "reports",
+              label: "Reports",
+              icon: <TabCount n={reportCount} />,
+              hint:
+                reportCount > 0
+                  ? `Reports (${reportCount}) — scheduled reports`
+                  : "Scheduled reports",
+            },
+          ]}
+        />
       </div>
 
-      {/* Everything below the header scrolls as one column, so a tall
-          generator section never pins the notes list below the fold. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="p-3">
-          <div className="flex items-center gap-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-            <span>Generate</span>
-            {generatingKind && !generatingHere && (
-              <span className="text-badge normal-case text-subtle-foreground">
-                generating in another notebook…
-              </span>
-            )}
-            {generatingKind && generatingHere && (
-              <button
-                onClick={() => cancelGeneration("artifact")}
-                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
-                title="Stop generating"
-              >
-                <Square className="h-3 w-3" />
-                Stop
-              </button>
-            )}
-            {audioProgress && generatingHere && (
-              <span className="text-badge normal-case tabular-nums text-subtle-foreground">
-                voicing {audioProgress.done}/{audioProgress.total}
-              </span>
-            )}
-            <button
-              onClick={() => {
-                // Create the file first, then edit it in the reader — the
-                // editor always points at a template that exists on disk.
-                void (async () => {
-                  try {
-                    const t = await api.saveTemplate(
-                      null,
-                      "New template",
-                      "",
-                      "Describe what this generator should produce from the notebook's sources.",
-                    );
-                    await useStore.getState().refreshTemplates();
-                    useStore.getState().openInReader({ type: "template", id: t.id });
-                  } catch (e) {
-                    useStore
-                      .getState()
-                      .pushToast("error", e instanceof Error ? e.message : String(e));
-                  }
-                })();
-              }}
-              className="ml-auto rounded p-0.5 transition-colors hover:text-foreground"
-              title="New template — a reusable custom generator"
-              aria-label="New template"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={() => void api.openTemplatesFolder()}
-              className="rounded p-0.5 transition-colors hover:text-foreground"
-              title="Open the templates folder — each .md file is a generator"
-              aria-label="Open templates folder"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <>
-              {/* Keep the frequent actions immediately available; everything
-                  else, including custom templates, lives behind More. */}
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
-                {primaryArtifacts.map((a) => (
-                    <GenTile
+      {/* The tabs share the rest of the pane, and each face owns its own
+          scrolling — exactly one region per tab — so Generate can keep its
+          instructions field out of the scroll. */}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {studioTab === "generate" && (
+        <>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3 pt-3">
+          {/* No GENERATE caps row: the tab already says it. What is left here
+              is only what a run in flight has to report — and the stop it
+              has to offer. */}
+          {(generatingKind || (audioProgress && generatingHere)) && (
+            <div className="mb-2 flex items-center gap-2 px-1 text-micro text-subtle-foreground">
+              {generatingKind && !generatingHere && (
+                <span>generating in another notebook…</span>
+              )}
+              {generatingKind && generatingHere && (
+                <button
+                  onClick={() => cancelGeneration("artifact")}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-destructive hover:bg-destructive/10"
+                  title="Stop generating"
+                >
+                  <Square className="h-3 w-3" />
+                  Stop
+                </button>
+              )}
+              {audioProgress && generatingHere && (
+                <span className="tabular-nums">
+                  voicing {audioProgress.done}/{audioProgress.total}
+                </span>
+              )}
+            </div>
+          )}
+          {/* Grouped lists, one per shelf (DESIGN.md §4): the row is the
+              generator, the count on the right is how many of that kind this
+              notebook already holds. Each shelf shows its top rows and folds
+              the rest behind one disclosure row — every generator is still
+              one click away, nothing is behind a More menu. */}
+          <div className="flex flex-col gap-2">
+            {artifactShelves.map((shelf) => {
+              const open = openShelves.has(shelf.id);
+              const rows = open ? [...shelf.top, ...shelf.folded] : shelf.top;
+              return (
+                <GenGroup key={shelf.id} label={shelf.label}>
+                  {rows.map((a) => (
+                    <GenRow
                       key={a.kind}
                       icon={a.icon}
-                      busy={busyKinds.has(a.kind)}
                       label={a.label}
-                      category={a.family}
-                      tint={TINT_BY_FAMILY[a.family]}
+                      family={a.family}
+                      count={kindCounts[a.kind]}
+                      busy={busyKinds.has(a.kind)}
                       disabled={!hasSources}
                       onClick={() => generate(a.kind, instructions)}
                     />
                   ))}
-                {moreCount > 0 && (
-                  <GenTile
-                    icon={
-                      moreOpen ? (
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      )
-                    }
-                    label={moreOpen ? "Less" : `More (${moreCount})`}
+                  {/* The same row both ways, in the same place so it never
+                      jumps: closed it names what it is hiding, open it offers
+                      the way back. Rendering it only while closed left an
+                      opened shelf with no way to fold again. */}
+                  {shelf.folded.length > 0 && (
+                    <FoldRow
+                      label={open ? "Show less" : foldSummary(shelf.folded)}
+                      open={open}
+                      collapses={open}
+                      title={
+                        open
+                          ? `Fold ${shelf.label} back`
+                          : `Show the rest of ${shelf.label}`
+                      }
+                      onClick={() => toggleShelf(shelf.id)}
+                    />
+                  )}
+                </GenGroup>
+              );
+            })}
+            <GenGroup label="Templates">
+                {/* The user's own generators live in their own group, apart from the
+                built-in Write kinds: one folded row for the templates, then
+                the two verbs that make and keep them. */}
+                {templates.length > 0 && (
+                  <FoldRow
+                    label="Your templates"
+                    count={templates.length}
+                    open={templatesOpen}
                     title={
-                      moreOpen
-                        ? "Show only the common generators"
-                        : `Show ${moreCount} more generators and templates, by what they are for`
+                      templatesOpen
+                        ? "Hide your templates"
+                        : "Show your templates — each .md file is a generator"
                     }
-                    tint={TINT_DISCLOSURE}
-                    disabled={false}
-                    onClick={() => setMoreOpen((open) => !open)}
+                    onClick={() => setTemplatesOpen(!templatesOpen)}
                   />
                 )}
-              </div>
-              {/* The long tail, shelved by intent and ordered by use inside
-                  each shelf; custom templates sit with the working documents. */}
-              {moreOpen &&
-                artifactGroups.map((group) => {
-                  const shelfTemplates = group.id === "write" ? templates : [];
-                  if (group.artifacts.length === 0 && shelfTemplates.length === 0) return null;
-                  return (
-                    <div key={group.id} className="mt-3">
-                      <div className="mb-1.5 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-                        {group.label}
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {group.artifacts.map((a) => (
-                          <GenTile
-                            key={a.kind}
-                            icon={a.icon}
-                            busy={busyKinds.has(a.kind)}
-                            label={a.label}
-                            category={a.family}
-                            tint={TINT_BY_FAMILY[a.family]}
-                            disabled={!hasSources}
-                            onClick={() => generate(a.kind, instructions)}
-                          />
-                        ))}
-                        {shelfTemplates.map((t) => (
-                          <GenTile
-                            key={t.id}
-                            icon={<FileText className="h-3.5 w-3.5" />}
-                            busy={busyKinds.has(`template:${t.id}`)}
-                            label={t.name}
-                            title={`${t.description || t.name} — right-click to edit`}
-                            category="template"
-                            tint={TINT_TEMPLATES}
-                            disabled={!hasSources}
-                            onClick={() => generateFromTemplate(t)}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              useStore.getState().openInReader({ type: "template", id: t.id });
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-
-              {showInstructions ? (
-                <div className="mt-2.5 flex flex-col gap-1.5">
-                  <Textarea
-                    rows={2}
-                    autoFocus
-                    name="generation-instructions"
-                    aria-label="Generation instructions"
-                    value={instructions}
-                    onChange={(e) => setInstructions(e.target.value)}
-                    onKeyDown={(e) => {
-                      // Escape folds an empty box; typed text needs the
-                      // explicit verb below, so a stray key never eats it.
-                      if (e.key === "Escape" && !instructions.trim()) {
+                {templatesOpen &&
+                  templates.map((t) => (
+                    <GenRow
+                      key={t.id}
+                      icon={<FileText className="h-3.5 w-3.5" />}
+                      label={t.name}
+                      family="template"
+                      title={`${t.description || t.name} — right-click to edit`}
+                      busy={busyKinds.has(`template:${t.id}`)}
+                      disabled={!hasSources}
+                      onClick={() => generateFromTemplate(t)}
+                      onContextMenu={(e) => {
                         e.preventDefault();
-                        setShowInstructions(false);
-                      }
-                    }}
-                    placeholder="Optional instructions applied to the next generation…"
-                    className="text-caption"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInstructions("");
-                      setShowInstructions(false);
-                    }}
-                    className="self-start text-micro text-muted-foreground transition-colors hover:text-foreground"
-                    title={
-                      instructions.trim()
-                        ? "Drop these instructions and hide the box"
-                        : "Hide the instructions box"
-                    }
-                  >
-                    {instructions.trim() ? "− Remove instructions" : "− Hide instructions"}
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowInstructions(true)}
-                  disabled={!hasSources}
-                  className="mt-2.5 text-micro text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
-                >
-                  + Add instructions
-                </button>
-              )}
-              {!hasSources && (
-                <p className="mt-2 text-micro text-subtle-foreground">
-                  Add sources to generate documents.
-                </p>
-              )}
-            </>
+                        useStore.getState().openInReader({ type: "template", id: t.id });
+                      }}
+                    />
+                  ))}
+                <>
+                    <GenRow
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label="New template"
+                      family="template"
+                      quiet
+                      title="A reusable custom generator"
+                      disabled={false}
+                      onClick={() => {
+                        // Create the file first, then edit it in the reader —
+                        // the editor always points at a template that
+                        // exists on disk.
+                        void (async () => {
+                          try {
+                            const t = await api.saveTemplate(
+                              null,
+                              "New template",
+                              "",
+                              "Describe what this generator should produce from the notebook's sources.",
+                            );
+                            await useStore.getState().refreshTemplates();
+                            useStore
+                              .getState()
+                              .openInReader({ type: "template", id: t.id });
+                          } catch (e) {
+                            useStore
+                              .getState()
+                              .pushToast(
+                                "error",
+                                e instanceof Error ? e.message : String(e),
+                              );
+                          }
+                        })();
+                      }}
+                    />
+                    <GenRow
+                      icon={<FolderOpen className="h-3.5 w-3.5" />}
+                      label="Templates folder"
+                      family="template"
+                      quiet
+                      title="Each .md file in it is a generator"
+                      disabled={false}
+                      onClick={() => void api.openTemplatesFolder()}
+                    />
+                  </>
+            </GenGroup>
+          </div>
         </div>
 
-        {currentId && <Reports />}
+        {/* One field for the whole pane, a footer outside the scroll so an
+            unfolded shelf can never push it off the bottom: whatever is
+            typed here rides along with the next generator pressed. */}
+        <div className="shrink-0 border-t border-border px-3 pb-2.5 pt-3">
+          {!hasSources && (
+            <p className="pb-2 px-1 text-micro text-subtle-foreground">
+              Add sources to generate documents.
+            </p>
+          )}
+          <div className="relative min-w-0">
+            <Sparkles
+              aria-hidden
+              className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle-foreground"
+            />
+            <Input
+              name="generation-instructions"
+              aria-label="Instructions for the next generation"
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              disabled={!hasSources}
+              placeholder="Instructions for the next generation…"
+              className="h-[30px] rounded-[8px] border-transparent bg-surface-2 pl-8 pr-2 text-caption shadow-[inset_0_0_0_0.5px_var(--border)] disabled:opacity-50"
+            />
+          </div>
+        </div>
+        </>
+        )}
+
+        {studioTab === "reports" && currentId && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Reports />
+        </div>
+        )}
 
         {/* Header and list share one marquee container: the sources panel
             lets a drag start on its "All selected" strip, and starting a
             notes selection was harder for want of the same run-up. */}
+        {studioTab === "notes" && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
         <div ref={notesListRef} onPointerDown={marqueeDown} className="select-none">
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
@@ -785,7 +893,7 @@ export function StudioPanel() {
               No notes match “{noteQuery.trim()}”.
             </div>
           ) : (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-px">
               {listedNotes.map((n) => (
                 <div
                   key={n.id}
@@ -808,7 +916,7 @@ export function StudioPanel() {
                     // otherwise — later DOM order wins at equal z).
                     // Flat rows, not bordered cards — the title and chips
                     // carry the card; a hover wash marks the target.
-                    "group relative cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-surface-2",
+                    "group relative cursor-pointer rounded-md px-2 py-1.5 transition-colors hover:bg-surface-2",
                     n.status === "stale" && "opacity-60",
                     pickedNoteIds.has(n.id) &&
                       "bg-primary/10 hover:bg-primary/15",
@@ -1026,6 +1134,8 @@ export function StudioPanel() {
           />
         </div>
         </div>
+        </div>
+        )}
       </div>
 
 
@@ -1110,54 +1220,142 @@ export function StudioPanel() {
 }
 
 /** One generator tile in the flowing Studio grid. */
-function GenTile({
+type StudioTab = "generate" | "notes" | "reports";
+
+/** The count beside a tab's name (`Notes 7`). `order-last` puts it after the
+ *  word whichever order `Segmented` renders label and icon in, and it is
+ *  aria-hidden because the tab's tooltip already says the number in words. */
+function TabCount({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return (
+    <span
+      aria-hidden
+      className="order-last text-micro font-normal tabular-nums text-subtle-foreground"
+    >
+      {n}
+    </span>
+  );
+}
+
+/** One shelf of generators: a small caps label over a grouped list — an
+ *  inset hairline for the group edge, so the border adds nothing to the box
+ *  and the rows split on hairlines (docs/RFC-mac-chrome.md, Shared). */
+function GenGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section>
+      <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
+        {label}
+      </div>
+      <div className="overflow-hidden rounded-[10px] bg-surface-2 shadow-[inset_0_0_0_0.5px_var(--border)] [&>*+*]:border-t [&>*+*]:border-border">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/** The last row of a shelf that has more in it: the names it is hiding, or a
+ *  named group with its count ("Your templates 11"). A row, not a More menu —
+ *  pressing it puts every one of those generators on the page. */
+function FoldRow({
+  label,
+  count,
+  open,
+  collapses,
+  title,
+  onClick,
+}: {
+  label: string;
+  count?: number;
+  /** Whether the rows this row governs are showing. */
+  open?: boolean;
+  /** True when pressing the row folds its shelf back up ("Show less" at the
+   *  foot of an opened shelf), so the chevron points up — where the rows are
+   *  about to go — rather than down at rows already on the page. */
+  collapses?: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-expanded={open ?? false}
+      className="flex h-[38px] w-full items-center gap-2.5 px-3 text-left text-body text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground"
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count ? (
+        <span className="text-micro tabular-nums text-subtle-foreground">{count}</span>
+      ) : null}
+      {collapses ? (
+        <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+      ) : open ? (
+        <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+      ) : (
+        <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+      )}
+    </button>
+  );
+}
+
+/** A generator as a list row: the family accent on its icon (wayfinding,
+ *  DESIGN.md §2), its name, and how many of that kind the notebook already
+ *  holds. Pressing it generates; while it runs the icon spins and a second
+ *  press is refused, because the pending note below is where the run
+ *  reports. */
+function GenRow({
   icon,
   label,
   title,
-  category,
-  tint,
+  family,
+  count,
   disabled,
   busy,
+  quiet,
   onClick,
   onContextMenu,
 }: {
   icon: ReactNode;
   label: string;
   title?: string;
-  category?: Artifact["family"] | "template";
-  tint: Tint;
+  family: Artifact["family"] | "template";
+  count?: number;
   disabled: boolean;
-  /** This kind is already generating: spin, dim, and refuse a second press.
-   *  The pending note below is where the run reports; pressing again only
-   *  queues a duplicate behind it. */
   busy?: boolean;
+  /** A verb rather than a generator (New template, Templates folder): same
+   *  row, muted, so the shelf's generators stay the loud thing on it. */
+  quiet?: boolean;
   onClick: () => void;
-  /** Template tiles: right-click opens the editor. */
+  /** Template rows: right-click opens the editor. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
+  const tint = family === "template" ? TINT_TEMPLATES : TINT_BY_FAMILY[family];
   return (
     <button
+      type="button"
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      aria-label={
-        [category ? `${label} — ${category}` : label, busy && "generating"]
-          .filter(Boolean)
-          .join(", ")
-      }
-      // The tile clips long names with an ellipsis, so the tooltip always
-      // leads with the whole name; a caller's own hint follows it.
+      aria-label={[label, busy && "generating"].filter(Boolean).join(", ")}
       title={[label, busy ? "Generating…" : title].filter(Boolean).join(" — ")}
       className={cn(
-        "flex items-center gap-2 rounded-md border px-2.5 py-2 text-caption text-foreground/90 transition-colors disabled:pointer-events-none disabled:opacity-40",
-        tint.tile,
+        "flex h-[38px] w-full items-center gap-2.5 px-3 text-left text-body transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-40",
+        quiet ? "text-muted-foreground hover:text-foreground" : "text-foreground/90",
       )}
     >
-      <span className={tint.icon}>
-        {busy ? <Spinner className="h-3.5 w-3.5" /> : icon}
+      <span
+        className={cn(
+          "shrink-0 [&>svg]:h-4 [&>svg]:w-4",
+          quiet ? "text-subtle-foreground" : tint.icon,
+        )}
+      >
+        {busy ? <Spinner className="h-4 w-4" /> : icon}
       </span>
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count ? (
+        <span className="text-micro tabular-nums text-subtle-foreground">{count}</span>
+      ) : null}
     </button>
   );
 }

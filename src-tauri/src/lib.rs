@@ -564,6 +564,8 @@ pub fn run() {
             okf::deletion_proposals_cmd,
             okf::resolve_deletion_proposal_cmd,
             commands::home_activity,
+            commands::notebook_previews,
+            commands::corpus_tags,
             commands::source_thumbnail,
             commands::source_image,
             commands::source_snippets,

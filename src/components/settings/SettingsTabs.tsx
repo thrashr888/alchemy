@@ -4,13 +4,36 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdates } from "@/lib/updates";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { SYSTEM_THEME, THEME_LIST, THEMES, resolveThemeId } from "@/lib/themes";
+import {
+  SYSTEM_THEME,
+  THEME_LIST,
+  THEMES,
+  resolveThemeId,
+  type ShaderVariant,
+} from "@/lib/themes";
 import { SLASH_COMMANDS } from "@/lib/slashCommands";
-import type { BuildInfo, ChatConfig, ReleaseNote } from "@/lib/types";
+import type {
+  BuildInfo,
+  ChatConfig,
+  ReadingPrefs,
+  ReleaseNote,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlchemySymbol } from "../AlchemyHero";
 import { Markdown } from "../Markdown";
-import { Button, Chip, EmptyState, Input, Spinner, Textarea } from "../ui";
+import {
+  Button,
+  EmptyState,
+  FormGroup,
+  FormRow,
+  Input,
+  PopupButton,
+  Segmented,
+  Spinner,
+  Switch,
+  Textarea,
+  type SegmentedOption,
+} from "../ui";
 import {
   AlignLeft,
   Braces,
@@ -57,23 +80,68 @@ export const CHAT_LENGTHS = [
   { id: "longer", label: "Thorough", icon: ScrollText, hint: "Conclusion first, then evidence, reasoning, and examples." },
 ] as const;
 
-const CHAT_FONTS = [
-  { id: "sans", label: "Sans", className: "font-sans" },
-  { id: "serif", label: "Serif", className: "font-serif" },
-  { id: "mono", label: "Mono", className: "font-mono" },
-  { id: "system", label: "System", className: "chat-system" },
-] as const;
+// Display prefs, shared by every notebook. They live in Appearance → Text
+// (they are display, and the model never sees them), not in a notebook's
+// Chat tab.
+const CHAT_FONTS: readonly SegmentedOption<ReadingPrefs["font"]>[] = [
+  { value: "sans", label: "Sans" },
+  { value: "serif", label: "Serif" },
+  { value: "mono", label: "Mono" },
+  { value: "system", label: "System" },
+];
 
-const CHAT_SIZES = [
-  { id: "small", label: "Small" },
-  { id: "medium", label: "Medium" },
-  { id: "large", label: "Large" },
-] as const;
+const CHAT_SIZES: readonly SegmentedOption<ReadingPrefs["fontSize"]>[] = [
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+  { value: "large", label: "Large" },
+];
 
-const CHAT_ALIGNS = [
-  { id: "natural", label: "Natural" },
-  { id: "justified", label: "Justified" },
-] as const;
+const CHAT_ALIGNS: readonly SegmentedOption<ReadingPrefs["textAlign"]>[] = [
+  { value: "natural", label: "Natural" },
+  { value: "justified", label: "Justified" },
+];
+
+/** Human names for the backdrop fields (Theme.shader -> what you see), so the
+ *  Backdrop row can say what this theme draws. One entry per mode in
+ *  DitherBackground's SHADER_MODE table; "mist" is the default when a theme
+ *  names no shader. */
+const SHADER_LABEL: Record<ShaderVariant, string> = {
+  mist: "Aetheric mist",
+  rain: "Code rain",
+  horizon: "Retro horizon",
+  grain: "Paper grain",
+  dial: "Instrument dial",
+  slipstream: "Slipstream",
+  trellis: "Trellis",
+  bars: "Rebus bars",
+  network: "City lights",
+  snow: "Snowfall",
+  moon: "Moonlit",
+  glitch: "Glitch",
+  orbit: "Orbits",
+  contrib: "Contribution wall",
+  corona: "Corona",
+  steam: "Steam",
+  phosphor: "Phosphor",
+  blueprint: "Blueprint",
+  crt: "CRT",
+  camo: "Camouflage",
+};
+
+/** Paper grain is the one still field (DitherBackground holds it at t=0);
+ *  every other mode animates. */
+const STATIC_SHADERS: readonly ShaderVariant[] = ["grain"];
+
+const ACCENT_OPTIONS: readonly SegmentedOption<ReadingPrefs["accent"]>[] = [
+  { value: "theme", label: "Theme" },
+  { value: "system", label: "System accent" },
+];
+
+const GLASS_OPTIONS: readonly SegmentedOption<"off" | "tinted" | "clear">[] = [
+  { value: "off", label: "Off" },
+  { value: "tinted", label: "Tinted" },
+  { value: "clear", label: "Clear" },
+];
 
 /** Mirrors ai::DEFAULT_ASSISTANT_NAME — the name a fresh install answers
  *  to. An empty field turns the persona off. */
@@ -93,8 +161,6 @@ export function styleHint(styleId: string, assistantName: string | undefined): s
 
 export function ChatTab() {
   const assistantName = useStore((state) => state.aiConfig?.profile?.assistantName);
-  const reading = useStore((state) => state.reading);
-  const setReading = useStore((state) => state.setReading);
   const chatConfig = useStore((state) => state.chatConfig);
   const setChatConfig = useStore((state) => state.setChatConfig);
   const currentId = useStore((state) => state.currentId);
@@ -107,7 +173,7 @@ export function ChatTab() {
   const lengthHint = CHAT_LENGTHS.find((length) => length.id === chatConfig.length)?.hint;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-[18px]">
       <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         {currentId ? (
           <>
@@ -122,78 +188,48 @@ export function ChatTab() {
         )}
       </p>
 
-      <Field label="Conversational goal, style, or role">
-        <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
-          {CHAT_STYLES.map((style) => (
-            <OptionTile
-              key={style.id}
-              icon={style.icon}
-              label={style.label}
-              active={chatConfig.style === style.id}
-              onClick={() => apply({ style: style.id })}
+      {/* The tile grids span the group's width: the glyph and its label ARE
+          the option, so they keep their own shape (DESIGN.md §4 ledger). */}
+      <FormGroup caption="Conversational goal, style, or role" footer={hint}>
+        <div className="flex flex-col gap-3 px-3 py-2.5">
+          <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
+            {CHAT_STYLES.map((style) => (
+              <OptionTile
+                key={style.id}
+                icon={style.icon}
+                label={style.label}
+                active={chatConfig.style === style.id}
+                onClick={() => apply({ style: style.id })}
+              />
+            ))}
+          </div>
+          {chatConfig.style === "custom" && (
+            <Textarea
+              rows={4}
+              aria-label="Custom conversational style"
+              placeholder="Act as a skeptical peer reviewer; challenge claims and ask for evidence…"
+              value={chatConfig.customPrompt}
+              onChange={(event) => apply({ customPrompt: event.target.value })}
             />
-          ))}
+          )}
         </div>
-        {hint && <span className="text-micro text-subtle-foreground">{hint}</span>}
-        {chatConfig.style === "custom" && (
-          <Textarea
-            rows={4}
-            className="mt-1"
-            aria-label="Custom conversational style"
-            placeholder="Act as a skeptical peer reviewer; challenge claims and ask for evidence…"
-            value={chatConfig.customPrompt}
-            onChange={(event) => apply({ customPrompt: event.target.value })}
-          />
-        )}
-      </Field>
+      </FormGroup>
 
-      <Field label="Response length">
-        <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
-          {CHAT_LENGTHS.map((length) => (
-            <OptionTile
-              key={length.id}
-              icon={length.icon}
-              label={length.label}
-              active={chatConfig.length === length.id}
-              onClick={() => apply({ length: length.id })}
-            />
-          ))}
+      <FormGroup caption="Response length" footer={lengthHint}>
+        <div className="px-3 py-2.5">
+          <div className="grid grid-cols-3 gap-x-2 gap-y-3 sm:grid-cols-4 lg:grid-cols-5">
+            {CHAT_LENGTHS.map((length) => (
+              <OptionTile
+                key={length.id}
+                icon={length.icon}
+                label={length.label}
+                active={chatConfig.length === length.id}
+                onClick={() => apply({ length: length.id })}
+              />
+            ))}
+          </div>
         </div>
-        {lengthHint && <span className="text-micro text-subtle-foreground">{lengthHint}</span>}
-      </Field>
-      <div className="h-px bg-border" />
-      {/* How answers look, as distinct from how they read. Every notebook
-          shares these — they're display, and the model never sees them. */}
-      <div className="mt-1 px-1 text-micro font-semibold uppercase tracking-wide text-subtle-foreground">
-        Appearance · every notebook
-      </div>
-      <Field label="Chat font" hint="Display only; this does not change the model.">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_FONTS.map((font) => (
-            <Chip key={font.id} active={reading.font === font.id} onClick={() => setReading({ font: font.id })}>
-              <span className={font.className}>{font.label}</span>
-            </Chip>
-          ))}
-        </div>
-      </Field>
-      <Field label="Text size">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_SIZES.map((size) => (
-            <Chip key={size.id} active={reading.fontSize === size.id} onClick={() => setReading({ fontSize: size.id })}>
-              {size.label}
-            </Chip>
-          ))}
-        </div>
-      </Field>
-      <Field label="Alignment">
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_ALIGNS.map((alignment) => (
-            <Chip key={alignment.id} active={reading.textAlign === alignment.id} onClick={() => setReading({ textAlign: alignment.id })}>
-              {alignment.label}
-            </Chip>
-          ))}
-        </div>
-      </Field>
+      </FormGroup>
     </div>
   );
 }
@@ -237,53 +273,60 @@ export function PersonalizationTab() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-[18px]">
       <p className="text-pretty text-body leading-relaxed text-muted-foreground">
         Personalization is added to chat and document prompts and is sent only to your configured model. Changes save automatically.
       </p>
-      <Field label="What should the assistant call you?">
-        <Input
-          name="profile-name"
-          autoComplete="name"
-          aria-label="What should the assistant call you?"
-          placeholder="Paul…"
-          value={draft.name}
-          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-      <Field label="What do you call the assistant?">
-        <Input
-          name="profile-assistant-name"
-          aria-label="What do you call the assistant?"
-          placeholder="Alphonse…"
-          value={draft.assistantName}
-          onChange={(event) => setDraft({ ...draft, assistantName: event.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-      <Field label="What best describes your work?">
-        <Input
-          name="profile-profession"
-          autoComplete="organization-title"
-          aria-label="What best describes your work?"
-          placeholder="Product management…"
-          value={draft.profession}
-          onChange={(event) => setDraft({ ...draft, profession: event.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
-      <Field label="Instructions for the assistant">
-        <Textarea
-          rows={8}
-          name="profile-instructions"
-          aria-label="Instructions for the assistant"
-          placeholder="Preferences to keep in mind across all notebooks…"
-          value={draft.instructions}
-          onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
-          onBlur={saveOnBlur}
-        />
-      </Field>
+      <FormGroup caption="You">
+        <FormRow label="What should the assistant call you?">
+          <Input
+            name="profile-name"
+            autoComplete="name"
+            aria-label="What should the assistant call you?"
+            placeholder="Paul…"
+            className="w-44"
+            value={draft.name}
+            onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            onBlur={saveOnBlur}
+          />
+        </FormRow>
+        <FormRow label="What do you call the assistant?">
+          <Input
+            name="profile-assistant-name"
+            aria-label="What do you call the assistant?"
+            placeholder="Alphonse…"
+            className="w-44"
+            value={draft.assistantName}
+            onChange={(event) => setDraft({ ...draft, assistantName: event.target.value })}
+            onBlur={saveOnBlur}
+          />
+        </FormRow>
+        <FormRow label="What best describes your work?">
+          <Input
+            name="profile-profession"
+            autoComplete="organization-title"
+            aria-label="What best describes your work?"
+            placeholder="Product management…"
+            className="w-44"
+            value={draft.profession}
+            onChange={(event) => setDraft({ ...draft, profession: event.target.value })}
+            onBlur={saveOnBlur}
+          />
+        </FormRow>
+      </FormGroup>
+      <FormGroup caption="Instructions for the assistant">
+        <div className="px-3 py-2.5">
+          <Textarea
+            rows={8}
+            name="profile-instructions"
+            aria-label="Instructions for the assistant"
+            placeholder="Preferences to keep in mind across all notebooks…"
+            value={draft.instructions}
+            onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
+            onBlur={saveOnBlur}
+          />
+        </div>
+      </FormGroup>
     </div>
   );
 }
@@ -291,37 +334,145 @@ export function PersonalizationTab() {
 export function AppearanceTab() {
   const reading = useStore((state) => state.reading);
   const setReading = useStore((state) => state.setReading);
+  const theme = useStore((state) => state.theme);
+  // Named from the same theme table the swatches come from, so System reads
+  // as "System" rather than as whatever it resolves to this minute.
+  const themeName =
+    theme === SYSTEM_THEME ? "System" : THEMES[resolveThemeId(theme)].label;
+  const [themesOpen, setThemesOpen] = useState(false);
+  // The four blocks of the swatch strip, from the same theme table the
+  // picker reads: background, surface-2, foreground, primary.
+  const resolved = THEMES[resolveThemeId(theme)];
+  const swatch = [
+    resolved.vars.background,
+    resolved.vars["surface-2"],
+    resolved.vars.foreground,
+    resolved.vars.primary,
+  ];
+  const shader: ShaderVariant = resolved.shader ?? "mist";
+  const backdropName =
+    SHADER_LABEL[shader] +
+    (STATIC_SHADERS.includes(shader) ? "" : " \u00b7 moves");
   return (
-    <div className="flex flex-col gap-4">
-      <Field label="Theme">
-        <ThemePicker />
-      </Field>
-      <div className="h-px bg-border" />
-      <Field
-        label="Glass chrome"
-        hint="Experimental: the desktop blurs through the chrome like native macOS apps. Tinted keeps more body; Clear lets more through."
+    <div className="flex flex-col gap-[18px]">
+      <FormGroup
+        caption="Theme"
+        footer="37 themes, each with its own backdrop. System accent follows the color you chose in macOS settings."
       >
-        <div className="flex flex-wrap gap-1.5">
-          <Chip
-            active={!reading.glass}
-            onClick={() => setReading({ glass: false })}
+        {/* The swatch grid is 38 entries tall, so it folds behind the row
+            (a disclosure, the System Settings way) and opens on demand; the
+            row names the current theme and shows its palette. Two triggers,
+            one fold: the strip and the pop-up both open it, the way a
+            System Settings row's every affordance leads to the same sheet.
+            Closed by default so Backdrop, Selection color and Glass stay on
+            screen. */}
+        <FormRow label="Theme">
+          <button
+            type="button"
+            onClick={() => setThemesOpen((open) => !open)}
+            aria-expanded={themesOpen}
+            aria-label={`${themeName} palette \u2014 choose a theme`}
+            className="flex overflow-hidden rounded shadow-[inset_0_0_0_0.5px_var(--border-strong)] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
-            Off
-          </Chip>
-          <Chip
-            active={reading.glass && reading.glassStyle === "tinted"}
-            onClick={() => setReading({ glass: true, glassStyle: "tinted" })}
+            {swatch.map((color, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="h-3.5 w-2.5"
+                style={{ backgroundColor: color }}
+              />
+            ))}
+          </button>
+          <PopupButton
+            onClick={() => setThemesOpen((open) => !open)}
+            aria-expanded={themesOpen}
           >
-            Tinted
-          </Chip>
-          <Chip
-            active={reading.glass && reading.glassStyle === "clear"}
-            onClick={() => setReading({ glass: true, glassStyle: "clear" })}
-          >
-            Clear
-          </Chip>
-        </div>
-      </Field>
+            {themeName}
+          </PopupButton>
+        </FormRow>
+        {themesOpen && (
+          <div className="px-3 py-2.5">
+            <ThemePicker />
+          </div>
+        )}
+        <FormRow label="Backdrop">
+          <span className="text-caption text-muted-foreground">
+            {backdropName}
+          </span>
+          <Switch
+            checked={reading.backdropMotion}
+            onChange={(backdropMotion) => setReading({ backdropMotion })}
+          />
+        </FormRow>
+        <FormRow label="Selection color">
+          <Segmented
+            label="Selection color"
+            options={ACCENT_OPTIONS}
+            value={reading.accent}
+            onChange={(accent) => setReading({ accent })}
+          />
+        </FormRow>
+      </FormGroup>
+
+      <FormGroup
+        caption="Glass"
+        footer="Tinted keeps the theme's colors over the desktop. Clear is the plain macOS material. Off is opaque."
+      >
+        <FormRow
+          label="Window material"
+          hint="Experimental: the desktop blurs through the chrome like native macOS apps."
+        >
+          <Segmented
+            label="Window material"
+            options={GLASS_OPTIONS}
+            value={reading.glass ? reading.glassStyle : "off"}
+            onChange={(style) =>
+              style === "off"
+                ? setReading({ glass: false })
+                : setReading({ glass: true, glassStyle: style })
+            }
+          />
+        </FormRow>
+        {/* Off means opaque everywhere, so there is nothing for this to do;
+            it stays visible and dimmed rather than disappearing. */}
+        <FormRow label="Sidebars show through to the desktop">
+          <Switch
+            checked={reading.glassSidebars}
+            disabled={!reading.glass}
+            onChange={(glassSidebars) => setReading({ glassSidebars })}
+          />
+        </FormRow>
+      </FormGroup>
+
+      <FormGroup
+        caption="Text"
+        footer="Display only; this does not change the model. Every notebook shares these."
+      >
+        <FormRow label="Chat font">
+          <Segmented
+            label="Chat font"
+            options={CHAT_FONTS}
+            value={reading.font}
+            onChange={(font) => setReading({ font })}
+          />
+        </FormRow>
+        <FormRow label="Text size">
+          <Segmented
+            label="Text size"
+            options={CHAT_SIZES}
+            value={reading.fontSize}
+            onChange={(fontSize) => setReading({ fontSize })}
+          />
+        </FormRow>
+        <FormRow label="Alignment">
+          <Segmented
+            label="Alignment"
+            options={CHAT_ALIGNS}
+            value={reading.textAlign}
+            onChange={(textAlign) => setReading({ textAlign })}
+          />
+        </FormRow>
+      </FormGroup>
     </div>
   );
 }

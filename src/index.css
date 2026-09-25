@@ -128,6 +128,9 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Chrome is not copy: a drag across the window must move nothing but
+     the window. WKWebView still reads the prefixed property. */
+  -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
 }
@@ -180,6 +183,7 @@ textarea,
 [contenteditable],
 .selectable,
 .prose {
+  -webkit-user-select: text;
   user-select: text;
 }
 
@@ -206,6 +210,38 @@ button {
 
 ::selection {
   background: var(--selection, rgba(94, 106, 210, 0.35));
+}
+
+/* Appearance → Selection color → System accent (ReadingPrefs.accent). WebKit
+   resolves the `AccentColor` / `AccentColorText` system keywords to the color
+   chosen in macOS System Settings, so selection and primary fills follow the
+   Mac instead of the theme; everything else drawn from --primary (buttons,
+   switches, progress fills, the citation and find highlights, the settings
+   sidebar wash) follows for free.
+
+   `!important` is load-bearing: applyTheme() writes each theme's palette as
+   inline custom properties on this same <html>, and an inline declaration
+   outranks a stylesheet rule unless the rule is important. */
+html[data-accent="system"] {
+  --primary: AccentColor !important;
+  /* Hover moves toward the foreground, which lightens the fill in dark
+     themes and darkens it in light ones — the same direction either way. */
+  --primary-hover: color-mix(
+    in srgb,
+    AccentColor 82%,
+    var(--foreground)
+  ) !important;
+  --primary-foreground: AccentColorText !important;
+  --ring: AccentColor !important;
+  --selection: color-mix(in srgb, AccentColor 35%, transparent) !important;
+  /* Links and citation text are chrome too: a citation marker in the accent
+     is the same affordance as a selected row in it. Lifted toward the
+     foreground so the raw accent stays legible as small type on either
+     scheme (the per-theme citations are all a shade off their primary for
+     the same reason). `.slide-surface` re-points --citation at the deck's
+     own accent on the element itself, which outranks this inherited value,
+     so slide decks keep their document palette. */
+  --citation: color-mix(in srgb, AccentColor 88%, var(--foreground)) !important;
 }
 
 /* Markdown rendering inside chat + notes. */
@@ -564,11 +600,123 @@ html[data-glass="clear"] .app-root {
 html[data-glass="clear"] .side-card {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
+/* Workspace panes and the toolbar (DESIGN.md §9, "the Mac formula"):
+   the sidebars are the material, not cards on it. Full height, no radius,
+   one hairline toward the content. Opaque at rest; under glass they go
+   translucent so the native vibrancy (and the blank-chat shader behind
+   them) shows through, tinted with the theme's own surface — the macOS
+   Tinted style in the theme's color rather than system gray. */
+.side-pane {
+  background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
+}
+[data-scheme="light"] .side-pane {
+  background: var(--surface);
+}
+.glass .side-pane {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+}
+html[data-glass="clear"] .side-pane {
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+}
+/* Appearance -> Glass -> "Sidebars show through to the desktop", off
+   (ReadingPrefs.glassSidebars). The toolbar and the sheet keep their glass
+   rules; only the two side panes go back to their opaque at-rest tone, for
+   a window that is translucent where the chrome is and solid where the
+   lists are. Must stay AFTER the .glass rules above: same specificity, so
+   source order decides. */
+html[data-glass-sidebars="off"] .side-pane {
+  background: color-mix(in srgb, var(--surface) 96%, var(--foreground));
+}
+html[data-glass-sidebars="off"][data-scheme="light"] .side-pane {
+  background: var(--surface);
+}
+.toolbar {
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.glass .toolbar {
+  background: color-mix(in srgb, var(--chrome) 55%, transparent);
+}
+html[data-glass="clear"] .toolbar {
+  /* Clear keeps a thin floor too: with none, the toolbar's glyphs vanished
+     against a light desktop (they are the theme's foreground, drawn for
+     the theme's chrome, not for the wallpaper). */
+  background: color-mix(in srgb, var(--chrome) 32%, transparent);
+}
+/* The sheet: the center content column. Opaque at rest (it inherits the
+   window background). Under glass it keeps a legibility floor: the
+   sidebars and toolbar are where the desktop shows through; the sheet
+   stays near-opaque so text never fights the wallpaper — the tension in
+   docs/RFC-mac-chrome.md, resolved on the side of reading. Tinted keeps
+   the theme's background at 86%; Clear lets more through but still
+   floors it. */
+/* Sticky section headers inside the sheet (Grow's Feeds / Needs attention,
+   the Registry's filter bar, the reader's outline, the timeline's day
+   labels). They must hide what scrolls under them, so they carry the
+   sheet's own floor — opaque at rest, and under glass the same partial
+   mix the sheet uses plus a blur, so they never read as black bars on a
+   frosted window. */
+.sheet-sticky {
+  /* No backdrop-filter here: on a sticky element WKWebView composites the
+     filtered backdrop from a stale scroll offset, and the rows beneath
+     ghosted through the header. The background is near-opaque anyway. */
+  background: var(--background);
+}
+/* Under glass these (Grow's section bars, the reader's outline, the
+   timeline's day labels — plain blocks, not table cells) sit a shade
+   above the sheet's own floor so what scrolls under them is covered
+   without a black band. Table heads no longer stick at all: see
+   HomeTableHead. */
+.glass .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+}
+html[data-glass="clear"] .sheet-sticky {
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+}
+
+/* Glass widgets: under glass the sheet's and panes' raised surfaces (the
+   composer, message bubbles, cards, grouped lists, pills) would otherwise
+   stay opaque and read as black slabs on a frosted window. They become
+   frosted layers themselves — the theme's own surface at partial alpha
+   over the already-blurred material, the way Messages' compose field
+   sits on its vibrant window. The mixes are computed on <html> from the
+   theme's inline values (no self-reference), then handed down to the
+   regions that draw widgets; menus keep their own `.menu-glass` recipe. */
+html.glass {
+  --glass-surface: color-mix(in srgb, var(--surface) 70%, transparent);
+  --glass-surface-2: color-mix(in srgb, var(--surface-2) 68%, transparent);
+  --glass-elevated: color-mix(in srgb, var(--elevated) 76%, transparent);
+}
+.glass .sheet,
+.glass .side-pane,
+.glass .toolbar {
+  --surface: var(--glass-surface);
+  --surface-2: var(--glass-surface-2);
+  --elevated: var(--glass-elevated);
+}
+/* Clear lets more of the material through the widgets as well: at the
+   Tinted mixes they read as grey slabs on a light desktop, because the
+   theme's dark surface is doing all the work the material should. */
+html[data-glass="clear"] {
+  --glass-surface: color-mix(in srgb, var(--surface) 44%, transparent);
+  --glass-surface-2: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  --glass-elevated: color-mix(in srgb, var(--elevated) 50%, transparent);
+}
+.glass .sheet {
+  background: color-mix(in srgb, var(--background) 86%, transparent);
+}
+html[data-glass="clear"] .sheet {
+  background: color-mix(in srgb, var(--background) 62%, transparent);
+}
+
 /* Floating menus and popovers: frosted like native macOS menus —
    a translucent elevated tone over a backdrop blur of whatever sits
    beneath, in or out of glass mode. */
 .menu-glass {
-  background: color-mix(in srgb, var(--elevated) 72%, transparent);
+  /* 84%: the floor at which menu text stays legible over a bright
+     desktop under glass; below ~75% the wallpaper reads through the
+     labels. */
+  background: color-mix(in srgb, var(--elevated) 84%, transparent);
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
 }

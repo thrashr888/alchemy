@@ -8,13 +8,13 @@ import {
   LiveRegion,
   RowMenu,
   StepTrail,
-  Textarea,
   useConfirm,
 } from "./ui";
 import { useSourceActions } from "./SourceMenu";
 import { Favicon } from "./SourcesPanel";
 import { Markdown } from "./Markdown";
 import { LiveCards } from "./LiveCards";
+import { Composer } from "./Composer";
 import {
   cn,
   chatReadingClass,
@@ -45,17 +45,11 @@ import type {
   SuggestedSource,
 } from "@/lib/types";
 import {
-  Bot,
-  MessageSquare,
   Wrench,
   ArrowDown,
-  ArrowUp,
-  Square,
-  Eraser,
   Quote,
   StickyNote,
   Sparkles,
-  Telescope,
   Check,
   Copy,
   NotebookPen,
@@ -63,16 +57,12 @@ import {
   CornerDownRight,
   ExternalLink,
   FileText,
-  SlidersHorizontal,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
   Share,
   X,
 } from "lucide-react";
-
-/** Composer autosize ceiling — past this the textarea scrolls instead. */
-const COMPOSER_MAX_H = 180;
 
 /** Fuzzy match for the @ picker: every query character (spaces ignored) must
  *  appear in order in the title. Substring hits outrank scattered ones, and
@@ -157,8 +147,6 @@ export function ChatPanel() {
   const waiting = useStore((s) =>
     s.sendingFor === s.currentId ? s.waiting : "",
   );
-  const agentMode = useStore((s) => s.agentMode);
-  const toggleAgentMode = useStore((s) => s.toggleAgentMode);
   // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
   // the user's own coding agent. The pane itself stays mounted behind the
   // chat view (its session is a live subprocess and its transcript persists
@@ -214,6 +202,46 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  /** A suggested question fills the composer instead of firing immediately —
+   *  the user can tweak it, or just hit Enter. */
+  function askSuggested(q: string) {
+    setDraft(q);
+    inputRef.current?.focus();
+  }
+
+  /** Clear the notebook conversation — a row in the composer's model pill
+   *  now that the chat toolbar is gone. Unrecoverable bulk loss, so this is
+   *  one of the few places a confirmation earns its keep (DESIGN.md §9). */
+  async function clearConversation() {
+    if (
+      await confirm({
+        title: "Clear this conversation?",
+        confirmLabel: "Clear",
+        danger: true,
+      })
+    )
+      clearChat();
+  }
+
+  /** The Agent view's own Clear, handed to `AgentPane`'s pill row. Clearing
+   *  the transcript also ends the session: the two together mean "start
+   *  over", and a live agent quietly keeping the cleared context would
+   *  belie the empty pane. */
+  async function clearAgentSession() {
+    if (!currentId) return;
+    if (
+      !(await confirm({
+        title: "Clear this session?",
+        confirmLabel: "Clear",
+        danger: true,
+      }))
+    )
+      return;
+    void api.acpStop(currentId).catch(() => {});
+    const showing = useStore.getState().acpPanes[currentId]?.agentId;
+    if (showing) useStore.getState().clearAcpPane(currentId, showing);
+  }
+
   // Restore the saved draft for this notebook (refresh/restart survival),
   // then keep the mirror current. Restore runs first and stamps `draftNb`;
   // the save effect below refuses to write until the stamp matches, so a
@@ -268,15 +296,9 @@ export function ChatPanel() {
     }, 0);
   }, [pendingInput]);
 
-  // Autosize from the draft, not from onChange: sending, a slash reset, a
-  // follow-up click and retry-after-failure all set the text programmatically,
-  // so keying off the value is what makes the box shrink back as well as grow.
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`;
-  }, [draft]);
+  // Growing the textarea with what's typed is Composer's job now (it owns
+  // the same effect, keyed on the value it's handed) — sending, a slash
+  // reset, a follow-up click and retry-after-failure still just set `draft`.
 
   // Streaming token/step listeners live in the store's global listeners now
   // (bindGlobalListeners): they must keep accumulating while the user is on
@@ -761,12 +783,7 @@ export function ChatPanel() {
         return;
       }
       case "clear": {
-        const ok = await confirm({
-          title: "Clear this conversation?",
-          confirmLabel: "Clear",
-          danger: true,
-        });
-        if (ok) void s.clearChat();
+        await clearConversation();
         return;
       }
     }
@@ -777,103 +794,11 @@ export function ChatPanel() {
       <LiveRegion announcements={announcements} />
       {/* The blank-state shader lives in Workspace now — behind the side
           panels, not just this column. */}
-      <div className="relative z-10 flex items-center px-5 h-12 border-b border-border">
-        {hostedAgent ? (
-          <Bot className="h-4 w-4 text-muted-foreground" />
-        ) : (
-          <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        )}
-        <span className="ml-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          {hostedAgent ? "Agent" : "Chat"}
-        </span>
-        <div className="ml-auto flex items-center gap-1">
-          {/* The handoff where the conversation is (docs/RFC-desktop-apps.md):
-              the same Open In the notebook menu offers, as a dropdown. */}
-          {currentId && desktopApps.some((a) => a.installed) && (
-            <RowMenu
-              alwaysVisible
-              label="Open in"
-              trigger={
-                <span className="inline-flex items-center gap-1.5">
-                  <Share className="h-3.5 w-3.5" />
-                  Open in
-                </span>
-              }
-              triggerClassName="inline-flex h-7 items-center rounded-md px-2 text-caption text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-              items={desktopApps
-                .filter((a) => a.installed)
-                .map((a) => ({
-                  label: `${a.label}…`,
-                  onClick: () =>
-                    void useStore.getState().handoffNotebook(currentId, a.id),
-                }))}
-            />
-          )}
-          {currentId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setHostedAgent((v) => !v)}
-              title={
-                hostedAgent
-                  ? "Back to notebook chat"
-                  : "Run your own coding agent against this notebook"
-              }
-            >
-              {hostedAgent ? (
-                <MessageSquare className="h-3.5 w-3.5" />
-              ) : (
-                <Bot className="h-3.5 w-3.5" />
-              )}
-              {hostedAgent ? "Chat" : "Agent"}
-            </Button>
-          )}
-          {!hostedAgent && messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                if (await confirm({ title: "Clear this conversation?", confirmLabel: "Clear", danger: true }))
-                  clearChat();
-              }}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              Clear
-            </Button>
-          )}
-          {hostedAgent && currentId && agentHistory && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={async () => {
-                // Clearing the transcript also ends the session: the two
-                // together mean "start over", and a live agent quietly
-                // keeping the cleared context would belie the empty pane.
-                if (await confirm({ title: "Clear this session?", confirmLabel: "Clear", danger: true })) {
-                  void api.acpStop(currentId).catch(() => {});
-                  const showing =
-                    useStore.getState().acpPanes[currentId]?.agentId;
-                  if (showing)
-                    useStore.getState().clearAcpPane(currentId, showing);
-                }
-              }}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              Clear
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => useStore.getState().openSettings("chat")}
-            title="Chat settings (style, length, custom prompt)"
-            aria-label="Chat settings"
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
+      {/* No chat toolbar row (docs/RFC-mac-chrome.md, "Sheet (chat)"): the
+          notebook's verbs — Open In, Share — live in the title pop-up, and
+          the chat's own tuning, the Agent view and Clear conversation hang
+          off the composer's model pill. A label over the sheet named the
+          column the window title already names. */}
       {/* The agent pane stays mounted (hidden) while Chat is in front: its
           session is a live subprocess, and toggling views must not kill it
           or drop the streamed transcript. It unmounts — and stops its
@@ -885,7 +810,15 @@ export function ChatPanel() {
             !hostedAgent && "hidden",
           )}
         >
-          <AgentPane notebookId={currentId} visible={hostedAgent} />
+          {/* With the toolbar row gone, the way back out of the Agent view
+              and its own Clear ride the agent composer's pill row — the
+              chat's model pill is not on screen here to hold them. */}
+          <AgentPane
+            notebookId={currentId}
+            visible={hostedAgent}
+            onExit={() => setHostedAgent(false)}
+            onClearSession={agentHistory ? clearAgentSession : undefined}
+          />
         </div>
       )}
       {!(hostedAgent && currentId) && (
@@ -893,10 +826,19 @@ export function ChatPanel() {
       <div ref={scrollRef} onScroll={updateAtBottom} className="relative z-10 flex-1 overflow-y-auto">
         <div
           className={cn(
-            "mx-auto flex max-w-[720px] flex-col gap-6 px-5 py-6",
-            // Blank state: fill the scroll area exactly so the centered hero
-            // never overflows it by a hair and summons a scrollbar.
-            isBlank && "min-h-full",
+            // 680 is the sheet's one measure: the transcript and the composer
+            // share the box, and the 16px inset matches the composer's own
+            // pl-4, so an answer's first character sits directly above the
+            // question's (RFC-mac-chrome, "Sheet (chat)").
+            "mx-auto flex max-w-[680px] flex-col px-4",
+            // Blank sheet: a top-aligned 26px rhythm — card, sigil, pills —
+            // not a vertically centred hero. Everything centres across.
+            isBlank && "items-center gap-[26px] pb-6 pt-[26px]",
+            // With nothing to stack (no notebook, or no sources yet, so no
+            // summary card) the rhythm has one element in it and reads as a
+            // sigil stranded at the top: centre that one case the way it was.
+            isBlank && !canChat && "min-h-full justify-center",
+            !isBlank && "gap-6 py-6",
             chatReadingClass(reading),
           )}
         >
@@ -927,6 +869,26 @@ export function ChatPanel() {
               hasSources={sources.length > 0}
               compact={canChat && !!summary}
             />
+          )}
+
+          {/* Questions to start from, as pills under the sigil (RFC-mac-chrome,
+              "Sheet (chat)"). Wrapping within 560 so a row of three short
+              questions centres and a long one gets its own line. */}
+          {isBlank && followups.length > 0 && (
+            <div className="flex max-w-[560px] flex-wrap justify-center gap-2">
+              {followups.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => askSuggested(q)}
+                  className={cn(
+                    "flex h-7 items-center rounded-full bg-surface-2 px-3 text-caption text-foreground",
+                    "shadow-[inset_0_0_0_0.5px_var(--border)] transition-colors hover:bg-elevated",
+                  )}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
           )}
 
           {messagesHasMore && (
@@ -983,12 +945,7 @@ export function ChatPanel() {
               {followups.map((q, i) => (
                 <button
                   key={i}
-                  onClick={() => {
-                    // Fill the composer instead of firing immediately — the
-                    // user can tweak the question, or just hit Enter.
-                    setDraft(q);
-                    inputRef.current?.focus();
-                  }}
+                  onClick={() => askSuggested(q)}
                   className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2 text-left text-body text-foreground/90 transition-colors hover:border-border-strong hover:bg-surface-2"
                 >
                   <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -1017,8 +974,8 @@ export function ChatPanel() {
       </div>
 
       {answersElsewhere && currentId ? (
-        <div className="relative z-10 px-5 pb-5 pt-2">
-          <div className="mx-auto flex max-w-[720px] items-center gap-3 rounded-lg border border-border-strong bg-surface px-4 py-3">
+        <div className="relative z-10 px-5 pb-[18px] pt-2">
+          <div className="mx-auto flex max-w-[680px] items-center gap-3 rounded-lg border border-border-strong bg-surface px-4 py-3">
             <Share className="h-4 w-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <div className="text-body text-foreground">
@@ -1046,199 +1003,203 @@ export function ChatPanel() {
           </div>
         </div>
       ) : (
-      <div className="relative z-10 px-5 pb-5 pt-2">
-        <div className="mx-auto max-w-[720px]">
-          <div
-            className={cn(
-              "relative rounded-lg border border-border-strong bg-surface p-2.5 shadow-md transition-colors",
-              "focus-within:border-ring/60",
-            )}
-          >
-            {slashOpen && (
-              <SlashPicker
-                results={slashResults}
-                selected={slashSel}
-                onHover={setSlashSel}
-                onPick={activateSlash}
-              />
-            )}
-            {mentionOpen && !slashOpen && (
-              <MentionPicker
-                results={mentionResults}
-                selected={mentionSel}
-                onHover={setMentionSel}
-                onPick={pickMention}
-              />
-            )}
-            <Textarea
-              ref={inputRef}
-              rows={1}
-              className="border-0 bg-transparent focus:ring-0 min-h-[24px] max-h-[180px] px-1.5 py-1"
-              placeholder={
-                canChat
-                  ? "Ask anything — / for commands, @ to ask about one source…"
-                  : currentId
-                    ? "Add a source to start chatting"
-                    : "Select or create a notebook"
-              }
-              value={draft}
-              disabled={!canChat}
-              role="combobox"
-              aria-expanded={slashOpen}
-              aria-controls={slashOpen ? "slash-picker" : undefined}
-              aria-activedescendant={
-                slashOpen && slashResults[slashSel]
-                  ? `slash-${slashResults[slashSel].name}`
-                  : undefined
-              }
-              onChange={(e) => {
-                // First keystroke of a draft: start loading the models now,
-                // so a cold local model's load overlaps the typing instead
-                // of following Send. Throttled backend-side (10 min).
-                if (!draft && e.target.value) void api.warmChatModels().catch(() => {});
-                setDraft(e.target.value);
-                // Any edit re-opens the picker (Esc/blur only dismiss the
-                // current text) and resets the highlight to the top match.
-                setSlashDismissed(false);
-                setSlashSel(0);
-                setMentionDismissed(false);
-              }}
-              // Clicking outside (Send button, model pill, transcript) closes
-              // the pickers; row clicks use onMouseDown+preventDefault so
-              // focus never leaves and this doesn't fire.
-              onBlur={() => {
-                setSlashDismissed(true);
-                setMentionDismissed(true);
-              }}
-              onKeyDown={(e) => {
-                // isComposing: don't act mid-IME-composition (CJK input).
-                if (e.nativeEvent.isComposing) return;
-                if (slashOpen) {
-                  const c = slashResults[slashSel];
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSlashSel((i) =>
-                      slashResults.length ? (i + 1) % slashResults.length : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashSel((i) =>
-                      slashResults.length
-                        ? (i - 1 + slashResults.length) % slashResults.length
-                        : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSlashDismissed(true);
-                    return;
-                  }
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    if (c) completeSlash(c);
-                    return;
-                  }
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    if (c) activateSlash(c);
-                    else submit(); // no match → send as a plain message
-                    return;
-                  }
-                  // Other keys type through and re-filter the picker.
+      <div className="relative z-10 px-5 pb-[18px] pt-2">
+        <div className="mx-auto max-w-[680px]">
+          <Composer
+            value={draft}
+            textareaRef={inputRef}
+            disabled={!canChat}
+            sending={sending}
+            onSubmit={submit}
+            onStop={() => cancelGeneration("chat")}
+            placeholder={
+              canChat
+                ? "Ask anything — / for commands, @ to ask about one source…"
+                : currentId
+                  ? "Add a source to start chatting"
+                  : "Select or create a notebook"
+            }
+            role="combobox"
+            ariaExpanded={slashOpen}
+            ariaControls={slashOpen ? "slash-picker" : undefined}
+            ariaActiveDescendant={
+              slashOpen && slashResults[slashSel]
+                ? `slash-${slashResults[slashSel].name}`
+                : undefined
+            }
+            onChange={(value) => {
+              // First keystroke of a draft: start loading the models now,
+              // so a cold local model's load overlaps the typing instead
+              // of following Send. Throttled backend-side (10 min).
+              if (!draft && value) void api.warmChatModels().catch(() => {});
+              setDraft(value);
+              // Any edit re-opens the picker (Esc/blur only dismiss the
+              // current text) and resets the highlight to the top match.
+              setSlashDismissed(false);
+              setSlashSel(0);
+              setMentionDismissed(false);
+            }}
+            // Clicking outside (Send button, model pill, transcript) closes
+            // the pickers; row clicks use onMouseDown+preventDefault so
+            // focus never leaves and this doesn't fire.
+            onBlur={() => {
+              setSlashDismissed(true);
+              setMentionDismissed(true);
+            }}
+            onKeyDown={(e) => {
+              // isComposing: don't act mid-IME-composition (CJK input).
+              if (e.nativeEvent.isComposing) return;
+              if (slashOpen) {
+                const c = slashResults[slashSel];
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSlashSel((i) =>
+                    slashResults.length ? (i + 1) % slashResults.length : 0,
+                  );
                   return;
                 }
-                if (mentionOpen) {
-                  const m = mentionResults[mentionSel];
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setMentionSel((i) =>
-                      mentionResults.length ? (i + 1) % mentionResults.length : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setMentionSel((i) =>
-                      mentionResults.length
-                        ? (i - 1 + mentionResults.length) % mentionResults.length
-                        : 0,
-                    );
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setMentionDismissed(true);
-                    return;
-                  }
-                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-                    e.preventDefault();
-                    if (m) pickMention(m);
-                    return;
-                  }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashSel((i) =>
+                    slashResults.length
+                      ? (i - 1 + slashResults.length) % slashResults.length
+                      : 0,
+                  );
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSlashDismissed(true);
+                  return;
+                }
+                if (e.key === "Tab") {
+                  e.preventDefault();
+                  if (c) completeSlash(c);
                   return;
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  submit();
+                  if (c) activateSlash(c);
+                  else submit(); // no match → send as a plain message
+                  return;
                 }
-              }}
-            />
-            {/* Named sources ride on their own line above the tools: a long
-                title in the tools row squeezed the pills and wrapped. */}
-            {activeMentions.length > 0 && (
-              <div
-                className="min-w-0 truncate px-1.5 pt-1 text-micro text-subtle-foreground"
-                title={activeMentions.map((m) => m.title).join(", ")}
-              >
-                Searching only:{" "}
-                {activeMentions.map((m) => m.title).join(", ")}
-              </div>
-            )}
-            <div className="flex items-center gap-1.5 px-1.5 pt-1">
-              <button
-                onClick={toggleAgentMode}
-                title="Deep research: several searches over your sources before answering"
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-micro transition-colors",
-                  agentMode
-                    ? "border-primary/50 bg-primary/15 text-citation"
-                    : "border-border bg-surface-2 text-muted-foreground hover:text-foreground",
+                // Other keys type through and re-filter the picker.
+                return;
+              }
+              if (mentionOpen) {
+                const m = mentionResults[mentionSel];
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionSel((i) =>
+                    mentionResults.length ? (i + 1) % mentionResults.length : 0,
+                  );
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionSel((i) =>
+                    mentionResults.length
+                      ? (i - 1 + mentionResults.length) % mentionResults.length
+                      : 0,
+                  );
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMentionDismissed(true);
+                  return;
+                }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                  e.preventDefault();
+                  if (m) pickMention(m);
+                  return;
+                }
+                return;
+              }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            pickers={
+              <>
+                {slashOpen && (
+                  <SlashPicker
+                    results={slashResults}
+                    selected={slashSel}
+                    onHover={setSlashSel}
+                    onPick={activateSlash}
+                  />
                 )}
-              >
-                <Telescope className="h-3 w-3" />
-                {agentMode ? "Deep research: on" : "Deep research: off"}
-              </button>
-              <ModelPill />
-              <span className="flex-1" />
-              {sending ? (
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  onClick={() => cancelGeneration("chat")}
-                  title="Stop"
-                  aria-label="Stop generating"
+                {mentionOpen && !slashOpen && (
+                  <MentionPicker
+                    results={mentionResults}
+                    selected={mentionSel}
+                    onHover={setMentionSel}
+                    onPick={pickMention}
+                  />
+                )}
+              </>
+            }
+            // Named sources ride on their own line above the tools: a long
+            // title in the tools row squeezed the pills and wrapped.
+            note={
+              activeMentions.length > 0 && (
+                <div
+                  className="min-w-0 truncate pt-1 text-micro text-subtle-foreground"
+                  title={activeMentions.map((m) => m.title).join(", ")}
                 >
-                  <Square className="h-3.5 w-3.5" />
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  size="icon"
-                  onClick={submit}
-                  disabled={!draft.trim() || !canChat}
-                  title="Send"
-                  aria-label="Send message"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
+                  Searching only:{" "}
+                  {activeMentions.map((m) => m.title).join(", ")}
+                </div>
+              )
+            }
+            menu={
+              <ModelPill
+                deepResearch
+                // The sheet has no toolbar, so the chat's own controls hang
+                // off this pop-up: how answers are made, where they happen,
+                // and the one destructive verb.
+                extraRows={(close) => (
+                  <>
+                    <MenuRow
+                      label="Chat settings…"
+                      muted
+                      onPick={() => {
+                        close();
+                        useStore.getState().openSettings("chat");
+                      }}
+                    />
+                    {currentId && (
+                      <MenuRow
+                        label="Run my own coding agent"
+                        muted
+                        onPick={() => {
+                          close();
+                          setHostedAgent(true);
+                        }}
+                      />
+                    )}
+                    {messages.length > 0 && (
+                      <MenuRow
+                        label="Clear conversation…"
+                        muted
+                        onPick={() => {
+                          close();
+                          void clearConversation();
+                        }}
+                      />
+                    )}
+                  </>
+                )}
+              />
+            }
+            onAttach={() => useStore.getState().openAddSource()}
+            attachDisabled={!currentId}
+            attachTitle="Add a source to this notebook"
+          />
         </div>
       </div>
       )}
@@ -1262,26 +1223,36 @@ function SummaryBanner({
   /** Blank notebook: the chip sits under the centered hero, so center it. */
   centered?: boolean;
 }) {
+  // One card shape for both states (RFC-mac-chrome, "Sheet (chat)"): 640
+  // wide on the blank sheet, radius 10, a strong inset hairline that costs
+  // no layout. The "generate" state was a dashed chip — the dash read as a
+  // drop target, and the summary's absence is not a different kind of thing
+  // from its presence, so it wears the same card with one quiet row inside.
+  const card = cn(
+    "rounded-[10px] shadow-[inset_0_0_0_0.5px_var(--border-strong)]",
+    "px-[18px] py-4 text-body leading-[1.5]",
+    centered && "w-full max-w-[640px] self-center",
+  );
+  const capsLabel =
+    "text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground";
   if (!summary && !loading) {
     return (
-      <button
-        onClick={onRefresh}
-        className={cn(
-          "rounded-lg border border-dashed border-border-strong bg-surface/50 px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:text-foreground",
-          centered ? "self-center" : "self-start",
-        )}
-      >
-        <Sparkles className="mr-1.5 inline h-3 w-3" />
-        Generate notebook summary
-      </button>
+      <div className={card}>
+        <div className={cn(capsLabel, "mb-2")}>Notebook summary</div>
+        <button
+          onClick={onRefresh}
+          className="flex items-center gap-1.5 text-body text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Sparkles className="h-3 w-3" />
+          Generate notebook summary
+        </button>
+      </div>
     );
   }
   return (
-    <div className="rounded-lg border border-border bg-surface/60 p-3.5">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-micro font-medium uppercase tracking-wide text-subtle-foreground">
-          Notebook summary
-        </span>
+    <div className={card}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className={capsLabel}>Notebook summary</span>
         <button
           onClick={onRefresh}
           className="text-muted-foreground transition-colors hover:text-foreground"
@@ -1291,9 +1262,9 @@ function SummaryBanner({
         </button>
       </div>
       {loading && !summary ? (
-        <div className="text-body text-muted-foreground">Summarizing sources…</div>
+        <div className="text-muted-foreground">Summarizing sources…</div>
       ) : (
-        <div className="text-body leading-relaxed text-foreground/90 selectable">
+        <div className="text-foreground/90 selectable">
           {/* Single newlines become markdown hard breaks so the model's line
               breaks survive; double newlines stay paragraphs. */}
           <Markdown>{summary.replace(/\n(?!\n)/g, "  \n")}</Markdown>
@@ -2226,10 +2197,10 @@ function ChatHero({
     <div
       className={cn(
         "flex flex-col items-center gap-4 text-center transition-all duration-200",
-        // Non-compact fills the column's spare height (the wrapper is
-        // min-h-full on a blank notebook) instead of guessing with vh —
-        // a guess that overflowed short windows into a scrollbar.
-        compact ? "pt-1" : "flex-1 justify-center",
+        // The sigil sits in the blank sheet's 26px rhythm now — card, sigil,
+        // pills, read from the top — so it no longer claims the column's
+        // spare height to centre itself in.
+        compact && "pt-1",
       )}
     >
       <AlchemySymbol
@@ -2244,7 +2215,7 @@ function ChatHero({
       />
       {!compact && (
         <>
-          <div className="text-section font-semibold text-foreground/90">
+          <div className="text-body font-semibold text-foreground/90">
             {!hasNotebook
               ? "Create a notebook to begin"
               : !hasSources
@@ -2299,23 +2270,45 @@ const isAgentProvider = (kind: string) => AGENT_KINDS.has(kind);
  *  The choice is the app's, not the notebook's (it writes `AiConfig`), so the
  *  same pills serve Home's corpus-wide composer — `scope` only names what the
  *  provider is about to answer. */
-export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
+/** The composer's one pop-up for how answers are made: which provider,
+ *  which of its models, how hard it thinks, and — in a notebook — whether
+ *  deep research runs first. Three pills used to carry these; one pill
+ *  reading "Claude Code · Default" carries them now, with the sections
+ *  stacked in one panel, the way a macOS pop-up button groups related
+ *  choices behind one control. */
+export function ModelPill({
+  scope = "this notebook",
+  deepResearch = false,
+  extraRows,
+}: {
+  scope?: string;
+  /** Show the Deep research row (notebook chat; Home's corpus chat has none). */
+  deepResearch?: boolean;
+  /** Surface-specific rows for the last section — the notebook chat hangs
+   *  its Chat settings, the Agent view and Clear conversation here, because
+   *  this pop-up is the only chrome the sheet has (RFC-mac-chrome). Called
+   *  with `close` so a row can dismiss the menu the way the built-in rows
+   *  do; Home's corpus chat passes nothing. */
+  extraRows?: (close: () => void) => React.ReactNode;
+}) {
   const aiConfig = useStore((s) => s.aiConfig);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const openSettings = useStore((s) => s.openSettings);
-  const [open, setOpen] = useState<null | "provider" | "model" | "effort">(null);
+  const agentMode = useStore((s) => s.agentMode);
+  const toggleAgentMode = useStore((s) => s.toggleAgentMode);
+  const [open, setOpen] = useState(false);
   const [ready, setReady] = useState<
     { id: string; ready: boolean; detail: string }[]
   >([]);
-  // What the active provider offers. Fetched when a menu that needs it opens
-  // (listing spawns a CLI), and re-fetched when the provider changes.
+  // What the active provider offers. Fetched when the menu opens (listing
+  // spawns a CLI), and re-fetched when the provider changes.
   const [offer, setOffer] = useState<ProviderModels | null>(null);
 
   const active = aiConfig?.providers.find((p) => p.id === aiConfig.chatProvider);
   const activeId = active?.id;
 
   useEffect(() => {
-    if (open === "provider") void api.providerReadiness().then(setReady).catch(() => {});
+    if (open) void api.providerReadiness().then(setReady).catch(() => {});
   }, [open]);
 
   useEffect(() => {
@@ -2350,7 +2343,7 @@ export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
   function commit(next: Partial<ProviderEntry>, keepOpen = false) {
     if (!aiConfig || !active) return;
     const id = active.id;
-    if (!keepOpen) setOpen(null);
+    if (!keepOpen) setOpen(false);
     void saveAiConfig({
       ...aiConfig,
       chatProvider: id,
@@ -2361,65 +2354,53 @@ export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
   }
 
   const efforts = offer?.efforts ?? [];
+  const modelName = active.chatModel || offer?.defaultModel || "Default";
+  const label = [
+    active.label,
+    active.kind !== "fm" ? modelName : null,
+    active.effort || null,
+    deepResearch && agentMode ? "Deep research" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const section = (text: string) => (
+    <div className="px-2.5 pb-0.5 pt-2 text-micro font-medium uppercase tracking-wide text-subtle-foreground">
+      {text}
+    </div>
+  );
 
   return (
-    <span className="inline-flex items-center gap-1">
-      <MenuPill
-        label={active.label}
-        open={open === "provider"}
-        onToggle={() => setOpen((o) => (o === "provider" ? null : "provider"))}
-        onClose={() => setOpen(null)}
-        title={`Which provider answers ${scope}`}
-        menuLabel="Answer with"
-      >
-        {aiConfig.providers.map((p) => {
-          const r = ready.find((x) => x.id === p.id);
-          const selectable = r ? r.ready : true;
-          return (
-            <MenuRow
-              key={p.id}
-              label={p.label}
-              selected={aiConfig.chatProvider === p.id}
-              disabled={!selectable}
-              note={!selectable ? "unavailable" : undefined}
-              autoFocus={p.id === aiConfig.chatProvider}
-              onPick={() => {
-                setOpen(null);
-                void saveAiConfig({ ...aiConfig, chatProvider: p.id });
-              }}
-            />
-          );
-        })}
-        <div className="mx-2 my-1 h-px bg-border" />
-        <MenuRow
-          label="Model settings…"
-          muted
-          onPick={() => {
-            setOpen(null);
-            openSettings("models");
-          }}
-        />
-      </MenuPill>
+    <MenuPill
+      label={label}
+      muted={!active.chatModel && !active.effort}
+      open={open}
+      onToggle={() => setOpen((o) => !o)}
+      onClose={() => setOpen(false)}
+      title={`How answers are made ${scope}: provider, model, effort`}
+      menuLabel="Answer with"
+      wide
+    >
+      {aiConfig.providers.map((p) => {
+        const r = ready.find((x) => x.id === p.id);
+        const selectable = r ? r.ready : true;
+        return (
+          <MenuRow
+            key={p.id}
+            label={p.label}
+            selected={aiConfig.chatProvider === p.id}
+            disabled={!selectable}
+            note={!selectable ? "unavailable" : undefined}
+            autoFocus={p.id === aiConfig.chatProvider}
+            onPick={() => {
+              void saveAiConfig({ ...aiConfig, chatProvider: p.id });
+            }}
+          />
+        );
+      })}
 
       {active.kind !== "fm" && (
-        <MenuPill
-          // Naming the inherited model beats the bare word "Default", which
-          // tells the user nothing about what will actually answer. Muted, so
-          // "inherited" still reads differently from "chosen".
-          label={active.chatModel || offer?.defaultModel || "Default"}
-          muted={!active.chatModel}
-          open={open === "model"}
-          onToggle={() => setOpen((o) => (o === "model" ? null : "model"))}
-          onClose={() => setOpen(null)}
-          title={
-            active.chatModel
-              ? `Model for ${active.label}`
-              : offer?.defaultModel
-                ? `${active.label} default: ${offer.defaultModel}`
-                : `Model for ${active.label} — using its own default`
-          }
-          menuLabel="Models"
-        >
+        <>
+          {section("Model")}
           {!offer ? (
             <div className="px-2.5 py-1.5 text-micro text-subtle-foreground">
               reading models…
@@ -2436,7 +2417,7 @@ export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
                     (isAgentProvider(active.kind) ? "the CLI's own" : undefined)
                   }
                   selected={!active.chatModel}
-                  onPick={() => commit({ chatModel: "" })}
+                  onPick={() => commit({ chatModel: "" }, true)}
                 />
               )}
               {offer.models.map((m: string) => (
@@ -2444,10 +2425,9 @@ export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
                   key={m}
                   label={m}
                   selected={active.chatModel === m}
-                  onPick={() => commit({ chatModel: m })}
+                  onPick={() => commit({ chatModel: m }, true)}
                 />
               ))}
-              <div className="mx-2 my-1 h-px bg-border" />
               <CustomModelRow
                 current={active.chatModel}
                 known={offer.models}
@@ -2455,32 +2435,46 @@ export function ModelPill({ scope = "this notebook" }: { scope?: string }) {
               />
             </>
           )}
-        </MenuPill>
+        </>
       )}
 
       {efforts.length > 0 && (
-        <MenuPill
-          label={active.effort || "Default"}
-          muted={!active.effort}
-          open={open === "effort"}
-          onToggle={() => setOpen((o) => (o === "effort" ? null : "effort"))}
-          onClose={() => setOpen(null)}
-          title={`Reasoning effort for ${active.label}`}
-          menuLabel=""
-          wide
-        >
+        <>
+          {section("Effort")}
           <EffortSlider
             levels={efforts}
             value={active.effort}
             onPick={(e) => commit({ effort: e }, true)}
           />
-        </MenuPill>
+        </>
       )}
-    </span>
+
+      {deepResearch && (
+        <>
+          <div className="mx-2 my-1 h-px bg-border" />
+          <MenuRow
+            label="Deep research"
+            note="several searches before answering"
+            selected={agentMode}
+            onPick={() => toggleAgentMode()}
+          />
+        </>
+      )}
+
+      <div className="mx-2 my-1 h-px bg-border" />
+      <MenuRow
+        label="Model settings…"
+        muted
+        onPick={() => {
+          setOpen(false);
+          openSettings("models");
+        }}
+      />
+      {extraRows?.(() => setOpen(false))}
+    </MenuPill>
   );
 }
 
-/** A composer pill that opens a popover menu above it. */
 export function MenuPill({
   label,
   muted,
@@ -2513,12 +2507,18 @@ export function MenuPill({
         aria-haspopup="menu"
         title={title}
         className={cn(
-          "inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-micro transition-colors hover:text-foreground",
+          // The composer's model pill (RFC-mac-chrome, "Sheet (chat)"): 24px
+          // tall, fully round, surface-2 under an inset hairline so the edge
+          // costs no layout inside the composer's own padding.
+          "inline-flex h-6 items-center gap-1 rounded-full bg-surface-2 px-2.5 text-caption transition-colors",
+          "shadow-[inset_0_0_0_0.5px_var(--border)] hover:text-foreground",
           muted ? "text-subtle-foreground" : "text-muted-foreground",
         )}
       >
-        {label}
-        <ChevronDown className="h-3 w-3" />
+        {/* A provider · model · effort · Deep research label can outgrow the
+            composer; clip it rather than push the send button off the row. */}
+        <span className="max-w-[260px] truncate">{label}</span>
+        <ChevronDown className="h-2.5 w-2.5 shrink-0" />
       </button>
       {open && (
         <>

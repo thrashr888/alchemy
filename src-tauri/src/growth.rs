@@ -1068,6 +1068,14 @@ pub fn entity_page_title(card: &RegistryCard) -> String {
     format!("Entity: {}", card.name)
 }
 
+/// Whether a note title is one of the wiki's own pages — the index or an
+/// entity page. Entity pages were minted as kind `note` before `wiki`
+/// existed, so callers that need "is this the notebook's ledger rather
+/// than something someone wrote" ask by title, not kind.
+pub fn is_wiki_page_title(title: &str) -> bool {
+    title == WIKI_INDEX_TITLE || title.starts_with("Entity: ")
+}
+
 /// One entity page: the card's registry facts plus the documents filed
 /// under it in this notebook, linked by title. Deterministic, like the
 /// index — the registry is the source of truth, this is its wiki face.

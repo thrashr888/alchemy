@@ -22,14 +22,21 @@ carries hierarchy**, not boxes; **shadows are whispers** and borders carry
 the edge; active states are quiet tinted pills; radius is disciplined and
 un-nested.
 
-The workspace is a Finder-style arrangement: the window is one chrome
-container (`app-root`) holding the titlebar and two floating **side-cards**
-(`side-card` — Sources and Studio, inset rounded-xl), while the center
-chat/reader column stays **uncontained** — it is the paper itself, never a
-third card. Optional **glass mode** (Settings → Appearance) makes the window
-transparent behind macOS Liquid Glass: the chrome layer and side-cards go
-translucent, the center goes fully transparent, and content cards carry
-their own opaque surfaces.
+The workspace is the macOS split-view arrangement (docs/RFC-mac-chrome.md):
+one **toolbar** (`.toolbar`, 52px) that is also the title bar — the
+notebook's name is the window title with a subtitle line under it (sources,
+where it is kept, when it was last written) and a pop-up of the notebook's
+verbs; the center mode tabs sit in its middle as a segmented control. Below
+it, Sources and Studio are **panes** (`.side-pane`): full height, no radius,
+one hairline toward the center, the material itself rather than cards on a
+surface. Studio is an **inspector** — Generate, Notes and Reports are three
+faces behind a segmented control. The center column stays **uncontained**;
+it is the paper. Optional **glass mode** (Settings → Appearance: Off, Tinted,
+Clear) makes the window transparent behind macOS Liquid Glass: the toolbar
+and panes go translucent — tinted with the theme's own surface, never
+system gray — the center goes fully transparent, and content cards carry
+their own opaque surfaces. Home wears the same three parts — toolbar, one
+`.side-pane` sidebar, one sheet (§9, "Home is a library").
 
 Empty chat may use the animated dithered "aetheric mist" WebGL background
 (`DitherBackground`) — the app's primary decorative element: behind content,
@@ -130,6 +137,22 @@ introduce a webfont; the system stack is deliberate.
 
 ## 4. Component Stylings
 
+**Measurements.** The exact numbers for the shared controls — track and
+button heights, radii, paddings, the caps label, the group row, the
+footnote — live in one table: the "Shared" section of
+docs/RFC-mac-chrome.md § Measurements, read off the approved mocks. This
+section says what each primitive *is* and when to reach for it; that table
+says how big. When the two disagree, the table wins and this section is
+stale.
+
+Two shapes recur and are worth naming. A **hairline** is `--border` (a
+strong one is `--border-strong`). An **inset hairline** is
+`box-shadow: inset 0 0 0 0.5px …` rather than a `border`: it draws the same
+edge without adding to the box, so a 22px button in a 2px-padded track comes
+out at exactly 26px and a 40px row is 40px. Every group, track, field and
+pop-up below uses the inset form; a `border` is for things whose edge may
+add height (cards, modals, table frames).
+
 - **Buttons** (`ui.Button`): heights 28px (`sm`, icon) / 32px (`md`); radius 6px.
   Variants: `primary` (accent fill, subtle 1px shadow), `secondary`
   (surface-2 fill + strong border), `ghost` (text-only, surface-2 on hover),
@@ -159,9 +182,41 @@ introduce a webfont; the system stack is deliberate.
   not a status, so color there would mean nothing (§1). The one colored
   element a chip may carry is a `dot` swatch standing for a colored thing.
 - **Segmented controls** (`ui.Segmented`): two to four exclusive states of
-  one thing (grid/table, newest/A–Z) in one bordered 8px track, segments
-  6px, the active one `surface-2`. Icon-only segments carry `hint` as
-  their name. More than four options, or long names: a `Select`.
+  one thing (grid/table, newest/A–Z, Tinted/Clear/Off). The track is a
+  `surface-2` fill under an inset hairline — not a border — and the chosen
+  segment is a raised tile: the `elevated` tone, a strong inset hairline and
+  one soft `0 1px 2px` shadow, which is the only fill a segment ever
+  carries. Two sizes, and the choice is about what the control *is*: `sm` is
+  the spec (26px track radius 7, 22px buttons, padding 0 10px, 12px medium
+  labels) and belongs to everything that filters, sorts or configures — the
+  Studio's tabs, Settings, Home's grid/table, the gallery. `md` is for a
+  segmented control that is **navigation**, which in this app is exactly one:
+  the toolbar's view switcher (32px track radius 8, 28px buttons, padding 0
+  12px, 13px labels, 14px icons). A place you go all day is a control; at
+  filter size it reads as a hint beside the title. Icon-only segments lose
+  the label padding and carry `hint` as their name. More than four options,
+  or long names: a `PopupButton` or a `Select`.
+- **Pop-up buttons** (`ui.PopupButton`): the macOS control that *names its
+  current value* and opens a menu or a fold to change it — the theme in
+  Appearance, the sort order on Home, the model on the composer. 22px, the
+  `elevated` tone under a strong inset hairline, a 10px chevron trailing.
+  It is not a `Select`: what it opens is a real menu or a disclosure, so it
+  can show icons, counts and swatches. Reach for it when a `Segmented`
+  would need a fifth option or a long name.
+- **Grouped forms** (`ui.FormGroup` + `ui.FormRow`): the macOS System
+  Settings shape, and the only shape a settings pane uses. A group is a
+  rounded-10px `surface-2` box under an inset hairline whose rows are
+  divided by hairlines; the optional uppercase 11px `caption` sits above it
+  and the optional one-sentence `footer` below it, both outside the box and
+  aligned to the row padding, not the box edge. A row is 40px and one
+  control: the label leading (with an optional 11px hint under it, which is
+  the only thing that grows a row past 40), the control trailing — a
+  `Switch`, a `Segmented`, a `PopupButton`, a `Select`, a small `Button`, or
+  just a value. The label column takes the slack, so a label-less row still
+  pushes its buttons to the right edge. A control that needs the whole width
+  (the theme swatch grid, a textarea, the chat style tiles) is a plain
+  `px-3 py-2.5` div inside the group instead of a row. No `<hr>` dividers
+  between sections: the 18px gap between groups is the division.
 - **Sorting**: tables sort by their column headers (`HomeTable`: the
   header is the button, the arrow shows direction, text starts ascending
   and counts and dates descending). Every other list sorts through
@@ -172,12 +227,24 @@ introduce a webfont; the system stack is deliberate.
 - **Filter fields** (`ui.SearchField`): the search glass drawn in at left,
   a clear button once there is text, `type="search"`. `quiet` (28px,
   transparent fill) inside a side card, where a filled box would be a box
-  in a box; `field` (32px, `surface-2`) in a page toolbar beside other
-  32px controls. Placeholder reads "Filter <things>…".
-- **Checkboxes**: a real `<input type="checkbox">` with the `select-quiet`
-  class for list selection (Finder-style, §9); a `ui.Switch` for a setting
+  in a box; `field` (26px, `surface-2` under an inset hairline, 13px text,
+  a 16px glass) in a toolbar or a settings sidebar, where the box should be
+  visible. Placeholder reads "Filter <things>…".
+- **Checkboxes and switches**: a real `<input type="checkbox">` with the
+  `select-quiet` class for list selection (Finder-style, §9); a `ui.Switch`
+  — a 26×16 track with a 12px knob, `--primary` when on — for a setting
   that is on or off. Never a checkbox for a setting, never a switch for a
-  selection.
+  selection. A switch whose setting cannot apply right now (the glass
+  sub-options with the window material Off) takes `disabled` and stays
+  visible and dimmed rather than disappearing: the row still says what the
+  app can do.
+- **Generator rows** (Studio › Generate): grouped hairline lists, one group
+  per shelf, each row 38px with an icon in its family accent, the
+  generator's name, and how many notes of that kind the notebook already
+  holds. The row is the button; while it runs the icon spins and a second
+  press is refused. Each shelf shows its top rows and folds the rest into
+  one disclosure row that names them — a button, never a More menu (§9).
+  One instructions field at the foot of the pane, always present.
 - **Menus**: `menu-glass` material (see §2), hairline edge (see §6), radius 6px, 13px items;
   open focuses the first item, arrows cycle, Escape closes and restores focus,
   `role="menu"`/`menuitem`.
@@ -227,28 +294,54 @@ its own version of one is a bug unless it is listed here with its reason.
 The measurable check (2026-09-22): raw `<select>`s outside `ui.tsx` went
 from 17 to 0; toggle chips from four drawn styles to one; sort controls
 from four shapes to two (headers for tables, the menu for the rest);
-filter fields from three to one. Raw `<button>`s (216) are fine — most are
+filter fields from three to one. Settings (2026-09-23): the twelve panes'
+hand-drawn label/hint/divider stacks became `FormGroup`/`FormRow`, and the
+chip rows for glass, chat font, text size and alignment became `Segmented`
+— seven panes converted, five (Models, Agents, Activity, Shortcuts, About)
+keep their own sections because their rows are lists and status, not
+settings. The Mac chrome pass (2026-09-23) then put numbers on all of it:
+every shared control now measures what docs/RFC-mac-chrome.md's table says
+(segmented 26/22, group rows 40, fields 26, switch 26×16, pop-up 22), and
+the borders on groups, tracks and fields became inset hairlines so those
+numbers are the rendered heights and not one or two pixels more. One
+primitive was added rather than drawn per site: `PopupButton`, which the
+theme row, Home's sort order and the composer's model pill all use.
+Raw `<button>`s (216) are fine — most are
 icon buttons and row bodies styled for their spot; the rule is that a
 button that *looks like* a primitive uses the primitive.
 
 Justified exceptions, kept on purpose:
 
-- **Onboarding doors** are cards with a title and a note, not chips —
-  they carry a paragraph, and a chip cannot. They keep their own layout
-  and the accent border for the chosen door: choosing a model is the one
-  place first-run color means something.
+- **Onboarding doors** are rows in a grouped inset list, not chips and no
+  longer cards: first run is a Setup Assistant asking one question per
+  step, and a question with four answers is a radio group. The list is a
+  10px container on `surface-2` with a hairline border and hairlines
+  between rows; each row carries a radio circle, an 18px icon, a title and
+  a one-line hint, and an optional status pill on the right. The accent
+  appears only in the filled radio of the chosen row, and `success` only
+  in a pill that reports something actually found or running — a door this
+  Mac does not have is dimmed and unpickable instead of colored.
 - **The graph's degree badge** (`GraphView`) is a tabular-nums label that
   toggles a highlight; it reads as data, not a filter, and stays a plain
   label.
 - **The reader's title field** and the command palette's input are
   transparent, unbordered inputs by design: the text *is* the surface.
-- **The chat composer** is its own component: a growing textarea with its
-  toolbar, not an `Input`.
+- **The chat composer** is its own component: a growing textarea over a pill
+  row, not an `Input`. It floats on the sheet — 680 wide, radius 22, the
+  menus' frosted material, a strong hairline and a deep shadow — and its
+  model pill's pop-up is the only chrome the chat has: how answers are made,
+  Chat settings, the Agent view, Clear conversation. There is no chat
+  toolbar row, because a strip over the sheet would only have labelled the
+  column the window title already names; the notebook's own verbs (Open In,
+  Share) belong to the title pop-up, not beside the transcript.
 - **Pickers that show the thing they pick** — the notebook color swatches
   and icon grid (`NotebookEditModal`), the theme strips and the big
   icon-and-label tiles in Appearance (`SettingsTabs`) — are not chips: the
   swatch, glyph or strip *is* the label. They keep their own shapes and use
-  the ring for the selected one.
+  the ring for the selected one. The Theme row's four-block strip is the
+  same idea shrunk to a row: it shows the current theme's background,
+  surface, text and accent, and it opens the same fold the `PopupButton`
+  beside it does, because both are the row's answer to one question.
 - **Studio's generator tiles** (`GenTile`) are buttons with a family accent
   on the icon; the accent is wayfinding for note kinds (§2), not a state.
 
@@ -260,11 +353,10 @@ Justified exceptions, kept on purpose:
   padding 84px clears macOS traffic lights (centered via
   `trafficLightPosition` in `tauri.conf.json`). No bottom rule — the cards
   provide the separation.
-- Workspace arrangement: side-cards are inset `mx-2 mb-2 mt-1` with an 8px
-  gap to the open center; the 4px top inset plus the center's `pt-1` puts
-  the SOURCES / CHAT / STUDIO headers on one horizontal line. Collapsed
-  rails are `w-12` cards that hug their content (`self-start`), not
-  full-height strips.
+- Workspace arrangement: the panes are flush — no margins, no radius — with
+  a hairline on the edge that meets the center, so the SOURCES / CHAT /
+  STUDIO headers sit on one line by construction. Collapsed rails are
+  `w-12` full-height strips with the same hairline.
 - Side panels: Sources 280px default (drag 220–400), Studio 320px default
   (drag 260–460); resizable via `ResizeHandle` (double-click resets).
   Collapsed panels become 48px icon rails.
@@ -331,7 +423,10 @@ What each clause means here:
 
 - **System is law** — appearance, accessibility text size, and reduced
   motion come from macOS and are never overridden (§3, §7). Standard edit
-  shortcuts (⌘C/V/X/Z/A, ⌘F) always mean the standard thing.
+  shortcuts (⌘C/V/X/Z/A, ⌘F) always mean the standard thing. Appearance →
+  Selection color → System accent goes one further and hands `--primary`,
+  `--ring` and `--selection` to the `AccentColor` system keyword, so
+  selection follows the color the user picked in System Settings.
 - **Menu is the index** — every user-facing command appears in the native
   menu bar (`menu.rs`) with its shortcut. If it's not in a menu, it's not
   discoverable; the menu is the app's table of contents, not a formality.
@@ -347,6 +442,163 @@ What each clause means here:
   text restore on relaunch. Quitting is not losing your place.
 
 When a rule here conflicts with a web idiom, the Mac wins.
+
+**The Sources pane is a Finder sidebar.** 260px, 10px of padding, 12px
+between its blocks, one hairline toward the center
+(docs/RFC-mac-chrome.md, "Sources pane" — that table is the spec).
+The rules that are easy to lose:
+
+- **One line per row.** 28px, `px-2`, radius 6, 13px, 1px apart, selected
+  in `--selection`. What a source's domain is, where its folder lives and
+  how much it contributes are on the hover card and in the `title`, not on
+  a second line. Four states earn a second line, because each is the row
+  asking for something: a proposed deletion, an import running, an import
+  that failed, a file still in the cloud.
+- **A caption before a chart.** The corpus size is one `text-micro` line
+  under the header; the bar only appears past 80% of the 10M the evals
+  fence, because that is the only point where "where you are" is worth a
+  picture.
+- **The filter field stays, the chips fold.** 2,487-source notebooks are
+  navigated by typing, so the field is always there past eight sources;
+  kind, tag and condition chips fold behind the filter toggle in the
+  header. A filter that is on keeps its chip visible whatever the toggle
+  says, so it can always be switched off.
+- **Tags are rows, not just chips.** Under the list: caps label, then the
+  busiest five as rows, folded under the caps header, with an 8px dot and a count, each one applying the
+  same tag facet the chips do — one filter state, two ways in. Tags carry
+  no color in the model, so the dot is a stable hash over the categorical
+  palette in `src/lib/sourceGroups.ts`, never a fresh hex in a component.
+- **Grow is pinned to the foot.** 32px, `surface-2` under an inset
+  hairline, a 6px `--warning` dot and "N to review". It is the notebook's
+  standing offer, not the list's first row, where it pushed the sources
+  down and scrolled away.
+- **Icon buttons are 24px**, min-width 28 (24 and square in a pane header
+  or a collapsed rail), `px-[7px]`, radius 6, muted, `surface-2` on hover.
+  The chrome's buttons are shorter than they are wide so a row of them
+  reads as one strip; `Button size="icon"` is a 28px square and is not it.
+
+**Home is a library.** One toolbar, one 220px sidebar (`.side-pane`), one
+sheet — Photos and Music, not a dashboard. The Brief sits alone at the
+sidebar's top, no caps label of its own, the way Mail's Inbox sits above its
+account blocks: an icon, "Brief", and a 6px dot when last night's run is
+unread. Below it the sidebar is three blocks of 28px rows (Library, Registry,
+Tags), each row a place with its count, its 6px dot, or its `--primary` count
+badge; the selected row is washed in `--selection`. Choosing a row changes
+what the sheet shows, so every surface Home holds — the shelf, the corpus
+conversation, the Registry, the timeline, the night shift's Staff, the Brief,
+the nightly reports — is a section of one center column rather than a card
+stacked around it. Shared and Archived are the same shelf, narrowed. The
+shelf groups notebooks by recency (Today, Last 7 days, Earlier) and draws
+each as a 212px card whose thumb stands in for the notebook: its color, its
+name in caps, and then what is actually inside — two or three of its newest
+source titles behind their type glyphs, the newest note among them, and its
+lead images as a strip of three tiles along the bottom — with the counts
+moved to the tooltip, because a card has room to say what a notebook holds
+and the table already says how much. Until `notebook_previews` lands,
+id-derived ruled lines hold the space so the page never shimmers. The
+caption below the thumb sits 6px under it, inset 4px so the name lines up
+with the thumb's rounded edge rather than reading as flush against nothing,
+the way a Photos caption sits under its tile.
+
+Every section's **heading row** carries only its h1 title (26px/700,
+tracking -.01em) and, when the section has one, its trailing controls —
+Notebooks' Add source/Import, Registry's sort and suggest verbs (reported
+into the same slot by `RegistrySection` rather than drawn as a second
+toolbar), Nightly Reports' Mark all read. Notebooks alone keeps a second
+line, "Since you were away", because that line is about the visit rather
+than a count. What a section holds moved out of the heading and into a
+Finder-style **status bar**: one centered line in the sheet's footer,
+present on every section — `18 notebooks · 4,067 sources · 620 notes`,
+narrowed to `12 notebooks · #finance` under a tag; `4 conversations`;
+`13 reports · 2 unread`; `224 entries`; `10 waiting`. The Brief carries
+nothing there — what last night's run did is now the Brief's own line,
+read from the sidebar row's tooltip and repeated as a quiet second line
+inside the Brief section itself, since that is the surface it is actually
+about. The toolbar carries the collection's controls for every section —
+the grid/table switch, the sort pop-up, the filter field — so no section
+draws a second search box (`HomeViewControls`' `chrome="own"`). The
+Registry's entries (registry cards in the model) flow like the shelf now
+too: full-width at the shelf's own padding (`px-7`, 18px between blocks),
+no suggestion remnants (Keep all/Dismiss all and the waiting banner
+belong to the Suggested queue alone).
+
+**Chats' sessions live in the sidebar**, Finder-folder/Mail-mailbox style,
+not in a second column: the Library's Chats row is a disclosure
+(`ChatsRow` in `HomeView.tsx`), and its sessions nest beneath it as
+indented child rows (`HomeChatSidebarThreads` in `HomeChat.tsx`) — newest
+first, 28px, `pl-8 pr-2 rounded-md text-body`, title truncated to one line.
+The two-line Messages entry this used to be (title, then a muted `8/29/2026
+· 14 turns`) is one line now; that detail moved to the row's `title`
+tooltip, since a sidebar row has no room for a second line. A chevron on
+the Chats row opens and closes the sub-list independently of selection
+(persisted, `localStorage.homeChatsOpen`, open by default); a small `+` at
+the row's trailing edge, visible on hover/focus or while Chats is the
+section on screen, starts a new conversation without a trip to the sheet.
+The selected session washes `bg-[var(--selection)]`; the parent Chats row
+washes only when the open conversation is the blank one nothing has been
+asked into yet, the way Mail's Inbox row stays selected until a message
+underneath it is. The list caps at 12 sessions with a final `Show N more…`
+row, so a long history can't push Registry and Tags off the sidebar's
+bottom. With the list gone from the sheet, Chats draws no heading row at
+all — no title, no New chat button, nothing above the transcript — and no
+footer either, so the composer sits 18px above the sheet's bottom edge,
+exactly like the notebook's own chat. The transcript and composer are the
+notebook's Chat page's own, not a redrawn copy: both share one `Composer`
+component (`src/components/Composer.tsx`), so the 680 measure, the
+radius-22 frosted composer, the one model pop-up and the blank state
+(sigil + a line, no summary card — a notebook summary doesn't apply to the
+whole corpus) all read identically wherever they're asked. Home's own
+style and length choices fold into sections of that one pop-up,
+`ModelPill`'s `extraRows`, exactly as the notebook composer hangs Chat
+settings and Clear conversation off it — three pills and an Ask button
+became one pop-up and the circle send.
+
+**Settings is System Settings.** The dialog is a sidebar and a pane, not a
+tab bar. The sidebar leads with an identity block — the app sigil,
+"Alchemy", and a muted second line giving the version and whether it's
+current (`0.65.1 · Up to date`, `0.66.0 available`, `Checking…`) — the way
+System Settings leads with the account block, not the word "Settings".
+Below that a filter field, then the twelve rows split into four groups
+(App: General, Appearance, Shortcuts · Content: Sources, Studio, Chat,
+Models, Agents · Automation: Nightly, Personalization, Activity · About)
+with a plain gap between them, no captions — the gap alone is the division,
+same rule as a `FormGroup`. Each row is a 20px colored icon tile beside its
+name, the selected row washed in `--selection` with the tile filled in
+`--primary`. The pane's 52px top bar carries only a Back/Forward pair,
+walking the tabs visited in this open of the dialog (a stack in component
+state, deep links push onto it too) — not a title, which moved into a
+centered header block below the bar: a 56px `surface-2` tile holding the
+tab's glyph, the title, and a one-sentence plain-register description
+(`WRITING.md`, max 44ch). The pane below that is grouped inset forms
+(`FormGroup`/`FormRow`, §4) — never a long ungrouped column of labels — so
+a setting is found by the group it belongs to, the way it is on the rest
+of the Mac.
+
+**Studio is an inspector.** 300px wide, `px-3 py-2.5`, 12px between blocks,
+one hairline toward the center. The segmented control is the first thing in
+the pane — Generate, Notes, Reports, each with its count after the word in
+`text-micro font-normal` — and the chosen face is remembered. No caps STUDIO
+line and no collapse button in the pane's own header: the toolbar's
+inspector toggle and ⌘2 close it, and a second control saying the same
+thing is one too many. Generate is shelves, not a wall: Understand, Learn
+and visualize, Write, each a grouped list (radius 10, `surface-2`, inset
+hairline) of 38px rows carrying a family-accented icon, the generator's
+name, and how many notes of that kind the notebook already holds. A shelf
+shows its **top rows** — ordered by what this notebook actually makes, then
+by the primary set — and folds the rest into one disclosure row that names
+them (`Timeline, Data table, Insights, 3 more`). Folding is not hiding: the
+row is a button, and pressing it puts every generator on the page. **A fold
+goes both ways.** The row stays where it is once opened, reading `Show less`
+with the chevron pointing up — a disclosure that can only be opened is a
+trapdoor, and the row never jumps out from under the finger that pressed it.
+Nothing lives behind a More menu, there is no separate "start here" shelf
+(the top rows *are* the start), and the Write shelf carries the reader's own
+templates plus the two verbs that make and keep them. **Exactly one region
+scrolls per tab.** On Generate the shelves scroll and the instructions field
+is a footer outside that region, hairline above it, pinned to the pane's
+foot — 30px, `surface-2` with an inset hairline — so unfolding a shelf can
+never push it off the bottom; whatever is typed there rides along with the
+next generator pressed. Notes and Reports each scroll their own list.
 
 ### Menus — the NSMenu formula
 
@@ -504,8 +756,9 @@ Re-runnable by hand: ⌘F5 to start VoiceOver, then walk the main window with
 VO-→ and confirm each line. A failure here is a bug, not a nit.
 
 1. **Titlebar** — notebook name is read once, not twice (the color dot is
-   `aria-hidden`); "Open the command menu" and "Open settings" announce as
-   buttons with those names.
+   `aria-hidden`); "Search and commands" and "Open settings" announce as
+   buttons with those names, and the two pane toggles say which way they
+   go ("Hide sources" / "Show studio") rather than only "Sidebar".
 2. **Degraded bar**, when one is showing — the title and the sentence are
    read together, and each fix button announces its own verb ("Start
    Ollama", "Install qwen3", "Rebuild now").
@@ -536,7 +789,7 @@ not rendered — recorded as found, not as it ought to be.
 | Notebook shelf (`HomeView`) | `AlchemyHero` branch; filter-empty line | none | `activityError` row + Retry (activity feed only) | `HealthBanner` |
 | Home Staff + Brief (`HomeSections`) | `StaffQuiet` per group; "No brief yet" | `StaffQuiet` "Loading…" (watchers only) | none — toasts, and `FiledGroup` catches into an empty list | "Night Shift is off" button |
 | Latest reports (`HomeReportsFeed`) | "You're all caught up"; `EmptyState` in `HomeView` | "Loading reports…" in `HomeView` | `EmptyState` "Reports unavailable" + Retry | none |
-| Registry (`RegistrySection`) | `EmptyState` "No cards yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
+| Registry (`RegistrySection`) | `EmptyState` "No entries yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
 | Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | one "Indexing n of m documents" card with a `ProgressBar`; single imports keep their own row | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
 | Chat (`ChatPanel`) | `ChatHero`; disabled composer | `ThinkingDots`, `StepTrail`, streaming markdown | `ChatMessage` error branch + Retry + `FallbackOffers` | `ModelPill` "unavailable" rows; `HealthBanner` via `Workspace` |
 | Agent pane (`AgentPane`) | `AgentBlankSlate` | `AgentBlankSlate` "Looking for agents…" | `FailureNotice` + Terminal + Retry | "Running without notebook access" notice |

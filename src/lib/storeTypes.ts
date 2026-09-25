@@ -16,6 +16,8 @@ import type {
   NoteSummary,
   NoteKind,
   Notebook,
+  NotebookPreview,
+  CorpusTag,
   OkfBinding,
   OkfLifecycle,
   ReadingPrefs,
@@ -76,13 +78,41 @@ export interface NavEntry {
   /** The Home conversation that was open, for `section: "chat"`. */
   thread?: string | null;
   /** The Registry card that was open, for `section: "registry"` — a card
-   *  is a page of its own, and back from one returns to the cast. */
+   *  is a page of its own, and back from one returns to the cast. A
+   *  suggestion has no page, so `section: "suggested"` never carries one. */
   card?: string | null;
+  /** Which notebooks the shelf was showing, for `section: "notebooks"`.
+   *  Part of the shelf's identity the way `thread` is part of chat's:
+   *  Archived is not where you were when you were looking at Shared. */
+  scope?: HomeScope;
+  /** The tag the shelf was narrowed to, for `section: "notebooks"`. Opening
+   *  a notebook off a filtered shelf and pressing Back must return to the
+   *  filter, not to the whole library. */
+  tag?: string | null;
 }
 
-/** Home's center column: the notebook grid, the Registry's cast, or the
- *  corpus-wide conversation. */
-export type HomeSection = "notebooks" | "registry" | "chat" | "timeline";
+/** Home's center column: which surface the Library's sidebar has selected.
+ *  `notebooks` is the shelf itself; the rest are the surfaces that used to
+ *  be rails or cards around it (docs/RFC-mac-chrome.md, "Home"). */
+export type HomeSection =
+  | "notebooks"
+  /** The Registry's accepted cards — the cast, with its own sort and
+   *  filters. Visiting it does NOT clear the Suggested badge: looking at
+   *  who is already cast is not a ruling on who was proposed. */
+  | "registry"
+  /** The suggestion queue on its own, accept/dismiss and nothing else. The
+   *  sidebar's badge and `registrySeenAt` belong to this row alone. */
+  | "suggested"
+  | "chat"
+  | "timeline"
+  | "staff"
+  | "brief"
+  | "reports";
+
+/** Which notebooks the Notebooks shelf is showing. Shared and Archived are
+ *  the same shelf narrowed, not sections of their own — so they are a scope
+ *  the shelf carries rather than a `HomeSection`. */
+export type HomeScope = "all" | "shared" | "archived";
 
 /** Home's conversation, as the store holds it: which thread is open and the
  *  turns already settled into it. Both come from the backend — the thread
@@ -175,6 +205,22 @@ export interface AcpPaneState {
 
 export interface AppState {
   notebooks: Notebook[];
+  /** What each notebook holds, by notebook id — the contents the Library's
+   *  cards draw instead of ruled lines (DESIGN.md §9). Empty until Home's
+   *  shelf asks for it. A missing key means the read hasn't landed (the card
+   *  shows its skeleton); a key whose preview has no sources means the
+   *  notebook really is empty, and the card says so. That distinction is why
+   *  the backend returns a row for every notebook. */
+  notebookPreviews: Record<string, NotebookPreview>;
+  /** The corpus's busiest tags, for the Library sidebar's Tags block. Read
+   *  on the same leash as the previews (`refreshNotebookPreviews`): both are
+   *  corpus rollups, both are only on screen at Home, so they travel
+   *  together rather than on two debounces that could drift apart. */
+  corpusTags: CorpusTag[];
+  /** The tag row the Library's sidebar has selected, or null. A scope on the
+   *  Notebooks shelf, like `homeScope` — narrowing the shelf to the
+   *  notebooks that tag's sources sit in, not a place of its own. */
+  homeTagFilter: string | null;
   currentId: string | null;
   sources: Source[];
   selectedSourceIds: Record<string, boolean> | null;
@@ -332,6 +378,11 @@ export interface AppState {
   /** Home's center column: the notebook grid, the Registry's cast, or the
    *  Chat tab's conversation. */
   homeSection: HomeSection;
+  /** Which notebooks the shelf shows. In the store rather than in HomeView
+   *  because it is part of where the user IS: back/forward records it, the
+   *  View menu's Shared and Archived set it, and neither can reach a
+   *  useState that only exists while Home is mounted. */
+  homeScope: HomeScope;
   /** The Home conversation currently open (docs/RFC-meta-chat.md). Persisted
    *  per thread in the `meta_turns` table, so it survives a tab switch, a
    *  window close, and a relaunch. */
@@ -398,6 +449,19 @@ export interface AppState {
   init: () => Promise<void>;
   bindGlobalListeners: () => void;
   refreshNotebooks: () => Promise<void>;
+  /** Re-read what the Library's shelf draws: what every notebook holds, and
+   *  the corpus's busiest tags. Two backend calls for the whole shelf, and
+   *  only ever called from Home — inside a notebook neither is on screen, so
+   *  the scans would be work for nobody. */
+  refreshNotebookPreviews: () => Promise<void>;
+  /** Pick a tag row, or clear it by passing the one already on. */
+  setHomeTagFilter: (tag: string | null) => void;
+  /** Show the Notebooks shelf at this scope — what the sidebar's Notebooks,
+   *  Shared and Archived rows do, and what the View menu's first, third and
+   *  fifth items do. */
+  goHomeShelf: (scope: HomeScope) => void;
+  /** Show one of Home's other sections. */
+  goHomeSection: (section: HomeSection) => void;
   selectNotebook: (id: string) => Promise<void>;
   closeNotebook: () => void;
   navBack: () => void;

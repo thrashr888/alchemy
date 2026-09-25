@@ -575,12 +575,15 @@ export function CenterModeTabs() {
       useStore.setState({ galleryOpen: false, growOpen: true });
     }
   };
-  // The one segmented control that is navigation: the same track as every
-  // other, one size up, with Reader dimmed until there is something to read.
+  // The one segmented control that is navigation, and the only one at `md`
+  // (docs/RFC-mac-chrome.md, "Toolbar"): 28px buttons, 13px labels. At the
+  // 22px filter size it read as a hint beside the title rather than the
+  // four places this window goes. Reader stays dimmed until there is
+  // something to read.
   return (
     <Segmented
-      label="Center"
       size="md"
+      label="Center"
       value={active}
       onChange={show}
       options={[
@@ -3784,7 +3787,7 @@ function RepoView({ source, map }: { source: Source; map: string | null }) {
             )
           ) : (
             <>
-              <div className="sticky top-0 z-10 -ml-1 flex items-center gap-2 bg-background/85 py-1 pl-1 backdrop-blur">
+              <div className="sheet-sticky sticky top-0 z-10 -ml-1 flex items-center gap-2 py-1 pl-1">
                 <RepoBreadcrumb
                   repoTitle={source.title}
                   rel={selRel ?? ""}

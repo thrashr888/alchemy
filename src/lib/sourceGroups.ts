@@ -93,3 +93,18 @@ export function groupOfNode(kind: string, sourceType: string): TypeGroup {
   if (kind === "note") return "notes";
   return GROUP_OF[sourceType as Source["sourceType"]] ?? "text";
 }
+
+/** Tags carry no color in the model (`Source.tags` is a string), so the dot
+ *  beside one is a stable hash over the palette above — same tag, same dot,
+ *  in every theme, in the Sources pane and in the Library's sidebar alike.
+ *
+ *  Lives here rather than in either component because both draw it: a second
+ *  copy of the hash is a second palette, and the two would drift the first
+ *  time one of them gained a hue. */
+const TAG_HUES = Object.values(GROUP_COLOR);
+
+export function tagHue(tag: string): string {
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) | 0;
+  return TAG_HUES[Math.abs(h) % TAG_HUES.length];
+}

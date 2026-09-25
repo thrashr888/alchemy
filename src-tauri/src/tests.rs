@@ -58,6 +58,7 @@ async fn rag_round_trip() {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     db.create_notebook(&nb).await.expect("create notebook");
     assert_eq!(
@@ -1010,6 +1011,7 @@ async fn notebook_counts_follow_writes_through_the_cache() {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     })
     .await
     .expect("create notebook");
@@ -4771,6 +4773,7 @@ fn okf_system_notebooks_never_bind() {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     assert!(is_system_notebook(&nb("system")));
     assert!(!is_system_notebook(&nb("")));

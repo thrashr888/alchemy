@@ -651,7 +651,7 @@ export function GrowPane() {
   // "Remove all") should never scroll away from the rows they act on.
   // Hairline below, pane background under it, so content passes cleanly.
   const headerBase =
-    "sticky top-0 z-10 -mx-5 border-b border-border bg-background/95 px-5 py-2 backdrop-blur";
+    "sheet-sticky sticky top-0 z-10 -mx-5 border-b border-border px-5 py-2";
   const headerRow = `${headerBase} flex items-center gap-2`;
 
   /** One quiet line while a section is still working. No spinner: six

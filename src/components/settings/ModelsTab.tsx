@@ -367,7 +367,7 @@ export function ModelsTab({
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[18px]">
       <Field
         label="Model"
         hint="Answers chat and writes studio documents."

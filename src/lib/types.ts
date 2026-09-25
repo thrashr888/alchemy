@@ -29,6 +29,12 @@ export interface Notebook {
   noteCount: number;
   /** Report-kind notes (scheduled runs, briefs). */
   reportCount: number;
+  /** One of the notebooks Alchemy ships rather than one you made. Computed
+   *  at list time from the title (`examples::STARTER_TITLES`), never stored:
+   *  every Mac seeds its own copy under its own id. The shelf gathers these
+   *  under "Built in" instead of scattering them through the recency
+   *  groups, and the active count leaves them out. */
+  builtIn?: boolean;
 }
 
 /** One document in the notebook link graph. */
@@ -64,6 +70,13 @@ export interface OkfBinding {
   /** The folder is shared with another person (docs/RFC-shared-notebook.md).
    *  Their deletions arrive as proposals rather than removals. */
   shared?: boolean;
+  /** The OTHER Macs that have written into this notebook, by their device
+   *  name ("Anne's MacBook (C02ABC)"). Derived at read time from the
+   *  provenance sidecar, never stored on the binding; empty for a folder
+   *  nobody else has written to yet, and for every binding that is not
+   *  shared. Nothing on disk records a person's name or an iCloud share
+   *  owner, so the device is the truest thing a card can say. */
+  peers?: string[];
 }
 
 /** One deletion the other person in a shared notebook made, waiting on an
@@ -649,6 +662,50 @@ export interface HomeActivity {
   stats: CorpusStats;
 }
 
+/** One source as a Home card names it. */
+export interface PreviewSource {
+  id: string;
+  title: string;
+  sourceType: Source["sourceType"];
+  /** Lead image when the source has one; "" otherwise (the backend already
+   *  folds ingest's "-" sentinel into ""). */
+  imageUrl: string;
+}
+
+/** One note as a Home card names it. */
+export interface PreviewNote {
+  id: string;
+  title: string;
+  kind: string;
+}
+
+/** What one notebook is made of, for the Library's cards (DESIGN.md §9) —
+ *  contents rather than counts. Mirrors `models::NotebookPreview`. */
+export interface NotebookPreview {
+  notebookId: string;
+  /** Newest first, at most 4; top-level sources ahead of folder children. */
+  sources: PreviewSource[];
+  /** Distinct lead images, newest first, at most 3. */
+  images: string[];
+  /** Newest first, at most 2. */
+  notes: PreviewNote[];
+  /** Newest user question, whitespace collapsed and cut to 120 chars. */
+  lastQuestion: string;
+  lastQuestionAt: number;
+}
+
+/** One tag as the Library's sidebar names it. Mirrors `models::CorpusTag`.
+ *  Tags are a per-source field, so this is a corpus-wide rollup built by one
+ *  projected scan in Rust — never a read of every notebook's sources. */
+export interface CorpusTag {
+  tag: string;
+  /** Sources wearing this tag, across every active notebook. */
+  count: number;
+  /** The notebooks those sources sit in, sorted — enough to narrow the shelf
+   *  without a second round trip. */
+  notebookIds: string[];
+}
+
 /** The Registry's kinds (RFC-registry). */
 export type CardKind =
   "asset" | "person" | "policy" | "provider" | "project" | "dependency";
@@ -1081,6 +1138,20 @@ export interface ReadingPrefs {
   glass: boolean;
   /** Glass opacity level, mirroring macOS's Clear/Tinted styles. */
   glassStyle: "tinted" | "clear";
+  /** Under glass, let the desktop show through the Sources and Studio panes.
+   *  Off puts `data-glass-sidebars="off"` on <html>, where index.css puts the
+   *  two side panes back to their opaque tone; the toolbar and the sheet keep
+   *  their glass rules either way. */
+  glassSidebars: boolean;
+  /** Whether the shader backdrop animates. Off freezes it at t=0 (the same
+   *  still field paper-grain themes always show). The OS
+   *  `prefers-reduced-motion` setting freezes it whatever this says. */
+  backdropMotion: boolean;
+  /** Where the selection and primary-button color comes from: the theme's own
+   *  accent, or the one the user picked in macOS System Settings. "system"
+   *  puts `data-accent="system"` on <html>, where index.css swaps the primary
+   *  and selection tokens for the `AccentColor` system keyword. */
+  accent: "theme" | "system";
 }
 
 export const DEFAULT_READING_PREFS: ReadingPrefs = {
@@ -1091,4 +1162,7 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   showRelated: true,
   glass: false,
   glassStyle: "tinted",
+  glassSidebars: true,
+  backdropMotion: true,
+  accent: "theme",
 };
