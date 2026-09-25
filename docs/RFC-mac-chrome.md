@@ -231,12 +231,25 @@ Cards' `px-7` side padding for consistency.
 
 ### Settings
 
-Sidebar 200px, padding 12px 8px, 2px between rows; search 26px radius 7;
-rows 28px padding 0 6px radius 6 with a 20px tile radius 5 (surface-2;
-primary when selected) holding a 12px glyph; selected row = wash. Pane
-header 52px, padding 0 20px, hairline below, title 15px/600. Content
-padding 18px 20px, 18px between sections; caps padding 0 12px 6px; group
-rows 40px; footnotes 11px. Appearance: Theme row = swatch strip (4×10×14
+Sidebar 200px, padding 12px 8px. Identity block: 28px sigil, "Alchemy"
+13px/600, second line 11px muted (version + update state), 12px below
+before the search field. Search 26px radius 7. Rows grouped ~10px apart
+(App: General/Appearance/Shortcuts · Content: Sources/Studio/Chat/Models/
+Agents · Automation: Nightly/Personalization/Activity · About), 2px between
+rows within a group, no captions; rows 28px padding 0 6px radius 6 with a
+20px tile radius 5 (surface-2; primary when selected) holding a 12px glyph;
+selected row = wash. Pane top bar 52px, padding 0 20px, hairline below,
+holding only a Back/Forward pair (24px `tb`-spec icon buttons, 2px apart,
+disabled at either end of the in-dialog tab history) — no title. Header
+block below the bar, centered: 56px `rounded-2xl bg-surface-2` tile holding
+the tab's glyph at 28px, title 20px/700 `tracking-[-.01em]`, one-sentence
+description 12px muted max 44ch, 18px below the block before the first
+group. Content padding 18px 20px (no extra top padding — the header
+block's own 18px covers it), 18px between sections; caps padding 0 12px
+6px; group rows 40px; footnotes 11px. The scrolling content column's
+`max-h` is `calc(92vh - 17.25rem)`: pane bar (3.25rem) + header block
+(~10.5rem) + the Models tab's Save footer (3.5rem), one constant sized for
+the tab carrying both. Appearance: Theme row = swatch strip (4×10×14
 radius 4) + pop-up button naming the theme; Backdrop row = its name and
 "moves" 12px muted + a switch; Selection color segmented; Glass = Window
 material segmented + "Sidebars show through to the desktop" switch;

@@ -2,8 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { previewSound } from "@/lib/sound";
-import { getVersion } from "@tauri-apps/api/app";
-import { checkForUpdates, type UpdateFlow } from "@/lib/updates";
 import type { SnapshotStatus } from "@/lib/types";
 import { clearReindexPending, markReindexStarted } from "@/lib/reindex";
 import {
@@ -21,6 +19,10 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cn, folderBreadcrumb } from "@/lib/utils";
 import { MacConnect } from "./MacConnect";
+import { AlchemySymbol } from "./AlchemyHero";
+import { CHROME_BUTTON } from "./SidebarRails";
+import { THEMES, resolveThemeId } from "@/lib/themes";
+import { useUpdateStatus, updateStatusLine } from "./settings/useUpdateStatus";
 import {
   AboutTab,
   AppearanceTab,
@@ -40,6 +42,8 @@ import { ActivityTab } from "./settings/ActivityTab";
 import {
   ChartNoAxesColumn,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Cpu,
   MessageSquare,
   Palette,
@@ -60,18 +64,89 @@ import {
 const normModel = (m: string) => m.replace(/:latest$/, "");
 
 const TABS = [
-  { id: "general", label: "General", icon: SlidersHorizontal },
-  { id: "background", label: "Nightly", icon: Moon },
-  { id: "sources", label: "Sources", icon: FolderGit2 },
-  { id: "studio", label: "Studio", icon: Wand2 },
-  { id: "models", label: "Models", icon: Cpu },
-  { id: "chat", label: "Chat", icon: MessageSquare },
-  { id: "personalization", label: "Personalization", icon: UserRound },
-  { id: "agents", label: "Agents", icon: Bot },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
-  { id: "activity", label: "Activity", icon: ChartNoAxesColumn },
-  { id: "about", label: "About", icon: Info },
+  {
+    id: "general",
+    label: "General",
+    icon: SlidersHorizontal,
+    description: "Updates, where notebooks live, sounds and diagnostics.",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    icon: Palette,
+    description: "Theme, backdrop, glass and the text you read in.",
+  },
+  {
+    id: "shortcuts",
+    label: "Shortcuts",
+    icon: Keyboard,
+    description: "Every command in the app, and the keys that trigger it.",
+  },
+  {
+    id: "sources",
+    label: "Sources",
+    icon: FolderGit2,
+    description: "Mac apps, Notion, and the browser clipper that feed a notebook.",
+  },
+  {
+    id: "studio",
+    label: "Studio",
+    icon: Wand2,
+    description: "Generator templates, and how Studio keeps notes tidy.",
+  },
+  {
+    id: "chat",
+    label: "Chat",
+    icon: MessageSquare,
+    description: "How the assistant sounds, and how long its answers run.",
+  },
+  {
+    id: "models",
+    label: "Models",
+    icon: Cpu,
+    description: "Which models chat, embed and route, and where they run.",
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    icon: Bot,
+    description: "Let other agents use Alchemy, or run one inside a notebook.",
+  },
+  {
+    id: "background",
+    label: "Nightly",
+    icon: Moon,
+    description: "What happens overnight: sync, snapshots and reports.",
+  },
+  {
+    id: "personalization",
+    label: "Personalization",
+    icon: UserRound,
+    description: "What the assistant calls you, and what it should know first.",
+  },
+  {
+    id: "activity",
+    label: "Activity",
+    icon: ChartNoAxesColumn,
+    description: "How much you've read, written and asked, over time.",
+  },
+  {
+    id: "about",
+    label: "About",
+    icon: Info,
+    description: "Version, release notes, and where the project lives.",
+  },
+] as const;
+
+/** System Settings' own grouping (RFC-mac-chrome.md, Settings): app-level
+ *  preferences, then what feeds a notebook, then what runs unattended, then
+ *  the app itself — ~10px between groups, no captions (the gap alone reads
+ *  as the division, same rule as a `FormGroup`). */
+const TAB_GROUPS: readonly (typeof TABS[number]["id"])[][] = [
+  ["general", "appearance", "shortcuts"],
+  ["sources", "studio", "chat", "models", "agents"],
+  ["background", "personalization", "activity"],
+  ["about"],
 ];
 
 export function SettingsDialog({
@@ -91,7 +166,25 @@ export function SettingsDialog({
     s.notebooks.reduce((sum, n) => sum + n.sourceCount, 0),
   );
 
-  const [tab, setTab] = useState(initialTab);
+  // A small in-dialog history, System Settings' own Back/Forward: a stack of
+  // visited tabs plus the index into it. `tab` is always `history[index]`.
+  // App.tsx only mounts this component while `settingsOpen`, so a fresh open
+  // is a fresh mount — these initializers already cover it; the effect below
+  // only has to handle `initialTab` changing on an instance that stays
+  // mounted (a deep link via `openSettings(tab)` while Settings is already
+  // showing). Clicking a sidebar row pushes the same way; Back/Forward only
+  // move the index, never mutate the stack.
+  const [history, setHistory] = useState<string[]>([initialTab]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const tab = history[historyIndex] ?? "general";
+  function goToTab(id: string) {
+    if (id === tab) return;
+    setHistory((h) => [...h.slice(0, historyIndex + 1), id]);
+    setHistoryIndex((i) => i + 1);
+  }
+  const canGoBack = historyIndex > 0;
+  const canGoForward = historyIndex < history.length - 1;
+
   const [draft, setDraft] = useState<AiConfig | null>(null);
   const [saving, setSaving] = useState(false);
   // Sidebar filter, the way System Settings searches its own pane list. It
@@ -99,12 +192,14 @@ export function SettingsDialog({
   // the content out from under you.
   const [navFilter, setNavFilter] = useState("");
 
+  const lastInitialTab = useRef(initialTab);
   useEffect(() => {
-    if (open) {
-      setTab(initialTab);
-      setNavFilter("");
+    if (initialTab !== lastInitialTab.current) {
+      lastInitialTab.current = initialTab;
+      goToTab(initialTab);
     }
-  }, [open, initialTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTab]);
 
   useEffect(() => {
     if (open && aiConfig) {
@@ -166,6 +261,14 @@ export function SettingsDialog({
   const shownTabs = needle
     ? TABS.filter((t) => t.label.toLowerCase().includes(needle))
     : TABS;
+  const shownIds = new Set(shownTabs.map((t) => t.id));
+  // Groups keep their order and their membership; filtering only drops rows
+  // (and, once a group has none left, the group itself) — it never
+  // reshuffles the System Settings layout the way a flat re-sort would.
+  const shownGroups = TAB_GROUPS.map((ids) =>
+    ids.filter((id) => shownIds.has(id)),
+  ).filter((ids) => ids.length > 0);
+  const activeTab = TABS.find((t) => t.id === tab) ?? TABS[0];
 
   if (!draft) {
     return (
@@ -205,19 +308,17 @@ export function SettingsDialog({
           height on the scrolling column itself — a percentage (max-h-full)
           collapses here because the panel is capped by max-h, not a fixed
           height, so overflow-y-auto never gets a bound (that was the
-          "long tabs don't scroll" regression). 8.5rem clears the header,
-          body padding, and the models tab's Save footer. bodyScroll={false}
-          keeps the modal body from scrolling too, so exactly one region
-          moves. "Settings" is the nav's section header (no title bar). */}
+          "long tabs don't scroll" regression). See the scroll div below for
+          the constant's arithmetic. bodyScroll={false} keeps the modal body
+          from scrolling too, so exactly one region moves. The identity block
+          is the nav's own header now (no "Settings" title bar). */}
       {/* The negative margin bleeds past the modal body's padding so the
           sidebar, the vertical hairline and the pane header's hairline reach
           the dialog edges — the System Settings shape (two columns meeting at
           a rule), not two boxes inset from a frame. */}
       <div className="-m-4 flex min-h-0 flex-1">
-        <nav className="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-border px-2 py-3">
-          <h2 className="px-1.5 pb-2 text-body font-semibold text-foreground">
-            Settings
-          </h2>
+        <nav className="flex w-[200px] shrink-0 flex-col border-r border-border px-2 py-3">
+          <SidebarIdentity />
           <SearchField
             variant="field"
             value={navFilter}
@@ -227,63 +328,121 @@ export function SettingsDialog({
             className="mb-1.5"
             inputClassName="rounded-[7px]"
           />
-          {shownTabs.map((t) => (
-            <button
-              type="button"
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              aria-current={tab === t.id ? "page" : undefined}
-              className={cn(
-                "flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-body transition-colors",
-                // The selection wash is the theme's own `--selection` (a
-                // ~25-35% primary over transparent), so the sidebar picks up
-                // the macOS accent along with every other selection when
-                // Appearance → Selection color is set to System accent.
-                tab === t.id
-                  ? "bg-[var(--selection)] font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] transition-colors",
-                  tab === t.id
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-surface-2 text-muted-foreground",
-                )}
-              >
-                <t.icon className="h-3 w-3" />
-              </span>
-              {t.label}
-            </button>
-          ))}
-          {shownTabs.length === 0 && (
-            <p className="px-1.5 py-1 text-caption text-subtle-foreground">
-              No settings match.
-            </p>
-          )}
+          {/* Groups, ~10px apart, the way System Settings splits its own row
+              list — the gap alone is the division, no captions (DESIGN.md
+              §4, "No <hr> dividers between sections"). */}
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto">
+            {shownGroups.map((ids, i) => (
+              <div key={i} className="flex flex-col gap-0.5">
+                {ids.map((id) => {
+                  const t = TABS.find((x) => x.id === id)!;
+                  return (
+                    <button
+                      type="button"
+                      key={t.id}
+                      onClick={() => goToTab(t.id)}
+                      aria-current={tab === t.id ? "page" : undefined}
+                      className={cn(
+                        "flex h-7 items-center gap-2 rounded-md px-1.5 text-left text-body transition-colors",
+                        // The selection wash is the theme's own `--selection`
+                        // (a ~25-35% primary over transparent), so the
+                        // sidebar picks up the macOS accent along with every
+                        // other selection when Appearance → Selection color
+                        // is set to System accent.
+                        tab === t.id
+                          ? "bg-[var(--selection)] font-medium text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] transition-colors",
+                          tab === t.id
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-surface-2 text-muted-foreground",
+                        )}
+                      >
+                        <t.icon className="h-3 w-3" />
+                      </span>
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {shownGroups.length === 0 && (
+              <p className="px-1.5 py-1 text-caption text-subtle-foreground">
+                No settings match.
+              </p>
+            )}
+          </div>
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Pane header: 52px, the same strip height as the window toolbar,
-              with a hairline below. It also holds the modal's floating close
-              button (top-right), which otherwise collided with the first
-              row's trailing switch; pr-10 keeps a long tab name clear of it. */}
-          <div className="flex h-[52px] shrink-0 items-center border-b border-border px-5 pr-10">
-            <h2 className="text-section font-semibold text-foreground">
-              {TABS.find((t) => t.id === tab)?.label}
-            </h2>
+          {/* Pane bar: 52px, the same strip height as the window toolbar,
+              with a hairline below. Holds only the Back/Forward pair —
+              the title moved into the header block below, the way System
+              Settings' own toolbar carries just the pair and a search field.
+              The modal's floating close button (top-right, from hideHeader)
+              still sits above this bar. */}
+          <div className="flex h-[52px] shrink-0 items-center border-b border-border px-5">
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                disabled={!canGoBack}
+                onClick={() => setHistoryIndex((i) => Math.max(0, i - 1))}
+                title="Back"
+                aria-label="Back"
+                className={CHROME_BUTTON}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={!canGoForward}
+                onClick={() =>
+                  setHistoryIndex((i) => Math.min(history.length - 1, i + 1))
+                }
+                title="Forward"
+                aria-label="Forward"
+                className={CHROME_BUTTON}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {/* Header block: centered tile, title and one-sentence description —
+              the shape System Settings' own General page uses. 18px below it
+              (the block's own pb) before the first group, so scrolled
+              content never starts flush under it. */}
+          <div className="flex shrink-0 flex-col items-center gap-2 px-5 pb-[18px] pt-5 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2">
+              <activeTab.icon className="h-7 w-7 text-foreground" />
+            </span>
+            <div className="flex flex-col items-center gap-1">
+              <h2 className="text-[1.25rem] font-bold leading-none tracking-[-.01em] text-foreground">
+                {activeTab.label}
+              </h2>
+              <p className="max-w-[44ch] text-pretty text-caption leading-relaxed text-subtle-foreground">
+                {activeTab.description}
+              </p>
+            </div>
           </div>
           {/* The scroll cap MUST stay a definite height on this column (see
-              the note above). 10.25rem = the Save footer and slack the 8.5rem
-              base covered, less the 2rem of body padding now bled away, plus
-              the 3.25rem pane header above. key={tab}: the scroll position
-              lives on this div, so switching tabs would otherwise keep the
-              old tab's scroll offset. */}
+              the note above the sidebar). 17.25rem = the pane bar (3.25rem)
+              + the header block above (~10.5rem: 20px top padding + the 56px
+              tile + 8px gap + a 20px title line + 4px gap + up to two 12px
+              description lines (~40px) + the block's own 18px bottom
+              padding) + the Models tab's Save footer (3.5rem: 24px padding +
+              a 32px button) — one constant, sized for the tab that carries
+              both a footer and the longest description, with the usual
+              slack for tabs that carry neither. key={tab}: the scroll
+              position lives on this div, so switching tabs would otherwise
+              keep the old tab's scroll offset. */}
           <div
             key={tab}
-            className="flex max-h-[calc(92vh-10.25rem)] min-w-0 flex-col gap-[18px] overflow-y-auto px-5 py-[18px]"
+            className="flex max-h-[calc(92vh-17.25rem)] min-w-0 flex-col gap-[18px] overflow-y-auto px-5 pb-[18px]"
           >
           {tab === "general" && <GeneralTab />}
           {tab === "background" && <BackgroundTab />}
@@ -318,6 +477,33 @@ export function SettingsDialog({
       </div>
 
     </Modal>
+  );
+}
+
+/** The sidebar's own header (RFC-mac-chrome.md, Settings): the identity
+ *  block System Settings leads its sidebar with, in place of a plain
+ *  "Settings" caption — the sigil, "Alchemy", and a second line giving the
+ *  version and whether it's current (`useUpdateStatus`, shared with
+ *  General's own Version row so both answer "am I current?" from the same
+ *  check). */
+function SidebarIdentity() {
+  const theme = useStore((s) => s.theme);
+  const { version, status } = useUpdateStatus();
+  return (
+    <div className="flex items-center gap-2 px-1.5 pb-3">
+      <AlchemySymbol
+        className="h-7 w-7 shrink-0 text-citation/70"
+        preferred={THEMES[resolveThemeId(theme)]?.sigil}
+      />
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate text-body font-semibold text-foreground">
+          Alchemy
+        </span>
+        <span className="truncate text-micro text-subtle-foreground">
+          {updateStatusLine(version, status)}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -380,50 +566,18 @@ function PrefToggle({
 /** App-level preferences: updates, notifications, sounds. */
 function GeneralTab() {
   const pushToast = useStore((s) => s.pushToast);
-  const [checking, setChecking] = useState(false);
-  const [update, setUpdate] = useState<UpdateFlow | null>(null);
   const [installing, setInstalling] = useState(false);
-  // The version in hand, beside the button that asks whether there is a
-  // newer one — the answer to "am I current?" should not need About.
-  const [version, setVersion] = useState("");
-  useEffect(() => {
-    getVersion().then(setVersion).catch(() => setVersion(""));
-  }, []);
-
-  // "Check for Updates…" from the app menu lands here with the flag set;
-  // the quiet startup check leaves `updateAvailable` behind — either way,
-  // this tab should be showing the Install button without another click,
-  // including when the quiet check completes while the tab is already open
-  // (hence `updateAvailable` in the deps).
-  const pendingUpdateCheck = useStore((s) => s.pendingUpdateCheck);
-  const updateAvailable = useStore((s) => s.updateAvailable);
-  useEffect(() => {
-    // Read live values: StrictMode replays mount effects with the same
-    // captured snapshot, so checking the props would double-run the check.
-    const s = useStore.getState();
-    // An explicit menu check always re-runs; a known-available version only
-    // triggers the interactive check once (`update` holds its outcome).
-    if (s.pendingUpdateCheck || (s.updateAvailable && !update)) {
-      useStore.setState({ pendingUpdateCheck: false });
-      void onCheck();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingUpdateCheck, updateAvailable]);
+  // The version in hand, and whether a newer one exists — shared with the
+  // sidebar's identity block via the same hook, so "am I current?" answers
+  // the same way in both places.
+  const { version, flow, checking, recheck } = useUpdateStatus();
 
   async function onCheck() {
-    setChecking(true);
-    const flow = await checkForUpdates();
-    setUpdate(flow);
-    setChecking(false);
-    // Keep the title-bar notice (UpdateBadge) honest: an explicit check is
-    // the freshest answer there is, in both directions.
-    if (flow.status === "available")
-      useStore.setState({ updateAvailable: flow.version });
-    if (flow.status === "none") useStore.setState({ updateAvailable: null });
-    if (flow.status === "none")
+    const result = await recheck();
+    if (result.status === "none")
       pushToast("success", "You're on the latest version.");
-    if (flow.status === "error")
-      pushToast("error", `Update check failed: ${flow.message}`);
+    if (result.status === "error")
+      pushToast("error", `Update check failed: ${result.message}`);
   }
 
   return (
@@ -439,7 +593,7 @@ function GeneralTab() {
         <FormRow label="Version">
           {version && (
             <span className="text-caption text-muted-foreground">
-              {update?.status === "none" ? `${version} · up to date` : version}
+              {flow?.status === "none" ? `${version} · up to date` : version}
             </span>
           )}
           <Button
@@ -450,14 +604,14 @@ function GeneralTab() {
           >
             Check for updates…
           </Button>
-          {update?.status === "available" && (
+          {flow?.status === "available" && (
             <Button
               variant="primary"
               size="sm"
               loading={installing}
               onClick={() => {
                 setInstalling(true);
-                void update.install().catch((e) => {
+                void flow.install().catch((e) => {
                   setInstalling(false);
                   pushToast(
                     "error",
@@ -466,7 +620,7 @@ function GeneralTab() {
                 });
               }}
             >
-              Install {update.version} & relaunch
+              Install {flow.version} & relaunch
             </Button>
           )}
         </FormRow>

@@ -522,11 +522,25 @@ Cards flows like the shelf now too: full-width at the shelf's own padding
 all and the waiting banner belong to the Suggested queue alone).
 
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
-tab bar: a filter field over twelve rows, each row a 20px colored icon tile
-beside its name, the selected row washed in `--selection` with the tile
-filled in `--primary`. The pane is grouped inset forms (`FormGroup`/
-`FormRow`, §4) — never a long ungrouped column of labels — so a setting is
-found by the group it belongs to, the way it is on the rest of the Mac.
+tab bar. The sidebar leads with an identity block — the app sigil,
+"Alchemy", and a muted second line giving the version and whether it's
+current (`0.65.1 · Up to date`, `0.66.0 available`, `Checking…`) — the way
+System Settings leads with the account block, not the word "Settings".
+Below that a filter field, then the twelve rows split into four groups
+(App: General, Appearance, Shortcuts · Content: Sources, Studio, Chat,
+Models, Agents · Automation: Nightly, Personalization, Activity · About)
+with a plain gap between them, no captions — the gap alone is the division,
+same rule as a `FormGroup`. Each row is a 20px colored icon tile beside its
+name, the selected row washed in `--selection` with the tile filled in
+`--primary`. The pane's 52px top bar carries only a Back/Forward pair,
+walking the tabs visited in this open of the dialog (a stack in component
+state, deep links push onto it too) — not a title, which moved into a
+centered header block below the bar: a 56px `surface-2` tile holding the
+tab's glyph, the title, and a one-sentence plain-register description
+(`WRITING.md`, max 44ch). The pane below that is grouped inset forms
+(`FormGroup`/`FormRow`, §4) — never a long ungrouped column of labels — so
+a setting is found by the group it belongs to, the way it is on the rest
+of the Mac.
 
 **Studio is an inspector.** 300px wide, `px-3 py-2.5`, 12px between blocks,
 one hairline toward the center. The segmented control is the first thing in
