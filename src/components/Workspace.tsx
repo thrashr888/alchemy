@@ -256,7 +256,10 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               triggerClassName="flex h-9 min-w-0 items-center gap-2.5 rounded-[8px] px-3 transition-colors hover:bg-surface-2"
               // The menu's wrapper must be allowed to give way, or the pill
               // holds its full width and the centered switcher lands on it.
-              className="min-w-[150px] !shrink"
+              // Floor and ceiling: never squeezed below a readable name, never
+              // wide enough to push the switcher off center — a long title
+              // truncates, the way a window title does.
+              className="min-w-[150px] max-w-[300px] !shrink"
               menuClassName="w-64"
               align="left"
               items={[
