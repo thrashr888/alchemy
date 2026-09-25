@@ -432,7 +432,7 @@ export function SettingsDialog({
               (the block's own pb) before the first group, so scrolled
               content never starts flush under it. A tab that carries its own
               hero (About) opts out with `header: false`. */}
-          {activeTab.header !== false && (
+          {!("header" in activeTab && activeTab.header === false) && (
           <div className="flex shrink-0 flex-col items-center gap-2 pb-0 pt-4 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2">
               <activeTab.icon className="h-7 w-7 text-foreground" />
