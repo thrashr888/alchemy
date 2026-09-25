@@ -1289,7 +1289,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const heading = (() => {
     if (homeSection === "registry")
       return {
-        title: "Registry",
+        title: "Cards",
         actions: (
           <>
             <div ref={setRegistryActionsEl} className="flex items-center gap-2" />

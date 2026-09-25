@@ -667,7 +667,6 @@ export function StudioPanel() {
             {artifactShelves.map((shelf) => {
               const open = openShelves.has(shelf.id);
               const rows = open ? [...shelf.top, ...shelf.folded] : shelf.top;
-              const isWrite = shelf.id === "write";
               return (
                 <GenGroup key={shelf.id} label={shelf.label}>
                   {rows.map((a) => (
@@ -699,90 +698,89 @@ export function StudioPanel() {
                       onClick={() => toggleShelf(shelf.id)}
                     />
                   )}
-                  {/* The Write shelf carries the user's own generators: one
-                      folded row, then the two verbs that make and keep them
-                      (they used to be icons in the caps row that is gone). */}
-                  {isWrite && templates.length > 0 && (
-                    <FoldRow
-                      label="Your templates"
-                      count={templates.length}
-                      open={templatesOpen}
-                      title={
-                        templatesOpen
-                          ? "Hide your templates"
-                          : "Show your templates — each .md file is a generator"
-                      }
-                      onClick={() => setTemplatesOpen(!templatesOpen)}
-                    />
-                  )}
-                  {isWrite &&
-                    templatesOpen &&
-                    templates.map((t) => (
-                      <GenRow
-                        key={t.id}
-                        icon={<FileText className="h-3.5 w-3.5" />}
-                        label={t.name}
-                        family="template"
-                        title={`${t.description || t.name} — right-click to edit`}
-                        busy={busyKinds.has(`template:${t.id}`)}
-                        disabled={!hasSources}
-                        onClick={() => generateFromTemplate(t)}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          useStore.getState().openInReader({ type: "template", id: t.id });
-                        }}
-                      />
-                    ))}
-                  {isWrite && (
-                    <>
-                      <GenRow
-                        icon={<Plus className="h-3.5 w-3.5" />}
-                        label="New template"
-                        family="template"
-                        quiet
-                        title="A reusable custom generator"
-                        disabled={false}
-                        onClick={() => {
-                          // Create the file first, then edit it in the reader —
-                          // the editor always points at a template that
-                          // exists on disk.
-                          void (async () => {
-                            try {
-                              const t = await api.saveTemplate(
-                                null,
-                                "New template",
-                                "",
-                                "Describe what this generator should produce from the notebook's sources.",
-                              );
-                              await useStore.getState().refreshTemplates();
-                              useStore
-                                .getState()
-                                .openInReader({ type: "template", id: t.id });
-                            } catch (e) {
-                              useStore
-                                .getState()
-                                .pushToast(
-                                  "error",
-                                  e instanceof Error ? e.message : String(e),
-                                );
-                            }
-                          })();
-                        }}
-                      />
-                      <GenRow
-                        icon={<FolderOpen className="h-3.5 w-3.5" />}
-                        label="Templates folder"
-                        family="template"
-                        quiet
-                        title="Each .md file in it is a generator"
-                        disabled={false}
-                        onClick={() => void api.openTemplatesFolder()}
-                      />
-                    </>
-                  )}
                 </GenGroup>
               );
             })}
+            <GenGroup label="Templates">
+                {/* The user's own generators live in their own group, apart from the
+                built-in Write kinds: one folded row for the templates, then
+                the two verbs that make and keep them. */}
+                {templates.length > 0 && (
+                  <FoldRow
+                    label="Your templates"
+                    count={templates.length}
+                    open={templatesOpen}
+                    title={
+                      templatesOpen
+                        ? "Hide your templates"
+                        : "Show your templates — each .md file is a generator"
+                    }
+                    onClick={() => setTemplatesOpen(!templatesOpen)}
+                  />
+                )}
+                {templatesOpen &&
+                  templates.map((t) => (
+                    <GenRow
+                      key={t.id}
+                      icon={<FileText className="h-3.5 w-3.5" />}
+                      label={t.name}
+                      family="template"
+                      title={`${t.description || t.name} — right-click to edit`}
+                      busy={busyKinds.has(`template:${t.id}`)}
+                      disabled={!hasSources}
+                      onClick={() => generateFromTemplate(t)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        useStore.getState().openInReader({ type: "template", id: t.id });
+                      }}
+                    />
+                  ))}
+                <>
+                    <GenRow
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label="New template"
+                      family="template"
+                      quiet
+                      title="A reusable custom generator"
+                      disabled={false}
+                      onClick={() => {
+                        // Create the file first, then edit it in the reader —
+                        // the editor always points at a template that
+                        // exists on disk.
+                        void (async () => {
+                          try {
+                            const t = await api.saveTemplate(
+                              null,
+                              "New template",
+                              "",
+                              "Describe what this generator should produce from the notebook's sources.",
+                            );
+                            await useStore.getState().refreshTemplates();
+                            useStore
+                              .getState()
+                              .openInReader({ type: "template", id: t.id });
+                          } catch (e) {
+                            useStore
+                              .getState()
+                              .pushToast(
+                                "error",
+                                e instanceof Error ? e.message : String(e),
+                              );
+                          }
+                        })();
+                      }}
+                    />
+                    <GenRow
+                      icon={<FolderOpen className="h-3.5 w-3.5" />}
+                      label="Templates folder"
+                      family="template"
+                      quiet
+                      title="Each .md file in it is a generator"
+                      disabled={false}
+                      onClick={() => void api.openTemplatesFolder()}
+                    />
+                  </>
+            </GenGroup>
           </div>
         </div>
 

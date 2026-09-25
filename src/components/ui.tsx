@@ -1942,7 +1942,7 @@ export function PopupButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-[22px] shrink-0 items-center gap-1 rounded-md bg-elevated pl-2.5 pr-1.5",
+        "inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-md bg-elevated pl-3 pr-2",
         "text-caption text-foreground transition-colors",
         "shadow-[inset_0_0_0_0.5px_var(--border-strong)]",
         "hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring/60 outline-none",
