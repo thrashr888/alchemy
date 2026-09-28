@@ -570,6 +570,7 @@ pub fn run() {
             okf::deletion_proposals_cmd,
             okf::resolve_deletion_proposal_cmd,
             commands::home_activity,
+            commands::ui_event,
             commands::notebook_previews,
             commands::corpus_tags,
             commands::source_thumbnail,
