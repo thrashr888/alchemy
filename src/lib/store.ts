@@ -4056,6 +4056,10 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   const next: NavEntry[] = [...stack.slice(0, index + 1), entry];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
+  // Every new place is one trace line (traces/ui.jsonl). Home places only:
+  // a notebook's own moves are already in retrieval traces, and the
+  // question this answers is which Home sections get read.
+  if (entry.nb === null) void api.uiEvent("home.place", entry);
 }
 
 // No audio rides on the legacy `error` field: it is set from launch loads,

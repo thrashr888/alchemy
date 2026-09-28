@@ -13058,6 +13058,26 @@ pub struct HomeActivity {
 
 /// One Home snapshot: one notes read supplies the recent list, report feed,
 /// and note count instead of three overlapping corpus scans.
+/// One line per place the user goes on Home (`traces/ui.jsonl`): section,
+/// scope, tag, open card, thread. The ablation RFC's items 4 and 7 wait on
+/// exactly this — whether the Brief and the Registry are read — and the
+/// front end already computes the place for Back/Forward, so it reports
+/// the same record here. Infallible: a trace must never cost a click.
+#[tauri::command]
+pub fn ui_event(name: String, detail: serde_json::Value) {
+    if let Some(dir) = crate::trace::dir() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        crate::trace::log_file(
+            dir,
+            "ui.jsonl",
+            serde_json::json!({ "ts": ts, "name": name, "detail": detail }),
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn home_activity(state: State<'_, AppState>) -> Result<HomeActivity, String> {
     let db = state.db.clone();

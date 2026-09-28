@@ -145,11 +145,14 @@ function peerName(device: string): string {
   return device.replace(/\s*\([^()]*\)\s*$/, "").trim() || device;
 }
 
-function sharedLabel(peers: string[] | undefined): string {
+function sharedLabel(peers: string[] | undefined, shared: boolean): string {
   const named = (peers ?? []).map(peerName).filter(Boolean);
-  if (named.length === 1) return `Shared with ${named[0]}`;
-  if (named.length > 1) return `Shared with ${named.length} devices`;
-  return "Shared";
+  // A folder someone shared with you reads "Shared with"; your own iCloud
+  // folder that another of your Macs has written to reads "Synced with".
+  const verb = shared ? "Shared with" : "Synced with";
+  if (named.length === 1) return `${verb} ${named[0]}`;
+  if (named.length > 1) return `${verb} ${named.length} devices`;
+  return shared ? "Shared" : "Synced";
 }
 
 /** The two-person mark on a shared notebook, wherever the shelf names one.
@@ -846,10 +849,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const desktopApps = useStore((s) => s.desktopApps);
   const okfBindings = useStore((s) => s.okfBindings);
   const okfBinding = useStore((s) => s.okfBinding);
-  const isShared = (id: string) => !!okfBindings[id]?.shared;
+  // Shared, or synced: a notebook another device has written to belongs in
+  // the Shared row whether the folder was shared to you or is your own
+  // iCloud Drive seen from a second Mac.
+  const isShared = (id: string) =>
+    !!okfBindings[id]?.shared || (okfBindings[id]?.peers?.length ?? 0) > 0;
   /** What this notebook says about who it is shared with, or null. */
   const sharedOf = (nb: Notebook) =>
-    isShared(nb.id) ? sharedLabel(okfBindings[nb.id]?.peers) : null;
+    isShared(nb.id)
+      ? sharedLabel(okfBindings[nb.id]?.peers, !!okfBindings[nb.id]?.shared)
+      : null;
   // Shared is a scope on the shelf, not a shelf of its own: a collaborative
   // notebook is still one of your notebooks, so it stays in the main list
   // and this narrows to it rather than moving it out.
