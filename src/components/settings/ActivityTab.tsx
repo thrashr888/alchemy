@@ -192,7 +192,10 @@ function SpeedRanking({ rows }: { rows: ModelStat[] }) {
           return (
             <div
               key={r.name}
-              className="grid grid-cols-[1rem_minmax(0,1fr)_5rem_auto] items-center gap-2.5 text-body"
+              // Three fixed columns after the rank — name, bar, figures — so
+              // the bars stand in one vertical line whatever the figures'
+              // length ("22.7s · 7 runs" vs "203.3s · 24 tok/s · 3 runs").
+              className="grid grid-cols-[1rem_minmax(0,1fr)_6rem_10.5rem] items-center gap-2.5 text-body"
             >
               <span className="text-caption tabular-nums text-subtle-foreground">
                 {i + 1}
@@ -221,7 +224,7 @@ function SpeedRanking({ rows }: { rows: ModelStat[] }) {
                   }}
                 />
               </span>
-              <span className="shrink-0 tabular-nums text-caption text-muted-foreground">
+              <span className="shrink-0 whitespace-nowrap text-right tabular-nums text-caption text-muted-foreground">
                 {fmtMs(r.avgTtftMs)}
                 <span className="text-subtle-foreground">
                   {r.avgTokensPerSec > 0 &&
