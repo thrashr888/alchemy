@@ -933,7 +933,10 @@ function WebClipperLink() {
       {/* Buttons, not links buried in the sentence — the sentence explains,
           the buttons act. The span carries the tooltip because a disabled
           button takes no pointer events, so its own title never shows. */}
-      <FormRow>
+      <FormRow
+        label="Browser extension"
+        hint="Clip the page you're viewing into a notebook."
+      >
         <Button
           variant="secondary"
           size="sm"
@@ -1096,9 +1099,9 @@ function StudioTab() {
     <div className="flex flex-col gap-[18px]">
       <FormGroup
         caption="Studio templates"
-        footer="One .md file per generator in ~/Documents/Alchemy/templates. This restores the default pack without touching files you've edited."
+        footer="They live in ~/Documents/Alchemy/templates. Installing restores the default pack without touching files you've edited."
       >
-        <FormRow>
+        <FormRow label="Template files" hint="One .md file per generator.">
           <Button
             variant="secondary"
             size="sm"
