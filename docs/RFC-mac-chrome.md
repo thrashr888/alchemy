@@ -232,7 +232,7 @@ Entries' `px-7` side padding for consistency.
 
 ### Settings
 
-Sidebar 200px, padding 12px 8px. Identity block: 28px sigil, "Alchemy"
+Dialog 768px wide (Shortcuts 896). Sidebar 200px, padding 12px 8px. Identity block: 28px sigil, "Alchemy"
 13px/600, second line 11px muted (version + update state), 12px below
 before the search field. Search 26px radius 7. Rows grouped ~10px apart
 (App: General/Appearance/Shortcuts · Content: Sources/Studio/Chat/Models/
