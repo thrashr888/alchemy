@@ -2,14 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import type { Note, SourceEvent } from "@/lib/types";
 import { cn, noteUnread, relativeTime } from "@/lib/utils";
-import { tallyEvents, unseenEvents } from "@/lib/arrivals";
+import { eventCount, tallyEvents, unseenEvents } from "@/lib/arrivals";
 import { Button } from "./ui";
-import {
-  ChevronDown,
-  ChevronUp,
-  Newspaper,
-  PanelRightClose,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, PanelRightClose } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 /** One quiet line describing activity since the previous home visit. */
@@ -45,6 +40,54 @@ export function AwayDigest({
   );
 }
 
+/** Last night, as a window: the twelve hours ending at 9am today, or ending
+ *  now when it is still before nine. Everything the Night Shift is meant to
+ *  do happens inside it, so one range answers "what got done while I was
+ *  asleep" without asking the backend for a second opinion. */
+export function lastNightWindow(now = Date.now()): { start: number; end: number } {
+  const nine = new Date(now);
+  nine.setHours(9, 0, 0, 0);
+  const end = Math.min(nine.getTime(), now);
+  return { start: end - 12 * 60 * 60 * 1000, end };
+}
+
+/** The Library footer's one line: what the night shift did, counted from the
+ *  same rows the Brief and the reports feed read. Clauses whose count is zero
+ *  are left out rather than written as "0"; when every count is zero there
+ *  was no run to describe.
+ *
+ *  Duplicates set aside are deliberately absent: hygiene findings live per
+ *  notebook in Grow, and reading them here would mean a corpus scan on every
+ *  Home render (the scan-storm lesson). When a corpus-wide count exists it
+ *  joins this list. */
+export function lastNightLine({
+  reports,
+  events,
+  now = Date.now(),
+}: {
+  /** Report-kind notes across every notebook, Briefs included. */
+  reports: Note[];
+  events: SourceEvent[];
+  now?: number;
+}): string {
+  const { start, end } = lastNightWindow(now);
+  const inWindow = (at: number) => at >= start && at <= end;
+  const written = reports.filter((r) => inWindow(r.updatedAt)).length;
+  const tally = (kind: string) =>
+    events
+      .filter((e) => e.kind === kind && inWindow(e.at))
+      .reduce((n, e) => n + eventCount(e), 0);
+  const refreshed = tally("updated");
+  const added = tally("added");
+  const parts = [
+    written > 0 && `${written} ${written === 1 ? "report" : "reports"} written`,
+    refreshed > 0 && `${refreshed} ${refreshed === 1 ? "source" : "sources"} refreshed`,
+    added > 0 && `${added} ${added === 1 ? "source" : "sources"} added`,
+  ].filter(Boolean) as string[];
+  if (parts.length === 0) return "No nightly run yet.";
+  return `Last night: ${parts.join(", ")}.`;
+}
+
 /** Read reports revealed per press of "Load older reports", and the number
  *  a caught-up feed opens with. */
 const PAGE = 5;
@@ -70,7 +113,6 @@ export function ReportsFeed({
   const baseline = useStore((state) => state.noteReadsBaseline);
   const markRead = useStore((state) => state.markNotesRead);
   const isUnread = (note: Note) => noteUnread(note, reads, baseline);
-  const unreadCount = reports.filter(isUnread).length;
 
   // Freeze group membership for this visit so cards do not jump while reading.
   const initialReads = useRef<Record<string, number> | null>(null);
@@ -131,81 +173,44 @@ export function ReportsFeed({
 
   return (
     <>
-      {/* Nothing here hides until you hover it. The stepping cursor is how you
-          read the feed, not a secondary verb — "3 of 8" is the only place the
-          position is written down — and Mark all read is the way out of a
-          backlog, which is exactly when it should be in sight. A control you
-          have to hover to find is a control you don't know you have.
-          The card is user-resizable, so the wrap keys off the header's OWN
-          width rather than the window's: a container query. Wide, it is one
-          line; narrow, the identity and the collapse toggle keep line one and
-          the verbs drop to line two, which is the pair you can afford to look
-          down for. The header grows a row and the scroll region below gives
-          up the height (min-h-0 flex-1), so nothing overlaps. */}
-      <div className="@container shrink-0 border-b border-border">
-        <div className="grid min-h-12 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 px-6 py-2 @md:grid-cols-[1fr_auto_auto]">
-          {/* Same icon as the collapsed rail, and the same grammar as Staff and
-              Chats across the way: icon, then the caption. */}
-          <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
-            <Newspaper className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-              Latest reports
-            </span>
-            {unreadCount > 0 && (
-              <span
-                title={`${unreadCount} unread`}
-                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-badge font-medium tabular-nums text-citation"
-              >
-                {unreadCount}
+      {/* The feed's own control row: just the stepping cursor now. The title
+          ("Latest reports"), the unread badge, and Mark all read moved out —
+          the heading row above carries the section's name and, when
+          something is unread, that verb (DESIGN.md §9 "Home is a library").
+          What is left here is genuinely the feed's own state (where you are
+          in it), not a second name for the section, so it stays. Nothing
+          here hides until you hover it: the cursor is how you read the feed,
+          not a secondary control. */}
+      {(rendered.length > 0 || onCollapse) && (
+        <div className="flex min-h-9 shrink-0 items-center justify-end gap-2 border-b border-border px-6 py-1.5">
+          {rendered.length > 0 && (
+            <>
+              <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
+                {current + 1} of {total}
               </span>
-            )}
-          </div>
-          {/* The cursor and chevrons only mean something over visible cards —
-              the caught-up state (nothing rendered) shows neither, and with
-              nothing unread there is no second line at all. */}
-          {(rendered.length > 0 || unreadCount > 0) && (
-            <div className="col-span-2 col-start-1 row-start-2 flex items-center justify-end gap-2 @md:col-span-1 @md:col-start-2 @md:row-start-1">
-              {rendered.length > 0 && (
-                <>
-                  <span className="whitespace-nowrap text-micro tabular-nums text-subtle-foreground">
-                    {current + 1} of {total}
-                  </span>
-                  <div className="flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => step(-1)}
-                      disabled={current <= 0}
-                      title="Previous report"
-                      aria-label="Jump to the previous report"
-                      className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-                    >
-                      <ChevronUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => step(1)}
-                      disabled={current >= total - 1}
-                      title="Next report"
-                      aria-label="Jump to the next report"
-                      className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </button>
-                  </div>
-                </>
-              )}
-              {unreadCount > 0 && (
+              <div className="flex items-center">
                 <button
                   type="button"
-                  onClick={() =>
-                    markRead(reports.filter(isUnread).map((note) => note.id))
-                  }
-                  className="whitespace-nowrap text-micro text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={() => step(-1)}
+                  disabled={current <= 0}
+                  title="Previous report"
+                  aria-label="Jump to the previous report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
                 >
-                  Mark all read
+                  <ChevronUp className="h-4 w-4" />
                 </button>
-              )}
-            </div>
+                <button
+                  type="button"
+                  onClick={() => step(1)}
+                  disabled={current >= total - 1}
+                  title="Next report"
+                  aria-label="Jump to the next report"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              </div>
+            </>
           )}
           {onCollapse && (
             <button
@@ -213,13 +218,13 @@ export function ReportsFeed({
               onClick={onCollapse}
               title="Collapse reports"
               aria-label="Collapse the reports feed"
-              className="col-start-2 row-start-1 rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground @md:col-start-3"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
             >
               <PanelRightClose className="h-4 w-4" />
             </button>
           )}
         </div>
-      </div>
+      )}
       <div ref={scrollRef} onScroll={syncCurrent} className="min-h-0 flex-1 overflow-y-auto">
         {/* Nothing new to read, said once at the top. It stands alone when
             the feed is empty and sits over the recent reports otherwise —

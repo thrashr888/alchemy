@@ -36,6 +36,7 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     e(state.db.create_notebook(&nb).await)?;
     Ok(nb)

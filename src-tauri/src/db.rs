@@ -2,7 +2,7 @@
 //! notebooks, sources, chunks (with vectors), messages, and notes — each its own
 //! Lance table. We filter by `notebook_id` instead of joining.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 mod deletions;
@@ -23,8 +23,9 @@ use lancedb::Connection;
 
 use crate::growth::SuggestedSource;
 use crate::models::{
-    Citation, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook, RegistryCard,
-    ReportSchedule, RunReceipt, Source, SourceEvent,
+    Citation, CorpusTag, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
+    NotebookPreview, PreviewNote, PreviewSource, RegistryCard, ReportSchedule, RunReceipt, Source,
+    SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -666,6 +667,7 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    built_in: false,
                 });
                 idx += 1;
             }
@@ -1211,6 +1213,13 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    // Derived, not stored: `seed_notebook` recognizes its own
+                    // examples by title (every Mac seeds its copy under a
+                    // fresh random id), and a Lance column on a shared
+                    // dev/prod store is a release-timing hazard. Settled
+                    // below once the source count is known — a starter the
+                    // user has grown past its seed is theirs.
+                    built_in: false,
                 });
             }
         }
@@ -1235,6 +1244,7 @@ impl Db {
                         n.source_count = s;
                         n.note_count = no;
                         n.report_count = r;
+                        n.built_in = crate::examples::is_built_in(&n.title, s);
                     }
                     notebooks.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
                     return Ok(notebooks);
@@ -1284,6 +1294,9 @@ impl Db {
             n.source_count = counts.get(&n.id).copied().unwrap_or(0);
             n.note_count = note_counts.get(&n.id).copied().unwrap_or(0);
             n.report_count = report_counts.get(&n.id).copied().unwrap_or(0);
+            // Needs the count, so it lands here and not with the row decode:
+            // a starter the user has grown past its seed is theirs.
+            n.built_in = crate::examples::is_built_in(&n.title, n.source_count);
         }
         // Store under the versions read BEFORE the scan: a write that landed
         // mid-scan leaves the cache keyed to the older version, so the next
@@ -1460,6 +1473,7 @@ impl Db {
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
+                    built_in: false,
                 });
             }
         }
@@ -3557,6 +3571,197 @@ impl Db {
             .collect();
         notes.truncate(recent_limit);
         Ok((notes, reports, source_count, chars, note_count))
+    }
+
+    /// What every notebook is made of, for Home's cards (DESIGN.md §9).
+    ///
+    /// Four projected scans, total, however many notebooks there are:
+    /// notebooks for `id`/`status`, sources for the seven columns a card
+    /// draws, notes for their titles, and user chat turns for the last
+    /// question. The obvious shape — `list_sources` once per notebook —
+    /// is N scans of the same table, which is exactly the DataFusion scan
+    /// stacking that drove 1000% CPU before (docs/ARCHITECTURE.md,
+    /// "Lance scan storms"); `home_activity` above is the pattern.
+    ///
+    /// Grouping is `group_notebook_previews`, kept pure so the caps and the
+    /// ordering are testable without a database.
+    pub async fn notebook_previews(&self) -> Result<Vec<NotebookPreview>> {
+        let (notebook_batches, source_batches, note_batches, message_batches) = tokio::try_join!(
+            self.collect_cols(T_NOTEBOOKS, None, &["id", "status"]),
+            self.collect_cols(
+                T_SOURCES,
+                None,
+                &[
+                    "notebook_id",
+                    "id",
+                    "title",
+                    "source_type",
+                    "image_url",
+                    "parent_id",
+                    "created_at",
+                ],
+            ),
+            self.collect_cols(
+                T_NOTES,
+                None,
+                &["notebook_id", "id", "title", "kind", "updated_at"],
+            ),
+            // Only the user's own turns can be "the last question", and a
+            // tool confirmation is not a turn — filter in Lance so neither
+            // crosses Arrow.
+            self.collect_cols(
+                T_MESSAGES,
+                Some("role = 'user' AND kind != 'tool'"),
+                &["notebook_id", "content", "created_at"],
+            ),
+        )?;
+
+        // A double import has appended the same notebook twice before (see
+        // `dedupe_notebook_rows`), so an id counts as shelf-visible when ANY
+        // of its rows is active — the same "active row wins" rule
+        // `dedupe_notebooks` applies to the listing.
+        let mut shelf: HashMap<String, bool> = HashMap::new();
+        for b in &notebook_batches {
+            let id = str_col(b, "id")?;
+            let status = str_col(b, "status")?;
+            for i in 0..b.num_rows() {
+                let active = status.value(i).is_empty();
+                let seen = shelf.entry(id.value(i).to_string()).or_insert(false);
+                *seen = *seen || active;
+            }
+        }
+        // Only active notebooks draw a card: "archived" is shown as rows and
+        // "system" (Briefs) is working infrastructure, so neither is worth a
+        // scan's worth of titles.
+        shelf.retain(|_, active| *active);
+
+        let mut sources = Vec::new();
+        for b in &source_batches {
+            let nb = str_col(b, "notebook_id")?;
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let stype = str_col(b, "source_type")?;
+            let image = str_col(b, "image_url")?;
+            let parent = str_col(b, "parent_id")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                if !shelf.contains_key(nb.value(i)) {
+                    continue;
+                }
+                sources.push(PreviewSourceRow {
+                    notebook_id: nb.value(i).to_string(),
+                    id: id.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    source_type: stype.value(i).to_string(),
+                    image_url: image.value(i).to_string(),
+                    parent_id: parent.value(i).to_string(),
+                    created_at: created.value(i),
+                });
+            }
+        }
+
+        let mut notes = Vec::new();
+        for b in &note_batches {
+            let nb = str_col(b, "notebook_id")?;
+            let id = str_col(b, "id")?;
+            let title = str_col(b, "title")?;
+            let kind = str_col(b, "kind")?;
+            let updated = i64_col(b, "updated_at")?;
+            for i in 0..b.num_rows() {
+                if !shelf.contains_key(nb.value(i)) {
+                    continue;
+                }
+                notes.push(PreviewNoteRow {
+                    notebook_id: nb.value(i).to_string(),
+                    id: id.value(i).to_string(),
+                    title: title.value(i).to_string(),
+                    kind: kind.value(i).to_string(),
+                    updated_at: updated.value(i),
+                });
+            }
+        }
+
+        // Only the newest question per notebook survives the scan — a chat
+        // history is the biggest of these tables and none of the rest of it
+        // reaches the card.
+        let mut questions: HashMap<String, PreviewQuestionRow> = HashMap::new();
+        for b in &message_batches {
+            let nb = str_col(b, "notebook_id")?;
+            let content = str_col(b, "content")?;
+            let created = i64_col(b, "created_at")?;
+            for i in 0..b.num_rows() {
+                let id = nb.value(i);
+                if !shelf.contains_key(id) {
+                    continue;
+                }
+                let at = created.value(i);
+                let keep = questions.get(id).is_none_or(|q| at > q.created_at);
+                if keep {
+                    questions.insert(
+                        id.to_string(),
+                        PreviewQuestionRow {
+                            content: content.value(i).to_string(),
+                            created_at: at,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut ids: Vec<String> = shelf.into_keys().collect();
+        ids.sort();
+        Ok(group_notebook_previews(&ids, sources, notes, questions))
+    }
+
+    /// The corpus's busiest tags, for the Library sidebar's third block
+    /// (DESIGN.md §9, docs/RFC-mac-chrome.md "Home").
+    ///
+    /// Tags live on the source (`Source.tags`, space-separated), so a
+    /// corpus-wide list is a rollup. Two projected scans for the whole
+    /// corpus — notebooks for `id`/`status`, sources for `notebook_id`/
+    /// `tags` — never `list_sources` once per notebook, which is the
+    /// DataFusion scan stacking behind the 1000% CPU (docs/ARCHITECTURE.md,
+    /// "Lance scan storms"). `notebook_previews` above is the same shape.
+    ///
+    /// Grouping is `group_corpus_tags`, kept pure so the ordering and the
+    /// cap are testable without a database.
+    pub async fn corpus_tags(&self, limit: usize) -> Result<Vec<CorpusTag>> {
+        let (notebook_batches, source_batches) = tokio::try_join!(
+            self.collect_cols(T_NOTEBOOKS, None, &["id", "status"]),
+            self.collect_cols(T_SOURCES, None, &["notebook_id", "tags"]),
+        )?;
+
+        // Same "active row wins" rule the shelf applies: a double import has
+        // appended a notebook twice, and an id counts as shelf-visible when
+        // any of its rows is active. Archived and "system" (Briefs) never
+        // contribute a tag, because neither is a place the shelf can go.
+        let mut shelf: HashMap<String, bool> = HashMap::new();
+        for b in &notebook_batches {
+            let id = str_col(b, "id")?;
+            let status = str_col(b, "status")?;
+            for i in 0..b.num_rows() {
+                let active = status.value(i).is_empty();
+                let seen = shelf.entry(id.value(i).to_string()).or_insert(false);
+                *seen = *seen || active;
+            }
+        }
+        shelf.retain(|_, active| *active);
+
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for b in &source_batches {
+            let nb = str_col(b, "notebook_id")?;
+            let tags = str_col(b, "tags")?;
+            for i in 0..b.num_rows() {
+                // An untagged source is most of the corpus; skipping it here
+                // keeps the pure half working on the few rows that matter.
+                if tags.value(i).is_empty() || !shelf.contains_key(nb.value(i)) {
+                    continue;
+                }
+                rows.push((nb.value(i).to_string(), tags.value(i).to_string()));
+            }
+        }
+
+        Ok(group_corpus_tags(rows, limit))
     }
 
     /// BM25-only search across every notebook — no embedding round-trip, so
@@ -5901,6 +6106,225 @@ fn note_batch(schema: &SchemaRef, notes: &[Note]) -> Result<RecordBatch> {
     )?)
 }
 
+/// At most this many source titles reach one Home card. Four fits the 140px
+/// thumb; the card draws two or three of them depending on whether an image
+/// strip is also there.
+const PREVIEW_SOURCES: usize = 4;
+/// At most this many image tiles in a card's strip (3 × 56px + gaps).
+const PREVIEW_IMAGES: usize = 3;
+const PREVIEW_NOTES: usize = 2;
+/// A question longer than this is cut. One card line truncates well before
+/// 120 chars; the cap is here so a pasted essay never crosses IPC as one, not
+/// to decide where the text visually ends.
+const PREVIEW_QUESTION_CHARS: usize = 120;
+
+/// One projected `sources` row on its way to a Home card.
+pub(crate) struct PreviewSourceRow {
+    pub notebook_id: String,
+    pub id: String,
+    pub title: String,
+    pub source_type: String,
+    pub image_url: String,
+    pub parent_id: String,
+    pub created_at: i64,
+}
+
+/// One projected `notes` row on its way to a Home card.
+pub(crate) struct PreviewNoteRow {
+    pub notebook_id: String,
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub updated_at: i64,
+}
+
+/// The newest user turn of one notebook's chat.
+pub(crate) struct PreviewQuestionRow {
+    pub content: String,
+    pub created_at: i64,
+}
+
+/// An `image_url` the card can actually draw. Ingest stores `""` for "never
+/// looked" and `"-"` for "looked, found none"; both mean no picture.
+fn preview_image(image_url: &str) -> Option<&str> {
+    let url = image_url.trim();
+    (!url.is_empty() && url != "-").then_some(url)
+}
+
+/// A chat question as one card line: whitespace collapsed (a pasted
+/// multi-line question would otherwise blow the row open) and cut to
+/// `PREVIEW_QUESTION_CHARS`, ellipsis included in the count so the cap is
+/// the cap. Cuts on char boundaries, never bytes.
+fn preview_question(content: &str) -> String {
+    let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= PREVIEW_QUESTION_CHARS {
+        return flat;
+    }
+    let mut cut: String = flat.chars().take(PREVIEW_QUESTION_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// Group one scan's worth of rows into one preview per notebook — the pure
+/// half of `Db::notebook_previews`, where the ordering and every cap live.
+///
+/// `ids` decides both which notebooks get a row and the order they come
+/// back in; a notebook with nothing in it still gets an (empty) preview, so
+/// the card can tell "loading" from "empty".
+pub(crate) fn group_notebook_previews(
+    ids: &[String],
+    sources: Vec<PreviewSourceRow>,
+    notes: Vec<PreviewNoteRow>,
+    mut questions: HashMap<String, PreviewQuestionRow>,
+) -> Vec<NotebookPreview> {
+    let mut by_notebook: HashMap<&str, Vec<&PreviewSourceRow>> = HashMap::new();
+    for row in &sources {
+        by_notebook
+            .entry(row.notebook_id.as_str())
+            .or_default()
+            .push(row);
+    }
+    let mut notes_by_notebook: HashMap<&str, Vec<&PreviewNoteRow>> = HashMap::new();
+    for row in &notes {
+        notes_by_notebook
+            .entry(row.notebook_id.as_str())
+            .or_default()
+            .push(row);
+    }
+
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut rows = by_notebook.remove(id.as_str()).unwrap_or_default();
+        // Newest first, id as the tie-break: a batch import stamps every
+        // source in it with the same millisecond, and a card that reorders
+        // itself between windows is the shimmer the ruled lines avoided.
+        rows.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        // Folder children count as sources but say less than their folder
+        // does, so the titles come from the top level first and only fall
+        // back to children when the top level runs short.
+        let named = rows
+            .iter()
+            .filter(|r| r.parent_id.is_empty())
+            .chain(rows.iter().filter(|r| !r.parent_id.is_empty()))
+            .take(PREVIEW_SOURCES)
+            .map(|r| PreviewSource {
+                id: r.id.clone(),
+                title: r.title.clone(),
+                source_type: r.source_type.clone(),
+                image_url: preview_image(&r.image_url).unwrap_or_default().to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        // Images come from every source, children included — a folder of
+        // photographs is exactly the notebook a picture should stand for.
+        let mut images: Vec<String> = Vec::with_capacity(PREVIEW_IMAGES);
+        for row in &rows {
+            if images.len() >= PREVIEW_IMAGES {
+                break;
+            }
+            if let Some(url) = preview_image(&row.image_url) {
+                if !images.iter().any(|seen| seen == url) {
+                    images.push(url.to_string());
+                }
+            }
+        }
+
+        let mut note_rows = notes_by_notebook.remove(id.as_str()).unwrap_or_default();
+        // Wiki pages ("Entity: MSFT", the index) are the notebook's own
+        // bookkeeping, refreshed on every sweep, so by timestamp they would
+        // always win. What the card should name is what someone made or
+        // asked for: authored notes and generated documents first, newest
+        // first; the wiki only when there is nothing else to show.
+        // Entity pages predate the `wiki` kind and sit in the table as
+        // `note`, so the ledger is recognized by title and the preview
+        // reports it as `wiki` either way — one word for the front end.
+        let is_ledger =
+            |r: &PreviewNoteRow| r.kind == "wiki" || crate::growth::is_wiki_page_title(&r.title);
+        note_rows.sort_by(|a, b| {
+            is_ledger(a)
+                .cmp(&is_ledger(b))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let picked_notes = note_rows
+            .iter()
+            .take(PREVIEW_NOTES)
+            .map(|r| PreviewNote {
+                id: r.id.clone(),
+                title: r.title.clone(),
+                kind: if is_ledger(r) {
+                    "wiki".to_string()
+                } else {
+                    r.kind.clone()
+                },
+            })
+            .collect::<Vec<_>>();
+
+        // A turn that is nothing but whitespace is not a question, so it
+        // leaves no timestamp either — "" and 0 travel together.
+        let (last_question, last_question_at) = questions
+            .remove(id.as_str())
+            .map(|q| (preview_question(&q.content), q.created_at))
+            .filter(|(text, _)| !text.is_empty())
+            .unwrap_or_default();
+
+        out.push(NotebookPreview {
+            notebook_id: id.clone(),
+            sources: named,
+            images,
+            notes: picked_notes,
+            last_question,
+            last_question_at,
+        });
+    }
+    out
+}
+
+/// Roll `(notebook_id, tags)` rows up into the corpus's busiest tags — the
+/// pure half of `Db::corpus_tags`, where the ordering and the cap live.
+///
+/// A tag string is the same space-separated, already-normalized form
+/// `commands::normalize_tags` writes, so this splits rather than re-parses;
+/// a source that repeats a token still counts once. Busiest first, the tag
+/// itself as the tie-break, so a sidebar of equal counts reads down
+/// alphabetically instead of reshuffling between calls.
+pub(crate) fn group_corpus_tags(rows: Vec<(String, String)>, limit: usize) -> Vec<CorpusTag> {
+    // BTreeMap for both: the outer one gives the alphabetical tie-break for
+    // free, the inner one keeps each tag's notebook ids sorted and deduped.
+    let mut by_tag: BTreeMap<&str, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    for (notebook_id, tags) in &rows {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for tag in tags.split_whitespace() {
+            // One source counts once per tag however often the string
+            // repeats it — the count is "sources wearing this", not tokens.
+            if !seen.insert(tag) {
+                continue;
+            }
+            let entry = by_tag.entry(tag).or_default();
+            entry.0 += 1;
+            entry.1.insert(notebook_id.as_str());
+        }
+    }
+
+    let mut out: Vec<CorpusTag> = by_tag
+        .into_iter()
+        .map(|(tag, (count, notebooks))| CorpusTag {
+            tag: tag.to_string(),
+            count,
+            notebook_ids: notebooks.into_iter().map(str::to_string).collect(),
+        })
+        .collect();
+    // Stable sort over an alphabetical vector: equal counts keep that order.
+    out.sort_by_key(|a| std::cmp::Reverse(a.count));
+    out.truncate(limit);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6156,6 +6580,7 @@ mod tests {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         db.create_notebook(&nb).await.expect("first row");
         assert!(
@@ -7081,5 +7506,229 @@ mod tests {
             "a fresh empty directory may be a build in flight"
         );
         assert!(old_full.exists(), "anything with files stays");
+    }
+
+    fn src_row(
+        nb: &str,
+        id: &str,
+        title: &str,
+        stype: &str,
+        image: &str,
+        parent: &str,
+        at: i64,
+    ) -> PreviewSourceRow {
+        PreviewSourceRow {
+            notebook_id: nb.into(),
+            id: id.into(),
+            title: title.into(),
+            source_type: stype.into(),
+            image_url: image.into(),
+            parent_id: parent.into(),
+            created_at: at,
+        }
+    }
+
+    fn note_row(nb: &str, id: &str, title: &str, kind: &str, at: i64) -> PreviewNoteRow {
+        PreviewNoteRow {
+            notebook_id: nb.into(),
+            id: id.into(),
+            title: title.into(),
+            kind: kind.into(),
+            updated_at: at,
+        }
+    }
+
+    /// The whole contract of the card's contents in one pass: newest first,
+    /// every cap held, top-level titles ahead of folder children, `""`/`"-"`
+    /// images ignored, duplicate pictures collapsed, and a notebook with
+    /// nothing in it still getting a row.
+    #[test]
+    fn notebook_previews_group_newest_first_within_every_cap() {
+        let ids = vec!["nb-1".to_string(), "nb-2".to_string(), "empty".to_string()];
+        let sources = vec![
+            // Five top-level sources: only the four newest are named.
+            src_row("nb-1", "s-1", "Oldest", "pdf", "", "", 100),
+            src_row("nb-1", "s-2", "Second", "url", "https://a/one.png", "", 200),
+            src_row("nb-1", "s-3", "Third", "url", "-", "", 300),
+            src_row("nb-1", "s-4", "Fourth", "markdown", "", "", 400),
+            src_row("nb-1", "s-5", "Newest", "url", "https://a/two.png", "", 500),
+            // A folder child, newer than every top-level row: it contributes
+            // its picture but must not push a top-level title off the card.
+            src_row(
+                "nb-1",
+                "s-6",
+                "Child",
+                "image",
+                "https://a/two.png",
+                "s-4",
+                600,
+            ),
+            src_row(
+                "nb-1",
+                "s-7",
+                "Child 2",
+                "image",
+                "https://a/three.png",
+                "s-4",
+                550,
+            ),
+            // A different notebook's rows must not leak across.
+            src_row("nb-2", "s-8", "Only one", "text", "", "", 10),
+        ];
+        let notes = vec![
+            note_row("nb-1", "n-1", "Old note", "note", 100),
+            note_row("nb-1", "n-2", "Newer report", "report", 300),
+            note_row("nb-1", "n-3", "Newest summary", "summary", 400),
+            // The wiki index is touched on every sweep; it must not win the
+            // card by recency alone.
+            note_row("nb-1", "n-4", "Entity: MSFT", "note", 900),
+        ];
+        let mut questions = HashMap::new();
+        questions.insert(
+            "nb-1".to_string(),
+            PreviewQuestionRow {
+                content: "  What did\n the review   say?  ".into(),
+                created_at: 999,
+            },
+        );
+        // A whitespace-only turn is not a question and leaves no timestamp.
+        questions.insert(
+            "nb-2".to_string(),
+            PreviewQuestionRow {
+                content: "   \n ".into(),
+                created_at: 42,
+            },
+        );
+
+        let out = group_notebook_previews(&ids, sources, notes, questions);
+        assert_eq!(
+            out.iter()
+                .map(|p| p.notebook_id.as_str())
+                .collect::<Vec<_>>(),
+            ["nb-1", "nb-2", "empty"],
+            "one row per id, in the order asked for"
+        );
+
+        let nb1 = &out[0];
+        assert_eq!(
+            nb1.sources
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Newest", "Fourth", "Third", "Second"],
+            "four newest TOP-LEVEL titles, newest first — the newer children wait"
+        );
+        assert_eq!(
+            nb1.sources[2].image_url, "",
+            "the \"-\" sentinel is not a picture"
+        );
+        assert_eq!(
+            nb1.images,
+            [
+                "https://a/two.png",
+                "https://a/three.png",
+                "https://a/one.png"
+            ],
+            "distinct images newest first, children included, capped at 3"
+        );
+        assert_eq!(
+            nb1.notes
+                .iter()
+                .map(|n| n.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Newest summary", "Newer report"],
+            "two newest notes by updated_at"
+        );
+        assert_eq!(nb1.last_question, "What did the review say?");
+        assert_eq!(nb1.last_question_at, 999);
+
+        let nb2 = &out[1];
+        assert_eq!(nb2.sources.len(), 1, "no cross-notebook leakage");
+        assert!(nb2.images.is_empty());
+        assert_eq!(nb2.last_question, "");
+        assert_eq!(nb2.last_question_at, 0, "no question, no timestamp");
+
+        let empty = &out[2];
+        assert!(empty.sources.is_empty() && empty.notes.is_empty());
+        assert_eq!(empty.last_question, "");
+    }
+
+    /// Sources stamped in the same millisecond (one batch import) order by
+    /// id, so a card draws the same page in every window.
+    #[test]
+    fn notebook_previews_break_timestamp_ties_by_id() {
+        let ids = vec!["nb".to_string()];
+        let rows = vec![
+            src_row("nb", "s-c", "C", "text", "", "", 500),
+            src_row("nb", "s-a", "A", "text", "", "", 500),
+            src_row("nb", "s-b", "B", "text", "", "", 500),
+        ];
+        let out = group_notebook_previews(&ids, rows, vec![], HashMap::new());
+        assert_eq!(
+            out[0]
+                .sources
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+    }
+
+    /// The whole contract of the sidebar's Tags block in one pass: busiest
+    /// first, ties alphabetical, notebook ids sorted and deduped, a repeated
+    /// token counted once per source, and the cap honored.
+    #[test]
+    fn corpus_tags_group_busiest_first_deduped_and_capped() {
+        let rows = vec![
+            ("nb-1".to_string(), "finance taxes".to_string()),
+            // The same notebook again: `finance` gains a count, not a second
+            // notebook id.
+            ("nb-1".to_string(), "finance".to_string()),
+            ("nb-2".to_string(), "finance rust".to_string()),
+            // A source whose string repeats a token counts once for it.
+            ("nb-2".to_string(), "rust rust".to_string()),
+            // Extra whitespace is not a tag.
+            ("nb-3".to_string(), "  taxes   ".to_string()),
+            ("nb-3".to_string(), "zephyr".to_string()),
+        ];
+
+        let out = group_corpus_tags(rows.clone(), 8);
+        assert_eq!(
+            out.iter()
+                .map(|t| (t.tag.as_str(), t.count))
+                .collect::<Vec<_>>(),
+            [("finance", 3), ("rust", 2), ("taxes", 2), ("zephyr", 1)],
+            "busiest first; equal counts read down alphabetically"
+        );
+        assert_eq!(
+            out[0].notebook_ids,
+            ["nb-1", "nb-2"],
+            "one id per notebook, sorted — not one per source"
+        );
+        assert_eq!(out[1].notebook_ids, ["nb-2"], "a repeat is still one row");
+
+        // The cap takes the busiest, never a prefix of the alphabet.
+        let top = group_corpus_tags(rows, 2);
+        assert_eq!(
+            top.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>(),
+            ["finance", "rust"]
+        );
+
+        assert!(group_corpus_tags(vec![], 8).is_empty());
+    }
+
+    /// A long question is cut to the cap, ellipsis counted inside it.
+    #[test]
+    fn preview_question_cuts_to_the_cap_including_the_ellipsis() {
+        let short = preview_question("Short enough");
+        assert_eq!(short, "Short enough");
+
+        // Multi-byte characters: cutting on bytes would panic here.
+        let long = "é".repeat(400);
+        let cut = preview_question(&long);
+        assert_eq!(cut.chars().count(), PREVIEW_QUESTION_CHARS);
+        assert!(cut.ends_with('…'));
+
+        assert_eq!(preview_question("   "), "");
     }
 }

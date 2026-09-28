@@ -133,74 +133,103 @@ const CMD: &[Command] = &[
         label: "Forward (⌘ → too)",
         context: "",
     },
-    // Where you go, kept as its own group above the sidebar toggles below:
-    // these change the center of Home, they don't show or hide a panel.
-    // Unkeyed — ⌘1–4 belong to the sidebars.
+    // Home's places, one item per section of its sidebar and in that order:
+    // the Library block, the Registry block, then the Brief and the
+    // Timeline. Home has no fold-able cards any more, so every one of these
+    // goes somewhere, and ⌘1–⌘9 run down the list the sidebar reads.
+    //
+    // None of them carries a native accelerator, and neither does the
+    // notebook group below. A key equivalent is global to the process, so
+    // ⌘1 would fire Home's Notebooks while a notebook is open. The
+    // frontend's keydown handler (App.tsx) reads the view first and
+    // dispatches to the group that belongs to it, and `set_menu_context`
+    // greys out the other; the `keys` column documents both meanings for
+    // Settings → Shortcuts.
     Command {
         id: "menu-home-notebooks",
-        menu_label: "Go to Notebooks",
-        accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
-    },
-    Command {
-        id: "menu-home-chat",
-        menu_label: "Go to Chats",
-        accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
-    },
-    Command {
-        id: "menu-home-registry",
-        menu_label: "Go to Registry",
-        accelerator: None,
-        keys: "",
-        label: "",
-        context: "",
-    },
-    // Two groups of sidebar toggles, one per view, in rail order — and ⌘1–4
-    // runs down each group the same way. The same four keys legitimately mean
-    // different sidebars in Home and in a notebook because the webview's
-    // keydown handler (App.tsx) reads the view before it dispatches, and the
-    // group that doesn't belong to that view is greyed out
-    // (`set_menu_context`). That is also why none of the eight carries a
-    // native accelerator: a key equivalent is global to the process and would
-    // fire whichever view is on screen — the `keys` column documents them for
-    // Settings → Shortcuts instead.
-    Command {
-        id: "menu-toggle-home-chats",
-        menu_label: "Chats",
+        menu_label: "Notebooks",
         accelerator: None,
         keys: "⌘ 1",
-        label: "Show or hide Chats",
+        label: "Go to Notebooks",
         context: "Home",
     },
     Command {
-        id: "menu-toggle-home-staff",
-        menu_label: "Staff",
+        id: "menu-home-chats",
+        menu_label: "Chats",
         accelerator: None,
         keys: "⌘ 2",
-        label: "Show or hide Staff",
+        label: "Go to Chats",
         context: "Home",
     },
     Command {
-        id: "menu-toggle-home-brief",
-        menu_label: "Brief",
+        id: "menu-home-shared",
+        menu_label: "Shared",
         accelerator: None,
         keys: "⌘ 3",
-        label: "Show or hide Brief",
+        label: "Go to Shared",
         context: "Home",
     },
     Command {
-        id: "menu-toggle-home-reports",
-        menu_label: "Latest Reports",
+        id: "menu-home-reports",
+        menu_label: "Nightly Reports",
         accelerator: None,
         keys: "⌘ 4",
-        label: "Show or hide Latest Reports",
+        label: "Go to Nightly Reports",
         context: "Home",
     },
+    Command {
+        id: "menu-home-archived",
+        menu_label: "Archived",
+        accelerator: None,
+        keys: "⌘ 5",
+        label: "Go to Archived",
+        context: "Home",
+    },
+    Command {
+        id: "menu-home-staff",
+        menu_label: "Staff",
+        accelerator: None,
+        keys: "⌘ 6",
+        label: "Go to Staff",
+        context: "Home",
+    },
+    Command {
+        id: "menu-home-cards",
+        menu_label: "Registry Entries",
+        accelerator: None,
+        keys: "⌘ 7",
+        label: "Go to Registry Entries",
+        context: "Home",
+    },
+    Command {
+        id: "menu-home-suggested",
+        menu_label: "Suggested",
+        accelerator: None,
+        keys: "⌘ 8",
+        label: "Go to Suggested",
+        context: "Home",
+    },
+    Command {
+        id: "menu-home-brief",
+        menu_label: "Brief",
+        accelerator: None,
+        keys: "⌘ 9",
+        label: "Go to Brief",
+        context: "Home",
+    },
+    // The tenth place, with no digit left to give it. The Shortcuts tab
+    // lists the rows that have a key, so an empty label keeps this one a
+    // menu item and nothing more.
+    Command {
+        id: "menu-home-timeline",
+        menu_label: "Timeline",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "Home",
+    },
+    // A notebook's panels, in rail order — ⌘1–⌘4 down the rail, the same
+    // four keys Home spends on the first four of its places.
     Command {
         id: "menu-toggle-sources",
         menu_label: "Sources",
@@ -416,9 +445,9 @@ pub struct AppMenu {
 }
 
 /// The View menu's two view-specific groups, held so their `enabled` can
-/// follow the frontend's current view. Home's sidebar toggles and a
-/// notebook's panel toggles are each dead in the other view, and a menu item
-/// that does nothing is worse than one that is visibly unavailable.
+/// follow the frontend's current view. Home's places and a notebook's panel
+/// toggles are each dead in the other view, and a menu item that does
+/// nothing is worse than one that is visibly unavailable.
 pub struct ViewContextMenu {
     home: Vec<MenuItem<Wry>>,
     notebook: Vec<MenuItem<Wry>>,
@@ -564,17 +593,28 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // owns the shortcut — it guards with shortcutBlocked so text fields keep
     // the line-start/line-end meaning. The menu items stay for
     // discoverability and mouse use.
-    // Two groups of sidebar toggles, one per view, and only the view you are
-    // in is live: a notebook's Sources/Studio/Gallery/Grow mean nothing on
-    // Home, and Home's four cards mean nothing inside a notebook. Kept as
-    // handles so `set_menu_context` can flip `enabled` as the frontend moves
-    // between views — the menu itself is never rebuilt. Each group is in rail
-    // order, which is also ⌘1–4 order (see the registry above).
-    let home_toggles = [
-        cmd_item(app, "menu-toggle-home-chats")?,
-        cmd_item(app, "menu-toggle-home-staff")?,
-        cmd_item(app, "menu-toggle-home-brief")?,
-        cmd_item(app, "menu-toggle-home-reports")?,
+    // Two groups, one per view, and only the view you are in is live: a
+    // notebook's Sources/Studio/Gallery/Grow mean nothing on Home, and
+    // Home's places mean nothing inside a notebook. Kept as handles so
+    // `set_menu_context` can flip `enabled` as the frontend moves between
+    // views — the menu itself is never rebuilt. Home's group is in sidebar
+    // order and the notebook's in rail order, which is ⌘-digit order for
+    // both (see the registry above).
+    let home_places = [
+        cmd_item(app, "menu-home-notebooks")?,
+        cmd_item(app, "menu-home-chats")?,
+        cmd_item(app, "menu-home-shared")?,
+        cmd_item(app, "menu-home-reports")?,
+        cmd_item(app, "menu-home-archived")?,
+        cmd_item(app, "menu-home-staff")?,
+    ];
+    let home_registry = [
+        cmd_item(app, "menu-home-cards")?,
+        cmd_item(app, "menu-home-suggested")?,
+    ];
+    let home_rest = [
+        cmd_item(app, "menu-home-brief")?,
+        cmd_item(app, "menu-home-timeline")?,
     ];
     let notebook_toggles = [
         cmd_item(app, "menu-toggle-sources")?,
@@ -587,12 +627,18 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         .item(&cmd_item(app, "menu-forward")?)
         .separator()
         .item(&cmd_item(app, "menu-search")?)
-        .separator()
-        .item(&cmd_item(app, "menu-home-notebooks")?)
-        .item(&cmd_item(app, "menu-home-chat")?)
-        .item(&cmd_item(app, "menu-home-registry")?)
         .separator();
-    for it in &home_toggles {
+    // Home's sidebar blocks, kept as the menu's groups: Library, Registry,
+    // then the two that hang below them.
+    for it in &home_places {
+        view = view.item(it);
+    }
+    view = view.separator();
+    for it in &home_registry {
+        view = view.item(it);
+    }
+    view = view.separator();
+    for it in &home_rest {
         view = view.item(it);
     }
     view = view.separator();
@@ -646,7 +692,11 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         ],
     )?;
     let context = ViewContextMenu {
-        home: home_toggles.into(),
+        home: home_places
+            .into_iter()
+            .chain(home_registry)
+            .chain(home_rest)
+            .collect(),
         notebook: notebook_toggles.into(),
     };
     // The app opens on Home, so start there rather than with both groups
@@ -771,5 +821,116 @@ pub fn handle_event(app: &AppHandle, id: &str) {
                 id: id.to_string(),
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Home's places, in sidebar order, with the digit each one answers to.
+    /// The frontend keeps the same table (src/lib/homeNav.ts) and dispatches
+    /// ⌘1–⌘9 from it; a rename on one side that is not made on the other
+    /// leaves a menu item that goes nowhere.
+    const HOME: &[(&str, &str)] = &[
+        ("menu-home-notebooks", "⌘ 1"),
+        ("menu-home-chats", "⌘ 2"),
+        ("menu-home-shared", "⌘ 3"),
+        ("menu-home-reports", "⌘ 4"),
+        ("menu-home-archived", "⌘ 5"),
+        ("menu-home-staff", "⌘ 6"),
+        ("menu-home-cards", "⌘ 7"),
+        ("menu-home-suggested", "⌘ 8"),
+        ("menu-home-brief", "⌘ 9"),
+        ("menu-home-timeline", ""),
+    ];
+
+    fn cmd(id: &str) -> &'static Command {
+        CMD.iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("{id} missing from the registry"))
+    }
+
+    #[test]
+    fn ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for c in CMD.iter().filter(|c| !c.id.is_empty()) {
+            assert!(seen.insert(c.id), "duplicate command id {}", c.id);
+        }
+    }
+
+    #[test]
+    fn home_places_are_in_sidebar_order_with_their_digits() {
+        let found: Vec<_> = CMD
+            .iter()
+            .filter(|c| c.id.starts_with("menu-home-"))
+            .map(|c| (c.id, c.keys))
+            .collect();
+        assert_eq!(found, HOME.to_vec());
+    }
+
+    /// A native key equivalent is global to the process, so ⌘1 on Home's
+    /// Notebooks would also fire inside a notebook, where ⌘1 is Sources.
+    /// Both context-dependent groups stay accelerator-less on purpose.
+    #[test]
+    fn context_dependent_groups_carry_no_accelerator() {
+        for c in CMD
+            .iter()
+            .filter(|c| c.id.starts_with("menu-home-") || c.id.starts_with("menu-toggle-"))
+        {
+            assert!(c.accelerator.is_none(), "{} took a key equivalent", c.id);
+        }
+    }
+
+    #[test]
+    fn a_notebooks_four_panels_keep_cmd_one_to_four() {
+        let found: Vec<_> = CMD
+            .iter()
+            .filter(|c| c.id.starts_with("menu-toggle-") && c.context == "Notebook")
+            .map(|c| (c.id, c.keys))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("menu-toggle-sources", "⌘ 1"),
+                ("menu-toggle-studio", "⌘ 2"),
+                ("menu-toggle-gallery", "⌘ 3"),
+                ("menu-toggle-grow", "⌘ 4"),
+            ]
+        );
+    }
+
+    /// The Shortcuts tab renders one key cap per space-separated token, so a
+    /// listed row with no keys draws an empty cap. Timeline is the one place
+    /// with no digit left, and it stays menu-only for exactly that reason.
+    #[test]
+    fn nine_home_rows_reach_the_shortcuts_tab() {
+        let rows: Vec<_> = shortcut_rows()
+            .into_iter()
+            .filter(|r| r.context == "Home")
+            .collect();
+        assert!(rows.iter().all(|r| !r.keys.is_empty()));
+        assert_eq!(
+            rows.iter().filter(|r| r.label.starts_with("Go to")).count(),
+            9
+        );
+        assert!(cmd("menu-home-timeline").label.is_empty());
+    }
+
+    /// The fold-able Home cards and the three unkeyed "Go to" items they
+    /// sat under are gone; nothing may quietly reintroduce an id the
+    /// frontend no longer routes.
+    #[test]
+    fn retired_ids_stay_retired() {
+        for id in [
+            "menu-home-chat",
+            "menu-home-registry",
+            "menu-toggle-home-chats",
+            "menu-toggle-home-staff",
+            "menu-toggle-home-brief",
+            "menu-toggle-home-reports",
+        ] {
+            assert!(!CMD.iter().any(|c| c.id == id), "{id} is back");
+        }
     }
 }

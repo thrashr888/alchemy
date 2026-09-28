@@ -1,23 +1,21 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   NOTEBOOK_PANELS,
-  navAtomic,
+  goHomePlace,
   toggleNotebookPanel,
   useStore,
 } from "@/lib/store";
-import { HOME_CARDS, toggleHomeCard } from "@/lib/homeCards";
+import { homePlaceByKey } from "@/lib/homeNav";
 import { HomeView } from "@/components/HomeView";
 import { FileDrop } from "@/components/FileDrop";
 import { Toaster } from "@/components/ui";
 import { FatalOverlay } from "@/components/ErrorBoundary";
 import { shortcutBlocked } from "@/lib/utils";
 import { isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "@/lib/api";
 import { report } from "@/lib/diagnostics";
 import { afterStartupPaint } from "@/lib/startup";
-import type { HomeSection } from "@/lib/storeTypes";
 import { THEME_LIST, SYSTEM_THEME } from "@/lib/themes";
 import { ARTIFACTS, AUDIO_OVERVIEW } from "@/components/studioArtifacts";
 
@@ -169,13 +167,13 @@ function App() {
     });
   }, [theme]);
 
-  // The View menu carries two groups of sidebar toggles — Home's four cards
-  // and a notebook's four panels — and only one view can act on either. Tell
-  // the menu which view is on screen so the other group greys out instead of
-  // offering a click that does nothing. The app menu is global to the
-  // process, so this follows the focused window: a background window's
-  // notebook must not grey out the menu over the Home window in front.
-  // (A note pop-out has neither set of sidebars and stays out of it.)
+  // The View menu carries two groups — Home's ten places and a notebook's
+  // four panels — and only one view can act on either. Tell the menu which
+  // view is on screen so the other group greys out instead of offering a
+  // click that does nothing. The app menu is global to the process, so this
+  // follows the focused window: a background window's notebook must not grey
+  // out the menu over the Home window in front. (A note pop-out has neither
+  // and stays out of it.)
   const inNotebook = !!currentId;
   // Detection cost (docs/RFC-events.md §4): the backend watches the folders
   // of notebooks some window has open and sweeps the rest slowly, so each
@@ -252,27 +250,31 @@ function App() {
         const s = useStore.getState();
         if (e.key === "ArrowLeft" || e.key === "[") s.navBack();
         else s.navForward();
-      } else if (e.key >= "1" && e.key <= "4" && !e.shiftKey && !e.altKey) {
-        // ⌘1–4 run down whichever set of sidebars is on screen: a notebook's
-        // Sources/Studio/Gallery/Grow, or Home's Chats/Staff/Brief/Latest
-        // Reports — in the order the rails read, which is the View menu's
-        // order too. Context-dependent, so it can't be a native menu key
-        // equivalent (those are global to the process and would fire in the
-        // wrong view); menu.rs keeps the items accelerator-less and documents
-        // both meanings in Settings → Shortcuts.
+      } else if (e.key >= "1" && e.key <= "9" && !e.shiftKey && !e.altKey) {
+        // The digits run down whatever is on screen: inside a notebook ⌘1–4
+        // are its Sources/Studio/Gallery/Grow panels, in rail order; on Home
+        // ⌘1–9 are the rows of the Library's sidebar, in sidebar order. Both
+        // orders are menu.rs's View-menu order too.
         //
-        // A note pop-out renders neither set of sidebars, so it leaves the
-        // keystroke alone — as it does the View menu's two groups.
+        // Context-dependent, so neither can be a native menu key equivalent
+        // — those are global to the process and would fire in the wrong
+        // view. This is the handler that reads the view first; menu.rs keeps
+        // both groups accelerator-less and documents the two meanings in
+        // Settings → Shortcuts.
+        //
+        // A note pop-out renders neither, so it leaves the keystroke alone —
+        // as it does the View menu's two groups.
         if (window.__ALCHEMY_NOTE__ || shortcutBlocked(e)) return;
-        const i = Number(e.key) - 1;
+        const digit = Number(e.key);
         if (useStore.getState().currentId) {
-          if (i >= NOTEBOOK_PANELS.length) return;
+          if (digit > NOTEBOOK_PANELS.length) return;
           e.preventDefault();
-          toggleNotebookPanel(NOTEBOOK_PANELS[i]);
-        } else if (toggleHomeCard(HOME_CARDS[i])) {
-          // Home registers its four toggles while it is mounted; nothing
-          // registered means nothing to show or hide.
+          toggleNotebookPanel(NOTEBOOK_PANELS[digit - 1]);
+        } else {
+          const place = homePlaceByKey(digit);
+          if (!place) return;
           e.preventDefault();
+          void goHomePlace(place);
         }
       }
     };
@@ -303,47 +305,6 @@ function App() {
     };
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
-  }, []);
-
-  // Home's chat surface, from the native menu (menu.rs). The store owns the
-  // rest of `menu://action`; these ride the same broadcast — it reaches every
-  // window, and the payload's target label is what keeps only the addressed
-  // one acting on it. Each hop leaves a notebook if one is open, so they are
-  // one back-stack entry apiece (navAtomic), not two.
-  //
-  // A note pop-out mounts no Home at all; the store's listener has already
-  // handed the action to the main window, so this shell stays out of it.
-  useEffect(() => {
-    if (!isTauri() || window.__ALCHEMY_NOTE__) return;
-    const label = getCurrentWebview().label;
-    const goHome = (go: () => Promise<void> | void) =>
-      void navAtomic(async () => {
-        const s = useStore.getState();
-        if (s.currentId) s.closeNotebook();
-        await go();
-      });
-    const section = (id: HomeSection) =>
-      goHome(() => useStore.setState({ homeSection: id, openCardId: null }));
-    const un = listen<{ target: string; id: string }>("menu://action", (e) => {
-      if (e.payload.target !== label) return;
-      if (e.payload.id === "menu-new-chat") {
-        goHome(() => useStore.getState().openHomeThread(null));
-      } else if (e.payload.id === "menu-home-notebooks") {
-        section("notebooks");
-      } else if (e.payload.id === "menu-home-registry") {
-        section("registry");
-      } else if (e.payload.id === "menu-home-chat") {
-        // The conversation that was last on screen, minting one only if there
-        // has never been one — what Home's own Chat tab does.
-        goHome(() => {
-          const s = useStore.getState();
-          return s.openHomeThread(s.homeChat.threadId);
-        });
-      }
-    });
-    return () => {
-      void un.then((off) => off());
-    };
   }, []);
 
   // Bridge the legacy `error` field into the toast stack so every error path

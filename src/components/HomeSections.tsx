@@ -29,10 +29,11 @@ import {
   Zap,
 } from "lucide-react";
 
-/* Home's Steward sidebars (RFC-v12-steward UI §2, as sidebars rather than
- * pages): Staff on the left mirroring the reports feed's side-card idiom,
- * the Brief as the top-right card above Latest Reports. Registry joins when
- * its pillar exists. */
+/* The Steward's surfaces (RFC-v12-steward UI §2). Written as Home's left
+ * and right sidebars; since the Library (docs/RFC-mac-chrome.md, "Home")
+ * they are center sections the Library's sidebar selects, so each one's
+ * collapse control is optional and the notebook workspace still mounts
+ * them as cards. The markup is unchanged either way. */
 
 /** The Brief card: the arrival point. Collapsing it swaps the whole card for
  *  a 48px icon rail, the way Staff and Chats collapse on the other side. */
@@ -41,17 +42,29 @@ export function BriefSidebar({
   briefs,
   schedules,
   unread,
+  lastNight,
   onRan,
+  bare = false,
   className,
   style,
   resizeHandle,
 }: {
-  onCollapse: () => void;
+  /** Fold the card down to its rail. Absent on the Library, where the
+   *  Brief is a center section chosen from the sidebar rather than a card
+   *  beside it — there is nothing to fold it into. */
+  onCollapse?: () => void;
   /** Report-kind notes from the Briefs notebook, newest first. */
   briefs: Note[];
   schedules: ReportSchedule[];
   unread: boolean;
+  /** What the night shift did, one line — the sidebar's Brief row wears the
+   *  same string as its tooltip; here it is the quiet second line under the
+   *  header, since the Library's footer no longer carries it (DESIGN.md §9). */
+  lastNight?: string;
   onRan: () => void;
+  /** Drop the card frame: on the Library the Brief IS the sheet's content,
+   *  and a rounded card inside the sheet is a box in a box. */
+  bare?: boolean;
   className?: string;
   style?: React.CSSProperties;
   /** The reading column's width handle, rendered on this card's edge. */
@@ -85,23 +98,39 @@ export function BriefSidebar({
 
   return (
     <section
-      className={cn("side-card relative flex min-h-0 flex-col", className)}
+      className={cn(
+        "relative flex min-h-0 flex-col",
+        !bare && "side-card",
+        className,
+      )}
       style={style}
     >
       {resizeHandle}
       {/* Run and collapse both persist. Running the brief by hand is the
           card's one verb — a brief you can only run by finding the button
-          under the pointer is a brief you re-run by waiting for tomorrow. */}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-6">
-        {/* The same icon the collapsed rail shows, so folding a card down
-            and back doesn't change what it is called. Staff and Chats on the
-            left already read this way; the right pair now matches. */}
-        <Sun className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Brief
-        </span>
-        {unread && (
-          <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="New brief" />
+          under the pointer is a brief you re-run by waiting for tomorrow.
+          Bare (the Library): the "Brief" title and the unread dot live in
+          the sidebar row and the outer heading now, so this row keeps only
+          what a title can't say — the run verb. */}
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border px-6",
+          bare ? "h-9" : "h-12",
+        )}
+      >
+        {!bare && (
+          <>
+            {/* The same icon the collapsed rail shows, so folding a card down
+                and back doesn't change what it is called. Staff and Chats on
+                the left already read this way; the right pair now matches. */}
+            <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              Brief
+            </span>
+            {unread && (
+              <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="New brief" />
+            )}
+          </>
         )}
         <div className="ml-auto flex items-center gap-1">
           {briefSchedule && (
@@ -119,18 +148,26 @@ export function BriefSidebar({
               )}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onCollapse}
-            title="Collapse the brief"
-            aria-label="Collapse the brief"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-          >
-            <PanelRightClose className="h-4 w-4" />
-          </button>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse the brief"
+              aria-label="Collapse the brief"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        {/* The quiet second line the footer used to carry: what last night's
+            run did, so the section that explains it is the section that
+            says it (DESIGN.md §9). */}
+        {bare && lastNight && (
+          <p className="mb-3 text-caption text-subtle-foreground">{lastNight}</p>
+        )}
         {!brief ? (
           <p className="text-caption text-subtle-foreground">
             No brief yet. It runs each morning; press play above to run it now.
@@ -163,6 +200,7 @@ export function StaffSidebar({
   onOpenEvent,
   onRan,
   onCollapse,
+  bare = false,
 }: {
   schedules: ReportSchedule[];
   reports: Note[];
@@ -174,7 +212,13 @@ export function StaffSidebar({
   onOpenNotebook: (notebookId: string) => void;
   onOpenEvent: (event: SourceEvent) => void;
   onRan: () => void;
-  onCollapse: () => void;
+  /** Fold the sidebar down to its rail; absent on the Library, where Staff
+   *  is a center section rather than a card beside the shelf. */
+  onCollapse?: () => void;
+  /** Drop the "Staff" title: the Library's own heading row already carries
+   *  it (DESIGN.md §9), so the section's own header keeps only the status
+   *  dot and the pause verb — the parts a title can't say. */
+  bare?: boolean;
 }) {
   const pushToast = useStore((s) => s.pushToast);
   const [status, setStatus] = useState<NightShiftStatus | null>(null);
@@ -237,11 +281,20 @@ export function StaffSidebar({
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <Moon className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-          Staff
-        </span>
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border px-4",
+          bare ? "h-9" : "h-12",
+        )}
+      >
+        {!bare && (
+          <>
+            <Moon className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              Staff
+            </span>
+          </>
+        )}
         <span className={cn("h-1.5 w-1.5 rounded-full", dot)} title={statusLabel} />
         <div className="ml-auto flex items-center gap-1">
           {status?.backgroundEnabled && (
@@ -259,15 +312,17 @@ export function StaffSidebar({
               )}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onCollapse}
-            title="Collapse Staff"
-            aria-label="Collapse the Staff sidebar"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </button>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              title="Collapse Staff"
+              aria-label="Collapse the Staff sidebar"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -535,7 +590,12 @@ export function useNightShiftTone() {
   return nightShiftTone(status);
 }
 
-/** The collapsed rails: one icon that reopens its sidebar. */
+/** The collapsed rails: one icon that reopens its sidebar.
+ *
+ *  Nothing mounts this since the Library: Home has one sidebar with one
+ *  toggle in the toolbar, so there is no pair of stacked cards to fold down
+ *  to an icon. Kept because the shape is the answer if a surface here ever
+ *  becomes a card beside the sheet again. */
 export function SidebarRail({
   icon,
   title,
