@@ -414,10 +414,56 @@ Guerneville question the local loop had answered "not in the library":
 | with both handled | Codex called `ask_everything` and `search`, found the answer in the *River House* notebook, and noticed the date is recorded as an assumption — with a working `alchemy://note/…` link to the note. |
 | Stop | settled 0.7s after the press mid-tool-call; partial kept as `stopped`; the session survives for a follow-up. |
 
-**Not verified live:** the inline permission prompt (Codex approves MCP
-calls itself, and Claude Code's login had expired — its sign-in failure is
-how the auth hint was found and tested). Routing, both directions, was
-verified: Ollama → loop, Claude Code / Codex → agent.
+Routing, both directions, was verified: Ollama → loop, Claude Code /
+Codex → agent.
+
+### Alchemy decides what may change a notebook
+
+**Decision (2026-10-01), for consistency across providers:** the rule about
+what an agent may change is the app's, not the agent's. Before this, each
+agent applied its own: Claude Code inherits the user's `defaultMode` (here
+`auto`, which approves tools itself — the first live Claude run never
+prompted for anything), Codex starts in its own "Auto review", and opencode
+follows its own config. The local loop already held writes to the user's
+words (§4); agents now meet the same rule.
+
+- **One classification.** `mcp/access.rs` labels each of the 67 tools read
+  or write, both lists explicit, and a test fails the build when a served
+  tool is in neither, in both, or no longer exists. At runtime anything not
+  on the read list is a write, so an unknown name asks.
+- **Asking mode, every session.** Claude Code is put in `default` ("always
+  ask"), Codex in `workspace-write`, before the session reports ready —
+  Home's and the notebook Agent pane's alike, since it's the same agent
+  touching the same notes. A mode the adapter doesn't offer is logged, not
+  forced.
+- **Reads are answered by Alchemy; writes go to the user.** A permission
+  request for one of Alchemy's read tools gets `allow_once` without the
+  user seeing it. The tool is identified from Claude's
+  `_meta.claudeCode.toolName`, the request title, or — for Codex, whose MCP
+  permission requests carry only a call id — the title its earlier
+  `tool_call` update gave that id. Another server's `search` is not ours.
+- **Only per-call answers.** Agents also offer "allow always" ("Yes, and
+  don't ask again for Create Note commands"), which writes a rule into the
+  agent's own settings — after which that agent stops asking Alchemy while
+  every other brain still asks. The prompt shows Yes / No / Cancel. A
+  remembered answer, if it's wanted, belongs in Alchemy.
+
+**Verified live with Claude Code:** a read (`list_notebooks`,
+`ask_everything`) ran with no prompt; "create a note in River House" stopped
+at an inline prompt naming `create_note`; No was respected — the agent said
+the note wasn't created, and none was.
+
+**The gap: opencode.** It has no asking mode — its modes choose an agent,
+and its permission rules live in opencode's config — so it still decides
+for itself. Closing it means writing opencode's permission config for the
+session (unverified), or not offering opencode as Home's brain.
+
+**Dev-only note.** The agents' own `alchemy` MCP entries (from Connect)
+point at 41414. To test agents against a dev build while the installed app
+is closed, set Alchemy's MCP port to 41413 so the dev +1 offset lands on
+41414 — this avoids editing `~/.claude.json`, which every running Claude
+Code session writes to. Set it back afterwards: the installed app reads the
+same config.
 
 ## Decisions
 

@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, HttpHeader, InitializeRequest, LoadSessionRequest, McpServer,
-    McpServerHttp, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    TextContent,
+    McpServerHttp, NewSessionRequest, PermissionOptionKind, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
+    SessionModeState, SessionNotification, SetSessionModeRequest, TextContent,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo, Responder};
@@ -71,6 +71,23 @@ impl AcpAgentKind {
             AcpAgentKind::Opencode => "opencode",
             AcpAgentKind::ClaudeCode => "Claude Code",
             AcpAgentKind::Codex => "Codex",
+        }
+    }
+
+    /// The session mode in which this agent asks the client before running
+    /// tools, so Alchemy — not the agent — decides what may change a notebook
+    /// (docs/RFC-unified-chat.md §6). Without it each agent applies its own
+    /// rule: Claude Code inherits the user's `defaultMode` (often `auto`,
+    /// which approves tools itself), and Codex starts in "Auto review".
+    ///
+    /// opencode has no such mode — its modes pick an agent, and asking is
+    /// governed by opencode's own config — so it keeps its own rules. That
+    /// is the one gap in the "same rule for every brain" promise.
+    fn ask_mode(self) -> Option<&'static str> {
+        match self {
+            AcpAgentKind::ClaudeCode => Some("default"),
+            AcpAgentKind::Codex => Some("workspace-write"),
+            AcpAgentKind::Opencode => None,
         }
     }
 
@@ -242,6 +259,96 @@ pub async fn home_brain(
         label: kind.label().to_string(),
         login_command: kind.login_command().to_string(),
     })
+}
+
+/// Answer a permission request on the user's behalf, or leave it to them.
+///
+/// Alchemy's own read-only tools are allowed without asking — the same rule
+/// the tool loop follows, so a search never interrupts the user whichever
+/// brain runs it. Anything else (a write, a delete, a shell command, a tool
+/// from another server, a name we can't read) goes to the user.
+///
+/// `names` are every spelling of the tool the request offers, best first:
+/// Claude Code's `_meta.claudeCode.toolName`, the request title, and for
+/// Codex — whose MCP permission request carries only the call id — the title
+/// its earlier `tool_call` update gave that id. Only `allow_once` is ever
+/// chosen: "always" would outlive this decision.
+fn auto_allow(
+    names: &[Option<String>],
+    options: &[(String, PermissionOptionKind)],
+) -> Option<String> {
+    let tool = names
+        .iter()
+        .flatten()
+        .find_map(|n| crate::mcp::access::alchemy_tool(n))?;
+    if crate::mcp::access::access(tool) != crate::mcp::access::Access::Read {
+        return None;
+    }
+    options
+        .iter()
+        .find(|(_, kind)| *kind == PermissionOptionKind::AllowOnce)
+        .map(|(id, _)| id.clone())
+}
+
+/// The answers the user is offered: this call only.
+///
+/// Agents also offer "allow always" ("Yes, and don't ask again for Create
+/// Note commands"), which writes a rule into the AGENT's own settings — after
+/// which that agent stops asking Alchemy at all, while every other brain
+/// still asks. The rule about what may change a notebook is the app's, so a
+/// remembered answer would have to be remembered by the app; until it is,
+/// only per-call answers are shown. If an agent ever offers nothing else,
+/// its options are kept as they are rather than leaving no way to say yes.
+fn per_call_options(
+    options: &[agent_client_protocol::schema::v1::PermissionOption],
+) -> Vec<&agent_client_protocol::schema::v1::PermissionOption> {
+    let once: Vec<_> = options
+        .iter()
+        .filter(|o| {
+            !matches!(
+                o.kind,
+                PermissionOptionKind::AllowAlways | PermissionOptionKind::RejectAlways
+            )
+        })
+        .collect();
+    if once
+        .iter()
+        .any(|o| o.kind == PermissionOptionKind::AllowOnce)
+    {
+        once
+    } else {
+        options.iter().collect()
+    }
+}
+
+/// Put the agent in its asking mode, if it has one and offers it here.
+async fn set_ask_mode(
+    connection: &ConnectionTo<Agent>,
+    kind: Option<AcpAgentKind>,
+    session_id: &SessionId,
+    modes: Option<&SessionModeState>,
+    agent_label: &str,
+) {
+    let Some(mode) = kind.and_then(AcpAgentKind::ask_mode) else {
+        return;
+    };
+    // An adapter release could rename its modes. Setting one it doesn't
+    // offer is an error at best; say so instead, and leave the session in
+    // whatever mode it chose.
+    let offered = modes.is_some_and(|m| m.available_modes.iter().any(|am| &*am.id.0 == mode));
+    if !offered {
+        crate::note!(
+            "acp: {agent_label} doesn't offer an asking mode ({mode}); its own rules apply"
+        );
+        return;
+    }
+    if let Err(err) = connection
+        .send_request(SetSessionModeRequest::new(session_id.clone(), mode))
+        .block_task()
+        .await
+    {
+        crate::note!("acp: couldn't put {agent_label} in {mode} mode: {err}");
+    }
 }
 
 /// Alchemy's own MCP server, as the agent should connect to it.
@@ -776,6 +883,12 @@ async fn run_session(
     let update_model = agent_label.to_string();
     let perm_app = app.clone();
     let perm_notebook = notebook_id.clone();
+    // Codex's MCP permission request carries only the call id; the tool's
+    // name arrived earlier, on the `tool_call` update for that id. Remember
+    // it so the permission can be judged by what it is for.
+    let tool_titles: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let update_titles = tool_titles.clone();
+    let kind = AcpAgentKind::from_id(&agent_id);
 
     let mut ready_tx = Some(ready_tx);
     let cwd = session_cwd(&app, &notebook_id);
@@ -787,6 +900,18 @@ async fn run_session(
             async move |notification: SessionNotification, _cx| {
                 let update =
                     serde_json::to_value(&notification.update).unwrap_or(serde_json::Value::Null);
+                if let (Some(id), Some(title)) = (
+                    update.get("toolCallId").and_then(|v| v.as_str()),
+                    update.get("title").and_then(|v| v.as_str()),
+                ) {
+                    let mut titles = update_titles.lock().unwrap();
+                    // A session can run for days; the names only matter
+                    // until the permission that follows a call.
+                    if titles.len() > 512 {
+                        titles.clear();
+                    }
+                    titles.insert(id.to_string(), title.to_string());
+                }
                 // First answer chunk of the turn stops the clock — thoughts
                 // and tool calls stream before it, but "first answer token"
                 // is what the chat surfaces measure, so the agent pane is
@@ -822,10 +947,37 @@ async fn run_session(
             async move |request: agent_client_protocol::schema::v1::RequestPermissionRequest,
                         responder,
                         _cx| {
-                let request_id = uuid::Uuid::new_v4().to_string();
-                let options = request
+                let names = [
+                    request
+                        .tool_call
+                        .meta
+                        .as_ref()
+                        .and_then(|m| m.get("claudeCode"))
+                        .and_then(|c| c.get("toolName"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    request.tool_call.fields.title.clone(),
+                    tool_titles
+                        .lock()
+                        .unwrap()
+                        .get(&*request.tool_call.tool_call_id.0)
+                        .cloned(),
+                ];
+                let kinds: Vec<(String, PermissionOptionKind)> = request
                     .options
                     .iter()
+                    .map(|o| (o.option_id.0.to_string(), o.kind))
+                    .collect();
+                if let Some(id) = auto_allow(&names, &kinds) {
+                    // One of Alchemy's reads: the user never sees it ask.
+                    let _ = responder.respond(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
+                    ));
+                    return Ok(());
+                }
+                let request_id = uuid::Uuid::new_v4().to_string();
+                let options = per_call_options(&request.options)
+                    .into_iter()
                     .map(|o| PermissionOptionInfo {
                         id: o.option_id.0.to_string(),
                         name: o.name.clone(),
@@ -899,13 +1051,17 @@ async fn run_session(
             // sessions, and a machine can lose them entirely. Falling through
             // to a fresh session is the right answer, silently.
             let mut resumed = None;
+            let mut modes: Option<SessionModeState> = None;
             if let Some(id) = resume.filter(|_| init.agent_capabilities.load_session) {
                 let mut load_req = LoadSessionRequest::new(id.clone(), cwd.clone());
                 if let Some(server) = &alchemy {
                     load_req = load_req.mcp_servers(vec![server.clone()]);
                 }
                 match connection.send_request(load_req).block_task().await {
-                    Ok(_) => resumed = Some(SessionId::from(id)),
+                    Ok(resp) => {
+                        modes = resp.modes;
+                        resumed = Some(SessionId::from(id));
+                    }
                     Err(err) => crate::note!("acp: could not resume {agent_label} session: {err}"),
                 }
             }
@@ -914,7 +1070,10 @@ async fn run_session(
             let session_id = match resumed {
                 Some(id) => id,
                 None => match connection.send_request(session_req).block_task().await {
-                    Ok(s) => s.session_id,
+                    Ok(s) => {
+                        modes = s.modes;
+                        s.session_id
+                    }
                     Err(err) => {
                         if let Some(tx) = ready_tx.take() {
                             // A session that dies on open is usually the agent
@@ -934,6 +1093,11 @@ async fn run_session(
                     }
                 },
             };
+
+            // Before "ready", so no prompt ever runs in the agent's own mode.
+            // Every session, not only Home's: the rule is the app's, and the
+            // notebook Agent pane is the same agent touching the same notes.
+            set_ask_mode(&connection, kind, &session_id, modes.as_ref(), agent_label).await;
 
             if let Some(tx) = ready_tx.take() {
                 let _ = tx.send(Ok(()));
@@ -1131,6 +1295,82 @@ mod home_tests {
         // Agent CLIs with no ACP adapter stay on the loop.
         assert!(AcpAgentKind::from_id("copilot").is_none());
         assert!(AcpAgentKind::from_id("gateway").is_none());
+    }
+
+    /// The rule, against the request shapes each adapter actually sends
+    /// (claude-agent-acp 0.85.0, codex-acp 2.1.1): Alchemy's reads are
+    /// allowed without asking; writes, other servers' tools and anything
+    /// unnamed go to the user.
+    #[test]
+    fn alchemy_reads_are_allowed_writes_ask() {
+        let claude_opts = vec![
+            ("allow-once".to_string(), PermissionOptionKind::AllowOnce),
+            (
+                "allow-with-updates".to_string(),
+                PermissionOptionKind::AllowAlways,
+            ),
+            ("reject".to_string(), PermissionOptionKind::RejectOnce),
+        ];
+        // Claude Code: the name in _meta and the title.
+        let read = [
+            Some("mcp__alchemy__search".into()),
+            Some("mcp__alchemy__search".into()),
+            None,
+        ];
+        assert_eq!(
+            auto_allow(&read, &claude_opts).as_deref(),
+            Some("allow-once")
+        );
+        let write = [Some("mcp__alchemy__create_note".into()), None, None];
+        assert_eq!(auto_allow(&write, &claude_opts), None);
+        // Codex: the request names nothing; the cached tool_call title does.
+        let codex = [None, None, Some("mcp.alchemy.list_notebooks".into())];
+        assert_eq!(
+            auto_allow(&codex, &claude_opts).as_deref(),
+            Some("allow-once")
+        );
+        // Another server's read-looking tool, a shell command, nothing at all.
+        let other = [Some("mcp__github__search".into()), None, None];
+        assert_eq!(auto_allow(&other, &claude_opts), None);
+        assert_eq!(
+            auto_allow(&[Some("Run command?".into()), None, None], &claude_opts),
+            None
+        );
+        assert_eq!(auto_allow(&[None, None, None], &claude_opts), None);
+        // Never "always": with no allow-once offered, the user decides.
+        let always_only = vec![("a".to_string(), PermissionOptionKind::AllowAlways)];
+        assert_eq!(auto_allow(&read, &always_only), None);
+    }
+
+    /// "Always" answers would move the decision into the agent's own
+    /// settings, so the user is offered this call only — unless an agent
+    /// offers nothing else, in which case its options stand.
+    #[test]
+    fn only_per_call_answers_are_offered() {
+        use agent_client_protocol::schema::v1::PermissionOption;
+        let opt = |id: &'static str, kind| PermissionOption::new(id, id, kind);
+        // claude-agent-acp's set for create_note, as seen live.
+        let claude = vec![
+            opt("allow-once", PermissionOptionKind::AllowOnce),
+            opt("allow-with-updates", PermissionOptionKind::AllowAlways),
+            opt("reject", PermissionOptionKind::RejectOnce),
+        ];
+        let shown: Vec<_> = per_call_options(&claude)
+            .iter()
+            .map(|o| o.option_id.0.to_string())
+            .collect();
+        assert_eq!(shown, vec!["allow-once", "reject"]);
+        let only_always = vec![opt("always", PermissionOptionKind::AllowAlways)];
+        assert_eq!(per_call_options(&only_always).len(), 1);
+    }
+
+    /// The asking modes, by the ids each adapter advertises. opencode has
+    /// none and keeps its own rules — pinned so that changes on purpose.
+    #[test]
+    fn asking_modes_per_agent() {
+        assert_eq!(AcpAgentKind::ClaudeCode.ask_mode(), Some("default"));
+        assert_eq!(AcpAgentKind::Codex.ask_mode(), Some("workspace-write"));
+        assert_eq!(AcpAgentKind::Opencode.ask_mode(), None);
     }
 
     /// The Home preamble points at the corpus-wide tools and holds writes to
