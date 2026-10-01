@@ -139,6 +139,50 @@ test("a whole session: JSON reply, SSE reply, session id, silent notification", 
   assert.equal(seen[2].headers["mcp-session-id"], "session-42");
 });
 
+test("nothing overtakes notifications/initialized", async () => {
+  // MCP's initialization phase is two messages, not one: the client must
+  // finish it with `notifications/initialized` before any other request.
+  // The proxy used to serialize only `initialize` and send the rest
+  // concurrently on separate connections, so `tools/list` could reach the app
+  // first — it did, on CI runners, while passing every local run. Holding the
+  // notification's 202 open makes the race deterministic: a request that
+  // waits for the phase to end can only arrive after that answer goes out.
+  let answeredAt = 0;
+  const arrivedAt = {};
+  const { server, port } = await fakeApp((res, message) => {
+    arrivedAt[message.method] = Date.now();
+    if (message.method === "initialize") {
+      return json(res, { jsonrpc: "2.0", id: message.id, result: { ok: true } }, {
+        "mcp-session-id": "session-7",
+      });
+    }
+    if (message.method === "notifications/initialized") {
+      return setTimeout(() => {
+        answeredAt = Date.now();
+        res.writeHead(202);
+        res.end();
+      }, 80);
+    }
+    return json(res, { jsonrpc: "2.0", id: message.id, result: { tools: [] } });
+  });
+  const proxy = startProxy(discoveryFile(port, "t"));
+  cleanup.push(() => {
+    proxy.stop();
+    server.close();
+  });
+
+  proxy.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  await proxy.next();
+  proxy.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+  proxy.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  assert.deepEqual(await proxy.next(), { jsonrpc: "2.0", id: 2, result: { tools: [] } });
+  assert.ok(answeredAt > 0, "the notification was never answered");
+  assert.ok(
+    arrivedAt["tools/list"] >= answeredAt,
+    `tools/list arrived ${answeredAt - arrivedAt["tools/list"]}ms before initialization ended`,
+  );
+});
+
 test("a 401 makes the proxy re-read the rotated token and retry", async () => {
   let accept = "token-one";
   const { server, seen, port } = await fakeApp((res, message, req) => {
