@@ -266,6 +266,7 @@ impl AlchemyMcp {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         self.state()
             .db

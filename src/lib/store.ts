@@ -20,6 +20,7 @@ import { notify } from "./notify";
 import { loadGrowthDismissed, saveGrowthDismissed } from "./growth";
 import { dropEntry, makeEntry, pushEntry } from "./history";
 import { historyOf, mergeLoadedTurns } from "./homeChatRun";
+import { homePlaceById, sameNavEntry, type HomePlace } from "./homeNav";
 import { claimTextUndo } from "./textUndo";
 import { playDone, playError } from "./sound";
 import { autoUpdateEnabled, checkForUpdatesQuietly } from "./updates";
@@ -29,6 +30,7 @@ import type {
   AcpEntry,
   AcpPaneState,
   AppState,
+  HomeScope,
   HomeSection,
   Migration,
   NavEntry,
@@ -173,6 +175,27 @@ const HOME_CHAT_CONFIG_KEY = "homeChatConfig";
  *  them. Pruned when a thread is deleted. */
 const HOME_DRAFTS_KEY = "homeChatDrafts";
 
+/** The shelf's scope and its tag row are both remembered across relaunches:
+ *  they are where the user was, and a reload that lands on an unfiltered
+ *  library has lost that. Written in one place each, because back/forward
+ *  restores them too — a `set` that skipped localStorage would leave the
+ *  next launch disagreeing with the last thing on screen. */
+function loadHomeScope(): HomeScope {
+  const raw = localStorage.getItem("homeScope");
+  return raw === "shared" || raw === "archived" ? raw : "all";
+}
+
+function writeHomeScope(scope: HomeScope): void {
+  localStorage.setItem("homeScope", scope);
+  useStore.setState({ homeScope: scope });
+}
+
+function writeHomeTagFilter(tag: string | null): void {
+  if (tag) localStorage.setItem("homeTagFilter", tag);
+  else localStorage.removeItem("homeTagFilter");
+  useStore.setState({ homeTagFilter: tag });
+}
+
 function loadHomeDrafts(): Record<string, string> {
   try {
     const raw = localStorage.getItem(HOME_DRAFTS_KEY);
@@ -291,6 +314,27 @@ function applyGlass(
   });
 }
 
+/** Under glass, whether the two side panes stay translucent. Only the flag
+ *  lives here — the background rules are in index.css under
+ *  `html[data-glass-sidebars="off"]`. The attribute is absent in the default
+ *  (show-through) state, like `data-accent`, so the CSS has one rule, not two. */
+function applyGlassSidebars(on: boolean) {
+  const root = document.documentElement;
+  if (on) delete root.dataset.glassSidebars;
+  else root.dataset.glassSidebars = "off";
+}
+
+/** Selection/primary accent: the theme's own color, or the one the user picked
+ *  in macOS System Settings. Only the flag lives here — the token swap is in
+ *  index.css under `html[data-accent="system"]`, which has to carry
+ *  `!important` because applyTheme() writes each theme's palette as inline
+ *  custom properties on this same element. */
+function applyAccent(accent: ReadingPrefs["accent"]) {
+  const root = document.documentElement;
+  if (accent === "system") root.dataset.accent = "system";
+  else delete root.dataset.accent;
+}
+
 function loadReadingPrefs(): ReadingPrefs {
   try {
     const raw = localStorage.getItem("readingPrefs");
@@ -354,6 +398,16 @@ let folderScanFlushHandle = 0;
 // mcp://changed arrives once per agent tool call; one trailing notebooks
 // refresh (a full list + native menu rebuild) covers a burst of them.
 let notebooksRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+// The card contents cost four corpus scans, so they refresh on the same
+// signals as the notebook list but on a far slacker leash: a title that
+// appeared five seconds ago is still news, and an agent importing in a loop
+// must not turn the shelf into a scan storm.
+const PREVIEWS_DEBOUNCE_MS = 5_000;
+/** How many tag rows the Library's sidebar asks for. A block of places, not
+ *  a tag browser — the Sources pane shows five under one list, and a corpus
+ *  can carry far more without the sidebar becoming a second scroller. */
+const TAG_ROWS = 8;
+let previewsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 // True while navBack/navForward replays a history entry, so the location
 // subscriber doesn't record the replay as a fresh navigation.
 let navApplying = false;
@@ -362,6 +416,18 @@ let toastSeq = 0;
 
 type Getter = () => AppState;
 type Setter = (partial: Partial<AppState>) => void;
+
+/** Queue one trailing card-contents refresh, at most every
+ *  `PREVIEWS_DEBOUNCE_MS`. Skipped while a notebook is open: the Library's
+ *  cards aren't on screen, and Home re-asks on mount anyway. */
+function queueNotebookPreviews(get: Getter) {
+  if (previewsRefreshTimer !== null) return;
+  previewsRefreshTimer = setTimeout(() => {
+    previewsRefreshTimer = null;
+    if (get().currentId) return;
+    void get().refreshNotebookPreviews();
+  }, PREVIEWS_DEBOUNCE_MS);
+}
 
 /** Drive one queue item through processing → done/error and auto-clear successes. */
 async function runQueued(
@@ -486,6 +552,11 @@ export const useStore = create<AppState>((rawSet, get) => {
 
   return {
     notebooks: [],
+    notebookPreviews: {},
+    corpusTags: [],
+    // Persisted like homeScope: the sidebar's selection is a place you were,
+    // and relaunching into an unfiltered shelf loses it.
+    homeTagFilter: localStorage.getItem("homeTagFilter") || null,
     currentId: null,
     sources: [],
     selectedSourceIds: null,
@@ -552,11 +623,12 @@ export const useStore = create<AppState>((rawSet, get) => {
     })(),
     sourcesWidth: clampPanel(
       "sources",
-      Number(localStorage.getItem("sourcesWidth")) || 280,
+      // Spec widths live in docs/RFC-mac-chrome.md: Sources 260, Studio 300.
+      Number(localStorage.getItem("sourcesWidth")) || 260,
     ),
     studioWidth: clampPanel(
       "studio",
-      Number(localStorage.getItem("studioWidth")) || 320,
+      Number(localStorage.getItem("studioWidth")) || 300,
     ),
     onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
     settingsOpen: false,
@@ -602,6 +674,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     okfBindings: {},
     galleryScope: null,
     homeSection: "notebooks",
+    homeScope: loadHomeScope(),
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
     homeDrafts: loadHomeDrafts(),
@@ -657,6 +730,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             applyGlass(true, themeIsDark(theme), reading.glassStyle, false);
         });
       applyTheme(get().theme);
+      applyAccent(get().reading.accent);
+      applyGlassSidebars(get().reading.glassSidebars);
       // Daily epigraph: regenerate in the background if stale; shows next open.
       void refreshEpigraph(get().theme);
       // Every page load (incl. dev reloads) resets the macOS stoplights to
@@ -1188,6 +1263,15 @@ export const useStore = create<AppState>((rawSet, get) => {
           return;
         }
         const s = get();
+        // Every row of Home's sidebar has a View-menu item and a ⌘-digit
+        // (src/lib/homeNav.ts), and all three land in the same place. The
+        // group is greyed out off Home (`set_menu_context`), but an action
+        // that does arrive from inside a notebook goes Home first.
+        const place = homePlaceById(e.payload.id);
+        if (place) {
+          void goHomePlace(place);
+          return;
+        }
         if (e.payload.id === "menu-settings") s.openSettings();
         else if (e.payload.id === "menu-about") s.openSettings("about");
         else if (e.payload.id === "menu-search") s.togglePalette();
@@ -1231,6 +1315,13 @@ export const useStore = create<AppState>((rawSet, get) => {
           else s.pushToast("info", "Open a notebook first, then add sources");
         } else if (e.payload.id === "menu-find") {
           set({ findBump: get().findBump + 1 });
+        } else if (e.payload.id === "menu-new-chat") {
+          // A fresh conversation, from anywhere — so it leaves a notebook
+          // first, and the two writes are one history entry.
+          void navAtomic(async () => {
+            if (get().currentId) get().closeNotebook();
+            await get().openHomeThread(null);
+          });
         } else if (e.payload.id === "menu-toggle-sources") {
           toggleNotebookPanel("sources");
         } else if (e.payload.id === "menu-toggle-studio") {
@@ -1398,7 +1489,16 @@ export const useStore = create<AppState>((rawSet, get) => {
           // actually waiting on an answer.
           const wanted = tail as HomeSection;
           const section: HomeSection = (
-            ["notebooks", "registry", "chat", "timeline"] as const
+            [
+              "notebooks",
+              "registry",
+              "suggested",
+              "chat",
+              "timeline",
+              "staff",
+              "brief",
+              "reports",
+            ] as const
           ).includes(wanted)
             ? wanted
             : "notebooks";
@@ -1480,7 +1580,47 @@ export const useStore = create<AppState>((rawSet, get) => {
     refreshNotebooks: async () => {
       set({ notebooks: await api.listNotebooks(), notebooksFailed: false });
       void api.rebuildAppMenu();
+      // Every signal that moves the shelf already comes through here —
+      // mcp://changed, a notebook created or deleted, an import or a chat
+      // turn settling — so the card contents follow the list from one place
+      // rather than thirteen call sites. On a 5s leash, and never while a
+      // notebook is open (see `queueNotebookPreviews`).
+      queueNotebookPreviews(get);
     },
+
+    refreshNotebookPreviews: async () => {
+      // Both rollups, one leash. Asked for together and settled separately:
+      // a Tags block that failed to load must not cost the cards their
+      // contents, and neither is the reason the shelf renders.
+      const [previews, tags] = await Promise.allSettled([
+        api.notebookPreviews(),
+        api.corpusTags(TAG_ROWS),
+      ]);
+      if (previews.status === "fulfilled") {
+        set({
+          notebookPreviews: Object.fromEntries(
+            previews.value.map((p) => [p.notebookId, p]),
+          ),
+        });
+      }
+      // The cards keep whatever they already drew, and an unpreviewed
+      // notebook keeps its ruled lines. Contents are a hint, never the
+      // reason a shelf renders — a failed read must not blank it.
+      if (tags.status === "fulfilled") set({ corpusTags: tags.value });
+    },
+
+    setHomeTagFilter: (tag) => {
+      // Pressing the row that is already on clears it — one control, two
+      // directions, the way every other facet here works.
+      writeHomeTagFilter(get().homeTagFilter === tag ? null : tag);
+    },
+
+    goHomeShelf: (scope) => {
+      writeHomeScope(scope);
+      set({ homeSection: "notebooks", openCardId: null });
+    },
+
+    goHomeSection: (section) => set({ homeSection: section, openCardId: null }),
 
     selectNotebook: async (id) => {
       localStorage.setItem("lastNotebookId", id);
@@ -1946,6 +2086,8 @@ export const useStore = create<AppState>((rawSet, get) => {
           reading.glassStyle,
           get().theme !== "system",
         );
+      if ("accent" in patch) applyAccent(reading.accent);
+      if ("glassSidebars" in patch) applyGlassSidebars(reading.glassSidebars);
     },
 
     clearQueueItem: (id) =>
@@ -2115,10 +2257,19 @@ export const useStore = create<AppState>((rawSet, get) => {
       try {
         const cards = await api.listRegistry();
         const shown = cards.filter((c) => c.origin === "auto" && c.surfaced);
+        // The sidebar's Cards count rides on this same read, so it is right
+        // from the first paint and not only after the Cards page has been
+        // visited (the page's own effect refines the per-kind split).
+        const mine = cards.filter((c) => !c.origin).length;
+        const prior = get().registryCounts;
         set({
           registrySignal: {
             shown: shown.length,
             newest: shown.reduce((m, c) => Math.max(m, c.createdAt), 0),
+          },
+          registryCounts: {
+            total: mine,
+            kinds: prior?.total === mine ? prior.kinds : [],
           },
         });
       } catch {
@@ -3745,11 +3896,15 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       });
       if (st.reader.open) st.closeReader();
     }
-    // Home's tabs are places too — a notebook has center modes, Home has
-    // sections, and back should return you to the one you were reading.
-    // A chat entry names its conversation, so back lands in that thread.
+    // Home's sections are places too — a notebook has center modes, Home
+    // has sections, and back should return you to the one you were reading.
+    // A chat entry names its conversation, so back lands in that thread; a
+    // shelf entry names its scope and its tag, so back lands on the shelf
+    // as it was narrowed and not on the whole library.
     if (target.nb === null) {
       const section = target.section ?? "notebooks";
+      writeHomeScope(target.scope ?? "all");
+      writeHomeTagFilter(target.tag ?? null);
       if (section === "chat")
         await useStore.getState().openHomeThread(target.thread ?? null);
       else if (section === "registry")
@@ -3759,6 +3914,32 @@ async function applyNav(delta: 1 | -1): Promise<void> {
   } finally {
     navApplying = false;
   }
+}
+
+/** Go to one of Home's places — the sidebar's rows, the View menu's Home
+ *  group, and ⌘1–⌘9 all land here, so the three can never drift.
+ *
+ *  A place on Home is reachable from inside a notebook (the menu items are
+ *  live wherever `set_menu_context` says Home is, and the palette jumps
+ *  here too), so leaving the notebook is part of the move — and the pair is
+ *  ONE history entry, the way the toolbar's own way out is. */
+export async function goHomePlace(place: HomePlace): Promise<void> {
+  await navAtomic(async () => {
+    const s = useStore.getState();
+    if (s.currentId) s.closeNotebook();
+    if (place.clearTag) writeHomeTagFilter(null);
+    if (place.section === "chat") {
+      // Whatever conversation was last on screen, minting one only if there
+      // has never been one — what the sidebar's Chats row does.
+      const st = useStore.getState();
+      useStore.setState({ openCardId: null });
+      await st.openHomeThread(st.homeChat.threadId);
+    } else if (place.section === "notebooks") {
+      useStore.getState().goHomeShelf(place.scope ?? "all");
+    } else {
+      useStore.getState().goHomeSection(place.section);
+    }
+  });
 }
 
 /** A notebook's five panels, in rail order — which is the View menu's order
@@ -3824,7 +4005,12 @@ useStore.subscribe((s, prev) => {
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
     s.homeChat.threadId === prev.homeChat.threadId &&
-    s.openCardId === prev.openCardId
+    s.openCardId === prev.openCardId &&
+    // The shelf's scope and tag row are part of where you are, not how it
+    // is drawn: grid-vs-table is a preference and stays out of the stack,
+    // but Archived and Shared are somewhere else entirely.
+    s.homeScope === prev.homeScope &&
+    s.homeTagFilter === prev.homeTagFilter
   )
     return;
   recordNav(s);
@@ -3848,24 +4034,26 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   const section = s.currentId ? undefined : s.homeSection;
   const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
   const card = section === "registry" ? (s.openCardId ?? null) : undefined;
+  // The shelf's scope and tag belong to the shelf: carried on a Notebooks
+  // entry the way `thread` is carried on a chat one, and absent everywhere
+  // else so that two visits to the Registry don't differ by a filter that
+  // wasn't on screen either time.
+  const scope = section === "notebooks" ? s.homeScope : undefined;
+  const tag = section === "notebooks" ? (s.homeTagFilter ?? null) : undefined;
+  const entry: NavEntry = {
+    nb: s.currentId,
+    mode,
+    doc,
+    section,
+    thread,
+    card,
+    scope,
+    tag,
+  };
   const { stack, index } = s.nav;
-  const cur = stack[index];
-  if (
-    cur &&
-    cur.nb === s.currentId &&
-    cur.mode === mode &&
-    cur.doc?.type === doc?.type &&
-    cur.doc?.id === doc?.id &&
-    cur.section === section &&
-    cur.thread === thread &&
-    cur.card === card
-  )
-    return;
+  if (sameNavEntry(stack[index], entry)) return;
   // A fresh navigation discards forward entries, browser-style.
-  const next: NavEntry[] = [
-    ...stack.slice(0, index + 1),
-    { nb: s.currentId, mode, doc, section, thread, card },
-  ];
+  const next: NavEntry[] = [...stack.slice(0, index + 1), entry];
   if (next.length > 100) next.splice(0, next.length - 100);
   useStore.setState({ nav: { stack: next, index: next.length - 1 } });
 }

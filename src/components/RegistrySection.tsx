@@ -9,6 +9,7 @@
    files without showing its reason is one you stop trusting on the first
    mistake. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/lib/api";
 import { restoreRegistryCards } from "@/lib/registryRestore";
 import { useStore } from "@/lib/store";
@@ -20,26 +21,15 @@ import type {
   RegistryCard,
   Source,
 } from "@/lib/types";
-import {
-  Badge,
-  Button,
-  CardAction,
-  EmptyState,
-  Input,
-  Modal,
-  RowMenu,
-  type RowMenuItem,
-  useMarquee,
-  useConfirm,
-} from "./ui";
+import { Badge, Button, CardAction, EmptyState, Input, Modal, RowMenu, type RowMenuItem, SortMenu, useMarquee, useConfirm } from "./ui";
 import { FilterBar, rankByCount } from "./FilterBar";
 import {
   HomeTable,
-  HomeViewControls,
+  HomeTableHead,
   matchesHomeQuery,
   useTableSort,
 } from "./HomeViewControls";
-import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
+import type { TableColumn, TableSort } from "./HomeViewControls";
 import { cn, relativeTime } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -67,7 +57,7 @@ async function deleteCardsUndoable(cards: RegistryCard[], after: () => void) {
   const label =
     cards.length === 1
       ? `Deleted “${cards[0].name}” — click to undo`
-      : `Deleted ${cards.length} cards — click to undo`;
+      : `Deleted ${cards.length} entries — click to undo`;
   useStore.getState().pushToast("success", label, () =>
     void (async () => {
       try {
@@ -173,8 +163,12 @@ const touched = (c: RegistryCard) => Math.max(c.updatedAt, c.createdAt);
     entry looks like a sort without being one.
     Fixed layout (see `HomeTable`): the short columns take set widths, the
     two lists take a share, and Name takes what is left and truncates. */
+/* Name and menu carry pl-7/pr-7 (28px, matching the sheet's own px-7): the
+   list mode rows bleed edge to edge (RegistrySection's -mx-7 wrapper), so
+   the header's text needs its own inset to keep lining up with the body
+   cells' matching pl-7/pr-7 and with the page heading above. */
 const CARD_COLUMNS = [
-  { key: "name", label: "Name", sort: "asc" },
+  { key: "name", label: "Name", className: "pl-7", sort: "asc" },
   { key: "kind", label: "Kind", className: "w-24", sort: "asc" },
   {
     key: "docs",
@@ -185,7 +179,7 @@ const CARD_COLUMNS = [
   { key: "nb", label: "Notebooks", className: "w-[20%]" },
   { key: "id", label: "Identifiers", className: "w-[13%]" },
   { key: "updated", label: "Updated", className: "w-24", sort: "desc" },
-  { key: "menu", label: "", className: "w-8" },
+  { key: "menu", label: "", className: "w-8 pr-7" },
 ] as const satisfies TableColumn[];
 
 /** Notebook names shown in a row before the cell folds the rest into a
@@ -250,10 +244,30 @@ function receipt(a: CardAttachment) {
   return `matched ${a.matched}`;
 }
 
-export function RegistrySection() {
+/** The Registry has two surfaces, and the sidebar has always had two rows
+ *  for them. `cards` is the cast — the accepted cards, with the sort and
+ *  filters that belong to a collection. `suggested` is the queue: proposals
+ *  waiting for a yes or a no, and nothing else on the page, because a
+ *  ruling is the only thing to do there. */
+export type RegistryView = "cards" | "suggested";
+
+export function RegistrySection({
+  view = "cards",
+  actionsPortal,
+}: {
+  view?: RegistryView;
+  /** Where the cards view's own sort/suggest/orphan-cleanup controls render:
+   *  a node HomeView holds inside the heading row's trailing slot, beside
+   *  "New card" — the same slot Notebooks' Add source/Import occupy. Portaled
+   *  rather than drawn here so the section has one toolbar, not two
+   *  (DESIGN.md §9 "Home is a library"). Absent on the Suggested view, which
+   *  has no controls of its own. */
+  actionsPortal?: HTMLDivElement | null;
+}) {
   const registryBump = useStore((s) => s.registryBump);
   const openCardId = useStore((s) => s.openCardId);
-  const view = useStore((s) => s.homeView);
+  /** Grid or table — the toolbar's shape switch, not the section's view. */
+  const shape = useStore((s) => s.homeView);
   const query = useStore((s) => s.homeQuery);
   const [cards, setCards] = useState<RegistryCard[]>([]);
   const [kind, setKind] = useState<string>("all");
@@ -369,10 +383,10 @@ export function RegistrySection() {
       }
       return true;
     });
-    return view === "table"
+    return shape === "table"
       ? sortCardRows(filtered, tableSort)
       : sortCards(filtered, sort);
-  }, [mine, kind, notebook, nbTitle, query, sort, tableSort, view]);
+  }, [mine, kind, notebook, nbTitle, query, sort, tableSort, shape]);
 
   // ---- Index selection (docs/RFC-multi-select.md) ----------------------
   const pick = usePickList("cards", shown.map((c) => c.id));
@@ -398,7 +412,7 @@ export function RegistrySection() {
    *  checked against. */
   const cardBatchItems = (ids: string[]): RowMenuItem[] => [
     {
-      label: `Delete ${ids.length} Cards…`,
+      label: `Delete ${ids.length} Entries…`,
       symbol: "trash",
       icon: <Trash2 className="h-3.5 w-3.5" />,
       danger: true,
@@ -422,9 +436,9 @@ export function RegistrySection() {
   );
   const cleanUpOrphans = async () => {
     const ok = await confirm({
-      title: `Remove ${orphans.length} orphaned card${orphans.length === 1 ? "" : "s"}?`,
+      title: `Remove ${orphans.length} orphaned entr${orphans.length === 1 ? "y" : "ies"}?`,
       message:
-        "These cards have no documents left, or none outside archived notebooks — " +
+        "These entries have no documents left, or none outside archived notebooks — " +
         "rematching found nothing. Identifiers and facts on them go too.",
       // Named, not just counted: "4 orphaned cards" is impossible to check
       // against, and this is the one screen where the user can still say no.
@@ -452,7 +466,7 @@ export function RegistrySection() {
           out.alreadyRunning
             ? "A suggest pass is already running"
             : out.created.length > 0
-              ? `Suggested ${out.created.length} card${out.created.length === 1 ? "" : "s"}`
+              ? `Suggested ${out.created.length} entr${out.created.length === 1 ? "y" : "ies"}`
               : out.queueFull
                 ? "The queue is full — rule on the suggestions shown and more will follow"
                 : "Nothing new to suggest",
@@ -464,6 +478,46 @@ export function RegistrySection() {
       setSuggesting(false);
     }
   };
+
+  // The queue on its own. No sort, no filters, no grid: every control on
+  // the cards page is for navigating a collection, and a proposal is not
+  // part of the collection until it is ruled on. A suggestion has no page
+  // of its own either, so the detail branch below is the cards view's.
+  if (view === "suggested") {
+    return (
+      <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
+        {/* The queue reads better narrow — a column of proposals, not a
+            grid — so it keeps its own width; only the side padding matches
+            the shelf's (px-7) for consistency with the rest of Home. */}
+        <div className="mx-auto w-full max-w-[960px] px-7 pb-10">
+          {suggested.length > 0 ? (
+            <SuggestionStrip
+              bare
+              cards={suggested}
+              waiting={waiting}
+              onChanged={load}
+            />
+          ) : (
+            <EmptyState
+              icon={<Sparkles className="h-5 w-5" />}
+              title="Nothing suggested"
+              hint="Alchemy proposes entries as it reads your notebooks. Ask for a pass now, or let the night shift do it."
+            >
+              <Button
+                variant="primary"
+                className="mt-3"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+              >
+                <Sparkles className="h-4 w-4" />
+                Suggest
+              </Button>
+            </EmptyState>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const open = cards.find((c) => c.id === openCardId) ?? null;
   if (openCardId && open) {
@@ -489,6 +543,7 @@ export function RegistrySection() {
     );
   }
 
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* relative z-10, like the notebook shelf's scroller: Home paints a
@@ -499,132 +554,143 @@ export function RegistrySection() {
           border — which is why the toggle alone went invisible, and only
           when a collapsed sidebar shortened the header enough to slide the
           row up into the banner. */}
+      {/* Kind groups and notebook chips sit above the scroller, on the
+          sheet, with the list's column headers under them in list mode:
+          nothing scrolls beneath either, so neither is sticky nor carries
+          a background. The head pads the scroller's reserved scrollbar
+          gutter so the two grids share one width. */}
+      <div className="relative z-10 shrink-0 border-b border-border px-7 py-2">
+        <FilterBar
+          bare
+          groups={kinds}
+          group={kinds.some((k) => k.value === kind) ? kind : "all"}
+          onGroup={setKind}
+          chips={nbChips}
+          chip={
+            notebook !== null && nbChips.includes(notebook) ? notebook : null
+          }
+          onChip={setNotebook}
+          chipAllLabel="All notebooks"
+          chipPrefix=""
+          />
+      </div>
+      {shape === "table" && loaded && !loadError && mine.length > 0 && (
+        <div className="relative z-10 shrink-0 pr-[10px]">
+          <HomeTableHead
+            columns={[...CARD_COLUMNS]}
+            sort={{ ...tableSort, onSort: toggleTableSort }}
+          />
+        </div>
+      )}
       <div
         ref={indexRef}
         onPointerDown={indexMarqueeDown}
-        className="relative z-10 min-h-0 flex-1 select-none overflow-y-auto"
+        className="relative z-10 flex min-h-0 flex-1 select-none flex-col gap-[18px] overflow-y-auto px-7 pb-[22px] [scrollbar-gutter:stable]"
       >
-        <div className="mx-auto w-full max-w-[960px] px-6 pb-10">
-          <SuggestionStrip cards={suggested} waiting={waiting} onChanged={load} />
-          {/* Unconditional, like the notebook shelf's: gating this on
-              "are there confirmed cards" made the whole row — filter AND
-              view toggle — vanish whenever the cast was empty or held only
-              suggestions, which reads as the control disappearing. */}
-          <HomeViewControls
-            placeholder="Filter cards by name or identifier…"
-            sort={
-              view === "table"
-                ? undefined
-                : { value: sort, options: SORTS, onChange: changeSort }
-            }
-            trailing={
-              <>
-                {orphans.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void cleanUpOrphans()}
-                    title={ORPHAN_HINT}
-                  >
-                    Clean up orphans ({orphans.length})
-                  </Button>
-                )}
+        {/* The cards view's own controls — sort, and the suggest/orphan verbs
+            — report into the heading row's trailing slot next to "New card"
+            (`actionsPortal`, set by HomeView) instead of drawing a second
+            toolbar in this column. Suggestions belong to their own queue
+            page now: nothing suggestion-shaped renders here any more. */}
+        {actionsPortal &&
+          createPortal(
+            <>
+              {shape !== "table" && (
+                <SortMenu
+                  label="Sort order"
+                  value={sort}
+                  options={SORTS}
+                  onChange={changeSort}
+                  className="shrink-0"
+                />
+              )}
+              {orphans.length > 0 && (
                 <Button
                   size="sm"
-                  variant="secondary"
-                  onClick={() => void suggestNow()}
-                  loading={suggesting}
-                  title="Read your notebooks and suggest cards worth tracking"
+                  variant="ghost"
+                  onClick={() => void cleanUpOrphans()}
+                  title={ORPHAN_HINT}
                 >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Suggest
+                  Clean up orphans ({orphans.length})
                 </Button>
-              </>
-            }
-          />
-          {/* Kind groups and notebook chips sit inside the content column,
-              under the controls — full-bleed they drew a band across the
-              pane with dead clickable space beside them. */}
-          <FilterBar
-            bare
-            groups={kinds}
-            group={kinds.some((k) => k.value === kind) ? kind : "all"}
-            onGroup={setKind}
-            chips={nbChips}
-            chip={
-              notebook !== null && nbChips.includes(notebook) ? notebook : null
-            }
-            onChip={setNotebook}
-            chipAllLabel="All notebooks"
-            chipPrefix=""
-          />
-          {loaded && loadError ? (
-            <EmptyState
-              icon={<Package className="h-5 w-5" />}
-              title="The registry didn't load"
-              hint={loadError}
-            >
-              <Button variant="primary" className="mt-3" onClick={() => void load()}>
-                Try again
-              </Button>
-            </EmptyState>
-          ) : loaded && mine.length === 0 ? (
-            <EmptyState
-              icon={<Package className="h-5 w-5" />}
-              title="No cards yet"
-              hint="A card is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
-            >
+              )}
               <Button
-                variant="primary"
-                className="mt-3"
-                onClick={() => setCreating(true)}
+                size="sm"
+                variant="secondary"
+                onClick={() => void suggestNow()}
+                loading={suggesting}
+                title="Read your notebooks and suggest entries worth tracking"
               >
-                <Plus className="h-4 w-4" />
-                New card
+                <Sparkles className="h-3.5 w-3.5" />
+                Suggest
               </Button>
-            </EmptyState>
-          ) : view === "table" ? (
-            <CardTable
-              cards={shown}
-              nbTitle={nbTitle}
-              sort={tableSort}
-              onSort={toggleTableSort}
-              onChanged={load}
-              pickedIds={pick.pickedIds}
-              onRowClick={(e, id) => {
-                if (justEnded()) return;
-                if (!pick.handleClick(e, id))
-                  useStore.setState({ openCardId: id });
-              }}
-              onContextItems={(id) => () =>
-                pick.contextItems(id, cardBatchItems)}
-            />
-          ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-              {shown.map((c) => (
-                <CardTile
-                  key={c.id}
-                  card={c}
-                  onOpen={() => useStore.setState({ openCardId: c.id })}
-                  onChanged={load}
-                  picked={pick.pickedIds}
-                  onActivate={(e) => {
-                    if (justEnded()) return true;
-                    return pick.handleClick(e, c.id) || undefined;
-                  }}
-                  onContextItems={() => pick.contextItems(c.id, cardBatchItems)}
-                />
-              ))}
-            </div>
+            </>,
+            actionsPortal,
           )}
-          {shown.length === 0 && mine.length > 0 && (
-            <EmptyState
-              compact
-              title={`No card matches \u201c${query.trim()}\u201d`}
-              hint="The filter looks at names and identifiers."
-            />
-          )}
-        </div>
+        {loaded && loadError ? (
+          <EmptyState
+            icon={<Package className="h-5 w-5" />}
+            title="The registry didn't load"
+            hint={loadError}
+          >
+            <Button variant="primary" className="mt-3" onClick={() => void load()}>
+              Try again
+            </Button>
+          </EmptyState>
+        ) : loaded && mine.length === 0 ? (
+          <EmptyState
+            icon={<Package className="h-5 w-5" />}
+            title="No entries yet"
+            hint="An entry is a thing your documents are about — a vehicle, a policy, a project. Give it an identifier like a VIN or policy number and matching documents file themselves."
+          >
+            <Button
+              variant="primary"
+              className="mt-3"
+              onClick={() => setCreating(true)}
+            >
+              <Plus className="h-4 w-4" />
+              New entry
+            </Button>
+          </EmptyState>
+        ) : shape === "table" ? (
+          <CardTable
+            cards={shown}
+            nbTitle={nbTitle}
+            onChanged={load}
+            pickedIds={pick.pickedIds}
+            onRowClick={(e, id) => {
+              if (justEnded()) return;
+              if (!pick.handleClick(e, id))
+                useStore.setState({ openCardId: id });
+            }}
+            onContextItems={(id) => () =>
+              pick.contextItems(id, cardBatchItems)}
+          />
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+            {shown.map((c) => (
+              <CardTile
+                key={c.id}
+                card={c}
+                onOpen={() => useStore.setState({ openCardId: c.id })}
+                onChanged={load}
+                picked={pick.pickedIds}
+                onActivate={(e) => {
+                  if (justEnded()) return true;
+                  return pick.handleClick(e, c.id) || undefined;
+                }}
+                onContextItems={() => pick.contextItems(c.id, cardBatchItems)}
+              />
+            ))}
+          </div>
+        )}
+        {shown.length === 0 && mine.length > 0 && (
+          <EmptyState
+            compact
+            title={`No entry matches \u201c${query.trim()}\u201d`}
+            hint="The filter looks at names and identifiers."
+          />
+        )}
       </div>
       {indexMarquee}
       <NewCardModal
@@ -849,7 +915,7 @@ export function AttachToCardModal({
     <Modal
       open={!!sourceId}
       onClose={onClose}
-      title="File under a card"
+      title="File under an entry"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
@@ -860,12 +926,12 @@ export function AttachToCardModal({
     >
       <div className="flex flex-col gap-3">
         <p className="text-caption text-muted-foreground">
-          Groups &ldquo;{sourceTitle}&rdquo; under a card. Filing changes
+          Groups &ldquo;{sourceTitle}&rdquo; under an entry. Filing changes
           nothing in the document.
         </p>
         <Input
           autoFocus
-          placeholder="Find or name a card…"
+          placeholder="Find or name an entry…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -890,14 +956,14 @@ export function AttachToCardModal({
             >
               <Plus className="h-4 w-4 text-muted-foreground" />
               <span className="text-body">
-                New asset card &ldquo;{q.trim()}&rdquo;
+                New asset entry &ldquo;{q.trim()}&rdquo;
               </span>
             </button>
           )}
           {shown.length === 0 && !q.trim() && (
             <EmptyState
               compact
-              title="No cards yet"
+              title="No entries yet"
               hint="Type a name above to create one."
             />
           )}
@@ -916,8 +982,6 @@ function CardTable({
   pickedIds,
   onRowClick,
   onContextItems,
-  sort,
-  onSort,
 }: {
   cards: RegistryCard[];
   nbTitle: (id: string) => string;
@@ -926,16 +990,15 @@ function CardTable({
   pickedIds: Set<string>;
   onRowClick: (e: React.MouseEvent, id: string) => void;
   onContextItems: (id: string) => () => RowMenuItem[] | null;
-  /** The rows arrive already ordered; the section sorts them so the
-   *  selection's range order matches what's drawn. */
-  sort: TableSort;
-  onSort: (key: string, natural: SortDir) => void;
 }) {
   const archivedIds = useArchivedIds();
   return (
-    <>
+    // -mx-7 bleeds the rows edge to edge of the sheet, Finder's list view
+    // rather than a card grid's own side margins (CARD_COLUMNS' pl-7/pr-7
+    // on the outer columns keep the text lined up with the heading above).
+    <div className="-mx-7">
       {/* No "New card" button here — the header's covers both views. */}
-      <HomeTable columns={[...CARD_COLUMNS]} sort={{ ...sort, onSort }} fixed>
+      <HomeTable columns={[...CARD_COLUMNS]}>
         {cards.map((c) => {
           const notebooks = [
             ...new Set(
@@ -960,11 +1023,11 @@ function CardTable({
                 }
               }}
               className={cn(
-                "group cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
+                "group h-10 cursor-pointer border-b border-border transition-colors last:border-b-0 hover:bg-surface-2",
                 pickedIds.has(c.id) && "bg-primary/10 hover:bg-primary/15",
               )}
             >
-              <td className="px-3 py-2">
+              <td className="py-2 pl-7 pr-3">
                 <span className="flex items-center gap-2">
                   <span className="shrink-0 text-muted-foreground">
                     {kindIcon(c.kind)}
@@ -1023,7 +1086,7 @@ function CardTable({
               <td className="truncate px-3 py-2 text-caption text-muted-foreground">
                 {relativeTime(touched(c))}
               </td>
-              <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              <td className="py-2 pl-2 pr-7" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
                   contextItems={onContextItems(c.id)}
                   items={[
@@ -1033,7 +1096,7 @@ function CardTable({
                     },
                     { label: "", separator: true, onClick: () => {} },
                     {
-                      label: "Delete Card",
+                      label: "Delete Entry",
                       symbol: "trash",
                       danger: true,
                       onClick: () => void deleteCardsUndoable([c], onChanged),
@@ -1045,7 +1108,7 @@ function CardTable({
           );
         })}
       </HomeTable>
-    </>
+    </div>
   );
 }
 
@@ -1058,12 +1121,17 @@ function SuggestionStrip({
   cards,
   waiting,
   onChanged,
+  bare,
 }: {
   /** The surfaced suggestions — the backend's pick of the likeliest keeps. */
   cards: RegistryCard[];
   /** How many more wait unseen for a slot. */
   waiting: number;
   onChanged: () => void;
+  /** On its own page the section heading already says "Suggested"; the caps
+   *  label and the margin under it are for the cards page, where the strip
+   *  sits above a grid and has to name itself. */
+  bare?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   if (cards.length === 0) return null;
@@ -1122,11 +1190,13 @@ function SuggestionStrip({
   };
 
   return (
-    <section className="mb-6">
+    <section className={bare ? undefined : "mb-6"}>
       <div className="flex items-center gap-2">
-        <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
-          Suggested
-        </h2>
+        {!bare && (
+          <h2 className="text-badge font-medium uppercase tracking-wider text-subtle-foreground">
+            Suggested
+          </h2>
+        )}
         {/* A sweep verdict only earns its place once ruling one-by-one is a
             chore; a single suggestion keeps the single pair of buttons. */}
         {cards.length > 1 && (
@@ -1262,7 +1332,7 @@ function CardTile({
       )}
     >
       <CardAction
-        label={`Open card ${card.name}`}
+        label={`Open entry ${card.name}`}
         onClick={(e) => onActivate?.(e) ?? onOpen()}
       />
       <div className="pointer-events-none relative z-10 mb-auto flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2 text-muted-foreground">
@@ -1303,7 +1373,7 @@ function CardTile({
             { label: "Open", onClick: onOpen },
             { label: "", separator: true, onClick: () => {} },
             {
-              label: "Delete Card",
+              label: "Delete Entry",
               symbol: "trash",
               danger: true,
               onClick: () => void deleteCardsUndoable([card], onChanged),
@@ -1352,7 +1422,7 @@ function NewCardModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="New card"
+      title="New entry"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
@@ -1637,10 +1707,10 @@ function CardDetail({
         {/* Sticky: flush against the scroller's top edge the button was
             clipped by the header above it, and scrolling a long document
             list used to carry the only way out off-screen. */}
-        <div className="sticky top-0 z-10 -mx-6 mb-3 bg-background/95 px-6 pb-3 pt-4 backdrop-blur">
+        <div className="sheet-sticky sticky top-0 z-10 -mx-6 mb-3 px-6 pb-3 pt-4">
           <Button variant="secondary" size="sm" onClick={onBack}>
             <ArrowLeft className="h-3.5 w-3.5" />
-            All cards
+            All entries
           </Button>
         </div>
 
@@ -1680,7 +1750,7 @@ function CardDetail({
               Waiting for you
             </h2>
             <p className="mt-1 text-caption text-muted-foreground">
-              These matched this card&rsquo;s name, which is a guess, not proof.
+              These matched this entry&rsquo;s name, which is a guess, not proof.
               Confirming only files the document here. Filing changes nothing
               in the document.
             </p>

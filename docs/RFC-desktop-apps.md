@@ -154,6 +154,23 @@ is green. Choosing any model door later clears `answersIn`. The open
 question below (a key prompt in the empty chat) was answered "no": the
 card names Settings → Models in one sentence and leaves it there.
 
+**Re-arranged 2026-09-23 (Apple AF redesign, PR #53).** First run is now a
+macOS Setup Assistant: a 300px brand pane on the left, and on the right one
+question at a time over three steps — Answers, Mac apps, Agents — each a
+grouped inset list. The desktop-app door is no longer a tile in a grid; it
+is the second radio row of step one, "Claude Desktop, ChatGPT or Copilot",
+whose right-hand pill names the app that was found. Picking it still calls
+the same `answersIn` write, and when more than one desktop app is
+installed a chip row under the list chooses between them. The same
+re-arrangement folds in the subscription CLIs (row three), Apple
+Intelligence (row one, its pill driven by `provider_readiness_one` on the
+`fm` entry so it can say "Ready" before it is chosen), and Ollama plus the
+gateway (row four, a `Segmented` picking between them). Every model check
+the old screen ran survives underneath the list, unchanged. Step two is
+`MacConnect` in its new `layout="rows"` form — one row per Apple app, same
+prompt-free readings. Step three is the MCP connector list from
+Settings → Agents, which first run had not offered before.
+
 ### As proposed
 
 The first-run stage gains a fourth kind of door under "Already on this Mac":

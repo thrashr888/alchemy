@@ -1,6 +1,7 @@
 import { visibleAnimation } from "@/lib/visibleAnimation";
 import { useEffect, useRef, useState } from "react";
 import { THEMES, resolveThemeId, type ShaderVariant } from "@/lib/themes";
+import { useStore } from "@/lib/store";
 
 /** Live prefers-reduced-motion. The CSS guard can't reach a WebGL loop, so
  *  the shader components subscribe to the media query themselves — with a
@@ -71,6 +72,9 @@ export function DitherBackground({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reducedMotion = useReducedMotion();
+  // Appearance -> Backdrop. The OS setting is an override, not a default:
+  // prefers-reduced-motion freezes the field whatever the pref says.
+  const backdropMotion = useStore((state) => state.reading.backdropMotion);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -128,7 +132,7 @@ export function DitherBackground({
       gl.uniform2f(uRes, canvas.width, canvas.height);
     };
     const startT = performance.now();
-    const isStatic = reducedMotion || variant === "grain";
+    const isStatic = reducedMotion || !backdropMotion || variant === "grain";
     const stop = visibleAnimation(canvas, resize, (now) => {
       gl.uniform1f(uTime, isStatic ? 0 : (now - startT) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -141,7 +145,7 @@ export function DitherBackground({
       gl.deleteBuffer(buf);
       gl.deleteProgram(program);
     };
-  }, [themeKey, intensity, density, reducedMotion]);
+  }, [themeKey, intensity, density, reducedMotion, backdropMotion]);
 
   return (
     <canvas

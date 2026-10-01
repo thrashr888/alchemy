@@ -5544,14 +5544,76 @@ pub async fn write_bound(state: &AppState, notebook_id: &str) -> Result<OkfWrite
 
 // ---- Surfaces (§5.5) --------------------------------------------------------
 
+/// A binding as the front end reads it: the machine-local record, plus who
+/// else has written into this notebook.
+///
+/// `peers` is derived, never stored, which is why it is a view and not a
+/// field on `OkfBinding`. That struct is both the IPC payload and the
+/// on-disk record (`okf-bindings.json`), and its derived `PartialEq` is the
+/// optimistic-concurrency check in `replace_binding_checked` — a computed
+/// field there would be persisted on every transaction and would make two
+/// equal records compare unequal. Flattened, so the front end sees the
+/// binding's own keys exactly as before with `peers` beside them.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OkfBindingView {
+    #[serde(flatten)]
+    pub binding: OkfBinding,
+    /// The OTHER Macs that have written material into this notebook, by the
+    /// name `device::this_device()` gives them ("Anne's MacBook (C02ABC)").
+    /// Empty for a folder nobody else has written to yet, and for every
+    /// binding that is not shared.
+    pub peers: Vec<String>,
+}
+
+/// Who else has written into this notebook, cheapest first.
+///
+/// The answer is already on disk beside the bundle: `okf_devices/<id>.json`
+/// is the per-source provenance sidecar the import path writes, and it
+/// records foreign devices only — this Mac's own name is never a row
+/// (`device::note_origin_device_checked`), so its values ARE the peer set.
+/// One small `read_to_string`, no Lance scan, no walk of the bundle.
+///
+/// Only shared bindings pay for it: between two Macs of one person the
+/// other Mac is not a peer to name on a card, and the Home shelf asks for
+/// every binding at once.
+///
+/// Nothing on disk records an owner or a `shared_by` — macOS marks a shared
+/// item through Foundation resource keys, which is why ownership detection
+/// was left out (docs/RFC-shared-notebook.md §1) — so a device name is the
+/// truest thing there is to say.
+fn binding_peers(data_dir: &Path, notebook_id: &str, binding: &OkfBinding) -> Vec<String> {
+    if !binding.shared {
+        return Vec::new();
+    }
+    let this = crate::device::this_device();
+    let mut peers: Vec<String> = crate::device::load_origin_devices(data_dir, notebook_id)
+        .into_values()
+        .filter(|d| !d.trim().is_empty() && !crate::device::same_device(d, this))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    // One card says "Shared with Anne's MacBook"; two say "2 devices". The
+    // order only matters for the first, but a set that reorders between
+    // calls would make the card flicker between names.
+    peers.sort();
+    peers
+}
+
 /// Where this notebook keeps itself on disk, if anywhere. The header chip and
 /// the ⋯ menu both ask this.
 #[tauri::command]
 pub async fn notebook_okf_binding(
     state: State<'_, AppState>,
     notebook_id: String,
-) -> Result<Option<OkfBinding>, String> {
-    binding_for_checked(&app_data_dir(&state), &notebook_id)
+) -> Result<Option<OkfBindingView>, String> {
+    let data_dir = app_data_dir(&state);
+    Ok(
+        binding_for_checked(&data_dir, &notebook_id)?.map(|binding| OkfBindingView {
+            peers: binding_peers(&data_dir, &notebook_id, &binding),
+            binding,
+        }),
+    )
 }
 
 /// Every binding, keyed by notebook id — one read of the sidecar for the
@@ -5560,8 +5622,15 @@ pub async fn notebook_okf_binding(
 #[tauri::command]
 pub async fn notebook_okf_bindings(
     state: State<'_, AppState>,
-) -> Result<HashMap<String, OkfBinding>, String> {
-    load_bindings_checked(&app_data_dir(&state))
+) -> Result<HashMap<String, OkfBindingView>, String> {
+    let data_dir = app_data_dir(&state);
+    Ok(load_bindings_checked(&data_dir)?
+        .into_iter()
+        .map(|(id, binding)| {
+            let peers = binding_peers(&data_dir, &id, &binding);
+            (id, OkfBindingView { binding, peers })
+        })
+        .collect())
 }
 
 /// Keep a notebook on disk as an OKF bundle at `path`.

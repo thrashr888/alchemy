@@ -740,7 +740,7 @@ export function TimelineSection() {
               <svg
                 width={paneW}
                 height={AXIS_H}
-                className="sticky top-0 z-10 block bg-background"
+                className="sheet-sticky sticky top-0 z-10 block"
                 aria-hidden
               >
                 <line

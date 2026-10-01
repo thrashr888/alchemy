@@ -6,7 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { navAtomic, useStore } from "@/lib/store";
+import { goHomePlace, navAtomic, useStore } from "@/lib/store";
+import { homePlaceById } from "@/lib/homeNav";
 import { api } from "@/lib/api";
 import { openMetaCitation } from "@/lib/citations";
 import { citedNotebooks, runForThread } from "@/lib/homeChatRun";
@@ -193,6 +194,14 @@ export function CommandPalette() {
         if (s.currentId) s.closeNotebook();
         await go();
       });
+    };
+    /** A jump to one of Home's places, by the menu id that names it — the
+     *  same table the View menu and ⌘1–⌘9 read (src/lib/homeNav.ts), so all
+     *  three ways in land in exactly the same spot. */
+    const goPlace = (id: string) => {
+      close();
+      const place = homePlaceById(id);
+      if (place) void goHomePlace(place);
     };
     const list: Command[] = [];
 
@@ -419,19 +428,15 @@ export function CommandPalette() {
         icon: <MessagesSquare className="h-3.5 w-3.5" />,
         // The conversation last on screen, minting one only if there has
         // never been one — what Home's own Chat tab does.
-        run: () =>
-          goHome(() => state().openHomeThread(state().homeChat.threadId)),
+        run: () => goPlace("menu-home-chats"),
       },
       {
         id: "home-registry",
         group: "Navigate",
         label: "Go to registry",
-        keywords: "cards people places things entities identifiers",
+        keywords: "entries cards people places things entities identifiers",
         icon: <Package className="h-3.5 w-3.5" />,
-        run: () =>
-          goHome(() =>
-            useStore.setState({ homeSection: "registry", openCardId: null }),
-          ),
+        run: () => goPlace("menu-home-cards"),
       },
       // Only from Home: inside a notebook, "Back to all notebooks" above is
       // already this row, and two ways to say it in one list is one too many.
@@ -444,13 +449,10 @@ export function CommandPalette() {
               label: "Go to notebooks",
               keywords: "shelf library home grid all",
               icon: <Library className="h-3.5 w-3.5" />,
-              run: () =>
-                goHome(() =>
-                  useStore.setState({
-                    homeSection: "notebooks",
-                    openCardId: null,
-                  }),
-                ),
+              // The whole shelf: scope back to all, tag filter off — the
+              // same as ⌘1, and what "go to notebooks" has to mean when the
+              // shelf is currently narrowed to Archived.
+              run: () => goPlace("menu-home-notebooks"),
             } satisfies Command,
           ]),
       {

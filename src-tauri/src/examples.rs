@@ -69,6 +69,33 @@ pub(crate) fn is_starter_title(title: &str) -> bool {
     STARTER_TITLES.contains(&title)
 }
 
+/// How many sources a starter carries the moment it is seeded. Curated
+/// Links is seeded empty and then given its one git source, so its seed
+/// is that single row; the ingest that follows already grows it past
+/// this, which is the intended reading — the links repo is the user's
+/// own project, not a museum piece.
+pub(crate) fn starter_seed_count(title: &str) -> Option<usize> {
+    match title {
+        INTRO_TITLE => Some(INTRO_SOURCES.len()),
+        EARNINGS_TITLE => Some(EARNINGS_SOURCES.len()),
+        AI_RESEARCH_TITLE => Some(AI_RESEARCH_SOURCES.len()),
+        ALCHEMY_HISTORY_TITLE => Some(ALCHEMY_HISTORY_SOURCES.len()),
+        CURATED_TITLE => Some(CURATED_SOURCES.len()),
+        LINKS_TITLE => Some(1),
+        _ => None,
+    }
+}
+
+/// A starter is "built in" only while it is still what we shipped. Once
+/// the user has grown it past its seed it is theirs and sits in the shelf
+/// with everything else (Home's "Built in" section, docs/RFC-mac-chrome.md).
+pub(crate) fn is_built_in(title: &str, source_count: i64) -> bool {
+    match starter_seed_count(title) {
+        Some(seed) => source_count <= seed as i64,
+        None => false,
+    }
+}
+
 /// (title, url, body) — url is "" for the intro's pasted-text tour and the
 /// company's top-level investor-relations page for earnings sources.
 type ExampleSource = (&'static str, &'static str, &'static str);
@@ -1682,6 +1709,7 @@ async fn insert_notebook(
         source_count: 0,
         note_count: 0,
         report_count: 0,
+        built_in: false,
     };
     db.create_notebook(&nb).await?;
     for p in prepared {
@@ -1830,6 +1858,17 @@ mod tests {
             );
         }
         assert!(!is_starter_title("My Notes"));
+    }
+
+    #[test]
+    fn a_starter_is_built_in_only_until_it_grows() {
+        assert!(is_built_in(INTRO_TITLE, INTRO_SOURCES.len() as i64));
+        assert!(is_built_in(INTRO_TITLE, 0));
+        assert!(!is_built_in(INTRO_TITLE, INTRO_SOURCES.len() as i64 + 1));
+        // Seeded empty, then one git source; the repo's children grow it.
+        assert!(is_built_in(LINKS_TITLE, 1));
+        assert!(!is_built_in(LINKS_TITLE, 2491));
+        assert!(!is_built_in("My Notes", 0));
         assert_eq!(
             crate::commands::auto_notebook_icon("chemistry lab"),
             ALCHEMY_HISTORY_ICON
@@ -1856,6 +1895,7 @@ mod tests {
             source_count: 0,
             note_count: 0,
             report_count: 0,
+            built_in: false,
         };
         db.create_notebook(&nb).await.expect("create notebook");
 
