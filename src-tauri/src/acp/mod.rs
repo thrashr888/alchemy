@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer,
+    CancelNotification, ContentBlock, HttpHeader, InitializeRequest, LoadSessionRequest, McpServer,
     McpServerHttp, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
     TextContent,
@@ -600,6 +600,33 @@ fn session_cwd(app: &AppHandle, notebook_id: &str) -> std::path::PathBuf {
 /// at the head of the session's first prompt — and only when the MCP server
 /// actually attached, because pointing the agent at tools it doesn't have
 /// would be worse than silence.
+/// Alchemy's own MCP server, as the agent should connect to it.
+///
+/// The server has required its per-installation bearer token since the local
+/// security hardening (67207aa, 2026-08-31); this handoff predates that and
+/// passed only the URL. Every hosted agent — the notebook Agent pane as much
+/// as Home — then met a 401 on its first call, and since "attached" was
+/// decided from the server running rather than from the agent being able to
+/// get in, nothing said so: the agent was told its tools were there and found
+/// them locked. Found driving Home's agent brain live, where Codex reported
+/// `mcp__alchemy__startup (failed)` and went looking for the port itself.
+///
+/// No token means no attachment, so the preamble never points the agent at
+/// tools it can't open.
+fn alchemy_mcp_server(app: &AppHandle, url: &str) -> Option<McpServer> {
+    match crate::mcp::auth_token(app) {
+        Ok(token) => Some(McpServer::Http(McpServerHttp::new("alchemy", url).headers(
+            vec![HttpHeader::new("Authorization", format!("Bearer {token}"))],
+        ))),
+        Err(err) => {
+            crate::note!(
+                "acp: no MCP token for the agent, attaching without Alchemy's tools: {err:#}"
+            );
+            None
+        }
+    }
+}
+
 fn session_preamble(notebook_title: &str, notebook_id: &str) -> String {
     let name = if notebook_title.is_empty() {
         "this notebook".to_string()
@@ -747,12 +774,12 @@ async fn run_session(
             // switched off in Settings, or it failed to bind its port — which
             // a second dev build on the same machine will cause, since the
             // dev +1 offset only separates dev from the installed app.
-            let mcp_attached = mcp.running && init.agent_capabilities.mcp_capabilities.http;
-            if mcp_attached {
-                session_req = session_req.mcp_servers(vec![McpServer::Http(McpServerHttp::new(
-                    "alchemy",
-                    mcp.url.clone(),
-                ))]);
+            let alchemy = (mcp.running && init.agent_capabilities.mcp_capabilities.http)
+                .then(|| alchemy_mcp_server(&app, &mcp.url))
+                .flatten();
+            let mcp_attached = alchemy.is_some();
+            if let Some(server) = &alchemy {
+                session_req = session_req.mcp_servers(vec![server.clone()]);
             }
             // Resume first when we have a session to resume and the agent can
             // do it. `session/load` replays the whole conversation back as
@@ -766,15 +793,12 @@ async fn run_session(
             let mut resumed = None;
             if let Some(id) = resume.filter(|_| init.agent_capabilities.load_session) {
                 let mut load_req = LoadSessionRequest::new(id.clone(), cwd.clone());
-                if mcp_attached {
-                    load_req = load_req.mcp_servers(vec![McpServer::Http(McpServerHttp::new(
-                        "alchemy",
-                        mcp.url.clone(),
-                    ))]);
+                if let Some(server) = &alchemy {
+                    load_req = load_req.mcp_servers(vec![server.clone()]);
                 }
                 match connection.send_request(load_req).block_task().await {
                     Ok(_) => resumed = Some(SessionId::from(id)),
-                    Err(err) => eprintln!("acp: could not resume {agent_label} session: {err}"),
+                    Err(err) => crate::note!("acp: could not resume {agent_label} session: {err}"),
                 }
             }
 
