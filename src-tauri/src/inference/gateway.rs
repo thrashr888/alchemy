@@ -213,6 +213,52 @@ impl OpenAiClient {
         })
     }
 
+    /// One non-streaming `/chat/completions` round with tools offered
+    /// (docs/RFC-unified-chat.md §1). See `Ollama::chat_tools` for why a tool
+    /// round is not streamed.
+    pub async fn chat_tools(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        round: usize,
+    ) -> Result<super::ToolOutcome> {
+        let started = std::time::Instant::now();
+        let mut body = json!({
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "stream": false,
+        });
+        if !self.effort.is_empty() {
+            body["reasoning_effort"] = json!(self.effort);
+        }
+        let mut attempt = 0;
+        let resp = loop {
+            let resp = self
+                .with_team_headers(self.request("/chat/completions"))
+                .await
+                .json(&body)
+                .send()
+                .await
+                .context("Couldn't reach the provider — check the base URL and your connection")?;
+            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                break resp;
+            }
+            attempt += 1;
+        };
+        if !resp.status().is_success() {
+            return Err(gateway_error(resp).await);
+        }
+        let value: serde_json::Value = resp.json().await.context("invalid gateway response")?;
+        let message = &value["choices"][0]["message"];
+        Ok(super::ToolOutcome {
+            text: message["content"].as_str().unwrap_or_default().to_string(),
+            calls: super::parse_tool_calls(&message["tool_calls"], round),
+            stats: wall_clock_stats(&value, started),
+            cost_usd: None,
+        })
+    }
+
     /// Streaming completion via SSE `data:` lines.
     pub async fn chat_stream<F>(
         &self,

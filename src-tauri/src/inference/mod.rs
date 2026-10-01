@@ -161,7 +161,7 @@ impl ChatTurn {
 
 /// Generation stats for one completion. Ollama reports true decode duration;
 /// OpenAI-style gateways report token counts, timed by wall clock instead.
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GenStats {
     pub eval_count: u64,
     pub eval_duration_ns: u64,
@@ -198,6 +198,72 @@ pub struct ChatOutcome {
     pub text: String,
     pub stats: Option<GenStats>,
     pub cost_usd: Option<f64>,
+}
+
+/// One tool the model asked for, normalized across providers.
+///
+/// Ollama hands back `arguments` as a JSON object; OpenAI-compatible
+/// gateways hand back a JSON *string*. Both are parsed to a `Value` here so
+/// the caller never has to know which provider answered.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    /// Provider-assigned id, echoed back on the tool result. Ollama does not
+    /// issue one, so the caller's round index stands in.
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// A non-streaming round of a tool loop: what the model said, and what it
+/// wants run before it will say more.
+#[derive(Debug, Clone, Default)]
+pub struct ToolOutcome {
+    pub text: String,
+    pub calls: Vec<ToolCall>,
+    pub stats: Option<GenStats>,
+    pub cost_usd: Option<f64>,
+}
+
+/// Parse a provider's `tool_calls` array into normalized calls.
+///
+/// Shared by the Ollama and gateway engines because the two shapes differ in
+/// exactly one place (object vs stringified arguments) and diverging parsers
+/// is how one provider quietly stops working.
+pub(crate) fn parse_tool_calls(value: &serde_json::Value, round: usize) -> Vec<ToolCall> {
+    let Some(raw) = value.as_array() else {
+        return Vec::new();
+    };
+    raw.iter()
+        .enumerate()
+        .filter_map(|(i, call)| {
+            let f = &call["function"];
+            let name = f["name"].as_str()?.to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let arguments = match &f["arguments"] {
+                // OpenAI: a JSON string. An unparseable one is the model's
+                // mistake, not ours - hand it on as an empty object so the
+                // dispatcher answers with a clear argument error the model
+                // can correct, rather than dropping the call silently.
+                serde_json::Value::String(text) => {
+                    serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}))
+                }
+                // Ollama: already an object.
+                other => other.clone(),
+            };
+            let id = call["id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("call_{round}_{i}"));
+            Some(ToolCall {
+                id,
+                name,
+                arguments,
+            })
+        })
+        .collect()
 }
 
 /// The slice of app config an Ollama engine needs — inference stays free of
@@ -384,6 +450,67 @@ impl ChatEngine {
             }
             _ => self.chat_stream(messages, on_token).await,
         }
+    }
+
+    /// Can this engine run a tool loop (docs/RFC-unified-chat.md §1)?
+    ///
+    /// Ollama's `/api/chat` and the OpenAI-compatible gateways both take a
+    /// `tools` array and answer with `tool_calls`. The other two are `false`
+    /// for reasons that are about shape, not capability:
+    ///
+    /// - **Foundation Models**: Apple's framework does expose tools, but our
+    ///   sidecar is one-shot and stateless - it builds a session, streams one
+    ///   answer and exits. A loop needs either a session that outlives a tool
+    ///   result or a reverse channel for Swift to ask Rust to run a tool,
+    ///   because every tool body is in Rust. It is the Small role regardless.
+    /// - **Agent CLIs**: they are loops already, and they already receive
+    ///   Alchemy's MCP server. Nesting ours around theirs would put two loops
+    ///   on one tool catalog, and `agent_cli.rs` records what happens when an
+    ///   agent calls back into the process waiting on it.
+    ///
+    /// A `false` here is not a failure: the caller keeps the single-shot
+    /// classifier path, which is what every engine did before the loop.
+    pub fn supports_tools(&self) -> bool {
+        match self {
+            ChatEngine::Ollama(_) | ChatEngine::Gateway(_) => true,
+            ChatEngine::FoundationModels(_) | ChatEngine::Agent(_) => false,
+        }
+    }
+
+    /// One non-streaming round with tools offered.
+    ///
+    /// `messages` is a raw JSON array rather than `[ChatTurn]` because a tool
+    /// conversation carries rows `ChatTurn` has no shape for - an assistant
+    /// row with `tool_calls`, and `tool` rows with results. Keeping that
+    /// inside the loop leaves `ChatTurn` (serialized directly into every
+    /// other request in the app) untouched.
+    ///
+    /// Rounds are deliberately NOT streamed. The loop gathers evidence; the
+    /// answer is synthesized afterwards through the same streaming path chat
+    /// has always used, so citations, cancellation and the token protocol are
+    /// unchanged.
+    pub async fn chat_tools(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        round: usize,
+    ) -> Result<ToolOutcome> {
+        let (kind, model) = self.activity();
+        let _busy = activity::begin(kind, &model);
+        let out = match self {
+            ChatEngine::Ollama(o) => o.chat_tools(messages, tools, round).await,
+            ChatEngine::Gateway(g) => g.chat_tools(messages, tools, round).await,
+            // Unreachable through the loop, which checks `supports_tools`
+            // first; an explicit error beats a silent empty round if a future
+            // caller forgets.
+            ChatEngine::FoundationModels(_) | ChatEngine::Agent(_) => {
+                Err(anyhow::anyhow!("{kind} does not support tool calls",))
+            }
+        };
+        if let Ok(o) = out.as_ref() {
+            crate::freshness::record_cost(o.cost_usd);
+        }
+        out
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {
@@ -617,5 +744,66 @@ mod tests {
         assert_eq!(p.max_gists, 1, "on-device admits one overview gist");
         assert_eq!(p.global_fan_out, 3, "on-device narrows the global fan-out");
         assert!(p.compact_excerpts, "on-device caps excerpt bodies");
+    }
+}
+
+#[cfg(test)]
+mod tool_call_tests {
+    use super::*;
+
+    /// Ollama hands back an arguments OBJECT; OpenAI-compatible gateways hand
+    /// back a stringified one. Both must normalize to the same call, or the
+    /// loop works on one provider and silently does nothing on the other.
+    #[test]
+    fn both_provider_shapes_normalize() {
+        let ollama = serde_json::json!([
+            { "function": { "name": "search_corpus", "arguments": { "query": "SNDK" } } }
+        ]);
+        let gateway = serde_json::json!([
+            {
+                "id": "call_abc",
+                "type": "function",
+                "function": { "name": "search_corpus", "arguments": "{\"query\":\"SNDK\"}" }
+            }
+        ]);
+        let a = parse_tool_calls(&ollama, 3);
+        let b = parse_tool_calls(&gateway, 3);
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+        assert_eq!(a[0].name, b[0].name);
+        assert_eq!(a[0].arguments, b[0].arguments);
+        assert_eq!(a[0].arguments["query"], "SNDK");
+        // Ollama issues no id, so the round index stands in; the gateway's
+        // own id is kept because the tool result has to echo it back.
+        assert_eq!(a[0].id, "call_3_0");
+        assert_eq!(b[0].id, "call_abc");
+    }
+
+    /// Arguments the model mangled reach the dispatcher as an empty object,
+    /// which answers with a clear argument error it can correct — better
+    /// than dropping the call and leaving the model waiting on nothing.
+    #[test]
+    fn unparseable_arguments_survive_as_empty() {
+        let calls = parse_tool_calls(
+            &serde_json::json!([
+                { "function": { "name": "get_note", "arguments": "{not json" } }
+            ]),
+            0,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments, serde_json::json!({}));
+    }
+
+    /// A nameless call is not a call. Anything else that isn't an array
+    /// (absent, null, an object) is simply no calls.
+    #[test]
+    fn malformed_calls_are_dropped() {
+        assert!(parse_tool_calls(&serde_json::Value::Null, 0).is_empty());
+        assert!(parse_tool_calls(&serde_json::json!({}), 0).is_empty());
+        assert!(parse_tool_calls(
+            &serde_json::json!([{ "function": { "name": "", "arguments": {} } }]),
+            0
+        )
+        .is_empty());
     }
 }
