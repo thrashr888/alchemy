@@ -829,7 +829,7 @@ impl Ai {
         };
         let chat = config
             .provider_by_id(&config.chat_provider)
-            .map(&engine_for)
+            .map(engine_for)
             .unwrap_or_else(|| ChatEngine::Ollama(Ollama::new(ollama_config(&config))));
         // Studio (Generate role) gets its own engine only when it differs —
         // same-provider stays one engine, one stats key.
@@ -837,7 +837,7 @@ impl Ai {
             .then(|| {
                 config
                     .provider_by_id(&config.studio_provider)
-                    .map(&engine_for)
+                    .map(engine_for)
             })
             .flatten();
         let data_dir = if runtime.data_dir.as_os_str().is_empty() {

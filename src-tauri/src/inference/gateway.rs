@@ -225,7 +225,7 @@ impl OpenAiClient {
         let started = std::time::Instant::now();
         let mut body = json!({
             "model": self.model,
-            "messages": messages,
+            "messages": super::to_openai_dialect(messages),
             "tools": tools,
             "stream": false,
         });

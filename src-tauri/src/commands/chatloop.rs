@@ -31,8 +31,8 @@ use tokio_util::sync::CancellationToken;
 use crate::models::MetaCitation;
 
 use super::{
-    add_urls_from_home, meta_step_to, open_notebook_outcome, retrieve_everything, save_home_note,
-    AppState, MetaEffect,
+    add_urls_from_home, contains_any, host_of, meta_step_to, open_notebook_outcome,
+    retrieve_everything, save_home_note, AppState, MetaEffect, GLOBAL_TOOL_VERBS,
 };
 
 /// Rounds a loop may spend before it has to settle for what it has.
@@ -48,6 +48,19 @@ const ROUNDS_GATEWAY: usize = 12;
 /// Tool results are model input, not a transcript: a list of 400 sources
 /// spends the window that the evidence needs.
 const RESULT_CAP: usize = 4_000;
+
+/// Enough evidence to answer from. Gathering stops once the loop holds this
+/// many distinct passages, and synthesis never sees more.
+///
+/// This, not the round budget, is what bounds a turn in practice. The first
+/// live run without it asked a question whose answer is not in the corpus:
+/// the model searched 15 times over all 8 rounds (6.2 minutes), handed
+/// synthesis 71 excerpts, and the local model timed out before its first
+/// token — six minutes of research and no answer. A model hunting for
+/// something absent never runs out of reasons to look again; a ceiling on
+/// what it may carry back does. 24 is the single-shot path's 16 passages
+/// plus headroom for what a second, reworded search adds.
+const EVIDENCE_CAP: usize = 24;
 
 /// What the loop collected, for the synthesis that follows it.
 #[derive(Default)]
@@ -65,6 +78,12 @@ pub(crate) struct LoopEvidence {
     /// The model stopped asking for tools of its own accord, rather than
     /// being cut off by the budget.
     pub settled: bool,
+    /// Why gathering ended: "settled" (the model was done), "sufficient"
+    /// (`EVIDENCE_CAP` reached), "budget" (rounds ran out), "error" (a
+    /// provider failure), "cancelled", or "skipped" (no tool-capable engine).
+    /// Traced, because the evals need to tell a model that knew when to stop
+    /// from one that was stopped.
+    pub stop: &'static str,
     pub cancelled: bool,
 }
 
@@ -310,10 +329,16 @@ async fn dispatch(
     state: &AppState,
     window_label: &str,
     thread_id: &str,
+    question: &str,
     name: &str,
     args: &Value,
 ) -> ToolReply {
     let target = Some((app, window_label));
+    // Writes and effects need the user's words behind them, not just the
+    // model's judgment. The classifier route has always held URLs to this
+    // ("only ingest URLs whose host actually appears in the user's message");
+    // the loop holds every tool that changes something to the same rule.
+    let asked = question.to_lowercase();
     match name {
         "search_corpus" => {
             let query = arg(args, "query");
@@ -371,6 +396,12 @@ async fn dispatch(
             if urls.is_empty() {
                 return ToolReply::say("error: urls is required and must be a non-empty array");
             }
+            let urls = licensed_urls(urls, &asked);
+            if urls.is_empty() {
+                return ToolReply::say(
+                    "error: only add URLs the user wrote in their message. None of these appear there.",
+                );
+            }
             let reply = add_urls_from_home(app, state, &urls).await;
             ToolReply {
                 text: reply.clone(),
@@ -383,6 +414,11 @@ async fn dispatch(
             if title.is_empty() {
                 return ToolReply::say("error: title is required");
             }
+            if !may_save(&asked) {
+                return ToolReply::say(
+                    "error: only save a note when the user asks to save or keep something.",
+                );
+            }
             let reply = save_home_note(app, state, thread_id, title).await;
             ToolReply {
                 text: reply.clone(),
@@ -394,6 +430,11 @@ async fn dispatch(
             let name = arg(args, "name");
             if name.is_empty() {
                 return ToolReply::say("error: name is required");
+            }
+            if !may_navigate(&asked) {
+                return ToolReply::say(
+                    "error: only open a notebook when the user asks to go somewhere. Answer the question instead.",
+                );
             }
             let Ok(notebooks) = state.db.list_notebooks().await else {
                 return ToolReply::say("error: couldn't read the notebook list");
@@ -504,6 +545,72 @@ async fn dispatch(
     }
 }
 
+/// The assistant row that records a round's tool calls, in the neutral form.
+///
+/// `arguments` stays an OBJECT. Ollama takes this as-is and rejects a
+/// stringified one outright ("Value looks like object, but can't find closing
+/// '}'"), which is what killed every second round until it was caught in the
+/// app — round one has no prior calls to echo, so it hid there. Gateways want
+/// the OpenAI dialect; `inference::to_openai_dialect` converts on the way out.
+fn assistant_row(text: &str, calls: &[crate::inference::ToolCall]) -> Value {
+    json!({
+        "role": "assistant",
+        "content": text,
+        "tool_calls": calls.iter().map(|c| json!({
+            "id": c.id,
+            "type": "function",
+            "function": { "name": c.name, "arguments": c.arguments },
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// A tool result row. Carries both links: Ollama reads `tool_name`, the
+/// OpenAI dialect reads `tool_call_id` (and the conversion drops the other).
+fn tool_row(id: &str, name: &str, content: &str) -> Value {
+    json!({
+        "role": "tool",
+        "tool_call_id": id,
+        "tool_name": name,
+        "content": content,
+    })
+}
+
+/// Words that license `save_note`. Deliberately not "note" on its own: "what
+/// notes do I have on X" is a question, not an instruction to write one.
+const SAVE_WORDS: [&str; 7] = [
+    "save",
+    "keep that",
+    "keep this",
+    "file that",
+    "file this",
+    "write that down",
+    "write this down",
+];
+
+/// The URLs the user actually wrote. The model can never invent or rewrite
+/// one into the library: a URL survives only if its host appears in the
+/// user's own message, the rule the classifier route has always applied.
+fn licensed_urls(urls: Vec<String>, asked: &str) -> Vec<String> {
+    urls.into_iter()
+        .filter(|u| {
+            let host = host_of(u).to_lowercase();
+            !host.is_empty() && asked.contains(&host)
+        })
+        .collect()
+}
+
+/// Did the user ask to keep something? `asked` is lowercased.
+fn may_save(asked: &str) -> bool {
+    contains_any(asked, &SAVE_WORDS)
+}
+
+/// Did the user ask to go somewhere? Moving the user's window is an action,
+/// not research: the live run that found this reached for open_notebook
+/// mid-search on a question that never asked to go anywhere.
+fn may_navigate(asked: &str) -> bool {
+    contains_any(asked, &GLOBAL_TOOL_VERBS)
+}
+
 /// What the model is told the loop is for.
 ///
 /// Deliberately short. It is prepended to a prompt that already carries the
@@ -514,6 +621,8 @@ fn loop_system() -> String {
      Use tools to find what you need — search more than once if the first result is thin. \
      Do NOT write the final answer: once you have enough, reply with no tool calls and \
      the answer will be written from what you gathered. \
+     If two or three searches keep missing, the library probably doesn't have it: stop, \
+     and the answer will say so. \
      Only act on what the user actually asked for; never invent a URL."
         .to_string()
 }
@@ -541,6 +650,7 @@ pub(crate) async fn run(
         (ai.chat_supports_tools(), ai.config().is_gateway())
     };
     if !supports {
+        ev.stop = "skipped";
         return ev;
     }
     let budget = if is_gateway {
@@ -562,7 +672,22 @@ pub(crate) async fn run(
         .collect();
     let mut used: Vec<String> = Vec::new();
 
+    ev.stop = "budget";
     for round in 0..budget {
+        // Honest progress from the first second. Without this the user
+        // watched the front end's "Searching every notebook…" placeholder
+        // for the whole first round — up to a minute on a 30b model — while
+        // nothing was searching yet: the model was still deciding what to
+        // look for. Transient, so the list keeps only the real searches.
+        meta_step_to(
+            Some((app, window_label)),
+            if round == 0 {
+                "Deciding what to look for"
+            } else {
+                "Looking further"
+            },
+            true,
+        );
         let tools: Vec<Value> = catalog()
             .iter()
             .filter(|t| enabled.contains(t.name))
@@ -578,6 +703,7 @@ pub(crate) async fn run(
         };
         let Some(out) = call else {
             ev.cancelled = true;
+            ev.stop = "cancelled";
             break;
         };
         let out = match out {
@@ -587,6 +713,7 @@ pub(crate) async fn run(
                 // failure: the caller still has the ordinary retrieval path,
                 // so this degrades rather than fails the turn.
                 crate::note!("chat loop round {round} failed: {err:#}");
+                ev.stop = "error";
                 break;
             }
         };
@@ -600,22 +727,24 @@ pub(crate) async fn run(
         }
         if out.calls.is_empty() {
             ev.settled = true;
+            ev.stop = "settled";
             break;
         }
 
-        messages.push(json!({
-            "role": "assistant",
-            "content": out.text,
-            "tool_calls": out.calls.iter().map(|c| json!({
-                "id": c.id,
-                "type": "function",
-                "function": { "name": c.name, "arguments": c.arguments.to_string() },
-            })).collect::<Vec<_>>(),
-        }));
+        messages.push(assistant_row(&out.text, &out.calls));
 
         for c in &out.calls {
             used.push(c.name.clone());
-            let reply = dispatch(app, state, window_label, thread_id, &c.name, &c.arguments).await;
+            let reply = dispatch(
+                app,
+                state,
+                window_label,
+                thread_id,
+                question,
+                &c.name,
+                &c.arguments,
+            )
+            .await;
             ev.push_citations(reply.citations);
             if let Some(r) = reply.reply {
                 ev.replies.push(r);
@@ -628,14 +757,17 @@ pub(crate) async fn run(
             for name in reply.enable {
                 enabled.insert(name);
             }
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": c.id,
-                "name": c.name,
-                "content": reply.text,
-            }));
+            messages.push(tool_row(&c.id, &c.name, &reply.text));
+        }
+        if ev.citations.len() >= EVIDENCE_CAP {
+            ev.stop = "sufficient";
+            break;
         }
     }
+    // One round of parallel searches can overshoot the cap; synthesis gets
+    // the first EVIDENCE_CAP, which arrived first because they answered the
+    // model's first, most direct queries.
+    ev.citations.truncate(EVIDENCE_CAP);
 
     // A turn that ran out of rounds keeps everything it gathered. Shift's
     // evals found the opposite (a round-limited turn discarded whole) let the
@@ -651,6 +783,7 @@ pub(crate) async fn run(
                 "rounds_used": ev.rounds_used,
                 "budget": budget,
                 "settled": ev.settled,
+                "stop": ev.stop,
                 "empty": ev.is_empty(),
                 "cancelled": ev.cancelled,
                 "wall_ms": started.elapsed().as_millis() as u64,
@@ -797,6 +930,62 @@ mod tests {
         ev.push_citations(vec![cite("b"), cite("c")]);
         assert_eq!(ev.citations.len(), 3);
         assert_eq!(passages(&ev.citations)[2].number, 3);
+    }
+
+    /// The bug the app found: the loop must record a call's arguments as an
+    /// object, or Ollama 400s the next round. Pinned on the builder itself,
+    /// not on a hand-made history, because the builder is where it broke.
+    #[test]
+    fn assistant_row_keeps_arguments_an_object() {
+        let calls = vec![crate::inference::ToolCall {
+            id: "call_0_0".into(),
+            name: "search_corpus".into(),
+            arguments: json!({ "query": "Guerneville house" }),
+        }];
+        let row = assistant_row("", &calls);
+        let args = &row["tool_calls"][0]["function"]["arguments"];
+        assert!(
+            args.is_object(),
+            "arguments must not be stringified: {args}"
+        );
+        assert_eq!(args["query"], "Guerneville house");
+
+        let tool = tool_row("call_0_0", "search_corpus", "…");
+        assert_eq!(tool["tool_name"], "search_corpus");
+        assert_eq!(tool["tool_call_id"], "call_0_0");
+    }
+
+    /// The trust boundary, pinned. Every write the loop can make has to be
+    /// licensed by the user's own words, not the model's judgment.
+    #[test]
+    fn writes_need_the_users_words() {
+        // URLs: only hosts the user typed. An invented one is dropped even
+        // when it rides alongside a real one.
+        let asked = "add https://example.com/post please".to_lowercase();
+        let kept = licensed_urls(
+            vec![
+                "https://example.com/post".into(),
+                "https://attacker.test/payload".into(),
+            ],
+            &asked,
+        );
+        assert_eq!(kept, vec!["https://example.com/post".to_string()]);
+        assert!(
+            licensed_urls(vec!["https://made-up.test/".into()], "what's in my notes").is_empty()
+        );
+
+        // Save: an instruction, not the word "note" in a question.
+        assert!(may_save("save that as a note"));
+        assert!(may_save("please keep this"));
+        assert!(!may_save("what notes do i have on the guerneville house?"));
+
+        // Navigate: only when asked to go somewhere. The exact question from
+        // the live run that reached for open_notebook must not license it.
+        assert!(may_navigate("open the japan notebook"));
+        assert!(may_navigate("take me to bayside"));
+        assert!(!may_navigate(
+            &"What did I conclude about the Guerneville house purchase date?".to_lowercase()
+        ));
     }
 
     /// An empty loop is the signal to fall back to plain retrieval.

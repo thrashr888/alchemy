@@ -54,9 +54,22 @@ pub fn note_context_limit(limit: usize) {
     if limit < MIN_INPUT_BUDGET_TOKENS {
         return; // Nonsense reading - don't poison the budget with it.
     }
-    let _ = OBSERVED_CONTEXT_TOKENS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
-        (cur == 0 || limit < cur).then_some(limit)
-    });
+    // Keep the smaller limit; 0 means none seen yet. Spelled as the
+    // compare-exchange loop `fetch_update` ran internally: Rust 1.99
+    // deprecated `fetch_update` for `try_update`, which older toolchains
+    // don't have, and this has to build on both.
+    let mut cur = OBSERVED_CONTEXT_TOKENS.load(Ordering::Relaxed);
+    while cur == 0 || limit < cur {
+        match OBSERVED_CONTEXT_TOKENS.compare_exchange_weak(
+            cur,
+            limit,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(seen) => cur = seen,
+        }
+    }
 }
 
 /// The on-device context window in force right now: what the framework

@@ -707,6 +707,67 @@ mod tests {
         server.abort();
     }
 
+    /// The second round is the one that broke in the app: its history echoes
+    /// the first round's call back, and real Ollama answers 400 when that
+    /// call's `arguments` is a string. This mock is as strict as the real
+    /// server, so a single-round test can no longer pass for a working loop.
+    #[tokio::test]
+    async fn second_round_echoes_arguments_as_an_object() {
+        use axum::{http::StatusCode, routing::post, Router};
+        let app = Router::new().route(
+            "/api/chat",
+            post(|body: String| async move {
+                let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                let stringified = body["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|m| m["tool_calls"].as_array().cloned().unwrap_or_default())
+                    .any(|c| c["function"]["arguments"].is_string());
+                if stringified {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json!({"error":"Value looks like object, but can't find closing '}' symbol"})
+                            .to_string(),
+                    );
+                }
+                (
+                    StatusCode::OK,
+                    json!({ "message": { "content": "Done." } }).to_string(),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let engine = Ollama::new(OllamaConfig {
+            base_url: format!("http://{address}"),
+            chat_model: "test".into(),
+            ..Default::default()
+        });
+        // Exactly the history the loop builds after one round.
+        let history = vec![
+            json!({"role":"user","content":"where is the SNDK data"}),
+            json!({
+                "role":"assistant","content":"",
+                "tool_calls":[{"id":"call_0_0","type":"function",
+                    "function":{"name":"search_corpus","arguments":{"query":"SNDK"}}}]
+            }),
+            json!({"role":"tool","tool_call_id":"call_0_0","tool_name":"search_corpus","content":"[NB · T] …"}),
+        ];
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.chat_tools(&history, &[], 1),
+        )
+        .await
+        .unwrap()
+        .expect("second round must be accepted");
+        assert_eq!(out.text, "Done.");
+        server.abort();
+    }
+
     /// An answer with no tool calls is how the model says it is done. The
     /// loop reads that as "settled", so an empty array must not look like a
     /// malformed response.

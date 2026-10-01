@@ -224,6 +224,34 @@ pub struct ToolOutcome {
     pub cost_usd: Option<f64>,
 }
 
+/// Rewrite a neutral tool conversation into the OpenAI dialect.
+///
+/// The loop speaks Ollama's form because Ollama is the strict one: it
+/// rejects `arguments` sent as a string. OpenAI-compatible gateways want the
+/// opposite — `arguments` as a JSON string — and name the tool row's link
+/// `tool_call_id` with no `tool_name`. One function owns the difference so
+/// the loop never has to know which engine is listening.
+pub(crate) fn to_openai_dialect(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            if let Some(calls) = m.get_mut("tool_calls").and_then(|c| c.as_array_mut()) {
+                for call in calls {
+                    let args = &mut call["function"]["arguments"];
+                    if !args.is_string() {
+                        *args = serde_json::Value::String(args.to_string());
+                    }
+                }
+            }
+            if let Some(obj) = m.as_object_mut() {
+                obj.remove("tool_name");
+            }
+            m
+        })
+        .collect()
+}
+
 /// Parse a provider's `tool_calls` array into normalized calls.
 ///
 /// Shared by the Ollama and gateway engines because the two shapes differ in
@@ -792,6 +820,35 @@ mod tool_call_tests {
         );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments, serde_json::json!({}));
+    }
+
+    /// The neutral history is Ollama's dialect untouched, and the OpenAI
+    /// rewrite stringifies arguments and drops `tool_name`. A second round
+    /// is where this matters: round one has no prior calls to echo back.
+    #[test]
+    fn dialects_round_trip_a_second_round() {
+        let neutral = vec![
+            serde_json::json!({"role":"user","content":"q"}),
+            serde_json::json!({
+                "role":"assistant","content":"",
+                "tool_calls":[{"id":"call_0_0","type":"function",
+                    "function":{"name":"search_corpus","arguments":{"query":"SNDK"}}}]
+            }),
+            serde_json::json!({"role":"tool","tool_call_id":"call_0_0","tool_name":"search_corpus","content":"…"}),
+        ];
+        // Ollama: arguments stay an object — a string here is a 400.
+        assert!(neutral[1]["tool_calls"][0]["function"]["arguments"].is_object());
+        let openai = to_openai_dialect(&neutral);
+        let args = &openai[1]["tool_calls"][0]["function"]["arguments"];
+        assert!(args.is_string());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(args.as_str().unwrap()).unwrap()["query"],
+            "SNDK"
+        );
+        assert!(openai[2].get("tool_name").is_none());
+        assert_eq!(openai[2]["tool_call_id"], "call_0_0");
+        // Idempotent: an already-stringified argument is left alone.
+        assert_eq!(to_openai_dialect(&openai), openai);
     }
 
     /// A nameless call is not a call. Anything else that isn't an array
