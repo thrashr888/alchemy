@@ -14,6 +14,7 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { Button, EmptyState, Textarea } from "./ui";
 import { Markdown } from "./Markdown";
+import { PermissionPrompt } from "./PermissionPrompt";
 import { cn } from "@/lib/utils";
 import type {
   AcpAgentInfo,
@@ -709,38 +710,6 @@ function statusLabel(status: string): string {
     default:
       return status.replace(/_/g, " ");
   }
-}
-
-function PermissionPrompt({
-  request,
-  onAnswer,
-}: {
-  request: AcpPermissionEvent;
-  onAnswer: (optionId: string | null) => void;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-surface-2 px-3 py-2.5">
-      <p className="text-caption text-foreground">
-        The agent wants to run{" "}
-        <span className="font-mono">{request.toolTitle || "a tool"}</span>.
-      </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {request.options.map((opt) => (
-          <Button
-            key={opt.id}
-            size="sm"
-            variant={opt.kind.startsWith("allow") ? "primary" : "secondary"}
-            onClick={() => onAnswer(opt.id)}
-          >
-            {opt.name}
-          </Button>
-        ))}
-        <Button size="sm" variant="ghost" onClick={() => onAnswer(null)}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function AgentPicker({

@@ -154,6 +154,137 @@ impl AcpAgentKind {
     }
 }
 
+// ---- Home: the agent as the corpus-wide brain -------------------------------
+
+/// Home threads have no notebook, so their sessions are keyed by this prefix
+/// and the thread id (docs/RFC-unified-chat.md §6). The session map, the
+/// working directory and the events all take any string as their key; only
+/// the preamble has to know a Home session from a notebook one.
+pub const HOME_SCOPE: &str = "home-";
+
+fn is_home(key: &str) -> bool {
+    key.starts_with(HOME_SCOPE)
+}
+
+/// Who answers Home's questions (docs/RFC-unified-chat.md §6).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeBrain {
+    /// "agent": Home turns run in a thread-scoped ACP session.
+    /// "loop": they go through `ask_everything` as before.
+    pub kind: &'static str,
+    /// The ACP agent id, for "agent"; empty otherwise.
+    pub agent_id: String,
+    /// What the turn is captioned with ("Claude Code").
+    pub label: String,
+    /// How to sign the agent in ("claude"), so a turn that fails on an
+    /// expired login can say what to run instead of just "Authentication
+    /// required".
+    pub login_command: String,
+}
+
+impl HomeBrain {
+    fn local() -> Self {
+        Self {
+            kind: "loop",
+            agent_id: String::new(),
+            label: String::new(),
+            login_command: String::new(),
+        }
+    }
+}
+
+/// Decide, per ask, whether Home's brain is the user's agent.
+///
+/// The agent answers when the chat provider IS an agent that speaks ACP. That
+/// is the case the tool loop can never serve — `supports_tools()` is false for
+/// agent CLIs, because headless they are one-shot answerers over excerpts
+/// Alchemy already retrieved. Hosted over ACP the same agent is a loop of its
+/// own with all of Alchemy's tools, so Home hands it the turn instead of
+/// running a second loop around it. The chat provider's kind and the ACP
+/// agent id are the same string (`claude-code`, `codex`, `opencode`), so this
+/// is a lookup, not a mapping table.
+///
+/// Two conditions fall back to the loop rather than fail the ask: the agent's
+/// binary isn't installed, and the MCP server isn't running. Without MCP the
+/// agent would arrive with no way into the user's notebooks, which for a
+/// corpus-wide question is worse than the excerpt answer it replaces.
+#[tauri::command]
+pub async fn home_brain(
+    app: AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
+) -> Result<HomeBrain, String> {
+    let provider_kind = {
+        let ai = state.ai.read().await;
+        let config = ai.config();
+        config
+            .provider_by_id(&config.chat_provider)
+            .map(|p| p.kind.clone())
+            .unwrap_or_default()
+    };
+    let Some(kind) = AcpAgentKind::from_id(&provider_kind) else {
+        return Ok(HomeBrain::local());
+    };
+    if !crate::mcp::status(&app).running {
+        return Ok(HomeBrain::local());
+    }
+    // The binary probe can fall back to a login-shell `which`; same reason
+    // `acp_agents` keeps it off the IPC thread.
+    let installed = tauri::async_runtime::spawn_blocking(move || kind.command().is_some())
+        .await
+        .unwrap_or(false);
+    if !installed {
+        return Ok(HomeBrain::local());
+    }
+    Ok(HomeBrain {
+        kind: "agent",
+        agent_id: kind.id().to_string(),
+        label: kind.label().to_string(),
+        login_command: kind.login_command().to_string(),
+    })
+}
+
+/// Alchemy's own MCP server, as the agent should connect to it.
+///
+/// The server has required its per-installation bearer token since the local
+/// security hardening (67207aa, 2026-08-31); this handoff predates that and
+/// passed only the URL. Every hosted agent — the notebook Agent pane as much
+/// as Home — then met a 401 on its first call, and since "attached" was
+/// decided from the server running rather than from the agent being able to
+/// get in, nothing said so: the agent was told its tools were there and found
+/// them locked. Found driving Home's agent brain live, where Codex reported
+/// `mcp__alchemy__startup (failed)` and went looking for the port itself.
+///
+/// No token means no attachment, so the preamble never points the agent at
+/// tools it can't open.
+fn alchemy_mcp_server(app: &AppHandle, url: &str) -> Option<McpServer> {
+    match crate::mcp::auth_token(app) {
+        Ok(token) => Some(McpServer::Http(McpServerHttp::new("alchemy", url).headers(
+            vec![HttpHeader::new("Authorization", format!("Bearer {token}"))],
+        ))),
+        Err(err) => {
+            crate::note!(
+                "acp: no MCP token for the agent, attaching without Alchemy's tools: {err:#}"
+            );
+            None
+        }
+    }
+}
+
+/// The Home counterpart of `session_preamble`: no notebook to name, so it
+/// points the agent at the whole library and at the corpus-wide tools.
+fn home_preamble() -> String {
+    "<context>You are running inside Alchemy, the user's local research notebook app, \
+     answering in its library-wide chat: questions here can span every notebook the user \
+     has. Their sources and notes are reachable through the connected `alchemy` MCP tools: \
+     start with `ask_everything` (passages from across all notebooks, each naming its \
+     notebook), use `list_notebooks` to see what exists and `search` with a notebook_id to \
+     go deeper in one, and `get_source`/`get_note` to read in full. Ground your answer in \
+     what those tools return and name the notebook each fact came from. Only add, change or \
+     delete anything when the user asks you to.</context>"
+        .to_string()
+}
+
 // ---- State ------------------------------------------------------------------
 
 #[derive(Default)]
@@ -358,15 +489,19 @@ pub async fn acp_start(
         .ok_or_else(|| format!("{} is not installed", kind.label()))?;
 
     // The preamble names the notebook, so look the title up front; an empty
-    // title (notebook gone mid-start) degrades to id-only wording.
-    let db = app.state::<crate::commands::AppState>().db.clone();
-    let notebook_title = db
-        .list_notebooks()
-        .await
-        .ok()
-        .and_then(|nbs| nbs.into_iter().find(|n| n.id == notebook_id))
-        .map(|n| n.title)
-        .unwrap_or_default();
+    // title (notebook gone mid-start) degrades to id-only wording. A Home
+    // session has no notebook and needs no lookup.
+    let notebook_title = if is_home(&notebook_id) {
+        String::new()
+    } else {
+        let db = app.state::<crate::commands::AppState>().db.clone();
+        db.list_notebooks()
+            .await
+            .ok()
+            .and_then(|nbs| nbs.into_iter().find(|n| n.id == notebook_id))
+            .map(|n| n.title)
+            .unwrap_or_default()
+    };
 
     let state = app.state::<AcpState>();
     let (tx, rx) = mpsc::unbounded_channel();
@@ -600,33 +735,6 @@ fn session_cwd(app: &AppHandle, notebook_id: &str) -> std::path::PathBuf {
 /// at the head of the session's first prompt — and only when the MCP server
 /// actually attached, because pointing the agent at tools it doesn't have
 /// would be worse than silence.
-/// Alchemy's own MCP server, as the agent should connect to it.
-///
-/// The server has required its per-installation bearer token since the local
-/// security hardening (67207aa, 2026-08-31); this handoff predates that and
-/// passed only the URL. Every hosted agent — the notebook Agent pane as much
-/// as Home — then met a 401 on its first call, and since "attached" was
-/// decided from the server running rather than from the agent being able to
-/// get in, nothing said so: the agent was told its tools were there and found
-/// them locked. Found driving Home's agent brain live, where Codex reported
-/// `mcp__alchemy__startup (failed)` and went looking for the port itself.
-///
-/// No token means no attachment, so the preamble never points the agent at
-/// tools it can't open.
-fn alchemy_mcp_server(app: &AppHandle, url: &str) -> Option<McpServer> {
-    match crate::mcp::auth_token(app) {
-        Ok(token) => Some(McpServer::Http(McpServerHttp::new("alchemy", url).headers(
-            vec![HttpHeader::new("Authorization", format!("Bearer {token}"))],
-        ))),
-        Err(err) => {
-            crate::note!(
-                "acp: no MCP token for the agent, attaching without Alchemy's tools: {err:#}"
-            );
-            None
-        }
-    }
-}
-
 fn session_preamble(notebook_title: &str, notebook_id: &str) -> String {
     let name = if notebook_title.is_empty() {
         "this notebook".to_string()
@@ -857,10 +965,12 @@ async fn run_session(
                         // the user typed, since the UI echoes their text
                         // locally before it reaches us.
                         let text = if std::mem::take(&mut first_prompt) && mcp_attached {
-                            format!(
-                                "{}\n\n{text}",
+                            let preamble = if is_home(&notebook_id) {
+                                home_preamble()
+                            } else {
                                 session_preamble(&notebook_title, &notebook_id)
-                            )
+                            };
+                            format!("{preamble}\n\n{text}")
                         } else {
                             text
                         };
@@ -993,5 +1103,43 @@ mod tests {
         );
         // Nothing human-readable at all: skipped, not rendered as "null".
         assert!(auth_method_names(&[json!({"type": "oauth"})]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    /// A Home key is recognized by its prefix and nothing else: a notebook
+    /// whose id merely contains "home" must keep its notebook preamble.
+    #[test]
+    fn home_keys_are_prefixed() {
+        assert!(is_home(&format!("{HOME_SCOPE}thread-1")));
+        assert!(!is_home("nb-home-improvement"));
+        assert!(!is_home(""));
+    }
+
+    /// The chat provider's kind IS the ACP agent id. If either side renames
+    /// one, Home silently falls back to the loop for that agent; this pins
+    /// the three that have to line up.
+    #[test]
+    fn provider_kinds_are_acp_ids() {
+        for id in ["claude-code", "codex", "opencode"] {
+            let kind = AcpAgentKind::from_id(id).expect(id);
+            assert_eq!(kind.id(), id);
+        }
+        // Agent CLIs with no ACP adapter stay on the loop.
+        assert!(AcpAgentKind::from_id("copilot").is_none());
+        assert!(AcpAgentKind::from_id("gateway").is_none());
+    }
+
+    /// The Home preamble points at the corpus-wide tools and holds writes to
+    /// the user's word, mirroring the loop's license rule.
+    #[test]
+    fn home_preamble_is_corpus_wide() {
+        let p = home_preamble();
+        assert!(p.contains("ask_everything"));
+        assert!(p.contains("list_notebooks"));
+        assert!(p.contains("Only add, change or delete anything when the user asks"));
     }
 }

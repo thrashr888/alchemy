@@ -705,6 +705,7 @@ pub fn run() {
             acp::acp_cancel,
             acp::acp_stop,
             acp::acp_permission,
+            acp::home_brain,
             connectors::list_agent_connectors,
             connectors::connect_agent,
             textsize::get_system_text_scale,

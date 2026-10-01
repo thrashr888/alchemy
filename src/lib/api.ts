@@ -8,6 +8,7 @@ import type {
   CorpusTimeline,
   ProviderModels,
   AcpAgentInfo,
+  HomeBrain,
   ActivityStats,
   Citation,
   AiConfig,
@@ -630,6 +631,9 @@ export const api = {
     content: string,
     citations: MetaCitation[],
     kind: MetaTurn["kind"],
+    /** Who wrote it, when that isn't the local chat model — a hosted agent's
+     *  label. Omitted, the backend captions it with the chat model. */
+    model?: string,
   ) =>
     run(
       cmd<MetaTurn>("add_meta_turn", {
@@ -638,8 +642,12 @@ export const api = {
         content,
         citations,
         kind,
+        model: model ?? null,
       }),
     ),
+  /** Which brain answers the next Home turn. Asked fresh on every ask: the
+   *  chat provider can change between two questions. */
+  homeBrain: () => run(probe<HomeBrain>("home_brain")),
   deleteMetaThread: (threadId: string) =>
     run(cmd<void>("delete_meta_thread", { threadId })),
   createNote: (notebookId: string, title: string, content: string) =>
