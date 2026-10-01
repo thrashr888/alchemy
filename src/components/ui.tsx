@@ -2175,7 +2175,7 @@ export function StepTrail({
   done: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface/60 px-3 py-2">
+    <div className="flex flex-col gap-1">
       {steps.map((s, i) => {
         // The countdown, when there is one, is the thing still running — the
         // last completed step hands its spinner over to it.

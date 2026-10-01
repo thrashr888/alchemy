@@ -323,13 +323,55 @@ open question 1 — the extracted body takes an actor rather than a context.
 for a top-12 chunk search and answer it worse. `is_global_query` keeps those
 on the specialized path, and they pay no loop round.
 
-**The cost to watch.** An ordinary Home question now pays one extra
-non-streaming round before retrieval — the round where the model decides
-*what* to search for, which is the point, but it is not free on a local 27b.
-Every run writes `rounds_used`, `wall_ms`, `settled` and `empty` to
-`traces/chatloop.jsonl`; decision 6 is waiting on those numbers from real
-hardware. If the median is bad, the lever is a cost-control toggle in
-Settings, default on.
+**What the first live runs found.** Driven in the dev app on
+`muse-glimmer:30b-mlx` (Ollama), one question whose answer is not in the
+corpus — "What did I conclude about the Guerneville house purchase date?" —
+run three times as each fix landed:
+
+| run | what happened |
+| --- | --- |
+| 1 | Round 2 failed every time: the history echoed round 1's call with `arguments` as a JSON *string* (OpenAI's dialect), and Ollama answers that with `400 "Value looks like object, but can't find closing '}'"`. The single-round mock test could not see it. The loop fell back to synthesis, so an answer still arrived. |
+| 2 | Dialect fixed; now it chained — and did not stop. 8 rounds, 20 tool calls, 15 searches, **6.2 minutes**, 71 excerpts handed to synthesis, which then timed out before its first token. No answer at all. It also reached for `open_notebook` mid-research on a question that never asked to go anywhere. |
+| 3 | With the fixes below: 5 searches, stopped as `sufficient` at **94s**, 27 excerpts, answered in ~76s more. |
+
+The research itself was good from run 2 on: the model found the property's
+street address in one result and searched by it, and tried the house's
+nickname. The single-shot path can do neither.
+
+What changed in response:
+
+- **Sufficiency, not the round budget, bounds a turn** (`EVIDENCE_CAP` = 24
+  passages). A model hunting for something absent never runs out of reasons
+  to look again; a ceiling on what it may carry back does. This also caps
+  what synthesis sees, which was the actual failure in run 2.
+- **Every write needs the user's words.** `add_source` keeps only URLs whose
+  host the user typed — the rule the classifier route always had and the
+  loop's first cut did not carry over. `save_note` needs an instruction to
+  save; `open_notebook` needs a navigation verb. A refused call goes back to
+  the model as a correctable error.
+- **Two dialects, one conversion.** The loop speaks Ollama's (strict) form;
+  `inference::to_openai_dialect` rewrites it for gateways.
+- **A step at the start of every round**, so the first minute is not the
+  front end's "Searching every notebook…" placeholder while nothing searches.
+- **The trace records why gathering ended** (`stop`: settled, sufficient,
+  budget, error, cancelled, skipped).
+
+Also verified live: a command ("switch chat to ollama") short-circuits on the
+classifier fast path with no loop round; an enumerative question skips the
+loop and keeps the global path; Stop pressed mid-round-1 with the model call
+in flight settles the turn in 0.1s.
+
+**Decision 6, answered.** The round budget was never the constraint that
+mattered; sufficiency is. The remaining cost is per-round model latency —
+roughly 19s a round on a 30b MLX model — so a pointed question that settles
+in two or three rounds spends 40–60s gathering before synthesis begins. That
+is the number to watch, and the lever if it is too slow is the model, not
+the loop.
+
+**One finding outside this RFC:** "What are my notebooks about, broadly?"
+answered as if the corpus were only about Alchemy, from 7 excerpts, across
+22 notebooks that cover far more. That is the pre-existing global path,
+which the loop deliberately leaves alone; it deserves its own look.
 
 ## Decisions
 
