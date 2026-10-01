@@ -151,13 +151,34 @@ async function handle(line) {
   }
 }
 
+/** Is this line the message that ends MCP's initialization phase? */
+function endsInitialization(line) {
+  try {
+    return JSON.parse(line).method === "notifications/initialized";
+  } catch {
+    return false;
+  }
+}
+
 const input = createInterface({ input: process.stdin });
-let handshake = null;
+// Every message waits for the initialization phase to end; after that they
+// are independent, so a slow search never holds up a cancellation.
+//
+// The phase is two messages, not one. `initialize` has to land first — its
+// reply carries the session id everything else needs — and the client then
+// closes the phase with `notifications/initialized`, which MCP requires
+// before any other request. Serializing only `initialize` sent that
+// notification and the next request concurrently on separate connections,
+// so `tools/list` could reach the app first. A client that never sends the
+// notification just stays sequential, which is slower but still correct.
+let phase = Promise.resolve();
+let initialized = false;
 input.on("line", (line) => {
-  // `initialize` has to land before anything else goes out: its reply carries
-  // the session id the rest of the conversation needs. After that, messages
-  // are independent — a slow search must not hold up a cancellation.
-  if (!handshake) handshake = handle(line);
-  else void handshake.then(() => handle(line));
+  if (initialized) {
+    void phase.then(() => handle(line));
+    return;
+  }
+  if (endsInitialization(line)) initialized = true;
+  phase = phase.then(() => handle(line));
 });
 input.on("close", () => process.exit(0));
