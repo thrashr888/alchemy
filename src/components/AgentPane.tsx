@@ -343,6 +343,7 @@ export function AgentPane({
           {permission && (
             <PermissionPrompt
               request={permission}
+              agent={agents?.find((a) => a.id === agentId)?.label}
               onAnswer={(id) => void answerPermission(id)}
             />
           )}

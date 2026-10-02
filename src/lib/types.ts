@@ -1081,6 +1081,9 @@ export interface AcpPermissionEvent {
   notebookId: string;
   requestId: string;
   toolTitle: string;
+  /** For one of Alchemy's own tools, what it does in the user's words
+   *  ("create a note"); null for anything else. */
+  action: string | null;
   options: { id: string; name: string; kind: string }[];
 }
 

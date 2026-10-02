@@ -455,6 +455,10 @@ struct PermissionEvent {
     notebook_id: String,
     request_id: String,
     tool_title: String,
+    /// For one of Alchemy's own tools, what it does in the user's words
+    /// ("create a note"), so the prompt can read "Claude Code wants to create
+    /// a note" instead of naming `mcp__alchemy__create_note`.
+    action: Option<String>,
     options: Vec<PermissionOptionInfo>,
 }
 
@@ -907,7 +911,7 @@ async fn run_session(
         .builder()
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
-                let update =
+                let mut update =
                     serde_json::to_value(&notification.update).unwrap_or(serde_json::Value::Null);
                 if let (Some(id), Some(title)) = (
                     update.get("toolCallId").and_then(|v| v.as_str()),
@@ -920,6 +924,16 @@ async fn run_session(
                         titles.clear();
                     }
                     titles.insert(id.to_string(), title.to_string());
+                }
+                // Our own tools in the user's words, in every trail that
+                // shows them (Home and the Agent pane alike). After the cache
+                // above, which keeps the wire name the permission check reads.
+                if let Some(human) = update
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .and_then(crate::mcp::access::human_title)
+                {
+                    update["title"] = serde_json::Value::String(human);
                 }
                 // First answer chunk of the turn stops the clock — thoughts
                 // and tool calls stream before it, but "first answer token"
@@ -996,7 +1010,19 @@ async fn run_session(
                             .unwrap_or_default(),
                     })
                     .collect();
-                let tool_title = request.tool_call.fields.title.clone().unwrap_or_default();
+                let ours = names
+                    .iter()
+                    .flatten()
+                    .find_map(|n| crate::mcp::access::alchemy_tool(n));
+                let action = ours
+                    .and_then(crate::mcp::access::action)
+                    .map(str::to_string);
+                let tool_title = names
+                    .iter()
+                    .flatten()
+                    .find_map(|n| crate::mcp::access::human_title(n))
+                    .or_else(|| request.tool_call.fields.title.clone())
+                    .unwrap_or_default();
                 permissions
                     .lock()
                     .unwrap()
@@ -1007,6 +1033,7 @@ async fn run_session(
                         notebook_id: perm_notebook.clone(),
                         request_id,
                         tool_title,
+                        action,
                         options,
                     },
                 );

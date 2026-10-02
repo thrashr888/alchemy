@@ -8,16 +8,32 @@ import type { AcpPermissionEvent } from "@/lib/types";
  *  once, always, reject — and Cancel declines without picking one. */
 export function PermissionPrompt({
   request,
+  agent,
   onAnswer,
 }: {
   request: AcpPermissionEvent;
+  /** Who is asking ("Claude Code"), when the caller knows. */
+  agent?: string | null;
   onAnswer: (optionId: string | null) => void;
 }) {
+  const who = agent || "The agent";
   return (
     <div className="rounded-lg border border-border bg-surface-2 px-3 py-2.5">
       <p className="text-caption text-foreground">
-        The agent wants to run{" "}
-        <span className="font-mono">{request.toolTitle || "a tool"}</span>.
+        {request.action ? (
+          // One of Alchemy's own tools: say what it does, not what it's
+          // called on the wire.
+          <>
+            {who} wants to {request.action}.
+          </>
+        ) : (
+          // Anything else is the agent's own tool; its name is the best
+          // description there is.
+          <>
+            {who} wants to run{" "}
+            <span className="font-mono">{request.toolTitle || "a tool"}</span>.
+          </>
+        )}
       </p>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {request.options.map((opt) => (

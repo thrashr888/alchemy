@@ -486,6 +486,7 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
             {chat.permission && (
               <PermissionPrompt
                 request={chat.permission}
+                agent={chat.agent}
                 onAnswer={chat.answerPermission}
               />
             )}
