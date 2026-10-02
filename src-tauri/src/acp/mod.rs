@@ -390,7 +390,7 @@ fn alchemy_mcp_server(app: &AppHandle, url: &str) -> Option<McpServer> {
 /// The Home counterpart of `session_preamble`: no notebook to name, so it
 /// points the agent at the whole library and at the corpus-wide tools.
 fn home_preamble() -> String {
-    "<context>You are running inside Alchemy, the user's local research notebook app, \
+    let base = "<context>You are running inside Alchemy, the user's local research notebook app, \
      answering in its library-wide chat: questions here can span every notebook the user \
      has. Their sources and notes are reachable through the connected `alchemy` MCP tools: \
      start with `ask_everything` (passages from across all notebooks, each naming its \
@@ -398,7 +398,16 @@ fn home_preamble() -> String {
      go deeper in one, and `get_source`/`get_note` to read in full. Ground your answer in \
      what those tools return and name the notebook each fact came from. Only add, change or \
      delete anything when the user asks you to.</context>"
-        .to_string()
+        .to_string();
+    with_field_notes(base)
+}
+
+/// Append the field-notes block, when there is one, to a preamble.
+fn with_field_notes(base: String) -> String {
+    match crate::fieldnotes::prompt_block() {
+        Some(notes) => format!("{base}\n\n{notes}"),
+        None => base,
+    }
 }
 
 // ---- State ------------------------------------------------------------------
@@ -893,14 +902,14 @@ fn session_preamble(notebook_title: &str, notebook_id: &str) -> String {
     } else {
         format!("the notebook \"{notebook_title}\"")
     };
-    format!(
+    with_field_notes(format!(
         "<context>You are running inside Alchemy, the user's local research notebook app, \
          attached to {name} (notebook_id: {notebook_id}). The user's questions are usually \
          about this notebook's contents. Its sources are reachable through the connected \
          `alchemy` MCP tools: start with `search` (hybrid search over the notebook's sources \
          and notes; pass this notebook_id), and use `list_sources`/`get_source` to read full \
          documents. Ground answers about the notebook's subject in those sources.</context>"
-    )
+    ))
 }
 
 #[expect(clippy::too_many_arguments)]
