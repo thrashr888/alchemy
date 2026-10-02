@@ -706,6 +706,8 @@ pub fn run() {
             acp::acp_stop,
             acp::acp_permission,
             acp::home_brain,
+            commands::undo::agent_changes,
+            commands::undo::undo_agent_changes,
             connectors::list_agent_connectors,
             connectors::connect_agent,
             textsize::get_system_text_scale,

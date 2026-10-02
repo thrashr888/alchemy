@@ -1077,6 +1077,26 @@ export interface HomeBrain {
 }
 
 /** A permission request awaiting the user's answer. */
+/** A note or source change an agent was allowed to make, kept so it can be
+ *  undone (backend `commands::undo`). */
+export interface AgentChange {
+  id: string;
+  /** When the user allowed it (ms). */
+  at: number;
+  /** update_note | delete_note | update_source | delete_source */
+  tool: string;
+  agent: string;
+  /** The note's or source's title before the change. */
+  title: string;
+  undone: boolean;
+}
+
+/** What an undo did, item by item — nothing it declined is silent. */
+export interface UndoReport {
+  restored: string[];
+  skipped: string[];
+}
+
 export interface AcpPermissionEvent {
   notebookId: string;
   requestId: string;

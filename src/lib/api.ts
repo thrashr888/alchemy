@@ -9,6 +9,8 @@ import type {
   ProviderModels,
   AcpAgentInfo,
   HomeBrain,
+  AgentChange,
+  UndoReport,
   ActivityStats,
   Citation,
   AiConfig,
@@ -647,6 +649,12 @@ export const api = {
     ),
   /** Which brain answers the next Home turn. Asked fresh on every ask: the
    *  chat provider can change between two questions. */
+  /** Changes agents were allowed to make in a session, for Undo. */
+  agentChanges: (key: string, fromMs: number, toMs: number) =>
+    run(query<AgentChange[]>("agent_changes", { key, fromMs, toMs })),
+  /** Put back what agents changed in a session between two moments. */
+  undoAgentChanges: (key: string, fromMs: number, toMs: number) =>
+    run(cmd<UndoReport>("undo_agent_changes", { key, fromMs, toMs })),
   homeBrain: () => run(probe<HomeBrain>("home_brain")),
   deleteMetaThread: (threadId: string) =>
     run(cmd<void>("delete_meta_thread", { threadId })),

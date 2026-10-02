@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { openMetaCitation } from "@/lib/citations";
-import { runForThread } from "@/lib/homeChatRun";
+import { api } from "@/lib/api";
+import { homeAgentKey, runForThread } from "@/lib/homeChatRun";
 import { navAtomic, useStore } from "@/lib/store";
 import { cn, chatReadingClass } from "@/lib/utils";
-import type { AcpPermissionEvent, MetaCitation, MetaTurn } from "@/lib/types";
+import type {
+  AcpPermissionEvent,
+  AgentChange,
+  MetaCitation,
+  MetaTurn,
+} from "@/lib/types";
 import { Markdown } from "./Markdown";
 import {
   CitationsToggle,
@@ -28,6 +34,7 @@ import {
   Sparkles,
   SquarePen,
   Trash2,
+  Undo2,
 } from "lucide-react";
 
 /**
@@ -323,6 +330,7 @@ export function HomeChatSidebarThreads() {
 /** The conversation itself: the scrolling middle, between Home's heading and
  *  the composer docked below it. */
 export function HomeChatThread({ chat }: { chat: HomeChat }) {
+  const undo = useAgentUndo(chat);
   const reading = useStore((s) => s.reading);
   const theme = useStore((s) => s.theme);
   const endRef = useRef<HTMLDivElement>(null);
@@ -371,6 +379,7 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
           chatReadingClass(reading),
         )}
       >
+        {undo.dialog}
         {chat.turns.map((turn, i) =>
           turn.role === "user" ? (
             <div key={turn.id} className="group flex flex-col items-end gap-1">
@@ -434,7 +443,10 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
               <MetaCitations citations={turn.citations} />
               <TurnActions
                 createdAt={turn.createdAt}
-                actions={[copyAction(turn.content)]}
+                actions={[
+                  copyAction(turn.content),
+                  ...undo.actionFor(chat.turns, i),
+                ]}
                 model={turn.model}
               />
             </div>
@@ -501,6 +513,98 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
 /** Re-run, as the notebook transcript means it: ask the same question again
  *  as a fresh turn at the end of this conversation. The earlier exchange
  *  stays exactly where it is — nothing in the thread is rewritten. */
+/** Undo for what an agent changed in this thread (RFC-unified-chat, phase 2).
+ *
+ *  Alchemy keeps a note's or source's state when the user says Yes to an
+ *  agent's update or delete; an answer whose turn made such changes offers
+ *  to put them back. A thread's changes are read once and split into turns
+ *  by time — each was allowed between its turn's question and its answer. */
+function useAgentUndo(chat: HomeChat) {
+  const threadId = useStore((s) => s.homeChat.threadId);
+  const pushToast = useStore((s) => s.pushToast);
+  const { confirm, dialog } = useConfirm();
+  const [changes, setChanges] = useState<AgentChange[]>([]);
+  const key = threadId ? homeAgentKey(threadId) : null;
+  // Re-read when the thread changes or a turn settles: that is when a new
+  // change can have been recorded.
+  const turnCount = chat.turns.length;
+  useEffect(() => {
+    if (!key) {
+      setChanges([]);
+      return;
+    }
+    let live = true;
+    api
+      .agentChanges(key, 0, Number.MAX_SAFE_INTEGER)
+      .then((c) => {
+        if (live) setChanges(c);
+      })
+      .catch(() => {
+        if (live) setChanges([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [key, turnCount]);
+
+  const actionFor = (turns: MetaTurn[], i: number): TurnAction[] => {
+    if (!key) return [];
+    let q = i - 1;
+    while (q >= 0 && turns[q].role !== "user") q--;
+    if (q < 0) return [];
+    const from = turns[q].createdAt;
+    const to = turns[i].createdAt;
+    const mine = changes.filter(
+      (c) => c.at >= from && c.at <= to && !c.undone,
+    );
+    if (mine.length === 0) return [];
+    const agent = mine[0].agent;
+    const line = (c: AgentChange) =>
+      c.tool.startsWith("delete")
+        ? `Bring back “${c.title}”`
+        : `Restore “${c.title}”`;
+    return [
+      {
+        label: "Undo changes",
+        doneLabel: "Undone",
+        icon: <Undo2 className="h-3.5 w-3.5" />,
+        title: `Put back what ${agent} changed in this answer`,
+        onClick: async () => {
+          const ok = await confirm({
+            title: `Undo what ${agent} changed?`,
+            message:
+              "Anything you've edited since is left as it is. Deleted items come back as new copies.",
+            items: mine.map(line),
+            confirmLabel: "Undo",
+          });
+          if (!ok) return;
+          try {
+            const report = await api.undoAgentChanges(key, from, to);
+            const done = report.restored.length;
+            const summary =
+              done > 0
+                ? `Put back ${done} ${done === 1 ? "change" : "changes"}.`
+                : "Nothing was put back.";
+            pushToast(
+              report.skipped.length ? "error" : "success",
+              report.skipped.length
+                ? `${summary} ${report.skipped.join(". ")}.`
+                : summary,
+            );
+          } finally {
+            const fresh = await api
+              .agentChanges(key, 0, Number.MAX_SAFE_INTEGER)
+              .catch(() => [] as AgentChange[]);
+            setChanges(fresh);
+          }
+        },
+      },
+    ];
+  };
+
+  return { actionFor, dialog };
+}
+
 function rerunAction(question: string, chat: HomeChat): TurnAction {
   return {
     label: "Re-run",
