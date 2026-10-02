@@ -617,14 +617,18 @@ fn may_navigate(asked: &str) -> bool {
 /// persona and the conversation, and every extra line is paid for on every
 /// round by a model that may have 8k of room.
 fn loop_system() -> String {
-    "You are gathering evidence to answer a question about the user's research library. \
+    let base =
+        "You are gathering evidence to answer a question about the user's research library. \
      Use tools to find what you need — search more than once if the first result is thin. \
      Do NOT write the final answer: once you have enough, reply with no tool calls and \
      the answer will be written from what you gathered. \
      If two or three searches keep missing, the library probably doesn't have it: stop, \
      and the answer will say so. \
-     Only act on what the user actually asked for; never invent a URL."
-        .to_string()
+     Only act on what the user actually asked for; never invent a URL.";
+    match crate::fieldnotes::prompt_block() {
+        Some(notes) => format!("{base}\n\n{notes}"),
+        None => base.to_string(),
+    }
 }
 
 /// Run the loop. Returns what it gathered, for the caller to synthesize from.
@@ -745,6 +749,10 @@ pub(crate) async fn run(
                 &c.arguments,
             )
             .await;
+            // A rejected call is a mistake worth remembering across sessions.
+            if let Some(why) = reply.text.strip_prefix("error:") {
+                crate::fieldnotes::record(&c.name, why);
+            }
             ev.push_citations(reply.citations);
             if let Some(r) = reply.reply {
                 ev.replies.push(r);

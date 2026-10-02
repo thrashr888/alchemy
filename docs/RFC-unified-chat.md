@@ -255,6 +255,17 @@ Shift's finding: most wasted rounds were the same mistake made again in a
 new session. That is the whole return, and it is available for a file
 append.
 
+**What field notes shipped.** `src-tauri/src/fieldnotes.rs` keeps
+`<app-data>/field-notes.md`, one `- tool: error` line each (error collapsed
+to one line, 200 characters), deduplicated by exact text with a repeat moving
+to the newest slot, newest 40 kept, written by temp file and rename. Two
+things are captured: a Home-loop tool reply that starts with `error:`, and an
+MCP tool call that fails with INVALID_PARAMS (internal errors are bugs and go
+to diagnostics). The block rides the Home loop's system prompt and both ACP
+preambles. The file is re-read on every use, so a line the user deletes stays
+deleted. Deferred: the Settings view beside `recent_errors`, the off switch,
+and the per-line turn tag.
+
 **Explicitly deferred: reflection, distillation, and A/B promotion.** Not
 because they're bad — because the gate that makes them honest is
 measurement against a re-runnable task, and Alchemy doesn't have one. A
