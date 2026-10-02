@@ -453,10 +453,12 @@ words (§4); agents now meet the same rule.
 at an inline prompt naming `create_note`; No was respected — the agent said
 the note wasn't created, and none was.
 
-**The gap: opencode.** It has no asking mode — its modes choose an agent,
-and its permission rules live in opencode's config — so it still decides
-for itself. Closing it means writing opencode's permission config for the
-session (unverified), or not offering opencode as Home's brain.
+**opencode is not offered as Home's brain (decided 2026-10-02).** It has no
+asking mode — its modes choose an agent, and its permission rules live in
+opencode's config — so it would decide for itself. `home_brain` only routes
+to an agent with an asking mode; with opencode as the chat provider, Home
+keeps the loop. The notebook Agent pane still hosts it. Revisit if opencode
+gains an asking mode or its per-session permission config proves reliable.
 
 **Dev-only note.** The agents' own `alchemy` MCP entries (from Connect)
 point at 41414. To test agents against a dev build while the installed app

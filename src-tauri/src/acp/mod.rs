@@ -91,6 +91,15 @@ impl AcpAgentKind {
         }
     }
 
+    /// May this agent be Home's brain? Only one Alchemy can hold to the
+    /// app's rule about what may change a notebook — one with an asking mode
+    /// (see `ask_mode`). opencode has none, so it would decide for itself, and
+    /// Home keeps the loop for it instead. The notebook Agent pane still
+    /// hosts it (decided 2026-10-02).
+    fn can_answer_home(self) -> bool {
+        self.ask_mode().is_some()
+    }
+
     fn from_id(id: &str) -> Option<Self> {
         AGENTS.into_iter().find(|k| k.id() == id)
     }
@@ -239,7 +248,7 @@ pub async fn home_brain(
             .map(|p| p.kind.clone())
             .unwrap_or_default()
     };
-    let Some(kind) = AcpAgentKind::from_id(&provider_kind) else {
+    let Some(kind) = AcpAgentKind::from_id(&provider_kind).filter(|k| k.can_answer_home()) else {
         return Ok(HomeBrain::local());
     };
     if !crate::mcp::status(&app).running {
@@ -1371,6 +1380,15 @@ mod home_tests {
         assert_eq!(AcpAgentKind::ClaudeCode.ask_mode(), Some("default"));
         assert_eq!(AcpAgentKind::Codex.ask_mode(), Some("workspace-write"));
         assert_eq!(AcpAgentKind::Opencode.ask_mode(), None);
+    }
+
+    /// Home's brain is only an agent Alchemy can govern: opencode, with no
+    /// asking mode, falls back to the loop.
+    #[test]
+    fn only_governable_agents_answer_home() {
+        assert!(AcpAgentKind::ClaudeCode.can_answer_home());
+        assert!(AcpAgentKind::Codex.can_answer_home());
+        assert!(!AcpAgentKind::Opencode.can_answer_home());
     }
 
     /// The Home preamble points at the corpus-wide tools and holds writes to
