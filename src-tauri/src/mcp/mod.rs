@@ -20,6 +20,7 @@ use crate::commands::{self, AppState};
 use crate::db::NOTEBOOK_PALETTE;
 use crate::models::{Note, Notebook, Source};
 
+pub(crate) mod access;
 mod diagnostics;
 mod growth;
 mod homechat;

@@ -1062,11 +1062,28 @@ export interface AcpUpdateEvent {
   };
 }
 
+/** Who answers a Home turn (docs/RFC-unified-chat.md §6, "One thread, two
+ *  brains"), from `home_brain`. "loop" is Alchemy's own corpus pipeline
+ *  (`ask_everything`); "agent" hands the turn to the hosted ACP agent the
+ *  chat provider names, run in a session keyed to the thread. */
+export interface HomeBrain {
+  kind: "loop" | "agent";
+  /** The ACP agent id when `kind` is "agent"; empty otherwise. */
+  agentId: string;
+  /** Who to caption the answer with, e.g. "Claude Code". */
+  label: string;
+  /** How to sign the agent in ("claude"); empty for the loop. */
+  loginCommand: string;
+}
+
 /** A permission request awaiting the user's answer. */
 export interface AcpPermissionEvent {
   notebookId: string;
   requestId: string;
   toolTitle: string;
+  /** For one of Alchemy's own tools, what it does in the user's words
+   *  ("create a note"); null for anything else. */
+  action: string | null;
   options: { id: string; name: string; kind: string }[];
 }
 

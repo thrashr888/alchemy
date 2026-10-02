@@ -297,8 +297,9 @@ data.
 2. **Permission classes, proposals for destructive and outside tools, undo
    journal.** The full write surface opens here, not before.
 3. **Renderable tool results** (`RFC-artifact-renderers`).
-4. **One thread, two brains** — fold `AgentPane` into the thread, delete the
-   toggle and the second transcript.
+4. **One thread, two brains** — the user's agent answers in the Home
+   thread. *First slice built — see "What phase 4 shipped" below.* The
+   notebook Agent pane and its toggle remain for now.
 5. **Field notes.**
 
 ## What phase 1 shipped
@@ -372,6 +373,99 @@ the loop.
 answered as if the corpus were only about Alchemy, from 7 excerpts, across
 22 notebooks that cover far more. That is the pre-existing global path,
 which the loop deliberately leaves alone; it deserves its own look.
+
+## What phase 4 shipped
+
+**Decision (2026-10-01): the agent is Home's brain, not a hand-off target.**
+When the chat provider is an agent with an ACP adapter (`claude-code`,
+`codex`, `opencode` — the provider kind and the ACP agent id are the same
+string), Home turns run in a thread-scoped ACP session instead of the tool
+loop. The hand-off chip the draft described would have done nothing for a
+user whose provider is an agent: the loop is skipped for agents
+(`supports_tools()` is false), so nothing ever fails over to them.
+
+- `home_brain` decides per ask, so a provider change takes effect on the
+  next question. It falls back to the loop when the agent isn't installed
+  or the MCP server isn't running — an agent with no way into the notebooks
+  is worse than the excerpt answer it would replace.
+- Sessions are keyed `home-<threadId>`; the session map, the working
+  directory and the events already took any string. Only the preamble
+  differs: Home's points at `ask_everything` and `list_notebooks`, and holds
+  writes to the user's word, as the loop does.
+- One live agent session per window; a thread left behind resumes from its
+  stored session id. A **fresh** session in a thread that already has turns
+  is handed the conversation so far, newest first within 6,000 characters,
+  so a thread that started on the local model doesn't meet an agent with no
+  idea what "it" refers to.
+- The agent's narration ("I'll search your notebooks…") goes to the step
+  trail; the saved answer is what it wrote after its last tool call.
+- `add_meta_turn` takes an optional `model`: an agent turn is captioned with
+  the agent that ran it, even if the provider changed mid-answer.
+- A sign-in failure carries the command that fixes it.
+
+**What the live run found.** Driven in the dev app with Codex, on the
+Guerneville question the local loop had answered "not in the library":
+
+| | |
+| --- | --- |
+| first try | `mcp__alchemy__startup (failed)`; Codex went probing ports itself and answered that it couldn't connect. |
+| cause 1 — a month-old regression | The ACP handoff (2026-08-20) passed the MCP URL without the bearer token the server has required since 2026-08-31. **Every hosted agent, notebook Agent pane included, has been locked out since.** Fixed in its own commit. |
+| cause 2 — dev only | All three agents carry their own `alchemy` MCP entry (written by Connect) pointing at 41414, the installed app; in dev it is closed and it shadows the session's. In production it is the same running app, so this doesn't reach users. Dev testing needs CLAUDE.md's documented edit (point the agent's entry at 41415, then restore). |
+| with both handled | Codex called `ask_everything` and `search`, found the answer in the *River House* notebook, and noticed the date is recorded as an assumption — with a working `alchemy://note/…` link to the note. |
+| Stop | settled 0.7s after the press mid-tool-call; partial kept as `stopped`; the session survives for a follow-up. |
+
+Routing, both directions, was verified: Ollama → loop, Claude Code /
+Codex → agent.
+
+### Alchemy decides what may change a notebook
+
+**Decision (2026-10-01), for consistency across providers:** the rule about
+what an agent may change is the app's, not the agent's. Before this, each
+agent applied its own: Claude Code inherits the user's `defaultMode` (here
+`auto`, which approves tools itself — the first live Claude run never
+prompted for anything), Codex starts in its own "Auto review", and opencode
+follows its own config. The local loop already held writes to the user's
+words (§4); agents now meet the same rule.
+
+- **One classification.** `mcp/access.rs` labels each of the 67 tools read
+  or write, both lists explicit, and a test fails the build when a served
+  tool is in neither, in both, or no longer exists. At runtime anything not
+  on the read list is a write, so an unknown name asks.
+- **Asking mode, every session.** Claude Code is put in `default` ("always
+  ask"), Codex in `workspace-write`, before the session reports ready —
+  Home's and the notebook Agent pane's alike, since it's the same agent
+  touching the same notes. A mode the adapter doesn't offer is logged, not
+  forced.
+- **Reads are answered by Alchemy; writes go to the user.** A permission
+  request for one of Alchemy's read tools gets `allow_once` without the
+  user seeing it. The tool is identified from Claude's
+  `_meta.claudeCode.toolName`, the request title, or — for Codex, whose MCP
+  permission requests carry only a call id — the title its earlier
+  `tool_call` update gave that id. Another server's `search` is not ours.
+- **Only per-call answers.** Agents also offer "allow always" ("Yes, and
+  don't ask again for Create Note commands"), which writes a rule into the
+  agent's own settings — after which that agent stops asking Alchemy while
+  every other brain still asks. The prompt shows Yes / No / Cancel. A
+  remembered answer, if it's wanted, belongs in Alchemy.
+
+**Verified live with Claude Code:** a read (`list_notebooks`,
+`ask_everything`) ran with no prompt; "create a note in River House" stopped
+at an inline prompt naming `create_note`; No was respected — the agent said
+the note wasn't created, and none was.
+
+**opencode is not offered as Home's brain (decided 2026-10-02).** It has no
+asking mode — its modes choose an agent, and its permission rules live in
+opencode's config — so it would decide for itself. `home_brain` only routes
+to an agent with an asking mode; with opencode as the chat provider, Home
+keeps the loop. The notebook Agent pane still hosts it. Revisit if opencode
+gains an asking mode or its per-session permission config proves reliable.
+
+**Dev-only note.** The agents' own `alchemy` MCP entries (from Connect)
+point at 41414. To test agents against a dev build while the installed app
+is closed, set Alchemy's MCP port to 41413 so the dev +1 offset lands on
+41414 — this avoids editing `~/.claude.json`, which every running Claude
+Code session writes to. Set it back afterwards: the installed app reads the
+same config.
 
 ## Decisions
 

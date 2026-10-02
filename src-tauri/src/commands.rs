@@ -13999,6 +13999,8 @@ pub async fn add_meta_turn(
     content: String,
     citations: Option<Vec<MetaCitation>>,
     kind: Option<String>,
+    // Who wrote an agent-hosted answer (docs/RFC-unified-chat.md §6).
+    model: Option<String>,
 ) -> Result<MetaTurn, String> {
     let thread_id = thread_id.trim().to_string();
     if thread_id.is_empty() {
@@ -14010,10 +14012,16 @@ pub async fn add_meta_turn(
     // Which model answered is the backend's to know, not the caller's: the
     // notebook transcript captions every answer this way, and Home's turns
     // now say the same thing. Momentary read guard, no await under it.
-    let model = if role == "assistant" {
-        state.ai.read().await.active_chat_model()
-    } else {
-        String::new()
+    //
+    // The one caller that knows better is an ACP-hosted Home turn. Its answer
+    // came from the agent session that ran it, which is not necessarily the
+    // configured provider by the time the turn settles — switch providers
+    // mid-answer and the default would caption the agent's words with the
+    // new model. So the front end names the agent it actually prompted.
+    let model = match (role.as_str(), model.filter(|m| !m.trim().is_empty())) {
+        ("assistant", Some(named)) => named,
+        ("assistant", None) => state.ai.read().await.active_chat_model(),
+        _ => String::new(),
     };
     let turn = MetaTurn {
         id: new_id(),

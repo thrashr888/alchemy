@@ -1,4 +1,5 @@
 import type {
+  AcpPermissionEvent,
   Citation,
   AiConfig,
   ChatConfig,
@@ -145,6 +146,15 @@ export interface HomeRun {
    *  one corpus question per window, so this one waits — and every meta://
    *  event until it clears belongs to the run being wound down, not to this. */
   queued: boolean;
+  /** Set when the hosted agent is writing this answer rather than Alchemy's
+   *  own pipeline (RFC-unified-chat §6): who it is, as the caption names it. */
+  agent?: string;
+  /** The agent's tool calls that have started and not yet finished. Its
+   *  trail is tools, not pipeline stages, so a step is done when the tool
+   *  says so — not when the first words of the answer arrive. */
+  toolsRunning?: number;
+  /** The agent is waiting on the user to allow a tool. */
+  permission?: AcpPermissionEvent | null;
 }
 
 export interface ExternalAdd {
@@ -486,11 +496,26 @@ export interface AppState {
     citations: MetaCitation[],
     kind: MetaTurn["kind"],
     threadId?: string,
+    /** Caption the turn with this instead of the local chat model — a hosted
+     *  agent's label. */
+    model?: string,
   ) => Promise<void>;
   /** Ask across every notebook, into the open conversation. Resolves when the
    *  answer has settled. A question asked while another is still being written
    *  winds that one down first (its partial is kept, as Stop keeps it). */
-  askHome: (question: string) => Promise<void>;
+  askHome: (
+    question: string,
+    opts?: {
+      /** Home chat's own asks pass true: when the chat provider is a hosted
+       *  agent, the turn runs in that agent's session for this thread. The
+       *  ⌘K palette never does — a glance at the launcher stays one fast
+       *  corpus answer, whoever the provider is. */
+      allowAgent?: boolean;
+    },
+  ) => Promise<void>;
+  /** Answer the hosted agent's pending tool permission in the live Home run.
+   *  `null` declines it. */
+  answerHomePermission: (optionId: string | null) => void;
   /** Land a Home tool reply: the quiet transcript row, plus whatever the
    *  backend could only ask this window to do — open a notebook, or let go
    *  of the conversation it just deleted. */

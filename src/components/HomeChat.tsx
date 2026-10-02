@@ -3,7 +3,7 @@ import { openMetaCitation } from "@/lib/citations";
 import { runForThread } from "@/lib/homeChatRun";
 import { navAtomic, useStore } from "@/lib/store";
 import { cn, chatReadingClass } from "@/lib/utils";
-import type { MetaCitation, MetaTurn } from "@/lib/types";
+import type { AcpPermissionEvent, MetaCitation, MetaTurn } from "@/lib/types";
 import { Markdown } from "./Markdown";
 import {
   CitationsToggle,
@@ -16,6 +16,7 @@ import {
   type TurnAction,
 } from "./ChatPanel";
 import { AlchemySymbol } from "./AlchemyHero";
+import { PermissionPrompt } from "./PermissionPrompt";
 import { THEMES, resolveThemeId } from "@/lib/themes";
 import { CHAT_LENGTHS, CHAT_STYLES } from "./settings/SettingsTabs";
 import { RowMenu, StepTrail, Textarea, useConfirm } from "./ui";
@@ -55,6 +56,14 @@ export interface HomeChat {
   /** The question that run is answering, shown when the thread's turns
    *  haven't finished loading back in. */
   question: string;
+  /** The hosted agent writing this answer, when it isn't Alchemy's own
+   *  pipeline (RFC-unified-chat §6). */
+  agent: string | null;
+  /** The agent's tool calls still going — its trail's spinner. */
+  toolsRunning: number;
+  /** A tool the agent is waiting to be allowed to run. */
+  permission: AcpPermissionEvent | null;
+  answerPermission: (optionId: string | null) => void;
   ask: (question: string) => void;
   stop: () => void;
 }
@@ -71,6 +80,7 @@ export function useHomeChat(): HomeChat {
   const run = useStore((s) => s.homeRun);
   const ask = useStore((s) => s.askHome);
   const stop = useStore((s) => s.stopHome);
+  const answerPermission = useStore((s) => s.answerHomePermission);
 
   // A run belongs to one thread. Looking at another conversation shows that
   // conversation, not someone else's answer arriving.
@@ -103,7 +113,13 @@ export function useHomeChat(): HomeChat {
     loading,
     queued: !!mine?.queued,
     question: mine?.question ?? "",
-    ask: (q: string) => void ask(q),
+    agent: mine?.agent ?? null,
+    toolsRunning: mine?.toolsRunning ?? 0,
+    permission: mine?.permission ?? null,
+    answerPermission,
+    // Home's own asks may go to the hosted agent when it's the chat
+    // provider; the store decides per question (the palette never does).
+    ask: (q: string) => void ask(q, { allowAgent: true }),
     stop,
   };
 }
@@ -315,7 +331,13 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
   // so this rides along with them rather than scheduling its own.
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [chat.turns.length, chat.streaming, chat.steps.length, chat.waiting]);
+  }, [
+    chat.turns.length,
+    chat.streaming,
+    chat.steps.length,
+    chat.waiting,
+    chat.permission,
+  ]);
 
   // The same blank state the notebook's Chat page shows on a truly empty
   // transcript (`ChatHero`, isBlank): the sigil and one line, no summary
@@ -438,7 +460,15 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
               <StepTrail
                 steps={chat.steps}
                 waiting={chat.waiting}
-                done={!!chat.streaming}
+                // The pipeline's stages are over once the answer starts
+                // arriving. An agent's are tools, which it can still be
+                // calling between paragraphs, so its trail is done only
+                // when none is running.
+                done={
+                  chat.agent
+                    ? !chat.waiting && chat.toolsRunning === 0
+                    : !!chat.streaming
+                }
               />
             )}
             {chat.streaming ? (
@@ -447,9 +477,18 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
               chat.steps.length === 0 &&
               !chat.waiting && (
                 <div className="text-caption text-muted-foreground">
-                  Searching every notebook…
+                  {chat.agent
+                    ? `${chat.agent} is working…`
+                    : "Searching every notebook…"}
                 </div>
               )
+            )}
+            {chat.permission && (
+              <PermissionPrompt
+                request={chat.permission}
+                agent={chat.agent}
+                onAnswer={chat.answerPermission}
+              />
             )}
           </div>
         )}

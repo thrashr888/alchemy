@@ -19,7 +19,18 @@ import { describe } from "./errors";
 import { notify } from "./notify";
 import { loadGrowthDismissed, saveGrowthDismissed } from "./growth";
 import { dropEntry, makeEntry, pushEntry } from "./history";
-import { historyOf, mergeLoadedTurns } from "./homeChatRun";
+import {
+  EMPTY_AGENT_FOLD,
+  foldAgentUpdate,
+  historyOf,
+  homeAgentKey,
+  mergeLoadedTurns,
+  agentAnswer,
+  agentFailureMessage,
+  seedAgentPrompt,
+  toolsRunning,
+  type AgentFold,
+} from "./homeChatRun";
 import { homePlaceById, sameNavEntry, type HomePlace } from "./homeNav";
 import { claimTextUndo } from "./textUndo";
 import { playDone, playError } from "./sound";
@@ -39,7 +50,11 @@ import type {
 } from "./storeTypes";
 export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
+  AcpPermissionEvent,
+  AcpStateEvent,
+  AcpUpdateEvent,
   ChatConfig,
+  HomeBrain,
   Message,
   MetaTurn,
   Note,
@@ -389,6 +404,83 @@ let metaSeq = 0;
  *  dropped rather than written — persisting them would resurrect the thread
  *  the user just deleted. */
 const abandonedThreads = new Set<string>();
+/** A Home turn the hosted agent is answering (RFC-unified-chat §6). It holds
+ *  the meta channel like any other Home run, but its events arrive on the
+ *  app-wide acp:// channels, which the listeners bound once in
+ *  bindGlobalListeners route here by session key. */
+interface AgentTurn {
+  key: string;
+  threadId: string;
+  /** acp_start has resolved. Before it, a session that dies is a failed
+   *  start, which the caller is already awaiting and reports itself. */
+  started: boolean;
+  /** The backend has said "turn": updates from here on are this answer's.
+   *  Before it, a resumed session is replaying its old transcript. */
+  live: boolean;
+  fold: AgentFold;
+  /** A tool permission the agent is blocked on. Cancelling has to answer it
+   *  too, or the agent sits waiting on a prompt nobody can see any more. */
+  permission: string | null;
+  settle: (end: AgentEnd) => void;
+}
+type AgentEnd =
+  | { kind: "done"; stopReason: string }
+  | { kind: "error"; message: string }
+  | { kind: "stopped" };
+let agentTurn: AgentTurn | null = null;
+let agentFlushHandle = 0;
+/** The Home thread whose agent session this window keeps alive. One at a
+ *  time: every thread asked into would otherwise leave an agent subprocess
+ *  running behind it. A thread left behind resumes from its stored session
+ *  id when it's asked into again, so stopping one loses nothing. */
+let liveHomeAgentKey: string | null = null;
+/** How long a cancelled agent turn gets to wind down before its session is
+ *  stopped outright. An agent that ignores session/cancel would otherwise
+ *  hold Home's one channel for good. */
+const AGENT_STOP_GRACE_MS = 5_000;
+const HOME_AGENT_PREFIX = "acpHome:";
+
+/** The agent session a Home thread last ran in, so a relaunch (or a thread
+ *  whose session was stopped to make room for another) picks the
+ *  conversation up where it was instead of meeting an agent with no memory
+ *  of it. */
+function readHomeAgent(
+  threadId: string,
+): { agentId: string; sessionId: string } | null {
+  try {
+    const raw = localStorage.getItem(HOME_AGENT_PREFIX + threadId);
+    const v = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    return v && typeof v.agentId === "string" && typeof v.sessionId === "string"
+      ? { agentId: v.agentId, sessionId: v.sessionId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberHomeAgent(threadId: string, agentId: string, sessionId: string) {
+  try {
+    localStorage.setItem(
+      HOME_AGENT_PREFIX + threadId,
+      JSON.stringify({ agentId, sessionId }),
+    );
+  } catch {
+    /* resuming is a convenience; the thread itself is in meta_turns */
+  }
+}
+
+/** A deleted thread takes its agent session with it: the subprocess, and the
+ *  id that would have resumed it. */
+function forgetHomeAgent(threadId: string) {
+  const key = homeAgentKey(threadId);
+  if (liveHomeAgentKey === key) liveHomeAgentKey = null;
+  void api.acpStop(key).catch(() => {});
+  try {
+    localStorage.removeItem(HOME_AGENT_PREFIX + threadId);
+  } catch {
+    /* nothing to resume from either way */
+  }
+}
 // folder://progress arrives once per ingested file; coalesce to one store
 // write per frame so a 5,000-file import doesn't mean 5,000 full re-renders
 // of the sources panel.
@@ -524,6 +616,189 @@ export const useStore = create<AppState>((rawSet, get) => {
     const s = get();
     if (s.homeSection === "chat" && !s.currentId) return;
     set({ homeChatUnread: true });
+  };
+
+  /** Commit the agent turn's fold into `homeRun`, once per frame — message
+   *  chunks arrive token by token, the same as meta://token does. */
+  const flushAgentTurn = () => {
+    if (agentFlushHandle !== 0) return;
+    agentFlushHandle = requestAnimationFrame(() => {
+      agentFlushHandle = 0;
+      const turn = agentTurn;
+      const run = get().homeRun;
+      if (!turn || !run || run.queued || run.threadId !== turn.threadId)
+        return;
+      set({
+        homeRun: {
+          ...run,
+          streaming: turn.fold.streaming,
+          steps: turn.fold.steps,
+          toolsRunning: toolsRunning(turn.fold),
+          waiting: "",
+        },
+      });
+    });
+  };
+
+  /** Cancel whatever holds the meta channel: the hosted agent's turn when
+   *  one is running, Alchemy's own pipeline otherwise. Either way the run
+   *  settles itself with whatever it had written. */
+  const cancelHomeRun = () => {
+    const turn = agentTurn;
+    if (!turn) {
+      void api.cancelGeneration("meta");
+      return;
+    }
+    if (turn.permission) {
+      void api.acpPermission(turn.key, turn.permission, null).catch(() => {});
+      turn.permission = null;
+    }
+    // Before the session is up there's no turn to cancel; the run checks
+    // for a stop once acp_start resolves and never sends the prompt.
+    void api.acpCancel(turn.key).catch(() => {});
+    setTimeout(() => {
+      if (agentTurn !== turn || !turn.started) return;
+      void api.acpStop(turn.key).catch(() => {});
+      turn.settle({ kind: "stopped" });
+    }, AGENT_STOP_GRACE_MS);
+  };
+
+  /** One Home turn, answered by the hosted agent in this thread's session
+   *  (RFC-unified-chat §6). Resolves once the answer has been written into
+   *  the thread. The user's question is already there. */
+  const askAgent = async (
+    threadId: string,
+    question: string,
+    brain: HomeBrain,
+    seq: number,
+    prior: { role: string; content: string }[],
+  ) => {
+    const key = homeAgentKey(threadId);
+    const withdrawn = () =>
+      metaSeq !== seq || (get().homeRun?.stopped ?? false);
+    // Stopped while the brain was being asked: don't spin an agent up for a
+    // question nobody is waiting on.
+    if (withdrawn()) return;
+    let resolve!: (end: AgentEnd) => void;
+    const ended = new Promise<AgentEnd>((r) => (resolve = r));
+    const turn: AgentTurn = {
+      key,
+      threadId,
+      started: false,
+      live: false,
+      fold: EMPTY_AGENT_FOLD,
+      permission: null,
+      settle: (end) => {
+        if (agentTurn === turn) agentTurn = null;
+        resolve(end);
+      },
+    };
+    agentTurn = turn;
+    try {
+      if (liveHomeAgentKey && liveHomeAgentKey !== key)
+        void api.acpStop(liveHomeAgentKey).catch(() => {});
+      liveHomeAgentKey = key;
+      // A session already running for this thread, with this agent, carries
+      // the conversation so far; anything else is replaced.
+      const running = await api.acpStatus(key).catch(() => null);
+      // A session that is already running, or resumes, remembers the thread;
+      // only a fresh one needs the conversation handed to it.
+      let fresh = false;
+      if (running !== brain.agentId) {
+        const stored = readHomeAgent(threadId);
+        const resume =
+          stored?.agentId === brain.agentId ? stored.sessionId : null;
+        try {
+          await api.acpStart(key, brain.agentId, resume);
+          fresh = !resume;
+        } catch (e) {
+          if (!resume) throw e;
+          // A session the agent no longer has is a reason to start a fresh
+          // one, not to fail the question.
+          try {
+            localStorage.removeItem(HOME_AGENT_PREFIX + threadId);
+          } catch {
+            /* the retry doesn't depend on it */
+          }
+          await api.acpStart(key, brain.agentId, null);
+          fresh = true;
+        }
+      }
+      turn.started = true;
+      // Stopped (or asked over) while the agent was starting: the question
+      // was never sent, so there is nothing to wait for or record.
+      if (withdrawn()) return;
+      await api.acpPrompt(key, fresh ? seedAgentPrompt(prior, question) : question);
+      const end = await ended;
+      const text = agentAnswer(turn.fold);
+      const caption = brain.label;
+      if (end.kind === "error") {
+        // The words that did arrive are still the agent's; the failure
+        // lands under them, the way a pipeline failure lands.
+        if (text.trim())
+          await get().appendHomeTurn(
+            "assistant",
+            text,
+            [],
+            "stopped",
+            threadId,
+            caption,
+          );
+        await get().appendHomeTurn(
+          "assistant",
+          agentFailureMessage(end.message, caption, brain.loginCommand),
+          [],
+          "error",
+          threadId,
+          caption,
+        );
+        markHomeChatUnread();
+        return;
+      }
+      const stopped =
+        withdrawn() ||
+        end.kind === "stopped" ||
+        end.stopReason === "cancelled";
+      if (!text.trim()) {
+        if (stopped) return;
+        await get().appendHomeTurn(
+          "assistant",
+          `${caption} finished without writing an answer.`,
+          [],
+          "error",
+          threadId,
+          caption,
+        );
+        markHomeChatUnread();
+        return;
+      }
+      // Agent answers carry no citations yet: what it read arrives as tool
+      // calls, not as the numbered excerpts a pipeline answer cites.
+      await get().appendHomeTurn(
+        "assistant",
+        text,
+        [],
+        stopped ? "stopped" : "chat",
+        threadId,
+        caption,
+      );
+      markHomeChatUnread();
+    } catch (e) {
+      // Usually a start that failed — the agent isn't signed in, or isn't
+      // installed any more. It lands captioned with the agent, since the
+      // agent is what needs fixing, not the local model.
+      await get().appendHomeTurn(
+        "assistant",
+        agentFailureMessage(describe(e), brain.label, brain.loginCommand),
+        [],
+        "error",
+        threadId,
+        brain.label,
+      );
+      markHomeChatUnread();
+    } finally {
+      if (agentTurn === turn) agentTurn = null;
+    }
   };
 
   const guard = async (fn: () => Promise<void>) => {
@@ -918,6 +1193,57 @@ export const useStore = create<AppState>((rawSet, get) => {
             get().appendHomeStep(e.payload.label, e.payload.transient);
         },
       );
+      // A Home turn the hosted agent is answering. The acp:// channels are
+      // shared with every notebook's Agent pane and every window, so each
+      // event is matched to the turn by its session key — anything else is
+      // somebody else's agent.
+      void listen<AcpStateEvent>("acp://state", (e) => {
+        const turn = agentTurn;
+        if (!turn || e.payload.notebookId !== turn.key) return;
+        const { state, detail } = e.payload;
+        if (state === "ready") {
+          const sessionId = (detail as { sessionId?: string } | null)
+            ?.sessionId;
+          if (sessionId)
+            rememberHomeAgent(turn.threadId, e.payload.agentId, sessionId);
+        } else if (state === "turn") {
+          turn.live = true;
+        } else if (state === "idle") {
+          if (turn.live)
+            turn.settle({
+              kind: "done",
+              stopReason: typeof detail === "string" ? detail : "",
+            });
+        } else if (turn.started && state === "error") {
+          turn.settle({
+            kind: "error",
+            message:
+              typeof detail === "string" && detail
+                ? detail
+                : "The agent hit an error.",
+          });
+        } else if (turn.started && state === "stopped") {
+          turn.settle({ kind: "stopped" });
+        }
+      });
+      void listen<AcpUpdateEvent>("acp://update", (e) => {
+        const turn = agentTurn;
+        if (!turn || !turn.live || e.payload.notebookId !== turn.key) return;
+        const next = foldAgentUpdate(turn.fold, e.payload.update);
+        // Thoughts fold to nothing; committing them would only clear the
+        // "Asking…" line with nothing to show in its place.
+        if (next === turn.fold) return;
+        turn.fold = next;
+        flushAgentTurn();
+      });
+      void listen<AcpPermissionEvent>("acp://permission", (e) => {
+        const turn = agentTurn;
+        if (!turn || e.payload.notebookId !== turn.key) return;
+        turn.permission = e.payload.requestId;
+        const run = get().homeRun;
+        if (run && !run.queued && run.threadId === turn.threadId)
+          set({ homeRun: { ...run, permission: e.payload } });
+      });
       // Verify-and-repair swaps a revised answer under the same message id
       // (backend spawn_answer_verify) — apply only when the message is in
       // this window's transcript.
@@ -1799,7 +2125,14 @@ export const useStore = create<AppState>((rawSet, get) => {
       }
     },
 
-    appendHomeTurn: async (role, content, citations, kind, intoThread) => {
+    appendHomeTurn: async (
+      role,
+      content,
+      citations,
+      kind,
+      intoThread,
+      model,
+    ) => {
       const threadId = intoThread ?? get().homeChat.threadId ?? newThreadId();
       // The conversation was deleted while this was being written.
       if (abandonedThreads.has(threadId)) return;
@@ -1817,6 +2150,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         content,
         citations,
         kind,
+        model,
         createdAt: Date.now(),
       };
       if (showing())
@@ -1834,6 +2168,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           content,
           citations,
           kind,
+          model,
         );
         set((s) =>
           s.homeChat.threadId === threadId
@@ -1858,7 +2193,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       }
     },
 
-    askHome: async (question) => {
+    askHome: async (question, opts) => {
       const q = question.trim();
       if (!q) return;
       // The thread id exists before the question does (openHomeThread mints
@@ -1894,7 +2229,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       };
       const run = (async () => {
         if (previous) {
-          void api.cancelGeneration("meta");
+          cancelHomeRun();
           await previous.catch(() => {});
           // Displaced in turn while waiting for the channel — the newer
           // question owns `homeRun` now, so leave it alone.
@@ -1908,8 +2243,31 @@ export const useStore = create<AppState>((rawSet, get) => {
               : {},
           );
         }
+        // Who answers is asked now, not remembered: the chat provider can
+        // change between two questions. A probe that fails falls back to
+        // Alchemy's own pipeline, which needs nothing from the probe.
+        const brain = opts?.allowAgent
+          ? await api.homeBrain().catch(() => null)
+          : null;
+        if (brain?.kind === "agent" && metaSeq === seq)
+          set((s) =>
+            s.homeRun
+              ? {
+                  homeRun: {
+                    ...s.homeRun,
+                    agent: brain.label,
+                    toolsRunning: 0,
+                    waiting: `Asking ${brain.label}…`,
+                  },
+                }
+              : {},
+          );
         await get().appendHomeTurn("user", q, [], "chat", threadId);
         try {
+          if (brain?.kind === "agent") {
+            await askAgent(threadId, q, brain, seq, prior);
+            return;
+          }
           const res = await api
             // No depth argument: the backend picks depth per model class
             // (deep rerank on gateways where the extra call is cheap,
@@ -1962,6 +2320,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // drop the draft — and say so where it can still be read.
       if (answer.effect?.kind === "deleteChat") {
         abandonedThreads.add(threadId);
+        forgetHomeAgent(threadId);
         if (get().homeChat.threadId === threadId)
           set({ homeChat: { threadId: newThreadId(), turns: [] } });
         get().setHomeDraft(`t:${threadId}`, "");
@@ -1990,8 +2349,20 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Keep what arrived: the backend resolves a cancelled run with the
       // partial answer and its citations. A queued run has nothing in flight
       // to cancel — the flag withdraws it before it starts.
-      set({ homeRun: { ...run, stopped: true } });
-      if (!run.queued) void api.cancelGeneration("meta");
+      set({ homeRun: { ...run, stopped: true, permission: null } });
+      if (!run.queued) cancelHomeRun();
+    },
+
+    answerHomePermission: (optionId) => {
+      const turn = agentTurn;
+      const run = get().homeRun;
+      const request = run?.permission;
+      if (!turn || !run || !request || request.notebookId !== turn.key) return;
+      turn.permission = null;
+      set({ homeRun: { ...run, permission: null } });
+      void api
+        .acpPermission(turn.key, request.requestId, optionId)
+        .catch((e) => get().pushToast("error", describe(e)));
     },
 
     appendHomeToken: (t) => {
@@ -2045,8 +2416,9 @@ export const useStore = create<AppState>((rawSet, get) => {
       if (get().homeRun?.threadId === threadId) {
         abandonedThreads.add(threadId);
         set({ homeRun: null });
-        void api.cancelGeneration("meta");
+        cancelHomeRun();
       }
+      forgetHomeAgent(threadId);
       // Deleting the conversation you're reading leaves a fresh one open,
       // not an empty screen with no way forward.
       if (get().homeChat.threadId === threadId)
