@@ -127,7 +127,7 @@ struct ToolSpec {
 
 /// Every tool the loop advertises.
 ///
-/// The `core` seven are the ones a common Home turn needs before it can do
+/// The `core` eight are the ones a common Home turn needs before it can do
 /// anything at all, and they are few because a catalog in a prompt is a bill
 /// this codebase has already measured: `agent_cli.rs` records copilot loading
 /// 105 tools for ~42k tool-definition tokens, and the fix was to cut it to
@@ -146,6 +146,20 @@ fn catalog() -> Vec<ToolSpec> {
                         "query": { "type": "string", "description": "What to look for, in natural language." }
                     },
                     "required": ["query"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "survey_notebooks",
+            core: true,
+            description: "Survey the whole library at once, from each source's distilled summary, for broad questions: which notebooks mention something, what the user has on a topic overall, how notebooks compare. Use search_corpus instead for a pointed question.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "The broad question, in natural language." }
+                    },
+                    "required": ["question"]
                 })
             },
         },
@@ -675,6 +689,44 @@ async fn dispatch(
                     ToolReply {
                         text: cap(text),
                         citations: found,
+                        ..Default::default()
+                    }
+                }
+            }
+        }
+        "survey_notebooks" => {
+            let query = arg(args, "question");
+            if query.is_empty() {
+                return ToolReply::say("error: question is required");
+            }
+            meta_step_to(
+                target,
+                format!("Surveying every notebook for “{query}”"),
+                false,
+            );
+            match super::global_meta_route(state, target, query).await {
+                Err(err) => ToolReply::say(format!("error: survey failed: {err}")),
+                // No distilled summaries yet (a fresh library): say so, and
+                // the model reaches for search_corpus instead.
+                Ok(None) => ToolReply::say(
+                    "The library has no source summaries yet. Use search_corpus instead.",
+                ),
+                Ok(Some((citations, passages))) => {
+                    let text = passages
+                        .iter()
+                        .map(|p| {
+                            format!(
+                                "[{} · {}] {}",
+                                p.notebook_title,
+                                p.title,
+                                p.snippet.replace('\n', " ")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ToolReply {
+                        text: cap(text),
+                        citations,
                         ..Default::default()
                     }
                 }
@@ -1588,7 +1640,7 @@ async fn dispatch_notebook(
             return declined_reply("Left it as it was — you said No.");
         }
     }
-    let reply = super::run_tool_action(app, state, notebook_id, question, &sources, action)
+    let reply = super::run_tool_action(app, state, notebook_id, &sources, action)
         .await
         .unwrap_or_default();
     if is_write {
@@ -1882,6 +1934,7 @@ mod tests {
         // The arms `dispatch` implements, kept beside the match it mirrors.
         let arms = [
             "search_corpus",
+            "survey_notebooks",
             "list_notebooks",
             "add_source",
             "save_note",
@@ -1910,11 +1963,13 @@ mod tests {
         assert_eq!(arms.len(), catalog().len(), "a dispatch arm went unlisted");
     }
 
-    /// The core set is a prompt-tax decision, not a drive-by. The seventh,
-    /// `create_notebook`, was one: asked for a notebook, a local model never
-    /// went to `tool_search` for a tool it couldn't see.
+    /// The core set is a prompt-tax decision, not a drive-by. Each addition
+    /// was one: `create_notebook` because a local model asked for a notebook
+    /// never went to `tool_search` for a tool it couldn't see, and
+    /// `survey_notebooks` because it replaced a phrase list that decided
+    /// before any model saw the question (RFC 6f).
     #[test]
-    fn core_set_stays_seven() {
+    fn core_set_stays_eight() {
         let core: Vec<&str> = catalog()
             .iter()
             .filter(|t| t.core)
@@ -1924,6 +1979,7 @@ mod tests {
             core,
             vec![
                 "search_corpus",
+                "survey_notebooks",
                 "list_notebooks",
                 "add_source",
                 "save_note",

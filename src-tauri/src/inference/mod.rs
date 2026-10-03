@@ -29,6 +29,7 @@ pub use ollama::is_cold as ollama_is_cold;
 // ranking gap) — beir_eval's BEIR_XENC hook is the sole consumer today.
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod rerank;
+mod text_tools;
 
 pub use agent_cli::{agent_default_model, agent_status, list_agent_models, AgentCli, AgentKind};
 pub(crate) use agent_cli::{find_binary_cached, load_shell_env};
@@ -499,10 +500,10 @@ impl ChatEngine {
     /// A `false` here is not a failure: the caller keeps the single-shot
     /// classifier path, which is what every engine did before the loop.
     pub fn supports_tools(&self) -> bool {
-        match self {
-            ChatEngine::Ollama(_) | ChatEngine::Gateway(_) => true,
-            ChatEngine::FoundationModels(_) | ChatEngine::Agent(_) => false,
-        }
+        // Every engine runs the chat loop (RFC-unified-chat 6e): Ollama and
+        // gateways through their tool-call APIs, Foundation Models and the
+        // agent CLIs through the text protocol in `text_tools`.
+        true
     }
 
     /// One non-streaming round with tools offered.
@@ -528,17 +529,76 @@ impl ChatEngine {
         let out = match self {
             ChatEngine::Ollama(o) => o.chat_tools(messages, tools, round).await,
             ChatEngine::Gateway(g) => g.chat_tools(messages, tools, round).await,
-            // Unreachable through the loop, which checks `supports_tools`
-            // first; an explicit error beats a silent empty round if a future
-            // caller forgets.
             ChatEngine::FoundationModels(_) | ChatEngine::Agent(_) => {
-                Err(anyhow::anyhow!("{kind} does not support tool calls",))
+                self.text_tool_round(messages, tools, round).await
             }
         };
         if let Ok(o) = out.as_ref() {
             crate::freshness::record_cost(o.cost_usd);
         }
         out
+    }
+
+    /// One loop round on an engine without a tool-call API: the tools go in
+    /// the prompt, the reply is one JSON object, parsed and checked against
+    /// what was offered (`text_tools`). One malformed reply gets one
+    /// corrective retry; a second is read as the model being done.
+    async fn text_tool_round(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        round: usize,
+    ) -> Result<ToolOutcome> {
+        let mut turns = text_tools::to_turns(messages, tools);
+        let mut cost = None;
+        let mut stats = None;
+        for attempt in 0..2 {
+            let fitted = match self {
+                // The on-device model's window is small: keep the system
+                // rules and the newest turns, trim the middle.
+                ChatEngine::FoundationModels(_) => {
+                    budget::fit_messages(&turns, budget::fm_input_budget_tokens()).into_owned()
+                }
+                _ => turns.clone(),
+            };
+            let out = match self {
+                ChatEngine::FoundationModels(f) => f.chat(&fitted).await?,
+                ChatEngine::Agent(a) => a.chat(&fitted).await?,
+                _ => unreachable!("native tool engines don't use the text protocol"),
+            };
+            cost = out.cost_usd.or(cost);
+            stats = out.stats.or(stats);
+            match text_tools::parse(&out.text, tools) {
+                text_tools::Parsed::Call { name, arguments } => {
+                    return Ok(ToolOutcome {
+                        text: String::new(),
+                        calls: vec![text_tools::to_call(name, arguments, round)],
+                        stats,
+                        cost_usd: cost,
+                    });
+                }
+                text_tools::Parsed::Malformed(why) if attempt == 0 => {
+                    turns.push(ChatTurn {
+                        role: "assistant".into(),
+                        content: out.text,
+                    });
+                    turns.push(text_tools::retry_turn(&why));
+                }
+                _ => {
+                    return Ok(ToolOutcome {
+                        text: out.text,
+                        calls: Vec::new(),
+                        stats,
+                        cost_usd: cost,
+                    });
+                }
+            }
+        }
+        Ok(ToolOutcome {
+            stats,
+            cost_usd: cost,
+            ..ToolOutcome::default()
+        })
     }
 
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<ChatOutcome> {

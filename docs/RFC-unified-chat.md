@@ -526,7 +526,7 @@ button waits for after release.
 
 ## Phase 6 (proposed 2026-10-03): every engine calls tools; no gate decides whether the model may act
 
-**Status: proposal, amended 2026-10-03 after review. Nothing below is built.**
+**Status: built 2026-10-03 (6a–6f), except the agent-provider half of 6c. Design and amendments below; what each phase shipped follows.**
 
 ### Why
 
@@ -844,6 +844,48 @@ create a note titled 'MCP read-only test' that says hello" never reached
 Claude. On an engine without the loop, the keyword gate passed it to the
 Small router, which picked `save_note` and saved *the previous answer*
 under that title.
+
+### What 6e and 6f shipped (2026-10-03)
+
+**6e: every engine runs the loop; the fuzzy gates and routers are gone.**
+
+- **A text tool protocol** (`inference/text_tools.rs`) for engines with no
+  tool-call API, which means Foundation Models and the agent CLIs. The loop's
+  tool conversation becomes plain chat turns. The system prompt lists the
+  offered tools as `name(param, optional?): description` and asks for one
+  JSON object, `{"tool": …, "arguments": {…}}`, or `{"done": true}`. The
+  reply is parsed: the first balanced object, fenced or not, with string
+  arguments accepted. It is then checked against what was offered. A
+  malformed reply gets one corrective retry, and a second is read as done,
+  never guessed at. Foundation Models' turns are fitted to its window.
+  `ChatEngine::supports_tools()` is now true for every engine.
+- **Deleted**, about 1,400 lines: `tool_gate`, `global_tool_gate`, the verb
+  and noun lists, `contains_any`, both Small routers (`route_tool`,
+  `route_global_tool`), their prompts and JSON parsers, `GlobalToolAction`,
+  `RouterJson`, the router-only `ToolAction` variants, and 20 tests that
+  pinned them. `try_tool_route` and `try_global_tool_route` are now only
+  their exact-shape fast paths: settings, schedules, and pasted URLs.
+
+**6f: `is_global_query` is gone.** `survey_notebooks` (core, so the core set
+is now eight) runs the gist route (`global_meta_route`) from inside the loop
+and returns its coverage as cited evidence. Home runs the loop on every
+question, and when the loop gathers nothing, the fallback is the pointed
+path. The phrase list and its test are deleted.
+
+**Verified live:**
+
+| engine | surface | message | result |
+| --- | --- | --- | --- |
+| Claude Code (headless, text protocol) | notebook | "Remove the Applied Digital source." | one round, `remove_source`, the prompt named the source, No kept it; 6.8 s |
+| Foundation Models (text protocol) | notebook | same | one round, same prompt, same decline; 2.8 s |
+| Foundation Models | notebook | "What exchange is Applied Digital listed on…?" | no tool call (1.25 s), then the pipeline answered "Nasdaq, APLD" with a citation |
+| Claude Code (headless) | Home, via the loop | "Across all of my notebooks, what are the recurring themes?" | `survey_notebooks` ×3 plus `list_notebooks`; a library-wide answer with 17 citations; 125 s |
+| Foundation Models | Home | "Which of my notebooks talk about neoclouds or GPU spending?" | chose `search_corpus` ×5 rather than the survey; a reasonable answer |
+
+So open question 1 has a first answer: the ~3B on-device model picked the
+right tool, and correctly made no call on a plain question. The cost to watch
+moved: on a headless agent, every loop round is a full CLI run (about 30 s
+on Claude Code).
 
 ### Review (2026-10-03)
 
