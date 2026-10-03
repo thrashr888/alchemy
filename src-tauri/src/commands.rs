@@ -9292,9 +9292,6 @@ async fn try_global_tool_route(
     if let Some(reply) = try_settings_fast_path(app, state, content).await {
         return ToolRoute::Answered(GlobalToolOutcome::say(reply));
     }
-    if !global_tool_gate(content) {
-        return ToolRoute::Fallthrough;
-    }
     // Deterministic fast path: a message that plainly asks to add the URLs it
     // carries skips the router, as it does in a notebook.
     let urls = extract_urls(content);
@@ -9302,6 +9299,16 @@ async fn try_global_tool_route(
         return ToolRoute::Answered(GlobalToolOutcome::say(
             add_urls_from_home(app, state, &urls).await,
         ));
+    }
+    // An engine that runs the tool loop gets every message: the loop has
+    // the router's verbs as tools, and no keyword list stands between the
+    // request and the model that can act on it (RFC-unified-chat 6b). The
+    // exact-shape fast paths above only save it a round.
+    if state.ai.read().await.chat_supports_tools() {
+        return ToolRoute::Fallthrough;
+    }
+    if !global_tool_gate(content) {
+        return ToolRoute::Fallthrough;
     }
 
     meta_step(Some(app), "Checking for commands", false);
@@ -9335,26 +9342,7 @@ async fn try_global_tool_route(
             }
         }
         GlobalToolAction::AddText { title, text } => {
-            let title = if title.is_empty() {
-                "Pasted from chat".to_string()
-            } else {
-                title
-            };
-            meta_step(Some(app), "Choosing a notebook", true);
-            let dest = file_into_notebook(state, &title, &text, "").await;
-            GlobalToolOutcome::say(match dest {
-                Err(err) => format!("Couldn't work out where to file that: {err}"),
-                Ok((nb_id, nb_title)) => match ingest::extract_pasted(&title, &text) {
-                    Ok(ex) => match store_extracted(state, &nb_id, ex).await {
-                        Ok(src) => format!(
-                            "Added **{}** to **{nb_title}** ({} chars).",
-                            src.title, src.char_count
-                        ),
-                        Err(err) => format!("Couldn't add that as a source: {err:#}"),
-                    },
-                    Err(err) => format!("Couldn't add that as a source: {err:#}"),
-                },
-            })
+            GlobalToolOutcome::say(add_text_from_home(app, state, &title, &text).await)
         }
         GlobalToolAction::SaveNote(title) => {
             GlobalToolOutcome::say(save_home_note(app, state, thread_id, &title).await)
@@ -9363,26 +9351,55 @@ async fn try_global_tool_route(
         GlobalToolAction::RenameChat(title) => {
             GlobalToolOutcome::say(rename_home_thread(state, thread_id, &title).await)
         }
-        GlobalToolAction::DeleteChat => {
-            if thread_id.is_empty() {
-                GlobalToolOutcome::say("There's no conversation to delete yet.")
-            } else {
-                match state.db.delete_meta_thread(thread_id).await {
-                    Ok(()) => GlobalToolOutcome {
-                        reply: "Deleted this conversation.".into(),
-                        effect: Some(MetaEffect {
-                            kind: "deleteChat".into(),
-                            notebook_id: String::new(),
-                        }),
-                    },
-                    Err(err) => GlobalToolOutcome::say(format!(
-                        "Couldn't delete this conversation: {err:#}"
-                    )),
-                }
-            }
-        }
+        GlobalToolAction::DeleteChat => delete_home_thread(state, thread_id).await,
     };
     ToolRoute::Answered(outcome)
+}
+
+/// Save text from a Home message as a source, filed by the app's judgment.
+/// Shared by the router and the tool loop.
+pub(crate) async fn add_text_from_home(
+    app: &AppHandle,
+    state: &AppState,
+    title: &str,
+    text: &str,
+) -> String {
+    let title = if title.trim().is_empty() {
+        "Pasted from chat".to_string()
+    } else {
+        title.trim().to_string()
+    };
+    meta_step(Some(app), "Choosing a notebook", true);
+    match file_into_notebook(state, &title, text, "").await {
+        Err(err) => format!("Couldn't work out where to file that: {err}"),
+        Ok((nb_id, nb_title)) => match ingest::extract_pasted(&title, text) {
+            Ok(ex) => match store_extracted(state, &nb_id, ex).await {
+                Ok(src) => format!(
+                    "Added **{}** to **{nb_title}** ({} chars).",
+                    src.title, src.char_count
+                ),
+                Err(err) => format!("Couldn't add that as a source: {err:#}"),
+            },
+            Err(err) => format!("Couldn't add that as a source: {err:#}"),
+        },
+    }
+}
+
+/// Delete THIS Home conversation. Shared by the router and the tool loop.
+pub(crate) async fn delete_home_thread(state: &AppState, thread_id: &str) -> GlobalToolOutcome {
+    if thread_id.is_empty() {
+        return GlobalToolOutcome::say("There's no conversation to delete yet.");
+    }
+    match state.db.delete_meta_thread(thread_id).await {
+        Ok(()) => GlobalToolOutcome {
+            reply: "Deleted this conversation.".into(),
+            effect: Some(MetaEffect {
+                kind: "deleteChat".into(),
+                notebook_id: String::new(),
+            }),
+        },
+        Err(err) => GlobalToolOutcome::say(format!("Couldn't delete this conversation: {err:#}")),
+    }
 }
 
 /// Save the previous Home answer as a note. Which notebook? The one the
@@ -14696,7 +14713,11 @@ pub async fn ask_everything(
     // A turn that only DID things has nothing to synthesize from: answer with
     // what it did, the way the classifier route answers a command. Synthesis
     // over "Added 2 sources to Japan" would only paraphrase it, slower.
-    if !loop_ev.replies.is_empty() && loop_ev.citations.is_empty() && loop_ev.facts.is_empty() {
+    // A declined write ends the turn on the user's word, whatever the
+    // loop had gathered before it asked.
+    if loop_ev.declined
+        || (!loop_ev.replies.is_empty() && loop_ev.citations.is_empty() && loop_ev.facts.is_empty())
+    {
         return Ok(MetaAnswer {
             answer: loop_ev.replies.join("\n\n"),
             citations: vec![],

@@ -33,9 +33,9 @@ use tokio_util::sync::CancellationToken;
 use crate::models::MetaCitation;
 
 use super::{
-    add_url_sources, add_urls_from_home, contains_any, host_of, meta_step_to, new_notebook,
-    open_notebook_outcome, retrieve_everything, save_home_note, AppState, MetaEffect,
-    GLOBAL_TOOL_VERBS,
+    add_text_from_home, add_url_sources, add_urls_from_home, delete_home_thread, host_of,
+    meta_step_to, new_notebook, open_notebook_outcome, rename_home_thread, retrieve_everything,
+    save_home_note, shared_tool_reply, AppState, MetaEffect, SharedAction, StyleTarget,
 };
 
 /// Rounds a loop may spend before it has to settle for what it has.
@@ -78,12 +78,16 @@ pub(crate) struct LoopEvidence {
     pub replies: Vec<String>,
     pub effect: Option<MetaEffect>,
     pub rounds_used: usize,
+    /// The user said No to a write. The answer is that, and nothing the
+    /// model went on to do after it: a declined write ends the turn.
+    pub declined: bool,
     /// The model stopped asking for tools of its own accord, rather than
     /// being cut off by the budget.
     pub settled: bool,
     /// Why gathering ended: "settled" (the model was done), "sufficient"
     /// (`EVIDENCE_CAP` reached), "budget" (rounds ran out), "error" (a
-    /// provider failure), "cancelled", or "skipped" (no tool-capable engine).
+    /// provider failure), "cancelled", "declined" (the user said No to a
+    /// write), or "skipped" (no tool-capable engine).
     /// Traced, because the evals need to tell a model that knew when to stop
     /// from one that was stopped.
     pub stop: &'static str,
@@ -121,10 +125,10 @@ struct ToolSpec {
     params: fn() -> Value,
 }
 
-/// Every tool phase 1 advertises.
+/// Every tool the loop advertises.
 ///
-/// The `core` six are the ones a common Home turn needs before it can do
-/// anything at all, and they are six because a catalog in a prompt is a bill
+/// The `core` seven are the ones a common Home turn needs before it can do
+/// anything at all, and they are few because a catalog in a prompt is a bill
 /// this codebase has already measured: `agent_cli.rs` records copilot loading
 /// 105 tools for ~42k tool-definition tokens, and the fix was to cut it to
 /// 17. A local model has far less room than copilot had. Everything else is
@@ -199,7 +203,10 @@ fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "create_notebook",
-            core: false,
+            // Core, not behind tool_search: a local model asked to make a
+            // notebook searched three times and stopped, never looking for
+            // a tool it couldn't see (live run, 2026-10-03).
+            core: true,
             description: "Create a new notebook when the user asks for one, optionally starting it with web pages. Give it a short title. urls may be pages the user wrote, or well-known public pages you are confident exist for the topic (for company filings, SEC EDGAR submissions JSON: https://data.sec.gov/submissions/CIK##########.json with the 10-digit CIK). Each page you propose is fetched first and only readable ones are added.",
             params: || {
                 json!({
@@ -217,9 +224,70 @@ fn catalog() -> Vec<ToolSpec> {
             },
         },
         ToolSpec {
+            name: "save_text",
+            core: false,
+            description: "Save text from the user's message (a pasted article, notes, a quote) as a source. Alchemy picks the notebook. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "A short title for the source." },
+                        "text": { "type": "string", "description": "The text to save, as the user gave it." }
+                    },
+                    "required": ["text"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "rename_chat",
+            core: false,
+            description: "Rename THIS conversation.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "title": { "type": "string", "description": "The new name." } },
+                    "required": ["title"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "delete_chat",
+            core: false,
+            description: "Delete THIS conversation and everything in it. Asks the user first.",
+            params: || json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "settings",
+            core: false,
+            description: "Read or change Alchemy's settings. op: get (current AI settings, redacted), models (installed models and provider readiness), test (probe a provider or model; field = its name, or empty for the chat provider), setup (the next setup step), set (field = chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|profile.name|profile.profession|profile.instructions|profile.assistantName, value = new value), style (field = answer style, value = default|shorter|longer), theme (field = theme name, \"random\", or empty to list), pull (field = Ollama model; staged for the user to run, never run), connect (field = agent client, or empty to list). API keys can never be read or set. Changes ask the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "op": { "type": "string", "enum": ["get", "models", "test", "setup", "set", "style", "theme", "pull", "connect"] },
+                        "field": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["op"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "night_shift",
+            core: false,
+            description: "The Night Shift (overnight report runs): status reports what is queued; pause and resume stop or restart it. Pause and resume ask the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "op": { "type": "string", "enum": ["status", "pause", "resume"] } },
+                    "required": ["op"]
+                })
+            },
+        },
+        ToolSpec {
             name: "tool_search",
             core: true,
-            description: "Find tools beyond the ones listed here. Returns matching tool definitions and makes them callable for the rest of this turn. Use it when you need to create a notebook, read a notebook's sources or notes, or inspect the app's own activity.",
+            description: "Find tools beyond the ones listed here. Returns matching tool definitions and makes them callable for the rest of this turn. Use it when you need to create a notebook, save text, change a setting, manage this chat or the Night Shift, read a notebook's sources or notes, or inspect the app's own activity.",
             params: || {
                 json!({
                     "type": "object",
@@ -317,6 +385,8 @@ struct ToolReply {
     effect: Option<MetaEffect>,
     /// Tool names to enable for the rest of the turn (`tool_search` only).
     enable: Vec<String>,
+    /// The user said No to this write. The turn ends on their word.
+    declined: bool,
 }
 
 impl ToolReply {
@@ -325,6 +395,27 @@ impl ToolReply {
             text: text.into(),
             ..Default::default()
         }
+    }
+}
+
+/// A write's confirmation, shown to the user as well as told to the model.
+fn write_reply(reply: String) -> ToolReply {
+    ToolReply {
+        text: reply.clone(),
+        reply: Some(reply),
+        ..Default::default()
+    }
+}
+
+/// The user said No to a write. Said to them, not just the model, so the
+/// answer is "you declined", never a search result misreading why nothing
+/// happened.
+fn declined_reply(reply: &str) -> ToolReply {
+    ToolReply {
+        text: reply.to_string(),
+        reply: Some(reply.to_string()),
+        declined: true,
+        ..Default::default()
     }
 }
 
@@ -586,11 +677,7 @@ async fn dispatch(
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                return ToolReply {
-                    text: format!("{reply} Don't propose these pages again this turn."),
-                    reply: Some(reply),
-                    ..Default::default()
-                };
+                return declined_reply(&reply);
             }
             let mut reply = add_urls_from_home(app, state, &urls).await;
             if !declined.is_empty() {
@@ -614,10 +701,9 @@ async fn dispatch(
             if title.is_empty() {
                 return ToolReply::say("error: title is required");
             }
-            if !may_save(&asked) {
-                return ToolReply::say(
-                    "error: only save a note when the user asks to save or keep something.",
-                );
+            let action = format!("save the previous answer as a note, “{title}”");
+            if !asker.approve(state, name, action, Vec::new(), args).await {
+                return declined_reply("Didn't save the note — you said No.");
             }
             let reply = save_home_note(app, state, thread_id, title).await;
             ToolReply {
@@ -630,11 +716,6 @@ async fn dispatch(
             let name = arg(args, "name");
             if name.is_empty() {
                 return ToolReply::say("error: name is required");
-            }
-            if !may_navigate(&asked) {
-                return ToolReply::say(
-                    "error: only open a notebook when the user asks to go somewhere. Answer the question instead.",
-                );
             }
             let Ok(notebooks) = state.db.list_notebooks().await else {
                 return ToolReply::say("error: couldn't read the notebook list");
@@ -652,11 +733,6 @@ async fn dispatch(
             if title.is_empty() {
                 return ToolReply::say("error: title is required");
             }
-            if !asks_for_new_notebook(&asked) {
-                return ToolReply::say(
-                    "error: only create a notebook when the user asks for a new one.",
-                );
-            }
             let urls: Vec<String> = args["urls"]
                 .as_array()
                 .map(|a| {
@@ -667,13 +743,118 @@ async fn dispatch(
                 })
                 .unwrap_or_default();
             match create_notebook_with_pages(app, asker, state, title, urls, &asked, args).await {
-                Err(err) => ToolReply::say(format!("error: {err}")),
+                Err(err) => match err.strip_prefix("DECLINED:") {
+                    Some(said) => declined_reply(said),
+                    None => ToolReply::say(format!("error: {err}")),
+                },
                 Ok((reply, effect)) => ToolReply {
                     text: reply.clone(),
                     reply: Some(reply),
                     effect: Some(effect),
                     ..Default::default()
                 },
+            }
+        }
+        "save_text" => {
+            let text = arg(args, "text");
+            if text.is_empty() {
+                return ToolReply::say("error: text is required");
+            }
+            let title = arg(args, "title");
+            let action = if title.is_empty() {
+                "save text from your message as a source".to_string()
+            } else {
+                format!("save “{title}” as a source")
+            };
+            if !asker.approve(state, name, action, Vec::new(), args).await {
+                return declined_reply("Didn't save it — you said No.");
+            }
+            write_reply(add_text_from_home(app, state, title, text).await)
+        }
+        "rename_chat" => {
+            // Local and reversible, like navigation: it runs without asking.
+            let title = arg(args, "title");
+            if title.is_empty() {
+                return ToolReply::say("error: title is required");
+            }
+            write_reply(rename_home_thread(state, thread_id, title).await)
+        }
+        "delete_chat" => {
+            let action = "delete this conversation and everything in it".to_string();
+            if !asker.approve(state, name, action, Vec::new(), args).await {
+                return declined_reply("Kept this conversation — you said No.");
+            }
+            let outcome = delete_home_thread(state, thread_id).await;
+            ToolReply {
+                text: outcome.reply.clone(),
+                reply: Some(outcome.reply),
+                effect: outcome.effect,
+                ..Default::default()
+            }
+        }
+        "settings" => {
+            let op = arg(args, "op").to_string();
+            let field = arg(args, "field").to_string();
+            let value = arg(args, "value").to_string();
+            // Reads run. A change asks, except `pull` (staged for the user
+            // to run, never run) and `connect` (its own confirm click is
+            // already the user's word before anything is written).
+            let changes = matches!(op.as_str(), "set" | "style" | "theme");
+            if changes {
+                let action = match op.as_str() {
+                    "set" => format!("set {field} to “{value}”"),
+                    "style" => format!("change the answer style to {field} {value}")
+                        .trim()
+                        .to_string(),
+                    _ if field.is_empty() || field == "random" => {
+                        "switch to a random theme".to_string()
+                    }
+                    _ => format!("switch the theme to {field}"),
+                };
+                if !asker.approve(state, name, action, Vec::new(), args).await {
+                    return declined_reply("Left the settings as they were — you said No.");
+                }
+            }
+            let reply = shared_tool_reply(
+                app,
+                state,
+                SharedAction::Settings { op, field, value },
+                StyleTarget::Home,
+            )
+            .await;
+            if changes {
+                write_reply(reply)
+            } else {
+                ToolReply::say(cap(reply))
+            }
+        }
+        "night_shift" => {
+            let op = arg(args, "op").to_string();
+            let changes = matches!(op.as_str(), "pause" | "resume");
+            if changes
+                && !asker
+                    .approve(
+                        state,
+                        name,
+                        format!("{op} the Night Shift"),
+                        Vec::new(),
+                        args,
+                    )
+                    .await
+            {
+                return declined_reply("Left the Night Shift as it was — you said No.");
+            }
+            let reply = shared_tool_reply(
+                app,
+                state,
+                SharedAction::NightShift { op },
+                StyleTarget::Home,
+            )
+            .await;
+            if changes {
+                write_reply(reply)
+            } else {
+                ToolReply::say(cap(reply))
             }
         }
         "tool_search" => {
@@ -835,31 +1016,33 @@ async fn create_notebook_with_pages(
         .filter(|(_, ok)| !ok)
         .map(|(u, _)| u.clone())
         .collect();
-    // Readable pages the model proposed are still the model's choice: the
-    // user approves them, listed, before any is added.
+    // One prompt for the whole write: the notebook, and any readable pages
+    // the model proposed, listed. The user's own pages ride along unlisted;
+    // they were the user's words already.
     let readable: Vec<String> = checked
         .into_iter()
         .filter(|(_, ok)| *ok)
         .map(|(u, _)| u)
         .collect();
-    let mut declined: Vec<String> = Vec::new();
-    let mut pages = written;
+    let mut action = format!("create the notebook “{}”", title.trim());
     if !readable.is_empty() {
-        let action = format!(
-            "start “{}” with {} suggested page{}",
-            title.trim(),
+        action.push_str(&format!(
+            " and start it with {} suggested page{}",
             readable.len(),
             if readable.len() == 1 { "" } else { "s" }
-        );
-        if asker
-            .approve(state, "create_notebook", action, readable.clone(), args)
-            .await
-        {
-            pages.extend(readable);
-        } else {
-            declined = readable;
-        }
+        ));
     }
+    if !asker
+        .approve(state, "create_notebook", action, readable.clone(), args)
+        .await
+    {
+        return Err(format!(
+            "DECLINED:Didn't create “{}” — you said No.",
+            title.trim()
+        ));
+    }
+    let mut pages = written;
+    pages.extend(readable);
     let nb = new_notebook(state, title.to_string())
         .await
         .map_err(|err| format!("couldn't create the notebook: {err}"))?;
@@ -872,13 +1055,6 @@ async fn create_notebook_with_pages(
             add_url_sources(app, state, &nb.id, &pages, "meta://step", &dest).await
         )
     };
-    if !declined.is_empty() {
-        reply.push_str(&format!(
-            "\n\nLeft out {} suggested page{} you declined.",
-            declined.len(),
-            if declined.len() == 1 { "" } else { "s" }
-        ));
-    }
     if !skipped.is_empty() {
         reply.push_str(&format!(
             "\n\nLeft out {} suggested page{} that didn't load as readable content:\n{}",
@@ -930,18 +1106,6 @@ fn tool_row(id: &str, name: &str, content: &str) -> Value {
     })
 }
 
-/// Words that license `save_note`. Deliberately not "note" on its own: "what
-/// notes do I have on X" is a question, not an instruction to write one.
-const SAVE_WORDS: [&str; 7] = [
-    "save",
-    "keep that",
-    "keep this",
-    "file that",
-    "file this",
-    "write that down",
-    "write this down",
-];
-
 /// Split URLs into the ones the user wrote (their host appears in the
 /// message, the rule the classifier route has always applied) and the ones
 /// the model came up with. The user's own go straight in; the model's are
@@ -953,50 +1117,20 @@ fn split_written(urls: Vec<String>, asked: &str) -> (Vec<String>, Vec<String>) {
     })
 }
 
-/// Did the user ask to keep something? `asked` is lowercased.
-fn may_save(asked: &str) -> bool {
-    contains_any(asked, &SAVE_WORDS)
-}
-
-/// Did the user ask for a new notebook? `asked` is lowercased. Both halves
-/// are needed: "make a summary" is not a notebook, and "which notebook has
-/// the filings" is a question.
-pub(crate) fn asks_for_new_notebook(asked: &str) -> bool {
-    const VERBS: [&str; 8] = [
-        "create",
-        "make",
-        "start",
-        "new notebook",
-        "set up",
-        "build",
-        "spin up",
-        "new one",
-    ];
-    asked.contains("notebook") && contains_any(asked, &VERBS)
-}
-
-/// Did the user ask to go somewhere? Moving the user's window is an action,
-/// not research: the live run that found this reached for open_notebook
-/// mid-search on a question that never asked to go anywhere.
-fn may_navigate(asked: &str) -> bool {
-    contains_any(asked, &GLOBAL_TOOL_VERBS)
-}
-
 /// What the model is told the loop is for.
 ///
 /// Deliberately short. It is prepended to a prompt that already carries the
 /// persona and the conversation, and every extra line is paid for on every
 /// round by a model that may have 8k of room.
 fn loop_system() -> String {
-    let base =
-        "You are gathering evidence to answer a question about the user's research library. \
-     Use tools to find what you need — search more than once if the first result is thin. \
-     Do NOT write the final answer: once you have enough, reply with no tool calls and \
-     the answer will be written from what you gathered. \
-     If two or three searches keep missing, the library probably doesn't have it: stop, \
-     and the answer will say so. \
-     Only act on what the user actually asked for. Pages you propose yourself \
-     are shown to the user, who approves them before anything is added.";
+    let base = "You work in the user's research library. If the user asks you to DO something \
+     (make a notebook, add or save something, change a setting, rename or delete this \
+     chat), do it with the matching tool first; use tool_search to find one you don't \
+     see. Changes are shown to the user, who approves them, so act rather than describe. \
+     If the user asks a QUESTION, gather evidence: search more than once if the first \
+     result is thin, and when two or three searches keep missing, stop. \
+     Do NOT write the final answer: reply with no tool calls when you are done and the \
+     answer will be written from what you gathered.";
     match crate::fieldnotes::prompt_block() {
         Some(notes) => format!("{base}\n\n{notes}"),
         None => base.to_string(),
@@ -1125,7 +1259,11 @@ pub(crate) async fn run(
             ev.push_citations(reply.citations);
             if let Some(r) = reply.reply {
                 ev.replies.push(r);
-            } else if !reply.text.is_empty() {
+            } else if !reply.text.is_empty() && c.name != "tool_search" {
+                // tool_search's list of tools is the loop's bookkeeping, not
+                // something the answer can use: as a fact it sent a pure
+                // action turn ("rename this chat") on to synthesis, which
+                // then reported finding nothing about renaming.
                 ev.facts.push(format!("{}: {}", c.name, reply.text));
             }
             if reply.effect.is_some() {
@@ -1135,6 +1273,14 @@ pub(crate) async fn run(
                 enabled.insert(name);
             }
             messages.push(tool_row(&c.id, &c.name, &reply.text));
+            if reply.declined {
+                ev.declined = true;
+                break;
+            }
+        }
+        if ev.declined {
+            ev.stop = "declined";
+            break;
         }
         if ev.citations.len() >= EVIDENCE_CAP {
             ev.stop = "sufficient";
@@ -1199,18 +1345,6 @@ mod tests {
     /// two lists drift. A name here that `dispatch` does not know would reach
     /// the model as a callable tool and answer "no tool named …" every time.
     #[test]
-    fn creating_a_notebook_needs_the_user_to_ask_for_one() {
-        assert!(asks_for_new_notebook(
-            "make me a notebook tracking hyperscaler sec filings"
-        ));
-        assert!(asks_for_new_notebook("start a new notebook on neoclouds"));
-        assert!(!asks_for_new_notebook(
-            "which notebook has the sec filings?"
-        ));
-        assert!(!asks_for_new_notebook("make a summary of the filings"));
-    }
-
-    #[test]
     fn catalog_is_covered() {
         // The arms `dispatch` implements, kept beside the match it mirrors.
         let arms = [
@@ -1220,6 +1354,11 @@ mod tests {
             "save_note",
             "open_notebook",
             "create_notebook",
+            "save_text",
+            "rename_chat",
+            "delete_chat",
+            "settings",
+            "night_shift",
             "tool_search",
             "list_sources",
             "list_notes",
@@ -1238,9 +1377,11 @@ mod tests {
         assert_eq!(arms.len(), catalog().len(), "a dispatch arm went unlisted");
     }
 
-    /// The six are six. A seventh is a prompt-tax decision, not a drive-by.
+    /// The core set is a prompt-tax decision, not a drive-by. The seventh,
+    /// `create_notebook`, was one: asked for a notebook, a local model never
+    /// went to `tool_search` for a tool it couldn't see.
     #[test]
-    fn core_set_stays_six() {
+    fn core_set_stays_seven() {
         let core: Vec<&str> = catalog()
             .iter()
             .filter(|t| t.core)
@@ -1254,6 +1395,7 @@ mod tests {
                 "add_source",
                 "save_note",
                 "open_notebook",
+                "create_notebook",
                 "tool_search",
             ]
         );
@@ -1345,8 +1487,9 @@ mod tests {
         assert_eq!(tool["tool_call_id"], "call_0_0");
     }
 
-    /// The trust boundary, pinned. Every write the loop can make has to be
-    /// licensed by the user's own words, not the model's judgment.
+    /// The URL trust boundary, pinned: the user's own URLs go straight in,
+    /// and anything the model came up with goes to the user first. Every
+    /// other write asks (`Asker::approve`).
     /// A Yes reaches the waiting turn; anything else is a No, and an
     /// answer to a prompt that already settled is ignored, not an error.
     #[tokio::test]
@@ -1388,19 +1531,6 @@ mod tests {
         let (written, _) =
             split_written(vec!["https://made-up.test/".into()], "what's in my notes");
         assert!(written.is_empty());
-
-        // Save: an instruction, not the word "note" in a question.
-        assert!(may_save("save that as a note"));
-        assert!(may_save("please keep this"));
-        assert!(!may_save("what notes do i have on the guerneville house?"));
-
-        // Navigate: only when asked to go somewhere. The exact question from
-        // the live run that reached for open_notebook must not license it.
-        assert!(may_navigate("open the japan notebook"));
-        assert!(may_navigate("take me to bayside"));
-        assert!(!may_navigate(
-            &"What did I conclude about the Guerneville house purchase date?".to_lowercase()
-        ));
     }
 
     /// An empty loop is the signal to fall back to plain retrieval.

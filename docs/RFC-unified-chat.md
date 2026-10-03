@@ -708,6 +708,51 @@ local model proposed a URL in only one of seven tries, so the run never
 reached a prompt to stop. The code path is the same cancel race as the
 rest of the loop.
 
+### What 6b shipped (2026-10-03)
+
+- **The router is bypassed on tool-capable engines.** In
+  `try_global_tool_route`, after the settings and pasted-URL fast paths,
+  an engine with `supports_tools()` goes straight to the loop: no
+  `global_tool_gate`, no Small router. Foundation Models and agent CLIs
+  without ACP keep both until 6e.
+- **The router's verbs are loop tools:** `save_text`, `rename_chat`,
+  `delete_chat`, `settings` and `night_shift` (behind `tool_search`), plus
+  `create_notebook`. They call the router's own code (`add_text_from_home`,
+  `delete_home_thread`, `shared_tool_reply`), so both paths behave alike.
+- **Guards became prompts.** `may_save`, `may_navigate` and
+  `asks_for_new_notebook` are gone. These ask: `save_note`, `save_text`,
+  `delete_chat`, settings `set`/`style`/`theme`, and Night Shift
+  `pause`/`resume`. `create_notebook` asks once, for the notebook and any
+  suggested pages together. These run without asking: `open_notebook` and
+  `rename_chat` (local and reversible), settings reads, `pull` (staged,
+  never run), and `connect` (it confirms itself).
+- **`create_notebook` joined the core set (now seven).** Behind
+  `tool_search`, a local model asked for a notebook searched three times and
+  stopped without ever looking for it.
+- **The loop's system prompt names actions.** It was "gathering evidence to
+  answer a question", which made every request a question. It now says to
+  do what the user asks with the matching tool, and to gather evidence only
+  for questions.
+- **A No ends the turn.** A declined write stops the loop (`stop:
+  "declined"`) and the answer is the decline alone, not the decline followed
+  by whatever the model did next.
+- **`tool_search` output isn't evidence.** As a fact, it sent a pure action
+  turn on to synthesis, which then wrote that it had found nothing about
+  renaming the chat.
+
+**Verified live** on Ollama (muse-glimmer 30B), through `askHome` with
+`allowAgent`:
+- "Start a new notebook for tracking how much the neoclouds are spending
+  on GPUs" called `create_notebook` first, asked "create the notebook
+  “Neocloud GPU Spending”", and on No answered only "Didn't create … — you
+  said No." (trace: `create_notebook`, `declined`).
+- "Rename this chat to GPU spending test" ran `tool_search` → `rename_chat`
+  with no prompt and answered with the rename.
+- The original failure case ("Make me a notebook like this one: <the Satya
+  quote>") now reaches the loop. The model chose to open the existing Cloud
+  SEC Dashboard notebook, which holds that exact brief. That's a defensible
+  reading, not a misfile.
+
 ### Review (2026-10-03)
 
 A review checked the first draft against the code. It found that the
