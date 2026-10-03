@@ -74,30 +74,26 @@ impl AcpAgentKind {
         }
     }
 
-    /// The session mode in which this agent asks the client before running
-    /// tools, so Alchemy — not the agent — decides what may change a notebook
-    /// (docs/RFC-unified-chat.md §6). Without it each agent applies its own
-    /// rule: Claude Code inherits the user's `defaultMode` (often `auto`,
-    /// which approves tools itself), and Codex starts in "Auto review".
+    /// The session mode in which this agent hands every tool call to the
+    /// client, so Alchemy's prompt (and the undo snapshot taken on Yes) sees
+    /// each write (docs/RFC-unified-chat.md §6). Claude Code's `default` does
+    /// exactly that: any `mcp__*` tool comes to us. Without it Claude Code
+    /// inherits the user's `defaultMode` (often `auto`, which approves tools
+    /// itself).
     ///
-    /// opencode has no such mode — its modes pick an agent, and asking is
-    /// governed by opencode's own config — so it keeps its own rules. That
-    /// is the one gap in the "same rule for every brain" promise.
+    /// Codex and opencode run on their own rules (decided 2026-10-03). Codex's
+    /// nearest mode, `workspace-write`, was tried live: it asked about every
+    /// shell command ("List files", nine times for two requests) yet still
+    /// ran some of Alchemy's writes — `add_source`, `update_source` — without
+    /// asking, so it neither left the decision to Alchemy nor stayed out of
+    /// the user's way. opencode has no asking mode at all. Both keep the
+    /// judgment the user configured them with, as in a terminal; when they do
+    /// ask, Alchemy's prompt and undo still apply.
     fn ask_mode(self) -> Option<&'static str> {
         match self {
             AcpAgentKind::ClaudeCode => Some("default"),
-            AcpAgentKind::Codex => Some("workspace-write"),
-            AcpAgentKind::Opencode => None,
+            AcpAgentKind::Codex | AcpAgentKind::Opencode => None,
         }
-    }
-
-    /// May this agent be Home's brain? Only one Alchemy can hold to the
-    /// app's rule about what may change a notebook — one with an asking mode
-    /// (see `ask_mode`). opencode has none, so it would decide for itself, and
-    /// Home keeps the loop for it instead. The notebook Agent pane still
-    /// hosts it (decided 2026-10-02).
-    fn can_answer_home(self) -> bool {
-        self.ask_mode().is_some()
     }
 
     fn from_id(id: &str) -> Option<Self> {
@@ -248,7 +244,7 @@ pub async fn home_brain(
             .map(|p| p.kind.clone())
             .unwrap_or_default()
     };
-    let Some(kind) = AcpAgentKind::from_id(&provider_kind).filter(|k| k.can_answer_home()) else {
+    let Some(kind) = AcpAgentKind::from_id(&provider_kind) else {
         return Ok(HomeBrain::local());
     };
     if !crate::mcp::status(&app).running {
@@ -1532,22 +1528,13 @@ mod home_tests {
         );
     }
 
-    /// The asking modes, by the ids each adapter advertises. opencode has
-    /// none and keeps its own rules — pinned so that changes on purpose.
+    /// Every hosted agent may be Home's brain; only Claude Code is put in an
+    /// asking mode. Codex and opencode run on their own rules (2026-10-03).
     #[test]
-    fn asking_modes_per_agent() {
+    fn only_claude_code_is_put_in_an_asking_mode() {
         assert_eq!(AcpAgentKind::ClaudeCode.ask_mode(), Some("default"));
-        assert_eq!(AcpAgentKind::Codex.ask_mode(), Some("workspace-write"));
+        assert_eq!(AcpAgentKind::Codex.ask_mode(), None);
         assert_eq!(AcpAgentKind::Opencode.ask_mode(), None);
-    }
-
-    /// Home's brain is only an agent Alchemy can govern: opencode, with no
-    /// asking mode, falls back to the loop.
-    #[test]
-    fn only_governable_agents_answer_home() {
-        assert!(AcpAgentKind::ClaudeCode.can_answer_home());
-        assert!(AcpAgentKind::Codex.can_answer_home());
-        assert!(!AcpAgentKind::Opencode.can_answer_home());
     }
 
     /// The Home preamble points at the corpus-wide tools and holds writes to

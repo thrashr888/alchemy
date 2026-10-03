@@ -442,11 +442,10 @@ words (§4); agents now meet the same rule.
   or write, both lists explicit, and a test fails the build when a served
   tool is in neither, in both, or no longer exists. At runtime anything not
   on the read list is a write, so an unknown name asks.
-- **Asking mode, every session.** Claude Code is put in `default` ("always
-  ask"), Codex in `workspace-write`, before the session reports ready —
-  Home's and the notebook Agent pane's alike, since it's the same agent
-  touching the same notes. A mode the adapter doesn't offer is logged, not
-  forced.
+- **Asking mode for Claude Code.** It is put in `default` ("always ask")
+  before the session reports ready — Home's and the notebook Agent pane's
+  alike. A mode the adapter doesn't offer is logged, not forced. (Codex and
+  opencode: see below.)
 - **Reads are answered by Alchemy; writes go to the user.** A permission
   request for one of Alchemy's read tools gets `allow_once` without the
   user seeing it. The tool is identified from Claude's
@@ -464,12 +463,20 @@ words (§4); agents now meet the same rule.
 at an inline prompt naming `create_note`; No was respected — the agent said
 the note wasn't created, and none was.
 
-**opencode is not offered as Home's brain (decided 2026-10-02).** It has no
-asking mode — its modes choose an agent, and its permission rules live in
-opencode's config — so it would decide for itself. `home_brain` only routes
-to an agent with an asking mode; with opencode as the chat provider, Home
-keeps the loop. The notebook Agent pane still hosts it. Revisit if opencode
-gains an asking mode or its per-session permission config proves reliable.
+**Codex and opencode run on their own rules (decided 2026-10-03).** The
+release sweep tried Codex in its nearest asking mode, `workspace-write`: it
+asked about every shell command ("List files" nine times for two requests),
+yet ran some of Alchemy's writes — `add_source`, and `update_source`, a
+destructive one — without asking, so no undo snapshot was taken. It neither
+left the decision to Alchemy nor stayed out of the way. opencode has no
+asking mode at all (a 2026-10-02 decision kept it out of Home; reversed here).
+
+So the rule is: **an agent that hands its tool calls to Alchemy gets Alchemy's
+prompt and undo** — Claude Code, verified; **Codex and opencode keep the
+judgment the user configured them with**, as in a terminal, and are offered
+as Home's brain like any agent. When they do ask, Alchemy's prompt and undo
+still apply; what they approve themselves can't be undone from Home. Revisit
+if either gains a mode that hands every tool call to the client.
 
 **Dev-only note.** The agents' own `alchemy` MCP entries (from Connect)
 point at 41414. To test agents against a dev build while the installed app
