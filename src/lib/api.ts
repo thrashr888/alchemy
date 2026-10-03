@@ -953,6 +953,9 @@ export const api = {
     requestId: string,
     optionId: string | null,
   ) => run(cmd<void>("acp_permission", { notebookId, requestId, optionId })),
+  /** Answer a Yes/No Alchemy's own tool loop is waiting on. */
+  loopPermission: (requestId: string, allow: boolean) =>
+    run(cmd<void>("loop_permission", { requestId, allow })),
 
   // Agent access (MCP)
   mcpStatus: () => run(query<McpStatus>("mcp_status")),

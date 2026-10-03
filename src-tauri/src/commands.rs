@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 mod brief;
-mod chatloop;
+pub(crate) mod chatloop;
 mod diagnostics;
 mod handoff;
 mod registry;

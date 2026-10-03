@@ -22,10 +22,12 @@
 //! a dispatch arm in the meantime; phase 2 extracts the tool bodies so both
 //! callers share one implementation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::models::MetaCitation;
@@ -341,18 +343,155 @@ fn cap(mut text: String) -> String {
     text
 }
 
+// ---- Asking the user (RFC-unified-chat phase 6a) --------------------------
+
+/// How long a prompt waits before it counts as No. Long enough to read a
+/// list of URLs and decide; short enough that a prompt left behind doesn't
+/// hold a turn open for the rest of the afternoon.
+const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Prompts waiting on the person: request id → (window, answer channel).
+/// The window is kept so closing it can answer No.
+type Pending = HashMap<String, (String, oneshot::Sender<bool>)>;
+static PENDING: LazyLock<Mutex<Pending>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// One Yes/No the loop raises. The same shape the agent's permission
+/// request takes on the wire, so the front end draws one prompt for both
+/// brains; `detail` lists what exactly would change (the URLs).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoopPermissionEvent {
+    window: String,
+    thread_id: String,
+    request_id: String,
+    tool_title: String,
+    action: String,
+    detail: Vec<String>,
+    options: Vec<Value>,
+}
+
+/// Where a prompt goes and what can end it early.
+#[derive(Clone, Copy)]
+pub(crate) struct Asker<'a> {
+    pub app: &'a AppHandle,
+    pub window_label: &'a str,
+    pub thread_id: &'a str,
+    pub cancel: &'a CancellationToken,
+}
+
+impl Asker<'_> {
+    /// Ask the person before a write and wait for the answer. Anything but
+    /// a Yes is a No: Stop, a newer question in this window (both cancel the
+    /// turn's token), closing the window, or no answer within
+    /// `PROMPT_TIMEOUT`. The wait is raised inside the cancel race, since
+    /// nothing has changed yet, and stands the turn aside from the
+    /// foreground queue so background work isn't held up by a person.
+    ///
+    /// A Yes to a write Undo can take back snapshots what it will change
+    /// before returning, the way an agent's approved write does, under the
+    /// same journal key Home's agent turns use, so the thread's Undo covers
+    /// both brains.
+    async fn approve(
+        &self,
+        state: &AppState,
+        tool: &str,
+        action: String,
+        detail: Vec<String>,
+        args: &Value,
+    ) -> bool {
+        let request_id = super::new_id();
+        let (tx, rx) = oneshot::channel();
+        PENDING
+            .lock()
+            .unwrap()
+            .insert(request_id.clone(), (self.window_label.to_string(), tx));
+        let _ = self.app.emit(
+            "chat://permission",
+            LoopPermissionEvent {
+                window: self.window_label.to_string(),
+                thread_id: self.thread_id.to_string(),
+                request_id: request_id.clone(),
+                tool_title: crate::mcp::access::human_title(tool)
+                    .or_else(|| crate::mcp::access::human_title(&format!("mcp__alchemy__{tool}")))
+                    .unwrap_or_else(|| tool.to_string()),
+                action,
+                detail,
+                options: vec![
+                    json!({ "id": "allow", "name": "Yes", "kind": "allow_once" }),
+                    json!({ "id": "reject", "name": "No", "kind": "reject_once" }),
+                ],
+            },
+        );
+        let allowed = {
+            let _aside = crate::foreground::stand_aside();
+            tokio::select! {
+                answer = rx => answer.unwrap_or(false),
+                _ = self.cancel.cancelled() => false,
+                _ = tokio::time::sleep(PROMPT_TIMEOUT) => false,
+            }
+        };
+        PENDING.lock().unwrap().remove(&request_id);
+        // Clears the prompt in a window that didn't answer it (timeout,
+        // Stop), and is harmless in one that did.
+        let _ = self.app.emit(
+            "chat://permission-settled",
+            json!({ "window": self.window_label, "requestId": request_id }),
+        );
+        if allowed && super::undo::journals(tool) {
+            super::undo::capture(state, &home_undo_key(self.thread_id), "Alchemy", tool, args)
+                .await;
+        }
+        allowed
+    }
+}
+
+/// The undo journal key for a Home thread, shared with its agent turns
+/// (`acp` keys Home sessions `home-<threadId>`).
+fn home_undo_key(thread_id: &str) -> String {
+    format!("home-{thread_id}")
+}
+
+/// Answer a prompt the loop is waiting on. An unknown id is a prompt that
+/// already settled (timed out, or Stop got there first) and is not an error
+/// worth showing.
+#[tauri::command]
+pub fn loop_permission(request_id: String, allow: bool) {
+    if let Some((_, tx)) = PENDING.lock().unwrap().remove(&request_id) {
+        let _ = tx.send(allow);
+    }
+}
+
+/// A closed window can't answer: every prompt it was showing is a No.
+pub(crate) fn decline_window_prompts(window_label: &str) {
+    let mut pending = PENDING.lock().unwrap();
+    let ids: Vec<String> = pending
+        .iter()
+        .filter(|(_, (w, _))| w == window_label)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        if let Some((_, tx)) = pending.remove(&id) {
+            let _ = tx.send(false);
+        }
+    }
+}
+
 /// Run one tool. Errors are returned to the MODEL as text, not propagated:
 /// a bad argument is something it can correct on the next round, and killing
 /// the turn over one teaches it nothing.
 async fn dispatch(
-    app: &AppHandle,
+    asker: Asker<'_>,
     state: &AppState,
-    window_label: &str,
-    thread_id: &str,
     question: &str,
     name: &str,
     args: &Value,
 ) -> ToolReply {
+    let Asker {
+        app,
+        window_label,
+        thread_id,
+        ..
+    } = asker;
     let target = Some((app, window_label));
     // Writes and effects need the user's words behind them, not just the
     // model's judgment. The classifier route has always held URLs to this
@@ -416,13 +555,54 @@ async fn dispatch(
             if urls.is_empty() {
                 return ToolReply::say("error: urls is required and must be a non-empty array");
             }
-            let urls = licensed_urls(urls, &asked);
-            if urls.is_empty() {
-                return ToolReply::say(
-                    "error: only add URLs the user wrote in their message. None of these appear there.",
+            // The user's own URLs are their scope and go straight in. Any
+            // the model came up with are a write the user approves, listed.
+            let (written, proposed) = split_written(urls, &asked);
+            let mut declined = Vec::new();
+            let mut urls = written;
+            if !proposed.is_empty() {
+                let action = format!(
+                    "add {} page{} you didn't link",
+                    proposed.len(),
+                    if proposed.len() == 1 { "" } else { "s" }
                 );
+                if asker
+                    .approve(state, name, action, proposed.clone(), args)
+                    .await
+                {
+                    urls.extend(proposed);
+                } else {
+                    declined = proposed;
+                }
             }
-            let reply = add_urls_from_home(app, state, &urls).await;
+            if urls.is_empty() {
+                // Said to the user, not just the model: the answer has to
+                // be "you said No", not a search result that missed.
+                let reply = format!(
+                    "Didn't add {} — you said No.",
+                    declined
+                        .iter()
+                        .map(|u| host_of(u))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return ToolReply {
+                    text: format!("{reply} Don't propose these pages again this turn."),
+                    reply: Some(reply),
+                    ..Default::default()
+                };
+            }
+            let mut reply = add_urls_from_home(app, state, &urls).await;
+            if !declined.is_empty() {
+                reply.push_str(&format!(
+                    "\n\nNot added (declined): {}",
+                    declined
+                        .iter()
+                        .map(|u| host_of(u))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
             ToolReply {
                 text: reply.clone(),
                 reply: Some(reply),
@@ -486,7 +666,7 @@ async fn dispatch(
                         .collect()
                 })
                 .unwrap_or_default();
-            match create_notebook_with_pages(app, target, state, title, urls, &asked).await {
+            match create_notebook_with_pages(app, asker, state, title, urls, &asked, args).await {
                 Err(err) => ToolReply::say(format!("error: {err}")),
                 Ok((reply, effect)) => ToolReply {
                     text: reply.clone(),
@@ -606,14 +786,16 @@ const MAX_STARTING_PAGES: usize = 12;
 /// Shared by the tool loop and the Home router, so a notebook can be made
 /// from chat on every engine, tool-calling or not. `Err` is a message for
 /// the model (or the user) to act on; nothing was created.
-pub(crate) async fn create_notebook_with_pages(
+async fn create_notebook_with_pages(
     app: &AppHandle,
-    target: Option<(&AppHandle, &str)>,
+    asker: Asker<'_>,
     state: &AppState,
     title: &str,
     urls: Vec<String>,
     asked: &str,
+    args: &Value,
 ) -> Result<(String, MetaEffect), String> {
+    let target = Some((app, asker.window_label));
     let existing = state
         .db
         .list_notebooks()
@@ -634,10 +816,7 @@ pub(crate) async fn create_notebook_with_pages(
         .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
         .take(MAX_STARTING_PAGES)
         .collect();
-    let (written, proposed): (Vec<String>, Vec<String>) = urls.into_iter().partition(|u| {
-        let host = host_of(u).to_lowercase();
-        !host.is_empty() && asked.contains(&host)
-    });
+    let (written, proposed) = split_written(urls, asked);
     if !proposed.is_empty() {
         meta_step_to(
             target,
@@ -656,10 +835,31 @@ pub(crate) async fn create_notebook_with_pages(
         .filter(|(_, ok)| !ok)
         .map(|(u, _)| u.clone())
         .collect();
-    let pages: Vec<String> = written
+    // Readable pages the model proposed are still the model's choice: the
+    // user approves them, listed, before any is added.
+    let readable: Vec<String> = checked
         .into_iter()
-        .chain(checked.into_iter().filter(|(_, ok)| *ok).map(|(u, _)| u))
+        .filter(|(_, ok)| *ok)
+        .map(|(u, _)| u)
         .collect();
+    let mut declined: Vec<String> = Vec::new();
+    let mut pages = written;
+    if !readable.is_empty() {
+        let action = format!(
+            "start “{}” with {} suggested page{}",
+            title.trim(),
+            readable.len(),
+            if readable.len() == 1 { "" } else { "s" }
+        );
+        if asker
+            .approve(state, "create_notebook", action, readable.clone(), args)
+            .await
+        {
+            pages.extend(readable);
+        } else {
+            declined = readable;
+        }
+    }
     let nb = new_notebook(state, title.to_string())
         .await
         .map_err(|err| format!("couldn't create the notebook: {err}"))?;
@@ -672,6 +872,13 @@ pub(crate) async fn create_notebook_with_pages(
             add_url_sources(app, state, &nb.id, &pages, "meta://step", &dest).await
         )
     };
+    if !declined.is_empty() {
+        reply.push_str(&format!(
+            "\n\nLeft out {} suggested page{} you declined.",
+            declined.len(),
+            if declined.len() == 1 { "" } else { "s" }
+        ));
+    }
     if !skipped.is_empty() {
         reply.push_str(&format!(
             "\n\nLeft out {} suggested page{} that didn't load as readable content:\n{}",
@@ -735,16 +942,15 @@ const SAVE_WORDS: [&str; 7] = [
     "write this down",
 ];
 
-/// The URLs the user actually wrote. The model can never invent or rewrite
-/// one into the library: a URL survives only if its host appears in the
-/// user's own message, the rule the classifier route has always applied.
-fn licensed_urls(urls: Vec<String>, asked: &str) -> Vec<String> {
-    urls.into_iter()
-        .filter(|u| {
-            let host = host_of(u).to_lowercase();
-            !host.is_empty() && asked.contains(&host)
-        })
-        .collect()
+/// Split URLs into the ones the user wrote (their host appears in the
+/// message, the rule the classifier route has always applied) and the ones
+/// the model came up with. The user's own go straight in; the model's are
+/// a write the user approves.
+fn split_written(urls: Vec<String>, asked: &str) -> (Vec<String>, Vec<String>) {
+    urls.into_iter().partition(|u| {
+        let host = host_of(u).to_lowercase();
+        !host.is_empty() && asked.contains(&host)
+    })
 }
 
 /// Did the user ask to keep something? `asked` is lowercased.
@@ -789,8 +995,8 @@ fn loop_system() -> String {
      the answer will be written from what you gathered. \
      If two or three searches keep missing, the library probably doesn't have it: stop, \
      and the answer will say so. \
-     Only act on what the user actually asked for; never invent a URL, except the \
-     starting pages create_notebook checks before adding.";
+     Only act on what the user actually asked for. Pages you propose yourself \
+     are shown to the user, who approves them before anything is added.";
     match crate::fieldnotes::prompt_block() {
         Some(notes) => format!("{base}\n\n{notes}"),
         None => base.to_string(),
@@ -905,16 +1111,13 @@ pub(crate) async fn run(
 
         for c in &out.calls {
             used.push(c.name.clone());
-            let reply = dispatch(
+            let asker = Asker {
                 app,
-                state,
                 window_label,
                 thread_id,
-                question,
-                &c.name,
-                &c.arguments,
-            )
-            .await;
+                cancel,
+            };
+            let reply = dispatch(asker, state, question, &c.name, &c.arguments).await;
             // A rejected call is a mistake worth remembering across sessions.
             if let Some(why) = reply.text.strip_prefix("error:") {
                 crate::fieldnotes::record(&c.name, why);
@@ -1144,22 +1347,47 @@ mod tests {
 
     /// The trust boundary, pinned. Every write the loop can make has to be
     /// licensed by the user's own words, not the model's judgment.
+    /// A Yes reaches the waiting turn; anything else is a No, and an
+    /// answer to a prompt that already settled is ignored, not an error.
+    #[tokio::test]
+    async fn a_prompt_settles_once_and_closing_its_window_says_no() {
+        let (tx, rx) = oneshot::channel();
+        PENDING
+            .lock()
+            .unwrap()
+            .insert("p1".into(), ("main".into(), tx));
+        loop_permission("p1".into(), true);
+        assert!(rx.await.unwrap());
+        loop_permission("p1".into(), true); // already settled: no panic
+
+        let (tx, rx) = oneshot::channel();
+        PENDING
+            .lock()
+            .unwrap()
+            .insert("p2".into(), ("other".into(), tx));
+        decline_window_prompts("main");
+        assert!(PENDING.lock().unwrap().contains_key("p2"));
+        decline_window_prompts("other");
+        assert!(!rx.await.unwrap());
+    }
+
     #[test]
     fn writes_need_the_users_words() {
-        // URLs: only hosts the user typed. An invented one is dropped even
-        // when it rides alongside a real one.
+        // URLs: hosts the user typed go straight in. An invented one never
+        // does, even riding alongside a real one: it goes to the user.
         let asked = "add https://example.com/post please".to_lowercase();
-        let kept = licensed_urls(
+        let (written, proposed) = split_written(
             vec![
                 "https://example.com/post".into(),
                 "https://attacker.test/payload".into(),
             ],
             &asked,
         );
-        assert_eq!(kept, vec!["https://example.com/post".to_string()]);
-        assert!(
-            licensed_urls(vec!["https://made-up.test/".into()], "what's in my notes").is_empty()
-        );
+        assert_eq!(written, vec!["https://example.com/post".to_string()]);
+        assert_eq!(proposed, vec!["https://attacker.test/payload".to_string()]);
+        let (written, _) =
+            split_written(vec!["https://made-up.test/".into()], "what's in my notes");
+        assert!(written.is_empty());
 
         // Save: an instruction, not the word "note" in a question.
         assert!(may_save("save that as a note"));

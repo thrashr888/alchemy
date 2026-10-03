@@ -52,6 +52,7 @@ export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   AcpPermissionEvent,
   AcpStateEvent,
+  LoopPermissionEvent,
   AcpUpdateEvent,
   ChatConfig,
   HomeBrain,
@@ -1236,6 +1237,39 @@ export const useStore = create<AppState>((rawSet, get) => {
         turn.fold = next;
         flushAgentTurn();
       });
+      // Alchemy's own loop asking before a write. Same prompt as an agent's,
+      // matched to this window's run by the payload, since Any-listeners
+      // aren't filtered by target.
+      void listen<LoopPermissionEvent>("chat://permission", (e) => {
+        if (e.payload.window !== thisWindow) return;
+        const run = get().homeRun;
+        if (!run || run.queued || run.threadId !== e.payload.threadId) return;
+        set({
+          homeRun: {
+            ...run,
+            permission: {
+              notebookId: "",
+              requestId: e.payload.requestId,
+              toolTitle: e.payload.toolTitle,
+              action: e.payload.action,
+              options: e.payload.options,
+              detail: e.payload.detail,
+              fromLoop: true,
+            },
+          },
+        });
+      });
+      // A loop prompt that settled without this window's answer (timed out,
+      // Stop, a newer question) goes away.
+      void listen<{ window: string; requestId: string }>(
+        "chat://permission-settled",
+        (e) => {
+          if (e.payload.window !== thisWindow) return;
+          const run = get().homeRun;
+          if (run?.permission?.requestId === e.payload.requestId)
+            set({ homeRun: { ...run, permission: null } });
+        },
+      );
       void listen<AcpPermissionEvent>("acp://permission", (e) => {
         const turn = agentTurn;
         if (!turn || e.payload.notebookId !== turn.key) return;
@@ -2359,9 +2393,19 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     answerHomePermission: (optionId) => {
-      const turn = agentTurn;
       const run = get().homeRun;
       const request = run?.permission;
+      if (run && request?.fromLoop) {
+        set({ homeRun: { ...run, permission: null } });
+        const allow = request.options.some(
+          (o) => o.id === optionId && o.kind.startsWith("allow"),
+        );
+        void api
+          .loopPermission(request.requestId, allow)
+          .catch((e) => get().pushToast("error", describe(e)));
+        return;
+      }
+      const turn = agentTurn;
       if (!turn || !run || !request || request.notebookId !== turn.key) return;
       turn.permission = null;
       set({ homeRun: { ...run, permission: null } });

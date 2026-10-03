@@ -675,6 +675,39 @@ composer (`HomeChat`'s `allowAgent` path, not the store's `askHome`
 directly). In dev, the agents' own `alchemy` MCP entry must be pointed at
 41415 first; see the phase 4 notes.
 
+### What 6a shipped (2026-10-03)
+
+- **A prompt channel in the loop.** `Asker::approve` (`commands/chatloop.rs`)
+  emits `chat://permission` with the window, thread, action, and a `detail`
+  list (the URLs), then waits on a oneshot. The wait races the turn's cancel
+  token (Stop and a newer question both cancel it), a 5-minute timeout, and
+  window close (`decline_window_prompts`, called from the Destroyed
+  handler). Anything but Yes is No. `loop_permission` answers it, and
+  `chat://permission-settled` clears a prompt that ended some other way.
+- **One prompt in the UI.** The store maps a loop prompt onto the run's
+  existing `permission` field, marked `fromLoop`, and `answerHomePermission`
+  routes it to `loop_permission`. `PermissionPrompt` names Alchemy as the
+  asker and lists the detail lines.
+- **The foreground stands aside while it waits**
+  (`foreground::stand_aside`), so Night Shift isn't held up by a person.
+- **Undo at approval.** A Yes to a journaled tool snapshots under
+  `home-<threadId>`, the key Home's agent turns use, so the thread's Undo
+  covers both brains. No loop tool is journaled yet; 6b's update and delete
+  tools are the first.
+- **The tiered URL rule.** `licensed_urls` became `split_written`. In
+  `add_source` and `create_notebook`, the user's own URLs go straight in.
+  The model's are listed in a prompt. A decline is said to the user
+  ("Didn't add en.wikipedia.org — you said No."), not left for synthesis to
+  misread as a search miss.
+
+**Verified live** on Ollama (muse-glimmer 30B), through `askHome` with
+`allowAgent`: "add the English Wikipedia page on return on invested
+capital" raised the prompt listing the URL; No added nothing and answered
+with the decline. **Not verified live:** Stop while a prompt is showing. The
+local model proposed a URL in only one of seven tries, so the run never
+reached a prompt to stop. The code path is the same cancel race as the
+rest of the loop.
+
 ### Review (2026-10-03)
 
 A review checked the first draft against the code. It found that the

@@ -1105,6 +1105,24 @@ export interface AcpPermissionEvent {
    *  ("create a note"); null for anything else. */
   action: string | null;
   options: { id: string; name: string; kind: string }[];
+  /** What exactly would change, one line each (the URLs a page add would
+   *  bring in). Only the tool loop sends it. */
+  detail?: string[];
+  /** Who asked: Alchemy's own tool loop rather than a hosted agent. A loop
+   *  prompt is answered with `loop_permission`, not `acp_permission`. */
+  fromLoop?: boolean;
+}
+
+/** A Yes/No the tool loop raises (RFC-unified-chat phase 6a). Same fields
+ *  the agent's request has, plus the window and thread it belongs to. */
+export interface LoopPermissionEvent {
+  window: string;
+  threadId: string;
+  requestId: string;
+  toolTitle: string;
+  action: string;
+  detail: string[];
+  options: { id: string; name: string; kind: string }[];
 }
 
 /** One agent client (Claude Code, Codex, …) and its connection state. */

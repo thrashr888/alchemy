@@ -153,7 +153,8 @@ export interface HomeRun {
    *  trail is tools, not pipeline stages, so a step is done when the tool
    *  says so — not when the first words of the answer arrive. */
   toolsRunning?: number;
-  /** The agent is waiting on the user to allow a tool. */
+  /** The agent, or Alchemy's own loop, is waiting on the user to allow a
+   *  write. */
   permission?: AcpPermissionEvent | null;
 }
 
@@ -513,8 +514,8 @@ export interface AppState {
       allowAgent?: boolean;
     },
   ) => Promise<void>;
-  /** Answer the hosted agent's pending tool permission in the live Home run.
-   *  `null` declines it. */
+  /** Answer the pending write permission in the live Home run, whichever
+   *  brain asked. `null` declines it. */
   answerHomePermission: (optionId: string | null) => void;
   /** Land a Home tool reply: the quiet transcript row, plus whatever the
    *  backend could only ask this window to do — open a notebook, or let go
