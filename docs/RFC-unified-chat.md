@@ -312,6 +312,8 @@ data.
    thread. *First slice built — see "What phase 4 shipped" below.* The
    notebook Agent pane and its toggle remain for now.
 5. **Field notes.**
+6. **Every engine calls tools; no text gates.** Proposed 2026-10-03 — see
+   the section of that name below. Reverses §1's "the classifier stays".
 
 ## What phase 1 shipped
 
@@ -521,6 +523,121 @@ snapshot is never late. No time-window guessing, no MCP or database hooks.
 
 Captured for the notebook Agent pane too (same permission path); its Undo
 button waits for after release.
+
+## Phase 6 (proposed 2026-10-03): every engine calls tools; no text gates
+
+**Status: proposal, awaiting review. Nothing below is built.**
+
+### Why
+
+The chat feature exists so a model can *act* in the notebooks. Today
+whether it gets to act is decided mostly by string matching on what the
+user typed, before any model sees the message. A live run on 2026-10-03
+showed what that costs. "Make me a notebook like this one: <pasted
+article>" passed the keyword gate. The Small router (an 8B model) then
+picked `add_text` and filed the article into a notebook it guessed (twice:
+agentkernel, then Curated Links). A third run, with stronger prompt
+wording, picked `chat` and created nothing. The model that could have done
+the job never saw the request. Patching it with yet another keyword list
+(`asks_for_new_notebook`) treats the symptom, and nobody would discover a
+feature gated on phrasing.
+
+An inventory of the user-input checks that decide behavior:
+
+| kind | checks | what they decide |
+| --- | --- | --- |
+| Gates | `tool_gate`, `global_tool_gate`, `settings_gate`, `schedule_gate`, `wants_add_sources`, `wants_add_context_urls`, `has_non_add_verb`, `TOOL_VERBS` and the noun lists | Whether a message is a command, and which fast path or router runs |
+| Router | `route_tool` / `route_global_tool` (one Small-role JSON call) | Which verb runs. This is a model call, but it only ever sees messages the gates let through |
+| Write guards | `licensed_urls`, `may_save`, `may_navigate`, `asks_for_new_notebook`, the router's URL-host filter | Whether the model may add, save, navigate, or create |
+| Retrieval strategy | `rag::is_global_query` (phrase and word lists) | Gist route versus pointed search. It also skips the tool loop entirely |
+| Retrieval internal | `gap_gate` | Whether a second search runs. Out of scope here |
+
+Which engines can act today:
+
+| surface | agent over ACP (Claude Code, Codex, opencode) | Ollama, gateway | Foundation Models; agent CLIs without ACP (cursor-cli, gemini-cli, hermes, copilot, bob) |
+| --- | --- | --- | --- |
+| Home | Yes, with MCP tools and Alchemy's write prompts (phase 4) | Tool loop, but behind the gate and router | Gate and router only |
+| Notebook chat | No: gate and router only (the Agent pane is separate) | Gate and router only. No loop | Gate and router only |
+
+### Design
+
+1. **The brain is chosen by engine capability, never by message text.**
+   An engine either runs a loop or it doesn't. The gates, the routers, and
+   the deterministic fast paths are deleted on both surfaces once every
+   engine has a loop. Every verb they handled becomes a catalog tool:
+   `add_text`, `rename_chat`, `delete_chat`, settings, Night Shift,
+   schedules, `create_notebook`, and the notebook verbs (generate, remove
+   source, and so on). Following §2, they should be read off the MCP
+   catalog rather than listed a second time.
+2. **Notebook chat gets the loop.** It gets the same loop, scoped to the
+   notebook: `search_corpus` becomes notebook search, and the notebook's id
+   is implicit. Agent providers get the Home treatment: the notebook turn
+   runs in the agent's ACP session.
+3. **Write guards become the agents' rule.** `mcp/access.rs` already
+   labels every tool read or write. Reads run. Writes stop at the same
+   inline Yes/No prompt agent turns already show (`answerHomePermission`),
+   whichever brain asked. Navigation (`open_notebook`) is local and
+   reversible, so it runs without asking. The URL-host license disappears:
+   a model-proposed page is part of the write the user approves, and the
+   prompt lists the URLs. This is one rule for every brain, and it replaces
+   five word lists that each approximated "did the user mean it".
+4. **Engines without native tools get a loop anyway.**
+   - *Agent CLIs without ACP* are loops already. Headless, they get
+     Alchemy's MCP server for the turn (the same handoff ACP sessions get,
+     token included), so they call tools themselves. The copilot deadlock
+     warning (`agent_cli.rs:531`) is the risk to design around: the turn's
+     wait must not hold anything the MCP handler needs.
+   - *Foundation Models* get a text tool protocol: the catalog in the
+     prompt, one JSON tool call per round, parsed and validated against the
+     schema, with a bounded retry on malformed output. The core six fit
+     FM's context, with `tool_search` for the rest. This is the one engine
+     where quality is a genuine open question (see below).
+5. **`is_global_query` becomes a tool.** A "survey notebooks" tool,
+   backed by the gist route, sits in the core set. The model picks it for
+   "which notebooks mention X" the way it picks `search_corpus` for a
+   pointed question. The phrase list goes away.
+
+### Cost
+
+Removing the gate does not add a round to an ordinary question. On Home
+the loop already runs for every non-global question, and the gate only
+sits in front of the router. A command-shaped message saves the Small
+router call. Notebook chat does gain a loop round on every question,
+which on a local model is the main latency risk. Jev's typed gate
+(`judge.rs` on the Jev branch) is the cheap way to settle "is this just a
+question?" where a TypeSafe key exists, but the design must not depend on
+it: a notebook must work without any particular provider.
+
+### Phases
+
+- **6a.** Write prompts in the tool loop, replacing the five guards.
+  Delete Home's gate, router, and fast paths for tool-capable engines.
+  Move the router's verbs into the catalog.
+- **6b.** Give non-ACP agent CLIs the MCP handoff for headless turns.
+- **6c.** Bring the loop to notebook chat, and agent providers to its ACP
+  session. Delete `tool_gate`, `route_tool`, `settings_gate`,
+  `schedule_gate`, and the add fast paths.
+- **6d.** Text tool protocol for Foundation Models. Delete the last router.
+- **6e.** Replace `is_global_query` with a survey tool.
+
+Each phase is verified live per engine class, driven through the real
+composer (`HomeChat`'s `allowAgent` path, not the store's `askHome`
+directly). In dev, the agents' own `alchemy` MCP entry must be pointed at
+41415 first; see the phase 4 notes.
+
+### Open questions
+
+1. **FM quality.** Can a ~3B model choose among six tools reliably? If it
+   can't, FM stays a Small-role engine and Settings says Home and notebook
+   chat need a different chat provider. The alternative is to keep the
+   router alive for one engine.
+2. **Notebook-chat latency** on local models with a loop round per
+   question. Measure it with the `chatloop.jsonl` traces before deciding
+   whether a typed gate (Jev, or the Small role asked for one Choice) is
+   worth keeping.
+3. **The prompt for a bulk write** (create a notebook and add 8 pages):
+   one prompt for the whole call, listing the pages, or one per page? One
+   per tool call matches agents today.
 
 ## Initial release scope (2026-10-02)
 
