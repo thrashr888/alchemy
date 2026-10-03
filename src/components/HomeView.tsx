@@ -1526,7 +1526,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           rowMenu={rowMenuFor}
         />
       ) : (
-        <div className="flex flex-col gap-[18px]">
+        <div className="flex flex-col gap-8">
           {[
             ...recencyGroups(ownNotebooks),
             // After Earlier, and last whatever the sort says: the shipped
@@ -1536,7 +1536,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               : []),
           ].map((group) => (
             <section key={group.label}>
-              <div className={cn(CAPS, "pb-2.5")}>{group.label}</div>
+              {/* A heading, not a caps label: the cards' own eyebrows are
+                  caps, and a shelf header in the same voice read as one
+                  more card. The hairline carries the band to the edge. */}
+              <h2 className="flex items-center gap-3 pb-3 text-section font-semibold text-foreground">
+                {group.label}
+                <span aria-hidden className="h-px flex-1 bg-border" />
+              </h2>
               <div className="flex flex-wrap gap-5">
                 {group.rows.map((nb) => (
                   <NotebookCard

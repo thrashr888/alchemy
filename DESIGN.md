@@ -488,7 +488,9 @@ what the sheet shows, so every surface Home holds — the shelf, the corpus
 conversation, the Registry, the timeline, the night shift's Staff, the Brief,
 the nightly reports — is a section of one center column rather than a card
 stacked around it. Shared and Archived are the same shelf, narrowed. The
-shelf groups notebooks by recency (Today, Last 7 days, Earlier) and draws
+shelf groups notebooks by recency (Today, Last 7 days, Earlier) under
+section-title headings with a hairline to the edge — sentence case, never
+the caps the cards' own eyebrows use — 32px apart, and draws
 each as a 212px card whose thumb stands in for the notebook: its color, its
 name in caps, and then what is actually inside — two or three of its newest
 source titles behind their type glyphs, the newest note among them, and its

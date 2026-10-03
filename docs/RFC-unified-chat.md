@@ -312,8 +312,8 @@ data.
    thread. *First slice built — see "What phase 4 shipped" below.* The
    notebook Agent pane and its toggle remain for now.
 5. **Field notes.**
-6. **Every engine calls tools; no text gates.** Proposed 2026-10-03 — see
-   the section of that name below. Reverses §1's "the classifier stays".
+6. **Every engine calls tools.** Proposed 2026-10-03 — see "Phase 6"
+   below. Narrows §1's "the classifier stays" to exact-shape fast paths.
 
 ## What phase 1 shipped
 
@@ -524,9 +524,9 @@ snapshot is never late. No time-window guessing, no MCP or database hooks.
 Captured for the notebook Agent pane too (same permission path); its Undo
 button waits for after release.
 
-## Phase 6 (proposed 2026-10-03): every engine calls tools; no text gates
+## Phase 6 (proposed 2026-10-03): every engine calls tools; no gate decides whether the model may act
 
-**Status: proposal, awaiting review. Nothing below is built.**
+**Status: proposal, amended 2026-10-03 after review. Nothing below is built.**
 
 ### Why
 
@@ -562,68 +562,133 @@ Which engines can act today:
 ### Design
 
 1. **The brain is chosen by engine capability, never by message text.**
-   An engine either runs a loop or it doesn't. The gates, the routers, and
-   the deterministic fast paths are deleted on both surfaces once every
-   engine has a loop. Every verb they handled becomes a catalog tool:
-   `add_text`, `rename_chat`, `delete_chat`, settings, Night Shift,
-   schedules, `create_notebook`, and the notebook verbs (generate, remove
-   source, and so on). Following §2, they should be read off the MCP
-   catalog rather than listed a second time.
-2. **Notebook chat gets the loop.** It gets the same loop, scoped to the
+   An engine either runs a loop or it doesn't. Every verb the routers
+   handled becomes a catalog tool: `add_text`, `rename_chat`, `delete_chat`,
+   settings, Night Shift, schedules, `create_notebook`, and the notebook
+   verbs (generate, remove source, and so on). Following §2, they should be
+   read off the MCP catalog rather than listed a second time.
+2. **Fast paths may stay; they must never be the only path.** A
+   deterministic shortcut is fine when it is an exact-shape parser for a
+   common phrasing ("switch to the dusk theme", a bare pasted URL, "make a
+   daily brief") and saves a model round. The test is: does a user who
+   words it differently still get it done? With the loop behind it, the
+   answer is yes; the shortcut only buys speed. `settings_gate`,
+   `schedule_gate` and the add-URL fast path stay on that basis. The fuzzy
+   gates go: `tool_gate`, `global_tool_gate`, the verb and noun lists, and
+   the Small routers. Those decide whether the model gets to act at all,
+   and a miss there means the request silently becomes an answer.
+3. **Notebook chat gets the loop.** It gets the same loop, scoped to the
    notebook: `search_corpus` becomes notebook search, and the notebook's id
    is implicit. Agent providers get the Home treatment: the notebook turn
    runs in the agent's ACP session.
-3. **Write guards become the agents' rule.** `mcp/access.rs` already
-   labels every tool read or write. Reads run. Writes stop at the same
-   inline Yes/No prompt agent turns already show (`answerHomePermission`),
-   whichever brain asked. Navigation (`open_notebook`) is local and
-   reversible, so it runs without asking. The URL-host license disappears:
-   a model-proposed page is part of the write the user approves, and the
-   prompt lists the URLs. This is one rule for every brain, and it replaces
-   five word lists that each approximated "did the user mean it".
-4. **Engines without native tools get a loop anyway.**
+4. **Writes: Alchemy's prompt where Alchemy owns the prompt.**
+   - **The loop gets a permission channel and undo first.** Today the Yes/No
+     prompt is wired to agent turns only (`answerHomePermission` →
+     `acp_permission`), and the loop dispatches writes inside `run()` with no
+     journal. The loop gains a pending-prompt future, the store's prompt
+     handling generalizes to both brains, and a write takes its undo
+     snapshot at the moment it's approved, as ACP writes do. No router verb
+     moves into the catalog before this exists, or "reversible" breaks.
+   - **The tiered URL rule stays.** A URL whose host appears in the user's
+     message is the user's scope: it's added without asking, as today
+     (`licensed_urls`). Anything the model came up with is a write the user
+     approves, and the prompt lists the URLs. `create_notebook_with_pages`
+     already splits pages this way; only the proposed half prompts.
+   - **The other guards become prompts.** `may_save`, `may_navigate` and
+     `asks_for_new_notebook` are replaced by the `mcp/access.rs`
+     classification: reads run, writes prompt. Navigation is local and
+     reversible, so it runs without asking.
+   - **Codex and opencode keep their own rules** (phase 4 notes). Alchemy
+     cannot prompt for a write those agents don't route through ACP's
+     permission request. This phase changes the loop and Claude Code only.
+5. **A waiting prompt never stalls the app.** The prompt is raised inside
+   the cancel race, since nothing has changed yet when it's showing. Stop
+   answers No. A superseding ask answers No. Closing the window answers No.
+   An unanswered prompt times out to No. While a prompt waits, the turn
+   releases its foreground hold, so Night Shift and background Small calls
+   resume.
+6. **Engines without native tools get a loop anyway.**
    - *Agent CLIs without ACP* are loops already. Headless, they get
-     Alchemy's MCP server for the turn (the same handoff ACP sessions get,
-     token included), so they call tools themselves. The copilot deadlock
-     warning (`agent_cli.rs:531`) is the risk to design around: the turn's
-     wait must not hold anything the MCP handler needs.
+     Alchemy's MCP server for the turn, **read tools only**: the MCP server
+     itself never prompts and never journals (`mcp/access.rs` is consulted
+     only on the ACP permission path), so a write over this handoff would
+     have no check and no undo. The handoff is filtered to
+     `Access::Read`. Writes stay out of reach until there's a way to hold
+     them as proposals in the thread. The copilot deadlock warning
+     (`agent_cli.rs:531`) still applies: the turn's wait must not hold
+     anything the MCP handler needs.
    - *Foundation Models* get a text tool protocol: the catalog in the
      prompt, one JSON tool call per round, parsed and validated against the
      schema, with a bounded retry on malformed output. The core six fit
      FM's context, with `tool_search` for the rest. This is the one engine
      where quality is a genuine open question (see below).
-5. **`is_global_query` becomes a tool.** A "survey notebooks" tool,
+7. **`is_global_query` becomes a tool.** A "survey notebooks" tool,
    backed by the gist route, sits in the core set. The model picks it for
    "which notebooks mention X" the way it picks `search_corpus` for a
-   pointed question. The phrase list goes away.
+   pointed question. The phrase list has two jobs today: it skips the loop,
+   and it picks the retrieval path (`commands.rs:14741`). The tool replaces
+   both.
 
 ### Cost
 
-Removing the gate does not add a round to an ordinary question. On Home
-the loop already runs for every non-global question, and the gate only
-sits in front of the router. A command-shaped message saves the Small
-router call. Notebook chat does gain a loop round on every question,
-which on a local model is the main latency risk. Jev's typed gate
-(`judge.rs` on the Jev branch) is the cheap way to settle "is this just a
-question?" where a TypeSafe key exists, but the design must not depend on
-it: a notebook must work without any particular provider.
+For ordinary questions on Home, removing the fuzzy gate adds no round: on
+Ollama and gateways the loop already runs for every non-global question,
+and the gate only sits in front of the router. A command-shaped message
+saves the Small router call. Kept fast paths stay instant. Without them,
+"switch to the dusk theme" would cost a loop round (about 19 s on a local
+30B model, per the phase 1 numbers) plus a prompt, since `settings` is a
+write. That's why they stay. The ⌘K palette goes through the same
+`ask_everything`, so it keeps them too.
+
+Notebook chat does gain a loop round on every question that misses a
+fast path, which on a local model is the main latency risk. Jev's typed
+gate (`judge.rs` on the Jev branch) is the cheap way to settle "is this
+just a question?" where a TypeSafe key exists. The design must not depend
+on it: a notebook must work without any particular provider.
+
+Unaffected: MCP's `ask_everything` tool (`mcp/search.rs:278`) calls
+`retrieve_everything` directly and never touches the gates.
 
 ### Phases
 
-- **6a.** Write prompts in the tool loop, replacing the five guards.
-  Delete Home's gate, router, and fast paths for tool-capable engines.
-  Move the router's verbs into the catalog.
-- **6b.** Give non-ACP agent CLIs the MCP handoff for headless turns.
-- **6c.** Bring the loop to notebook chat, and agent providers to its ACP
-  session. Delete `tool_gate`, `route_tool`, `settings_gate`,
-  `schedule_gate`, and the add fast paths.
-- **6d.** Text tool protocol for Foundation Models. Delete the last router.
-- **6e.** Replace `is_global_query` with a survey tool.
+Each phase ships on its own.
+
+- **6a. Loop prompt channel and undo.** Pending-prompt future in the loop,
+  the store's prompt generalized to both brains, an undo snapshot on
+  approval, the tiered URL rule kept, the waiting-prompt rules from §5. No
+  gate changes.
+- **6b. Catalog verbs, and the router bypassed for tool-capable engines.**
+  Router verbs become catalog tools, and the guards become prompts. On
+  engines where `supports_tools()` is true, Home skips the fuzzy gate and
+  the router. They are *bypassed*, not deleted: Foundation Models and the
+  agent CLIs without ACP still need them until 6e.
+- **6c. Notebook chat gets the loop,** and agent providers get its ACP
+  session.
+- **6d. Agent CLIs without ACP get a read-only MCP handoff.**
+- **6e. Text tool protocol for Foundation Models.** The fuzzy gates and
+  routers are deleted here, once every engine has a loop.
+- **6f. A survey tool replaces `is_global_query`** in both of its uses. It
+  doesn't depend on the others and can go first.
 
 Each phase is verified live per engine class, driven through the real
 composer (`HomeChat`'s `allowAgent` path, not the store's `askHome`
 directly). In dev, the agents' own `alchemy` MCP entry must be pointed at
 41415 first; see the phase 4 notes.
+
+### Review (2026-10-03)
+
+A review checked the first draft against the code. It found that the
+read-only MCP handoff was missing (the draft would have let headless CLIs
+write with no check), and that "one rule for every brain" contradicted the
+Codex/opencode decision. It found that the loop had no prompt channel or
+undo to replace the guards with, that a waiting prompt could stall Night
+Shift and block a superseding ask, and that 6a couldn't delete gates other
+engines still need. It also found that the cost section ignored the instant
+fast paths, which the draft's wording would have removed. The design above
+takes all of these. It also suggested adding `create_notebook` to the Small
+router as a smaller fix, which was not taken: it keeps the model's ability
+to act behind the router's verb list, which is the problem this phase
+exists to remove.
 
 ### Open questions
 
@@ -635,9 +700,9 @@ directly). In dev, the agents' own `alchemy` MCP entry must be pointed at
    question. Measure it with the `chatloop.jsonl` traces before deciding
    whether a typed gate (Jev, or the Small role asked for one Choice) is
    worth keeping.
-3. **The prompt for a bulk write** (create a notebook and add 8 pages):
-   one prompt for the whole call, listing the pages, or one per page? One
-   per tool call matches agents today.
+3. **Holding writes for headless CLIs.** A proposal-in-the-thread mode for
+   MCP writes from a chat turn would let 6d go beyond read-only. Is it
+   worth the protocol work?
 
 ## Initial release scope (2026-10-02)
 
