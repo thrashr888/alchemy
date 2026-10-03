@@ -12015,6 +12015,16 @@ pub(crate) async fn suggested_from_links(
             return Vec::new();
         }
     };
+    // No fetch on the answer's path: drop what a probe already found
+    // unreadable, and judge the rest in the background so the next thin
+    // answer (and the Grow pane) knows.
+    let readable =
+        crate::growth::filter_known_readable(&state.db, notebook_id, links.clone()).await;
+    let db = state.db.clone();
+    let id = notebook_id.to_string();
+    tokio::spawn(async move {
+        crate::growth::gate_readable(&db, &id, links, now()).await;
+    });
     let sources = match state.db.sources_with_content_shared(notebook_id).await {
         Ok(sources) => sources,
         Err(err) => {
@@ -12022,7 +12032,7 @@ pub(crate) async fn suggested_from_links(
             return Vec::new();
         }
     };
-    crate::growth::suggest_sources(question, &links, &crate::growth::own_hosts(&sources))
+    crate::growth::suggest_sources(question, &readable, &crate::growth::own_hosts(&sources))
 }
 
 /// What this notebook is hungry for: recent retrievals that came back thin.
@@ -12055,7 +12065,8 @@ pub async fn growth_links(
     notebook_id: String,
 ) -> Result<Vec<crate::growth::GrowthProposal>, String> {
     let started = std::time::Instant::now();
-    let out = e(growth_links_impl(&state.db, &state.trace_dir, &notebook_id).await)?;
+    let links = e(growth_links_impl(&state.db, &state.trace_dir, &notebook_id).await)?;
+    let out = crate::growth::gate_readable(&state.db, &notebook_id, links, now()).await;
     note_section("links", started, out.len());
     Ok(out)
 }
@@ -12065,8 +12076,8 @@ pub async fn growth_links(
 /// tiers that cost nothing — Spotlight matches on this Mac and outbound
 /// links the notebook's own sources keep pointing at. Computed on demand
 /// from stored content and local traces — no model call, and the only
-/// network is the feed gate's one-GET-per-candidate probe, whose verdict is
-/// remembered so it is not paid twice. Ingest happens only when the user
+/// network is the feed and readability gates' one-GET-per-candidate probes,
+/// whose verdicts are remembered so they are not paid twice. Ingest happens only when the user
 /// accepts a proposal. The open-web tier is a separate, explicit call
 /// (growth_web_search).
 ///
@@ -12086,12 +12097,8 @@ pub async fn growth_proposals(
     // NOT here: mdfind subprocesses are the slow part, and it has always been
     // its own call (growth_local).
     let mut proposals = e(growth_feeds_impl(&state.db, &notebook_id).await)?;
-    proposals.extend(e(growth_links_impl(
-        &state.db,
-        &state.trace_dir,
-        &notebook_id,
-    )
-    .await)?);
+    let links = e(growth_links_impl(&state.db, &state.trace_dir, &notebook_id).await)?;
+    proposals.extend(crate::growth::gate_readable(&state.db, &notebook_id, links, now()).await);
     let proposals = crate::growth::dedupe_proposals(proposals);
     Ok(GrowthOverview { queries, proposals })
 }

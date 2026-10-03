@@ -52,7 +52,7 @@ struct GrowResult {
 #[tool_router(router = growth_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
-        description = "What a notebook is hungry for and where to feed it — the Grow pane over MCP. Returns queries (recent questions the notebook answered thinly), suggestions (per thin question, the up-to-five links the chat offers under its answer — the notebook's own hosts' sub-pages first), proposals (URLs its own sources keep linking to but that aren't in the notebook, ranked), local (files on this Mac Spotlight matched to those questions; their url is a path), and webEnabled. Pass web:true to also run the open-web search tier when the notebook has it switched on — it costs metered credits, so only when the link and local tiers came up empty. Nothing is fetched here: add a proposal with add_source (url for web, file_path for local), and prefer proposals that name a matchedQuery."
+        description = "What a notebook is hungry for and where to feed it — the Grow pane over MCP. Returns queries (recent questions the notebook answered thinly), suggestions (per thin question, the up-to-five links the chat offers under its answer — the notebook's own hosts' sub-pages first), proposals (URLs its own sources keep linking to but that aren't in the notebook, ranked), local (files on this Mac Spotlight matched to those questions; their url is a path), and webEnabled. Pass web:true to also run the open-web search tier when the notebook has it switched on — it costs metered credits, so only when the link and local tiers came up empty. Each proposal has been fetched once to confirm it is readable; nothing is imported here: add a proposal with add_source (url for web, file_path for local), and prefer proposals that name a matchedQuery."
     )]
     async fn grow(
         &self,
@@ -68,7 +68,13 @@ impl AlchemyMcp {
             .sources_with_content(&notebook_id)
             .await
             .map_err(internal)?;
-        let proposals = growth::proposals(&with_content, &queries);
+        let proposals = growth::gate_readable(
+            &state.db,
+            &notebook_id,
+            growth::proposals(&with_content, &queries),
+            now,
+        )
+        .await;
         let sources = state
             .db
             .list_sources(&notebook_id)

@@ -3,8 +3,8 @@
 //! retrieval traces that returned thin evidence; candidates are outbound
 //! links found in existing sources' extracted text; ranking is
 //! deterministic — mention count, spread across sources, and overlap with
-//! the standing queries' tokens. No model call, no network: the proposal
-//! tray is the only thing that ever fetches, and only on an explicit Add.
+//! the standing queries' tokens. No model call. The proposal tray fetches on an explicit Add, and the readability gate fetches each
+//! link candidate once so nothing the importer can't read is offered.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -432,6 +432,146 @@ pub fn proposals(sources: &[Source], queries: &[String]) -> Vec<GrowthProposal> 
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.url.cmp(&b.url)));
     out.truncate(12);
     out
+}
+
+// ---- Readability gate for the link tier ------------------------------------
+
+/// How long a probe may hold the Grow pane's link section open. The import
+/// path allows a page 30s; a host that needs more than this to answer is
+/// judged again next time rather than holding the pane.
+const READ_PROBE_TIMEOUT_SECS: u64 = 10;
+/// A "can't read this" verdict is re-checked after a day: a timeout or a
+/// passing outage should not bury a good link for long. A readable verdict
+/// stands for a month.
+const UNREADABLE_RECHECK_MS: i64 = 86_400_000;
+const READABLE_RECHECK_MS: i64 = 30 * 86_400_000;
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct ReadVerdict {
+    checked_at: i64,
+    readable: bool,
+}
+
+fn readable_key(notebook_id: &str) -> String {
+    format!("growth.readable.{notebook_id}")
+}
+
+async fn load_verdicts(db: &crate::db::Db, notebook_id: &str) -> HashMap<String, ReadVerdict> {
+    db.kv_get(&readable_key(notebook_id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn verdict_fresh(v: &ReadVerdict, now_ms: i64) -> bool {
+    let ttl = if v.readable {
+        READABLE_RECHECK_MS
+    } else {
+        UNREADABLE_RECHECK_MS
+    };
+    now_ms - v.checked_at < ttl
+}
+
+/// Would Add turn this URL into a source with something in it? Asked of the
+/// same fast path the importer takes, so a login wall, a JS-only shell, a
+/// 404 layout, or a host that won't answer is never offered as a source.
+async fn probe_readable(url: &str) -> bool {
+    let timeout = std::time::Duration::from_secs(READ_PROBE_TIMEOUT_SECS);
+    match tokio::time::timeout(timeout, crate::ingest::extract_url(url)).await {
+        Ok(Ok(ex)) => ex.source_type == "feed" || crate::ingest::looks_blocked(&ex.text).is_none(),
+        Ok(Err(err)) => {
+            crate::note!("growth: {url} is not readable: {err:#}");
+            false
+        }
+        Err(_) => {
+            crate::note!("growth: {url} did not answer within {READ_PROBE_TIMEOUT_SECS}s");
+            false
+        }
+    }
+}
+
+/// The link tier minus anything a fetch says the importer could not read.
+/// Each candidate costs one GET, together rather than in turn, and the
+/// verdict is remembered per notebook so an open pane re-pays nothing.
+/// The slate is already capped (`proposals` keeps twelve), which bounds
+/// the probes per pass the same way.
+pub async fn gate_readable(
+    db: &crate::db::Db,
+    notebook_id: &str,
+    links: Vec<GrowthProposal>,
+    now_ms: i64,
+) -> Vec<GrowthProposal> {
+    let mut verdicts = load_verdicts(db, notebook_id).await;
+    let due: Vec<String> = links
+        .iter()
+        .filter(|p| p.kind == "web")
+        .filter(|p| {
+            verdicts
+                .get(&canonical_key(&p.url))
+                .is_none_or(|v| !verdict_fresh(v, now_ms))
+        })
+        .map(|p| p.url.clone())
+        .collect();
+    let probed = futures::future::join_all(
+        due.iter()
+            .map(|url| async move { (canonical_key(url), probe_readable(url).await) }),
+    )
+    .await;
+    for (key, readable) in probed {
+        verdicts.insert(
+            key,
+            ReadVerdict {
+                checked_at: now_ms,
+                readable,
+            },
+        );
+    }
+    let out = keep_readable(links, &verdicts, true);
+    if !due.is_empty() {
+        // Bounded by what the notebook links to now: a verdict on a link no
+        // source mentions any more is dropped instead of kept forever.
+        let live: HashSet<String> = out
+            .iter()
+            .map(|p| canonical_key(&p.url))
+            .chain(due.iter().map(|u| canonical_key(u)))
+            .collect();
+        verdicts.retain(|k, _| live.contains(k));
+        if let Ok(json) = serde_json::to_string(&verdicts) {
+            if let Err(err) = db.kv_set(&readable_key(notebook_id), &json).await {
+                crate::note!("growth: readability verdicts not saved: {err:#}");
+            }
+        }
+    }
+    out
+}
+
+/// The cached half of the gate, for callers that must not touch the
+/// network (the chips under a chat answer): known walls are dropped, and
+/// links nobody has probed yet still pass.
+pub async fn filter_known_readable(
+    db: &crate::db::Db,
+    notebook_id: &str,
+    links: Vec<GrowthProposal>,
+) -> Vec<GrowthProposal> {
+    keep_readable(links, &load_verdicts(db, notebook_id).await, false)
+}
+
+fn keep_readable(
+    links: Vec<GrowthProposal>,
+    verdicts: &HashMap<String, ReadVerdict>,
+    require_verdict: bool,
+) -> Vec<GrowthProposal> {
+    links
+        .into_iter()
+        .filter(|p| {
+            p.kind != "web"
+                || verdicts
+                    .get(&canonical_key(&p.url))
+                    .map_or(!require_verdict, |v| v.readable)
+        })
+        .collect()
 }
 
 // ---- Suggested sources under a thin answer ---------------------------------
@@ -1875,6 +2015,58 @@ mod tests {
     /// The field crosses IPC and comes back off disk, so pin its wire shape:
     /// camelCase out, and an older row that lacks it decodes to empty rather
     /// than failing the whole transcript.
+    #[test]
+    fn only_links_judged_readable_are_offered() {
+        let links = vec![
+            prop("https://a.test/good", "good", 2, 2),
+            prop("https://a.test/walled", "walled", 2, 2),
+            prop("https://a.test/unseen", "unseen", 2, 2),
+        ];
+        let mut verdicts = HashMap::new();
+        verdicts.insert(
+            canonical_key("https://a.test/good"),
+            ReadVerdict {
+                checked_at: 0,
+                readable: true,
+            },
+        );
+        verdicts.insert(
+            canonical_key("https://a.test/walled"),
+            ReadVerdict {
+                checked_at: 0,
+                readable: false,
+            },
+        );
+        let urls = |v: Vec<GrowthProposal>| v.into_iter().map(|p| p.url).collect::<Vec<_>>();
+        // The Grow pane: a link is offered only once a probe has read it.
+        assert_eq!(
+            urls(keep_readable(links.clone(), &verdicts, true)),
+            ["https://a.test/good"]
+        );
+        // Chat chips: never fetch, but never offer a known wall either.
+        assert_eq!(
+            urls(keep_readable(links, &verdicts, false)),
+            ["https://a.test/good", "https://a.test/unseen"]
+        );
+    }
+
+    #[test]
+    fn unreadable_verdicts_expire_sooner_than_readable_ones() {
+        let day = 86_400_000;
+        let bad = ReadVerdict {
+            checked_at: 0,
+            readable: false,
+        };
+        let good = ReadVerdict {
+            checked_at: 0,
+            readable: true,
+        };
+        assert!(verdict_fresh(&bad, day - 1));
+        assert!(!verdict_fresh(&bad, day));
+        assert!(verdict_fresh(&good, 29 * day));
+        assert!(!verdict_fresh(&good, 30 * day));
+    }
+
     #[test]
     fn suggested_sources_round_trip_through_serde() {
         let item = SuggestedSource {
