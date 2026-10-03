@@ -307,6 +307,8 @@ export interface AppState {
   sourcesOpen: boolean;
   studioOpen: boolean;
   sourcesWidth: number;
+  /** The Library sidebar's width, remembered across launches. */
+  libraryWidth: number;
   studioWidth: number;
   onboardingDismissed: boolean;
   settingsOpen: boolean;
@@ -557,7 +559,7 @@ export interface AppState {
   setDraggingFiles: (value: boolean) => void;
   toggleSources: () => void;
   toggleStudio: () => void;
-  setPanelWidth: (panel: "sources" | "studio", width: number) => void;
+  setPanelWidth: (panel: "sources" | "studio" | "library", width: number) => void;
   dismissOnboarding: () => void;
   openSettings: (tab?: string) => void;
   closeSettings: () => void;

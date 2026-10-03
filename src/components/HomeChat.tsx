@@ -252,7 +252,7 @@ export function HomeChatSidebarThreads() {
           <div
             key={t.id}
             className={cn(
-              "group relative flex h-7 shrink-0 items-center rounded-md pl-8 pr-2 transition-colors",
+              "group relative flex h-[30px] shrink-0 items-center rounded-md pl-8 pr-2 transition-colors",
               selected ? "bg-[var(--selection)]" : "hover:bg-surface-2",
             )}
           >
@@ -274,7 +274,7 @@ export function HomeChatSidebarThreads() {
               }
               aria-current={selected}
               className={cn(
-                "min-w-0 flex-1 truncate text-left text-body",
+                "min-w-0 flex-1 truncate text-left text-[0.875rem]",
                 selected
                   ? "font-medium text-foreground"
                   : "text-muted-foreground",
@@ -317,7 +317,7 @@ export function HomeChatSidebarThreads() {
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="flex h-7 w-full shrink-0 items-center rounded-md pl-8 pr-2 text-left text-body text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+          className="flex h-[30px] w-full shrink-0 items-center rounded-md pl-8 pr-2 text-left text-[0.875rem] text-subtle-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
         >
           Show {hidden} more…
         </button>

@@ -121,6 +121,7 @@ never `text-[Npx]`. The rem values are exact 16ths of px:
 | Section title | `text-section` / `--text-section` | 0.9375rem (15px) | 600 | Hero headings, app name |
 | Card title | `text-card` / `--text-card` | 0.875rem (14px) | 500 | Notebook and note cards (13px cards use Body) |
 | Body / controls | `text-body` / `--text-body` | 0.8125rem (13px) | 400–500 | Default UI text, buttons, inputs, prose |
+| Sidebar row | `text-[0.875rem]` | 0.875rem (14px) | 400–500 | The Library sidebar's rows on 30px rows: macOS's "Large" sidebar size, which Notes, Reminders and Finder readers sit next to |
 | Caption | `text-caption` / `--text-caption` | 0.75rem (12px) | 400 | Toasts, metadata, hints |
 | Micro-label | `text-micro` / `--text-micro` | 0.6875rem (11px) | 500, uppercase + tracking-wide | Panel headers ("SOURCES", "NOTES") |
 | Count badge | `text-badge` / `--text-badge` | 0.625rem (10px) | 500 | Numeric count badges only (the floor) |
@@ -481,8 +482,9 @@ The rules that are easy to lose:
 sheet — Photos and Music, not a dashboard. The Brief sits alone at the
 sidebar's top, no caps label of its own, the way Mail's Inbox sits above its
 account blocks: an icon, "Brief", and a 6px dot when last night's run is
-unread. Below it the sidebar is three blocks of 28px rows (Library, Registry,
-Tags), each row a place with its count, its 6px dot, or its `--primary` count
+unread. The sidebar is resizable from its trailing edge (180–360px,
+remembered across launches, double-click resets to 220). Below the Brief
+it is three blocks of 30px, 14px rows (Library, Registry, Tags), each row a place with its count, its 6px dot, or its `--primary` count
 badge; the selected row is washed in `--selection`. Choosing a row changes
 what the sheet shows, so every surface Home holds — the shelf, the corpus
 conversation, the Registry, the timeline, the night shift's Staff, the Brief,
@@ -528,7 +530,7 @@ belong to the Suggested queue alone).
 not in a second column: the Library's Chats row is a disclosure
 (`ChatsRow` in `HomeView.tsx`), and its sessions nest beneath it as
 indented child rows (`HomeChatSidebarThreads` in `HomeChat.tsx`) — newest
-first, 28px, `pl-8 pr-2 rounded-md text-body`, title truncated to one line.
+first, 30px, `pl-8 pr-2 rounded-md`, 14px, title truncated to one line.
 The two-line Messages entry this used to be (title, then a muted `8/29/2026
 · 14 turns`) is one line now; that detail moved to the row's `title`
 tooltip, since a sidebar row has no room for a second line. A chevron on

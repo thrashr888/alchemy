@@ -163,10 +163,21 @@ export async function removeSourcesGuarded(
 
 // Side panels stay usable at any drag position: wide enough for content,
 // narrow enough to leave the chat column room at the 1040px minimum window.
-const PANEL_BOUNDS = { sources: [220, 400], studio: [260, 460] } as const;
+const PANEL_BOUNDS = {
+  sources: [220, 400],
+  studio: [260, 460],
+  // The Library's sidebar: room for a long notebook name, never a column.
+  library: [180, 360],
+} as const;
+type Panel = keyof typeof PANEL_BOUNDS;
+const PANEL_KEYS = {
+  sources: "sourcesWidth",
+  studio: "studioWidth",
+  library: "libraryWidth",
+} as const;
 const CHAT_PAGE_SIZE = 80;
 
-function clampPanel(panel: "sources" | "studio", width: number): number {
+function clampPanel(panel: Panel, width: number): number {
   const [min, max] = PANEL_BOUNDS[panel];
   return Math.round(Math.min(max, Math.max(min, width)));
 }
@@ -905,6 +916,10 @@ export const useStore = create<AppState>((rawSet, get) => {
     studioWidth: clampPanel(
       "studio",
       Number(localStorage.getItem("studioWidth")) || 300,
+    ),
+    libraryWidth: clampPanel(
+      "library",
+      Number(localStorage.getItem("libraryWidth")) || 220,
     ),
     onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
     settingsOpen: false,
@@ -2556,11 +2571,13 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
     setPanelWidth: (panel, width) => {
       const w = clampPanel(panel, width);
-      localStorage.setItem(
-        panel === "sources" ? "sourcesWidth" : "studioWidth",
-        String(w),
-      );
-      set(panel === "sources" ? { sourcesWidth: w } : { studioWidth: w });
+      const key = PANEL_KEYS[panel];
+      try {
+        localStorage.setItem(key, String(w));
+      } catch {
+        // A width that can't be remembered still applies for this session.
+      }
+      set({ [key]: w } as Pick<AppState, typeof key>);
     },
 
     createNotebook: async (title, look) => {
