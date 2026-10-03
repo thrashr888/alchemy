@@ -483,20 +483,60 @@ pub(super) fn prepare(
             continue;
         }
         let rel = &locations[0];
-        let owners: Vec<_> = candidate
+        let mut owners: Vec<_> = candidate
             .concepts
             .iter()
             .filter(|(_, entry)| entry.portable_id == *portable_id)
             .map(|(id, _)| id.clone())
             .collect();
         if owners.len() > 1 {
-            // Name the file and the rows: a bare refusal left a notebook
-            // unsynced for a day while the culprit (a twin's row surviving
-            // its file being set aside) was found by hand.
-            return Err(format!(
-                "Multiple local rows claim one portable sync identity: {rel} is claimed by rows {}. Delete the duplicate note (its file stays) and the notebook syncs again",
+            // An iCloud " 2.md" twin that was set aside leaves its manifest
+            // concept behind: same portable id as the live entry, a
+            // different path, no file, and no row to move or drop - so
+            // neither the move-aside, the twin hold nor the dead-alias
+            // repair (all keyed on identical paths or on two files) ever
+            // sees it, and it failed the whole notebook ~1,100 times. When
+            // exactly one owner sits on the file we found, an owner whose
+            // own path has no file is a ghost: drop only its stale manifest
+            // entry. `prepare` cannot see database rows, so the rule is
+            // limited to "file absent and path differs"; a ghost that does
+            // have a row is simply re-gathered later, never lost here.
+            let live: Vec<_> = owners
+                .iter()
+                .filter(|id| candidate.concepts[*id].path == *rel)
+                .cloned()
+                .collect();
+            if live.len() == 1 {
+                let ghosts: Vec<_> = owners
+                    .iter()
+                    .filter(|id| {
+                        **id != live[0] && !bundle.join(&candidate.concepts[*id].path).exists()
+                    })
+                    .cloned()
+                    .collect();
+                for id in &ghosts {
+                    let gone = candidate.concepts.remove(id).unwrap();
+                    changed = true;
+                    super::okf_notice(format!(
+                        "Dropped stale sync claim {id} ({}): it shared sync identity with {rel} but its file is gone",
+                        gone.path
+                    ));
+                }
+                owners.retain(|id| !ghosts.contains(id));
+            }
+        }
+        if owners.len() > 1 {
+            // Still ambiguous: two claims whose files both exist, or none on
+            // the file we found. Nothing here can say which is right, so the
+            // file is held like a twin pair - not imported, not touched, and
+            // not a reason to stop the rest of the notebook syncing. Named
+            // in the log so the duplicate row can be deleted by hand.
+            super::okf_notice(format!(
+                "Multiple local rows claim sync identity {portable_id}: {rel} is claimed by rows {}. Holding {rel}, untouched, until the duplicate is removed",
                 owners.join(", ")
             ));
+            candidate.held.insert(rel.clone());
+            continue;
         }
         if let Some(id) = owners.first() {
             let entry = candidate.concepts.get_mut(id).unwrap();
@@ -962,6 +1002,74 @@ mod tests {
         reconcile(&a, "shared-notebook").await.unwrap();
         assert_eq!(load_manifest(&at).concepts.len(), 1);
         assert!(a.db.get_note("local-note").await.unwrap().is_some());
+        assert!(bundle.join("notes/original.md").exists());
+    }
+
+    /// A manifest concept whose twin file was set aside: same portable id as
+    /// the live entry, another path, no file.
+    async fn ghost_fixture() -> (Lab, AppState, PathBuf, PathBuf, OkfManifest) {
+        let lab = Lab::new();
+        let bundle = lab.0.join("bundle");
+        let a = lab.replica("a", &bundle).await;
+        seed(&a).await;
+        let at = manifest_path(&app_data_dir(&a), "a");
+        let manifest = load_manifest(&at);
+        (lab, a, bundle, at, manifest)
+    }
+
+    #[tokio::test]
+    async fn ghost_claim_with_another_path_and_no_file_is_pruned() {
+        let (_lab, a, bundle, at, mut manifest) = ghost_fixture().await;
+        let (live_id, live) = manifest.concepts.iter().next().unwrap();
+        let live_id = live_id.clone();
+        let mut ghost = live.clone();
+        ghost.path = "notes/original 2.md".into();
+        manifest.concepts.insert("ghost-twin".into(), ghost);
+        save_manifest_checked(&at, &manifest).unwrap();
+        reconcile(&a, "shared-notebook").await.unwrap();
+        let after = load_manifest(&at);
+        assert!(!after.concepts.contains_key("ghost-twin"));
+        assert!(after.concepts.contains_key(&live_id));
+        assert!(bundle.join("notes/original.md").exists());
+        assert!(a.db.get_note("local-note").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn two_claims_with_files_are_held_not_fatal() {
+        let (_lab, _a, bundle, at, mut manifest) = ghost_fixture().await;
+        let original = bundle.join("notes/original.md");
+        let (_, live) = manifest.concepts.iter().next().unwrap();
+        let mut twin = live.clone();
+        twin.path = "notes/original 2.md".into();
+        manifest.concepts.insert("twin-row".into(), twin);
+        save_manifest_checked(&at, &manifest).unwrap();
+        // The twin's file exists, so it is not a ghost.
+        std::fs::write(bundle.join("notes/original 2.md"), "other").unwrap();
+        let text = std::fs::read_to_string(&original).unwrap();
+        let mut candidate = load_manifest(&at);
+        // Both claims stay, the pass does not fail, and the file is held.
+        prepare(&bundle, &mut candidate, &HashSet::new(), Duplicates::Hold).unwrap();
+        assert_eq!(candidate.concepts.len(), 2);
+        assert!(candidate.held.contains("notes/original.md"));
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), text);
+    }
+
+    #[tokio::test]
+    async fn live_owner_is_never_pruned() {
+        let (_lab, _a, bundle, at, mut manifest) = ghost_fixture().await;
+        let (live_id, live) = manifest.concepts.iter().next().unwrap();
+        let (live_id, live) = (live_id.clone(), live.clone());
+        // Two ghosts and one live owner: only the ghosts go.
+        for name in ["g1", "g2"] {
+            let mut ghost = live.clone();
+            ghost.path = format!("notes/{name}.md");
+            manifest.concepts.insert(name.into(), ghost);
+        }
+        save_manifest_checked(&at, &manifest).unwrap();
+        let mut candidate = load_manifest(&at);
+        prepare(&bundle, &mut candidate, &HashSet::new(), Duplicates::Hold).unwrap();
+        assert_eq!(candidate.concepts.len(), 1);
+        assert!(candidate.concepts.contains_key(&live_id));
         assert!(bundle.join("notes/original.md").exists());
     }
 

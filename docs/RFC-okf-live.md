@@ -816,6 +816,16 @@ bundles. The rules, all in `okf/hygiene.rs`:
   and the log says so. A twin with no original just takes the name. A twin
   of a concept file is somebody's document: left alone (both are notes, as
   above) and named in the log once so the person can look them over.
+- **A twin's manifest concept can outlive its file.** When the " 2.md" twin
+  of a concept file is set aside, its manifest entry stays: the live
+  entry's portable id, another path, no file, no row. `prepare` found two
+  owners of one identity and failed the whole notebook on every pass, so a
+  notebook sat unsynced for days over `notes/summary.md 2.md`. Now, when
+  exactly one owner sits on the file found and another owner's own path
+  has no file, that entry is a ghost and only its manifest entry is
+  dropped, with a log line. Rows and files are never touched. If it is
+  still ambiguous (two owners whose files both exist, or none on the file)
+  the file is held like a twin pair and the rest of the notebook syncs.
 - **The heal** (`heal_bundle_bloat`, on launch after the frontmatter heal,
   once per store under the versioned marker `okf-bloat-healed`) runs the
   three over every bound bundle. For the log it collapses every inlined
