@@ -781,7 +781,41 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
             image_url: String::new(),
         });
     }
+    // A JSON document is data, not a page: readability would flatten it to
+    // one line and escape its brackets as markdown. Keep it valid and
+    // indented, so it chunks by structure and the reader can show a tree.
+    if content_type.contains("json") && status.is_success() {
+        if let Some(extracted) = json_document(&body, &url) {
+            return Ok(extracted);
+        }
+    }
     readable_page(body, status, url)
+}
+
+/// A JSON response as a source: pretty-printed text, titled by the
+/// document's own `name` or `title` when it has one (an SEC submissions
+/// file names its company), else by the file in the URL.
+pub fn json_document(body: &str, url: &str) -> Option<Extracted> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let named = ["name", "title"]
+        .iter()
+        .find_map(|k| value.get(*k).and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let file = url_file_title(url);
+    let title = match named {
+        Some(name) => format!("{name} ({file}.json)"),
+        None => format!("{file}.json"),
+    };
+    Some(Extracted {
+        feeds: Vec::new(),
+        author: String::new(),
+        title,
+        source_type: "url".to_string(),
+        url: url.to_string(),
+        text: serde_json::to_string_pretty(&value).ok()?,
+        image_url: String::new(),
+    })
 }
 
 /// Does this URL point at a PDF by its path? A backstop for servers that
@@ -798,7 +832,11 @@ fn url_file_title(url: &str) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     path.rsplit('/')
         .find(|seg| !seg.is_empty())
-        .map(|seg| seg.trim_end_matches(".pdf").to_string())
+        .map(|seg| {
+            seg.trim_end_matches(".pdf")
+                .trim_end_matches(".json")
+                .to_string()
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| url.to_string())
 }
@@ -3473,6 +3511,20 @@ mod tests {
             "body: {}",
             ex.text
         );
+    }
+
+    #[test]
+    fn json_responses_stay_valid_json() {
+        let ex = json_document(
+            r#"{"cik":"0001144879","name":"Applied Digital Corp.","tickers":["APLD"]}"#,
+            "https://data.sec.gov/submissions/CIK0001144879.json",
+        )
+        .unwrap();
+        assert_eq!(ex.title, "Applied Digital Corp. (CIK0001144879.json)");
+        let back: serde_json::Value = serde_json::from_str(&ex.text).unwrap();
+        assert_eq!(back["tickers"][0], "APLD");
+        assert!(ex.text.contains("\n  \"tickers\""), "indented: {}", ex.text);
+        assert!(json_document("not json", "https://a.test/x.json").is_none());
     }
 
     #[test]

@@ -642,6 +642,7 @@ pub fn run() {
             commands::live_view_back,
             commands::live_view_forward,
             commands::live_view_url,
+            commands::fetch_json_live,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,

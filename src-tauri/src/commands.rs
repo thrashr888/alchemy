@@ -12468,6 +12468,18 @@ pub fn live_view_forward(window: tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
+/// A JSON source's document as the server has it now, indented — the
+/// reader's Live view for data, where an embedded webview would only show
+/// one long line. Read-only: the stored copy changes on Refresh, not here.
+#[tauri::command]
+pub async fn fetch_json_live(url: String) -> Result<String, String> {
+    let ex = e(crate::ingest::extract_url(&url).await)?;
+    match serde_json::from_str::<serde_json::Value>(&ex.text) {
+        Ok(_) => Ok(ex.text),
+        Err(_) => Err(format!("{url} did not return JSON")),
+    }
+}
+
 /// The child's current address, polled by the reader so it can show where
 /// the user has wandered and offer "Add as source" for a new page.
 #[tauri::command]
