@@ -330,6 +330,24 @@ fn per_call_options(
     }
 }
 
+/// What a permission answer is called in Alchemy's prompt.
+///
+/// Agents name the same answer differently: Claude Code offers "Yes" / "No",
+/// Codex "Allow" / "Cancel" — and Codex's "Cancel" (reject this call; the
+/// agent carries on) sat next to the prompt's own Cancel (dismiss the
+/// request), two buttons with one label and different effects. The prompt is
+/// Alchemy's, so the words are too: the answers mean the same thing for every
+/// agent and are called the same thing. "Always" options are only shown when
+/// an agent offers nothing else (`per_call_options`); they keep the agent's
+/// wording, which says what it will remember.
+fn option_label(kind: PermissionOptionKind, agent_name: &str) -> String {
+    match kind {
+        PermissionOptionKind::AllowOnce => "Yes".into(),
+        PermissionOptionKind::RejectOnce => "No".into(),
+        _ => agent_name.to_string(),
+    }
+}
+
 /// Put the agent in its asking mode, if it has one and offers it here.
 async fn set_ask_mode(
     connection: &ConnectionTo<Agent>,
@@ -1094,7 +1112,7 @@ async fn run_session(
                     .into_iter()
                     .map(|o| PermissionOptionInfo {
                         id: o.option_id.0.to_string(),
-                        name: o.name.clone(),
+                        name: option_label(o.kind, &o.name),
                         kind: serde_json::to_value(o.kind)
                             .ok()
                             .and_then(|v| v.as_str().map(str::to_string))
@@ -1493,6 +1511,25 @@ mod home_tests {
         assert_eq!(shown, vec!["allow-once", "reject"]);
         let only_always = vec![opt("always", PermissionOptionKind::AllowAlways)];
         assert_eq!(per_call_options(&only_always).len(), 1);
+    }
+
+    /// Codex's "Allow" / "Cancel" read as Yes / No like Claude's, so the
+    /// prompt never shows two Cancels with different effects.
+    #[test]
+    fn answers_read_the_same_for_every_agent() {
+        assert_eq!(
+            option_label(PermissionOptionKind::AllowOnce, "Allow"),
+            "Yes"
+        );
+        assert_eq!(
+            option_label(PermissionOptionKind::RejectOnce, "Cancel"),
+            "No"
+        );
+        assert_eq!(option_label(PermissionOptionKind::AllowOnce, "Yes"), "Yes");
+        assert_eq!(
+            option_label(PermissionOptionKind::AllowAlways, "Always allow notes"),
+            "Always allow notes"
+        );
     }
 
     /// The asking modes, by the ids each adapter advertises. opencode has
