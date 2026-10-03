@@ -1117,6 +1117,9 @@ export interface AcpPermissionEvent {
  *  the agent's request has, plus the window and thread it belongs to. */
 export interface LoopPermissionEvent {
   window: string;
+  /** Which chat asked: Home's, or a notebook's. */
+  surface: "home" | "notebook";
+  /** The Home thread, or the notebook, the prompt belongs to. */
   threadId: string;
   requestId: string;
   toolTitle: string;

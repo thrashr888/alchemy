@@ -872,6 +872,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     sendingFor: null,
     streamingText: "",
     steps: [],
+    chatPermission: null,
     waiting: "",
     agentMode: localStorage.getItem("agentMode") === "true",
     chatConfig: DEFAULT_CHAT_CONFIG,
@@ -1257,6 +1258,23 @@ export const useStore = create<AppState>((rawSet, get) => {
       // aren't filtered by target.
       void listen<LoopPermissionEvent>("chat://permission", (e) => {
         if (e.payload.window !== thisWindow) return;
+        if (e.payload.surface === "notebook") {
+          // The notebook chat's loop: shown under that chat's step trail
+          // while its send is in flight.
+          if (!get().sending || get().sendingFor !== e.payload.threadId) return;
+          set({
+            chatPermission: {
+              notebookId: e.payload.threadId,
+              requestId: e.payload.requestId,
+              toolTitle: e.payload.toolTitle,
+              action: e.payload.action,
+              options: e.payload.options,
+              detail: e.payload.detail,
+              fromLoop: true,
+            },
+          });
+          return;
+        }
         const run = get().homeRun;
         if (!run || run.queued || run.threadId !== e.payload.threadId) return;
         set({
@@ -1280,6 +1298,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         "chat://permission-settled",
         (e) => {
           if (e.payload.window !== thisWindow) return;
+          if (get().chatPermission?.requestId === e.payload.requestId)
+            set({ chatPermission: null });
           const run = get().homeRun;
           if (run?.permission?.requestId === e.payload.requestId)
             set({ homeRun: { ...run, permission: null } });
@@ -2405,6 +2425,18 @@ export const useStore = create<AppState>((rawSet, get) => {
       // to cancel — the flag withdraws it before it starts.
       set({ homeRun: { ...run, stopped: true, permission: null } });
       if (!run.queued) cancelHomeRun();
+    },
+
+    answerChatPermission: (optionId) => {
+      const request = get().chatPermission;
+      if (!request) return;
+      set({ chatPermission: null });
+      const allow = request.options.some(
+        (o) => o.id === optionId && o.kind.startsWith("allow"),
+      );
+      void api
+        .loopPermission(request.requestId, allow)
+        .catch((e) => get().pushToast("error", describe(e)));
     },
 
     answerHomePermission: (optionId) => {

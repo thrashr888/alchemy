@@ -289,6 +289,8 @@ export interface AppState {
   sendingFor: string | null;
   streamingText: string;
   steps: string[];
+  /** A write the notebook's tool loop is waiting on the user to allow. */
+  chatPermission: AcpPermissionEvent | null;
   /** The live "still waiting" line, if the backend is counting down toward a
    *  timeout. Replaced on every tick and cleared the moment anything else
    *  happens, so it never joins the trail. */
@@ -519,6 +521,8 @@ export interface AppState {
   /** Answer the pending write permission in the live Home run, whichever
    *  brain asked. `null` declines it. */
   answerHomePermission: (optionId: string | null) => void;
+  /** Answer the notebook chat's pending write permission. `null` declines. */
+  answerChatPermission: (optionId: string | null) => void;
   /** Land a Home tool reply: the quiet transcript row, plus whatever the
    *  backend could only ask this window to do — open a notebook, or let go
    *  of the conversation it just deleted. */

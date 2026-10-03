@@ -753,6 +753,55 @@ rest of the loop.
   SEC Dashboard notebook, which holds that exact brief. That's a defensible
   reading, not a misfile.
 
+### What 6c shipped (2026-10-03)
+
+- **Notebook chat runs the loop** on tool-capable engines, before
+  retrieval. `chatloop::run` takes a `Surface` (a Home thread, or a
+  notebook) that picks the catalog, the system prompt, the step channel
+  (`meta://step` or `chat://step`), the prompt's scope, and the undo key
+  (`home-<thread>`, or the notebook id the Agent pane already uses).
+- **The loop acts; the pipeline answers.** The notebook catalog has no
+  search tool. Hybrid search, gap retrieval, outline escalation and the
+  rerank answer questions better than a tool round could. A question costs
+  one round with no tool calls, then the pipeline runs unchanged. A write,
+  or a declined write, is the answer on its own.
+- **One implementation per verb.** The notebook router's dispatch moved
+  into `run_tool_action(ToolAction)`, and the notebook loop builds a
+  `ToolAction` from the tool's arguments and calls it. Core tools are
+  `add_source`, `generate`, `save_note`, `remove_source` and
+  `tool_search`. Behind search: `save_text`, `refresh_sources`,
+  `schedule_report`, `update_report`, `commission`, `create_template`,
+  `settings`, `night_shift`, `list_sources`.
+- **Prompts:** every write asks, with the same tiered URL rule. A removal
+  is asked about only once it names exactly one source, and it is
+  journaled as `delete_source`, so Undo can put it back. On tool-capable
+  engines, `try_tool_route` keeps its exact fast paths and skips
+  `tool_gate` and the router.
+- **The prompt in notebook chat:** `chat://permission` carries
+  `surface: "notebook"`. The store holds it as `chatPermission`, and
+  `ChatPanel` draws the same `PermissionPrompt` under the step trail.
+- **Stop reaches the loop:** notebook chat claims its cancel scope before
+  the loop, not at the stream.
+
+**Not done:** the second half of 6c, agent providers answering notebook
+chat in the notebook's ACP session. Notebook chat with an agent provider
+still answers headless over retrieved excerpts, and the Agent pane is
+still separate. That is a front-end merge (RFC §6, "one thread, two
+brains") and gets its own pass.
+
+**Verified live** on Ollama (muse-glimmer 30B) in the SEC Filings (JSON
+test) notebook: "Remove the Applied Digital source" ran `tool_search` →
+`list_sources` → `remove_source`, asked "remove “Applied Digital Corp.
+(CIK0001144879.json)” from this notebook", and on No kept it (trace:
+`declined`).
+
+**The latency risk is real.** A plain question's no-tool round took 65 s
+on the local 30B model before the pipeline started. The first runs also
+hit a stalled Ollama (one generate round timed out at 180 s). That's the
+open question 2 cost, now measured: on slow local models, a loop round in
+front of every notebook question needs a cheaper decision before this
+ships to them. `chatloop.jsonl` records `surface` and `wall_ms` per turn.
+
 ### Review (2026-10-03)
 
 A review checked the first draft against the code. It found that the

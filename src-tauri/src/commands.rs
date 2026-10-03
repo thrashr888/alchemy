@@ -8603,10 +8603,6 @@ async fn try_tool_route(
     if let Some((kind, interval, name)) = schedule_gate(content) {
         return Some(create_schedule_reply(state, notebook_id, &kind, &interval, &name, "").await);
     }
-    if !tool_gate(content) {
-        return None;
-    }
-
     // Deterministic fast path: message with URLs that clearly asks to add them
     // skips the router entirely (previous behavior, zero extra latency).
     // A destructive/refresh verb disqualifies it — "delete https://x" must
@@ -8648,6 +8644,15 @@ async fn try_tool_route(
     if !allow_router {
         return None;
     }
+    // An engine that runs the tool loop gets every message: the notebook
+    // loop has these verbs as tools (RFC-unified-chat 6c), and no keyword
+    // list stands between the request and the model that can act on it.
+    if state.ai.read().await.chat_supports_tools() {
+        return None;
+    }
+    if !tool_gate(content) {
+        return None;
+    }
 
     let _ = app.emit(
         "chat://step",
@@ -8658,7 +8663,22 @@ async fn try_tool_route(
     );
     // Fetched once: the router prompt and the remove/refresh arms all use it.
     let sources = state.db.list_sources(notebook_id).await.ok()?;
-    match route_tool(state, &sources, content).await {
+    let action = route_tool(state, &sources, content).await;
+    run_tool_action(app, state, notebook_id, content, &sources, action).await
+}
+
+/// Carry out one notebook tool action. The router's choice and the notebook
+/// tool loop's both land here, so a verb behaves the same whichever picked
+/// it. `None` means "not a command": answer the question instead.
+async fn run_tool_action(
+    app: &AppHandle,
+    state: &AppState,
+    notebook_id: &str,
+    content: &str,
+    sources: &[Source],
+    action: ToolAction,
+) -> Option<String> {
+    match action {
         ToolAction::Chat => None,
         ToolAction::AddUrls(urls) => {
             // Trust boundary: only ingest URLs whose host actually appears in
@@ -9661,6 +9681,48 @@ async fn send_message_impl(
         return finish_tool_reply(&app, &state, &notebook_id, reply).await;
     }
 
+    // Claimed before the tool loop, not at the stream: Stop has to bite
+    // while the loop is deciding or a prompt is waiting, too.
+    let cancel = state.begin_generation(&format!("chat:{}", window.label()));
+
+    // The notebook tool loop (RFC-unified-chat 6c). It acts; the pipeline
+    // below answers. A question costs one round with no tool calls and falls
+    // through unchanged; an engine that can't call tools skips it entirely.
+    {
+        let all = e(state.db.list_messages(&notebook_id).await)?;
+        let kept: Vec<&Message> = all
+            .iter()
+            .filter(|m| m.id != user_msg.id && m.kind != "error")
+            .collect();
+        let recent: Vec<crate::ai::ChatTurn> = kept[kept.len().saturating_sub(6)..]
+            .iter()
+            .map(|m| crate::ai::ChatTurn {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            })
+            .collect();
+        let ev = chatloop::run(
+            &app,
+            &state,
+            window.label(),
+            chatloop::Surface::Notebook {
+                notebook_id: &notebook_id,
+            },
+            &content,
+            &recent,
+            &cancel,
+        )
+        .await;
+        if ev.cancelled {
+            return finish_tool_reply(&app, &state, &notebook_id, "Stopped.".into()).await;
+        }
+        // What the loop did is the answer: a declined write ends on the
+        // user's word, and a done write needs no synthesis to restate it.
+        if ev.declined || !ev.replies.is_empty() {
+            return finish_tool_reply(&app, &state, &notebook_id, ev.replies.join("\n\n")).await;
+        }
+    }
+
     // Retrieve relevant chunks. The selected sources are fetched first so
     // retrieval depth can scale with how much text is actually in play
     // (RFC-infinite-context §3) and the manifest reuses the same rows.
@@ -9879,7 +9941,6 @@ async fn send_message_impl(
     // cancellation token so a Stop click aborts the request; on cancel we keep
     // whatever partial text streamed so far.
     let app_for_cb = app.clone();
-    let cancel = state.begin_generation(&format!("chat:{}", window.label()));
     let partial = Arc::new(Mutex::new(String::new()));
     let partial_cb = partial.clone();
     // 0 = no token yet; the first token stores max(elapsed, 1).
@@ -14700,7 +14761,9 @@ pub async fn ask_everything(
             &app,
             &state,
             window.label(),
-            thread_id.as_deref().unwrap_or_default(),
+            chatloop::Surface::Home {
+                thread_id: thread_id.as_deref().unwrap_or_default(),
+            },
             &question,
             history.as_deref().unwrap_or(&[]),
             &cancel,

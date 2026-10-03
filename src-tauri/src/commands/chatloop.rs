@@ -434,6 +434,61 @@ fn cap(mut text: String) -> String {
     text
 }
 
+// ---- Where a turn runs ------------------------------------------------------
+
+/// Which chat a loop turn belongs to. Home acts across the library from a
+/// thread; a notebook's chat acts inside that one notebook (RFC 6c), where
+/// the notebook's own retrieval pipeline answers questions and the loop's
+/// job is the actions.
+#[derive(Clone, Copy)]
+pub(crate) enum Surface<'a> {
+    Home { thread_id: &'a str },
+    Notebook { notebook_id: &'a str },
+}
+
+impl Surface<'_> {
+    /// The thread or notebook a prompt belongs to, as the front end matches it.
+    fn scope_id(&self) -> &str {
+        match self {
+            Surface::Home { thread_id } => thread_id,
+            Surface::Notebook { notebook_id } => notebook_id,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Surface::Home { .. } => "home",
+            Surface::Notebook { .. } => "notebook",
+        }
+    }
+
+    /// The undo journal key: Home threads share their agent turns' key
+    /// (`home-<threadId>`); a notebook shares its Agent pane's (its id).
+    fn undo_key(&self) -> String {
+        match self {
+            Surface::Home { thread_id } => format!("home-{thread_id}"),
+            Surface::Notebook { notebook_id } => notebook_id.to_string(),
+        }
+    }
+}
+
+/// A progress line on the surface's own step trail: Home's is window-scoped
+/// `meta://step`; a notebook chat's is `chat://step`.
+fn step(app: &AppHandle, window_label: &str, surface: Surface<'_>, label: &str, transient: bool) {
+    match surface {
+        Surface::Home { .. } => meta_step_to(Some((app, window_label)), label, transient),
+        Surface::Notebook { .. } => {
+            let _ = app.emit(
+                "chat://step",
+                super::StepEvent {
+                    label: label.to_string(),
+                    transient,
+                },
+            );
+        }
+    }
+}
+
 // ---- Asking the user (RFC-unified-chat phase 6a) --------------------------
 
 /// How long a prompt waits before it counts as No. Long enough to read a
@@ -453,6 +508,9 @@ static PENDING: LazyLock<Mutex<Pending>> = LazyLock::new(|| Mutex::new(HashMap::
 #[serde(rename_all = "camelCase")]
 struct LoopPermissionEvent {
     window: String,
+    /// "home" or "notebook": which chat's prompt this is.
+    surface: String,
+    /// The Home thread or notebook the prompt belongs to.
     thread_id: String,
     request_id: String,
     tool_title: String,
@@ -466,7 +524,7 @@ struct LoopPermissionEvent {
 pub(crate) struct Asker<'a> {
     pub app: &'a AppHandle,
     pub window_label: &'a str,
-    pub thread_id: &'a str,
+    pub surface: Surface<'a>,
     pub cancel: &'a CancellationToken,
 }
 
@@ -480,7 +538,7 @@ impl Asker<'_> {
     ///
     /// A Yes to a write Undo can take back snapshots what it will change
     /// before returning, the way an agent's approved write does, under the
-    /// same journal key Home's agent turns use, so the thread's Undo covers
+    /// same journal key that surface's agent turns use, so its Undo covers
     /// both brains.
     async fn approve(
         &self,
@@ -500,7 +558,8 @@ impl Asker<'_> {
             "chat://permission",
             LoopPermissionEvent {
                 window: self.window_label.to_string(),
-                thread_id: self.thread_id.to_string(),
+                surface: self.surface.name().to_string(),
+                thread_id: self.surface.scope_id().to_string(),
                 request_id: request_id.clone(),
                 tool_title: crate::mcp::access::human_title(tool)
                     .or_else(|| crate::mcp::access::human_title(&format!("mcp__alchemy__{tool}")))
@@ -529,17 +588,10 @@ impl Asker<'_> {
             json!({ "window": self.window_label, "requestId": request_id }),
         );
         if allowed && super::undo::journals(tool) {
-            super::undo::capture(state, &home_undo_key(self.thread_id), "Alchemy", tool, args)
-                .await;
+            super::undo::capture(state, &self.surface.undo_key(), "Alchemy", tool, args).await;
         }
         allowed
     }
-}
-
-/// The undo journal key for a Home thread, shared with its agent turns
-/// (`acp` keys Home sessions `home-<threadId>`).
-fn home_undo_key(thread_id: &str) -> String {
-    format!("home-{thread_id}")
 }
 
 /// Answer a prompt the loop is waiting on. An unknown id is a prompt that
@@ -580,9 +632,15 @@ async fn dispatch(
     let Asker {
         app,
         window_label,
-        thread_id,
+        surface,
         ..
     } = asker;
+    let thread_id = match surface {
+        Surface::Home { thread_id } => thread_id,
+        Surface::Notebook { notebook_id } => {
+            return dispatch_notebook(asker, state, notebook_id, question, name, args).await;
+        }
+    };
     let target = Some((app, window_label));
     // Writes and effects need the user's words behind them, not just the
     // model's judgment. The classifier route has always held URLs to this
@@ -857,33 +915,7 @@ async fn dispatch(
                 ToolReply::say(cap(reply))
             }
         }
-        "tool_search" => {
-            let query = arg(args, "query").to_lowercase();
-            let words: Vec<&str> = query.split_whitespace().collect();
-            let matches: Vec<ToolSpec> = catalog()
-                .into_iter()
-                .filter(|t| !t.core)
-                .filter(|t| {
-                    let hay = format!("{} {}", t.name, t.description).to_lowercase();
-                    words.iter().any(|w| w.len() > 2 && hay.contains(w))
-                })
-                .collect();
-            if matches.is_empty() {
-                return ToolReply::say(
-                    "No other tool matches that. Answer from what you already have.",
-                );
-            }
-            let text = matches
-                .iter()
-                .map(|t| format!("{} — {}", t.name, t.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            ToolReply {
-                text: format!("These tools are now callable:\n{text}"),
-                enable: matches.iter().map(|t| t.name.to_string()).collect(),
-                ..Default::default()
-            }
-        }
+        "tool_search" => tool_search_reply(catalog(), arg(args, "query")),
         "list_sources" => {
             let id = arg(args, "notebook_id");
             match state.db.list_sources(id).await {
@@ -1076,6 +1108,496 @@ async fn create_notebook_with_pages(
     ))
 }
 
+// ---- The notebook loop (RFC-unified-chat phase 6c) --------------------------
+
+/// What a notebook's chat can do. Search is not here: the notebook's own
+/// pipeline (hybrid search, gap retrieval, outline escalation, rerank)
+/// answers questions better than a tool round could, so this loop acts and
+/// the pipeline answers. A question costs one round with no tool calls.
+fn notebook_catalog() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: "add_source",
+            core: true,
+            description: "Add web pages to this notebook by URL. Pages the user didn't link are shown to them first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "urls": { "type": "array", "items": { "type": "string" }, "description": "Full URLs." }
+                    },
+                    "required": ["urls"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "generate",
+            core: true,
+            description: "Generate a document from this notebook's sources (a study guide, briefing, FAQ, timeline, and so on). It is saved as a note. Asks the user first.",
+            params: || {
+                let mut kinds: Vec<&str> = crate::rag::ARTIFACT_KINDS.to_vec();
+                kinds.push("custom");
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": kinds },
+                        "prompt": { "type": "string", "description": "Extra instructions, or empty." }
+                    },
+                    "required": ["kind"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "save_note",
+            core: true,
+            description: "Save the previous answer in this chat as a note. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "title": { "type": "string", "description": "Title for the note, or empty." } }
+                })
+            },
+        },
+        ToolSpec {
+            name: "remove_source",
+            core: true,
+            description: "Remove one source from this notebook, named by part of its title or its site. Asks the user first, and can be undone.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "name": { "type": "string" } },
+                    "required": ["name"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "save_text",
+            core: false,
+            description: "Save text from the user's message as a source in this notebook. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "title": { "type": "string" }, "text": { "type": "string" } },
+                    "required": ["text"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "refresh_sources",
+            core: false,
+            description: "Re-fetch URL sources in this notebook: those matching a name fragment, or all of them when it is empty. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "name": { "type": "string" } }
+                })
+            },
+        },
+        ToolSpec {
+            name: "schedule_report",
+            core: false,
+            description: "Create a recurring report for this notebook (kind: an artifact kind, brief, custom, or a template name; interval: hourly, daily or weekly). Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string" },
+                        "interval": { "type": "string", "enum": ["hourly", "daily", "weekly"] },
+                        "name": { "type": "string" },
+                        "prompt": { "type": "string", "description": "What it should cover, for kind custom." }
+                    },
+                    "required": ["kind", "interval"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "update_report",
+            core: false,
+            description: "Change an existing recurring report, named by part of its name. Empty fields stay as they are. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "new_name": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "interval": { "type": "string" },
+                        "prompt": { "type": "string" },
+                        "enabled": { "type": "string", "enum": ["", "true", "false"] }
+                    },
+                    "required": ["name"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "commission",
+            core: false,
+            description: "Hand one job to the Night Shift instead of running it now (when: tonight, or now only if the user says so). Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string" },
+                        "name": { "type": "string" },
+                        "prompt": { "type": "string" },
+                        "when": { "type": "string", "enum": ["tonight", "now"] }
+                    },
+                    "required": ["kind"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "create_template",
+            core: false,
+            description: "Save a reusable custom generator the user can run from Studio later. Compose its prompt from what they asked it to do. Asks the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "description": { "type": "string" },
+                        "prompt": { "type": "string" }
+                    },
+                    "required": ["name", "prompt"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "settings",
+            core: false,
+            description: "Read or change Alchemy's settings; style changes apply to this notebook. Same ops as Home: get, models, test, setup, set, style, theme, pull, connect. Changes ask the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "op": { "type": "string", "enum": ["get", "models", "test", "setup", "set", "style", "theme", "pull", "connect"] },
+                        "field": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["op"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "night_shift",
+            core: false,
+            description: "The Night Shift: status, pause, or resume. Pause and resume ask the user first.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "op": { "type": "string", "enum": ["status", "pause", "resume"] } },
+                    "required": ["op"]
+                })
+            },
+        },
+        ToolSpec {
+            name: "list_sources",
+            core: false,
+            description: "List this notebook's sources: id, title, type.",
+            params: || json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "tool_search",
+            core: true,
+            description: "Find tools beyond the ones listed here: save text, refresh sources, schedule or change reports, hand work to the Night Shift, save a template, change settings, list sources.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                })
+            },
+        },
+    ]
+}
+
+/// The notebook loop's instructions: act on requests, leave questions to
+/// the pipeline.
+fn notebook_loop_system() -> String {
+    let base = "You work in one notebook of the user's research library. If the user asks you \
+     to DO something here (add a page, generate a document, save a note, remove or refresh \
+     a source, schedule a report, change a setting), do it with the matching tool; use \
+     tool_search to find one you don't see. Changes are shown to the user, who approves \
+     them, so act rather than describe. If the user is asking a QUESTION, call no tools \
+     at all: the notebook's own search answers questions, better than you can from here.";
+    match crate::fieldnotes::prompt_block() {
+        Some(notes) => format!("{base}\n\n{notes}"),
+        None => base.to_string(),
+    }
+}
+
+/// `tool_search` over a catalog: the non-core tools whose name or
+/// description shares a word with the query, made callable for the turn.
+fn tool_search_reply(catalog: Vec<ToolSpec>, query: &str) -> ToolReply {
+    let query = query.to_lowercase();
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let matches: Vec<ToolSpec> = catalog
+        .into_iter()
+        .filter(|t| !t.core)
+        .filter(|t| {
+            let hay = format!("{} {}", t.name, t.description).to_lowercase();
+            words.iter().any(|w| w.len() > 2 && hay.contains(w))
+        })
+        .collect();
+    if matches.is_empty() {
+        return ToolReply::say("No other tool matches that. Answer from what you already have.");
+    }
+    let text = matches
+        .iter()
+        .map(|t| format!("{} — {}", t.name, t.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ToolReply {
+        text: format!("These tools are now callable:\n{text}"),
+        enable: matches.iter().map(|t| t.name.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+/// Run one notebook tool. Each write asks first, then lands in the same
+/// `run_tool_action` the notebook router uses, so a verb behaves the same
+/// whichever picked it.
+async fn dispatch_notebook(
+    asker: Asker<'_>,
+    state: &AppState,
+    notebook_id: &str,
+    question: &str,
+    name: &str,
+    args: &Value,
+) -> ToolReply {
+    use super::ToolAction;
+    let app = asker.app;
+    let asked = question.to_lowercase();
+    let s = |key: &str| arg(args, key).to_string();
+    let sources = match state.db.list_sources(notebook_id).await {
+        Ok(sources) => sources,
+        Err(err) => return ToolReply::say(format!("error: couldn't read the sources: {err}")),
+    };
+    // Every write but add_source (tiered) and remove_source (named) asks
+    // with a sentence of its own, then runs as the router would.
+    let (action, ask): (ToolAction, Option<String>) = match name {
+        "tool_search" => return tool_search_reply(notebook_catalog(), arg(args, "query")),
+        "list_sources" => {
+            if sources.is_empty() {
+                return ToolReply::say("This notebook has no sources.");
+            }
+            return ToolReply::say(cap(sources
+                .iter()
+                .map(|s| format!("{} ({}) — id: {}", s.title, s.source_type, s.id))
+                .collect::<Vec<_>>()
+                .join("\n")));
+        }
+        "add_source" => {
+            let urls: Vec<String> = args["urls"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|u| u.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if urls.is_empty() {
+                return ToolReply::say("error: urls is required and must be a non-empty array");
+            }
+            let (mut urls, proposed) = split_written(urls, &asked);
+            if !proposed.is_empty() {
+                let action = format!(
+                    "add {} page{} you didn't link to this notebook",
+                    proposed.len(),
+                    if proposed.len() == 1 { "" } else { "s" }
+                );
+                if asker
+                    .approve(state, name, action, proposed.clone(), args)
+                    .await
+                {
+                    urls.extend(proposed);
+                } else if urls.is_empty() {
+                    let hosts: Vec<String> = proposed.iter().map(|u| host_of(u)).collect();
+                    return declined_reply(&format!(
+                        "Didn't add {} — you said No.",
+                        hosts.join(", ")
+                    ));
+                }
+            }
+            return write_reply(
+                super::add_url_sources(
+                    app,
+                    state,
+                    notebook_id,
+                    &urls,
+                    "chat://step",
+                    "this notebook",
+                )
+                .await,
+            );
+        }
+        "remove_source" => {
+            let needle = arg(args, "name").to_lowercase();
+            if needle.is_empty() {
+                return ToolReply::say("error: name is required");
+            }
+            let matches: Vec<_> = sources
+                .iter()
+                .filter(|s| {
+                    s.title.to_lowercase().contains(&needle)
+                        || (!s.url.is_empty() && host_of(&s.url).to_lowercase().contains(&needle))
+                })
+                .collect();
+            // Ambiguity and no-match are answers, not prompts: the router's
+            // own arm says so, and nothing is asked until there is one target.
+            if let [one] = matches.as_slice() {
+                // Journaled as the MCP tool it is, so Undo can put it back.
+                let journal = json!({ "source_id": one.id });
+                let action = format!("remove “{}” from this notebook", one.title);
+                if !asker
+                    .approve(state, "delete_source", action, Vec::new(), &journal)
+                    .await
+                {
+                    return declined_reply(&format!("Kept “{}” — you said No.", one.title));
+                }
+            }
+            (ToolAction::RemoveSource(s("name")), None)
+        }
+        "generate" => {
+            let kind = s("kind");
+            let label = crate::rag::artifact_spec(&kind)
+                .map(|(t, _)| t.to_string())
+                .unwrap_or_else(|| "document".into());
+            let ask = format!("generate a {label} from this notebook");
+            (
+                ToolAction::Generate {
+                    kind,
+                    prompt: s("prompt"),
+                },
+                Some(ask),
+            )
+        }
+        "save_note" => (
+            ToolAction::SaveNote(s("title")),
+            Some("save the previous answer as a note".to_string()),
+        ),
+        "save_text" => {
+            if arg(args, "text").is_empty() {
+                return ToolReply::say("error: text is required");
+            }
+            let ask = match arg(args, "title") {
+                "" => "save text from your message as a source".to_string(),
+                t => format!("save “{t}” as a source"),
+            };
+            (
+                ToolAction::AddText {
+                    title: s("title"),
+                    text: s("text"),
+                },
+                Some(ask),
+            )
+        }
+        "refresh_sources" => {
+            let ask = match arg(args, "name") {
+                "" => "re-fetch every URL source in this notebook".to_string(),
+                n => format!("re-fetch the sources matching “{n}”"),
+            };
+            (ToolAction::RefreshSources(s("name")), Some(ask))
+        }
+        "schedule_report" => {
+            let ask = format!("schedule a {} {} report", s("interval"), s("kind"));
+            (
+                ToolAction::ScheduleReport {
+                    kind: s("kind"),
+                    interval: s("interval"),
+                    name: s("name"),
+                    prompt: s("prompt"),
+                },
+                Some(ask),
+            )
+        }
+        "update_report" => {
+            let ask = format!("change the report “{}”", s("name"));
+            (
+                ToolAction::UpdateReport {
+                    name: s("name"),
+                    new_name: s("new_name"),
+                    kind: s("kind"),
+                    interval: s("interval"),
+                    prompt: s("prompt"),
+                    enabled: s("enabled"),
+                },
+                Some(ask),
+            )
+        }
+        "commission" => {
+            let when = if arg(args, "when") == "now" {
+                "now"
+            } else {
+                "tonight"
+            };
+            let ask = format!("hand a {} job to the Night Shift ({when})", s("kind"));
+            (
+                ToolAction::Commission {
+                    kind: s("kind"),
+                    name: s("name"),
+                    prompt: s("prompt"),
+                    when: when.to_string(),
+                },
+                Some(ask),
+            )
+        }
+        "create_template" => {
+            let ask = format!("save a template, “{}”", s("name"));
+            (
+                ToolAction::CreateTemplate {
+                    name: s("name"),
+                    description: s("description"),
+                    prompt: s("prompt"),
+                },
+                Some(ask),
+            )
+        }
+        "settings" => {
+            let (op, field, value) = (s("op"), s("field"), s("value"));
+            let ask = match op.as_str() {
+                "set" => Some(format!("set {field} to “{value}”")),
+                "style" => Some(
+                    format!("change this notebook's answer style to {field} {value}")
+                        .trim()
+                        .to_string(),
+                ),
+                "theme" if field.is_empty() || field == "random" => {
+                    Some("switch to a random theme".to_string())
+                }
+                "theme" => Some(format!("switch the theme to {field}")),
+                _ => None,
+            };
+            (
+                ToolAction::Shared(SharedAction::Settings { op, field, value }),
+                ask,
+            )
+        }
+        "night_shift" => {
+            let op = s("op");
+            let ask =
+                matches!(op.as_str(), "pause" | "resume").then(|| format!("{op} the Night Shift"));
+            (ToolAction::Shared(SharedAction::NightShift { op }), ask)
+        }
+        other => return ToolReply::say(format!("error: no tool named {other}")),
+    };
+    let is_write = ask.is_some() || name == "remove_source";
+    if let Some(ask) = ask {
+        if !asker.approve(state, name, ask, Vec::new(), args).await {
+            return declined_reply("Left it as it was — you said No.");
+        }
+    }
+    let reply = super::run_tool_action(app, state, notebook_id, question, &sources, action)
+        .await
+        .unwrap_or_default();
+    if is_write {
+        write_reply(reply)
+    } else {
+        ToolReply::say(cap(reply))
+    }
+}
+
 /// The assistant row that records a round's tool calls, in the neutral form.
 ///
 /// `arguments` stays an OBJECT. Ollama takes this as-is and rejects a
@@ -1147,7 +1669,7 @@ pub(crate) async fn run(
     app: &AppHandle,
     state: &AppState,
     window_label: &str,
-    thread_id: &str,
+    surface: Surface<'_>,
     question: &str,
     history: &[crate::ai::ChatTurn],
     cancel: &CancellationToken,
@@ -1169,7 +1691,15 @@ pub(crate) async fn run(
         ROUNDS_LOCAL
     };
 
-    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": loop_system() })];
+    let system = match surface {
+        Surface::Home { .. } => loop_system(),
+        Surface::Notebook { .. } => notebook_loop_system(),
+    };
+    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": system })];
+    let catalog = || match surface {
+        Surface::Home { .. } => catalog(),
+        Surface::Notebook { .. } => notebook_catalog(),
+    };
     for turn in history {
         messages.push(json!({ "role": turn.role, "content": turn.content }));
     }
@@ -1189,12 +1719,14 @@ pub(crate) async fn run(
         // for the whole first round — up to a minute on a 30b model — while
         // nothing was searching yet: the model was still deciding what to
         // look for. Transient, so the list keeps only the real searches.
-        meta_step_to(
-            Some((app, window_label)),
-            if round == 0 {
-                "Deciding what to look for"
-            } else {
-                "Looking further"
+        step(
+            app,
+            window_label,
+            surface,
+            match (surface, round) {
+                (Surface::Notebook { .. }, 0) => "Reading your request",
+                (_, 0) => "Deciding what to look for",
+                _ => "Looking further",
             },
             true,
         );
@@ -1248,7 +1780,7 @@ pub(crate) async fn run(
             let asker = Asker {
                 app,
                 window_label,
-                thread_id,
+                surface,
                 cancel,
             };
             let reply = dispatch(asker, state, question, &c.name, &c.arguments).await;
@@ -1302,6 +1834,7 @@ pub(crate) async fn run(
             "chatloop.jsonl",
             json!({
                 "at": super::now(),
+                "surface": surface.name(),
                 "question": question.chars().take(200).collect::<String>(),
                 "rounds_used": ev.rounds_used,
                 "budget": budget,
