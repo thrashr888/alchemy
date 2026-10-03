@@ -70,8 +70,9 @@ const FEED_STARTERS: &[FeedStarter] = &[
         MARKET_OPEN_TITLE,
         "dollar-sign",
         &[
-            "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
             "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+            "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+            "https://www.federalreserve.gov/feeds/press_all.xml",
         ],
     ),
 ];
