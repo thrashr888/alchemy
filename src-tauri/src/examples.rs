@@ -38,6 +38,48 @@ const LINKS_FEED: &str =
 /// first fill of ~1,400 links finishes in the background within the hour.
 const LINKS_IMPORT_GAP: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// Living starters: a notebook that is one or more feeds and nothing else.
+/// Each feed connects through the ordinary feed path (its newest entries
+/// land as sources, the poller keeps it current), so these grow on their
+/// own between launches. (title, icon, feed urls)
+pub(crate) const PRODUCT_HUNT_TITLE: &str = "Product Hunt Launches";
+pub(crate) const HACKER_NEWS_TITLE: &str = "Hacker News Front Page";
+pub(crate) const WIKIPEDIA_TITLE: &str = "Wikipedia Reading Queue";
+pub(crate) const MARKET_OPEN_TITLE: &str = "Market Open Watch";
+type FeedStarter = (&'static str, &'static str, &'static [&'static str]);
+const FEED_STARTERS: &[FeedStarter] = &[
+    (
+        PRODUCT_HUNT_TITLE,
+        "rocket",
+        &["https://www.producthunt.com/feed"],
+    ),
+    (
+        HACKER_NEWS_TITLE,
+        "newspaper",
+        &["https://news.ycombinator.com/rss"],
+    ),
+    (
+        WIKIPEDIA_TITLE,
+        "book",
+        &[
+            "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feeds_format=atom",
+            "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=onthisday&feeds_format=atom",
+        ],
+    ),
+    (
+        MARKET_OPEN_TITLE,
+        "dollar-sign",
+        &[
+            "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+            "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+        ],
+    ),
+];
+
+fn is_feed_starter(title: &str) -> bool {
+    FEED_STARTERS.iter().any(|(t, _, _)| *t == title)
+}
+
 /// Lucide icon for the alchemy-history notebook. The title-keyword auto-pick
 /// (`auto_notebook_icon`) would file "History" under a landmark; a flask is
 /// the better emblem for the real alchemy. Must be a name the frontend's
@@ -62,6 +104,10 @@ pub(crate) const STARTER_TITLES: &[&str] = &[
     CURATED_TITLE,
     ALCHEMY_HISTORY_TITLE,
     LINKS_TITLE,
+    PRODUCT_HUNT_TITLE,
+    HACKER_NEWS_TITLE,
+    WIKIPEDIA_TITLE,
+    MARKET_OPEN_TITLE,
 ];
 
 /// Is this notebook one the app seeded rather than one the user made?
@@ -89,7 +135,13 @@ pub(crate) fn starter_seed_count(title: &str) -> Option<usize> {
 /// A starter is "built in" only while it is still what we shipped. Once
 /// the user has grown it past its seed it is theirs and sits in the shelf
 /// with everything else (Home's "Built in" section, docs/RFC-mac-chrome.md).
+///
+/// A feed starter has no seed to outgrow: its feeds add sources every day,
+/// so it stays built in for as long as it carries the title.
 pub(crate) fn is_built_in(title: &str, source_count: i64) -> bool {
+    if is_feed_starter(title) {
+        return true;
+    }
     match starter_seed_count(title) {
         Some(seed) => source_count <= seed as i64,
         None => false,
@@ -938,8 +990,9 @@ const CURATED_SOURCES: &[CuratedSource] = &[
 /// Bump when the example content grows, so installs seeded by an older build
 /// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
 /// version; the original release wrote "1", the papers top-up "2", the
-/// curated-objects notebook "3", and the alchemy-history notebook "4".
-const EXAMPLES_VERSION: &str = "5";
+/// curated-objects notebook "3", the alchemy-history notebook "4", Curated
+/// Links "5", and the feed starters "6".
+const EXAMPLES_VERSION: &str = "6";
 
 /// One seeding pass at a time, across the launch tick and the on-demand
 /// command below: two passes reading "no marker" together would seed the
@@ -992,7 +1045,8 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // The links starter refills itself: its content is a git source,
             // not built-in text, so an import that failed offline is retried
             // here rather than in refill_empty_starters.
-            return refilled || seed_links(state, false).await;
+            let links = seed_links(state, false).await;
+            return refilled | links | seed_feed_starters(state, false).await;
         }
         // Every marker so far has held a small integer; anything else reads
         // as the original release.
@@ -1046,6 +1100,9 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // next launch that can reach GitHub.
             added |= seed_links(state, true).await;
         }
+        if seeded_at < 6 {
+            added |= seed_feed_starters(state, true).await;
+        }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
         }
@@ -1085,6 +1142,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         }
     }
     seeded |= seed_links(state, true).await;
+    seeded |= seed_feed_starters(state, true).await;
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
@@ -1131,6 +1189,92 @@ async fn seed_links(state: &AppState, create: bool) -> bool {
         });
     }
     created
+}
+
+/// The feed starters, with the same `create` contract as [`seed_links`].
+/// A feed that could not be connected (offline, a host having a bad day) is
+/// connected on a later launch: any of a starter's feeds missing from it is
+/// retried while the notebook exists. Returns true when a notebook was made.
+async fn seed_feed_starters(state: &AppState, create: bool) -> bool {
+    let db = &state.db;
+    let Ok(notebooks) = db.list_notebooks().await else {
+        return false;
+    };
+    let mut created = false;
+    let mut count = notebooks.len();
+    for (title, icon, _) in FEED_STARTERS {
+        if notebooks.iter().any(|n| n.title == *title) || !create {
+            continue;
+        }
+        match insert_notebook(db, title, icon, count, Vec::new()).await {
+            Ok(()) => {
+                created = true;
+                count += 1;
+            }
+            Err(err) => {
+                crate::note!("examples: creating \u{201c}{title}\u{201d} failed ({err:#}); will retry next launch");
+            }
+        }
+    }
+    if let Some(app) = crate::commands::app_handle() {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            connect_feed_starters(&state).await;
+        });
+    }
+    created
+}
+
+static FEEDS_CONNECTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+async fn connect_feed_starters(state: &AppState) {
+    use std::sync::atomic::Ordering;
+    if FEEDS_CONNECTING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    if let Err(err) = connect_feed_starters_inner(state).await {
+        crate::note!("examples: connecting starter feeds stopped ({err:#}); next launch retries");
+    }
+    FEEDS_CONNECTING.store(false, Ordering::SeqCst);
+}
+
+async fn connect_feed_starters_inner(state: &AppState) -> anyhow::Result<()> {
+    let notebooks = state.db.list_notebooks().await?;
+    for (title, _, feeds) in FEED_STARTERS {
+        let Some(nb) = notebooks.iter().find(|n| n.title == *title) else {
+            continue;
+        };
+        let have: std::collections::HashSet<String> = state
+            .db
+            .list_sources(&nb.id)
+            .await?
+            .iter()
+            .filter(|s| s.source_type == "feed")
+            .map(|s| link_key(&s.url))
+            .collect();
+        for url in *feeds {
+            if have.contains(&link_key(url)) {
+                continue;
+            }
+            let connected = match ingest::extract_url(url).await {
+                Ok(ex) if ex.source_type == "feed" => {
+                    crate::feeds::connect(state, &nb.id, &ex.url, &ex.text).await
+                }
+                Ok(_) => Err(anyhow::anyhow!("{url} no longer serves a feed")),
+                Err(err) => Err(err),
+            };
+            match connected {
+                Ok(_) => crate::note!("examples: connected {url} to \u{201c}{title}\u{201d}"),
+                Err(err) => {
+                    crate::note!("examples: {url} not connected ({err:#}); next launch retries")
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 static LINKS_SYNCING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1869,6 +2013,13 @@ mod tests {
         assert!(is_built_in(LINKS_TITLE, 1));
         assert!(!is_built_in(LINKS_TITLE, 2491));
         assert!(!is_built_in("My Notes", 0));
+        // Feed starters grow on their own; that is not the user's growth.
+        assert!(is_built_in(HACKER_NEWS_TITLE, 500));
+        for (title, icon, feeds) in FEED_STARTERS {
+            assert!(is_starter_title(title), "{title} is not a starter");
+            assert!(!icon.is_empty() && !feeds.is_empty());
+            assert!(feeds.iter().all(|f| f.starts_with("https://")));
+        }
         assert_eq!(
             crate::commands::auto_notebook_icon("chemistry lab"),
             ALCHEMY_HISTORY_ICON
