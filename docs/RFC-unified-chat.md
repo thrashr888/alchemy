@@ -420,7 +420,7 @@ Guerneville question the local loop had answered "not in the library":
 | | |
 | --- | --- |
 | first try | `mcp__alchemy__startup (failed)`; Codex went probing ports itself and answered that it couldn't connect. |
-| cause 1 — a month-old regression | The ACP handoff (2026-08-20) passed the MCP URL without the bearer token the server has required since 2026-08-31. **Every hosted agent, notebook Agent pane included, has been locked out since.** Fixed in its own commit. |
+| cause 1 — a regression since 0.52 | The ACP handoff (2026-08-20) passed the MCP URL without the bearer token the server has required since 2026-08-31 (shipped in 0.52). An agent **not** connected through Settings → Agents had only that handoff, and every call it made was refused; agents connected through Settings carry the key in their own entry and were unaffected. Fixed in its own commit. |
 | cause 2 — dev only | All three agents carry their own `alchemy` MCP entry (written by Connect) pointing at 41414, the installed app; in dev it is closed and it shadows the session's. In production it is the same running app, so this doesn't reach users. Dev testing needs CLAUDE.md's documented edit (point the agent's entry at 41415, then restore). |
 | with both handled | Codex called `ask_everything` and `search`, found the answer in the *River House* notebook, and noticed the date is recorded as an assumption — with a working `alchemy://note/…` link to the note. |
 | Stop | settled 0.7s after the press mid-tool-call; partial kept as `stopped`; the session survives for a follow-up. |
@@ -478,12 +478,16 @@ as Home's brain like any agent. When they do ask, Alchemy's prompt and undo
 still apply; what they approve themselves can't be undone from Home. Revisit
 if either gains a mode that hands every tool call to the client.
 
-**Dev-only note.** The agents' own `alchemy` MCP entries (from Connect)
-point at 41414. To test agents against a dev build while the installed app
-is closed, set Alchemy's MCP port to 41413 so the dev +1 offset lands on
-41414 — this avoids editing `~/.claude.json`, which every running Claude
-Code session writes to. Set it back afterwards: the installed app reads the
-same config.
+**Dev-only note — don't move the MCP port to test.** The agents' own `alchemy`
+MCP entries (from Connect) point at 41414, the installed app, and shadow the
+session's server in dev. An earlier version of this note suggested setting
+Alchemy's MCP port to 41413 so the dev +1 offset lands on 41414. **Don't:**
+every app start runs `connectors::refresh_installed_connectors` with the
+configured port and rewrites every connected agent's entry to it. On
+2026-10-03 that left Codex refused and Cursor stuck at 41413 (an install-link
+connection the refresh doesn't rewrite), which read as a Codex bug until the
+config was checked. To test one agent against a dev build, point only that
+agent's entry at 41415 and restore it afterwards, as CLAUDE.md says.
 
 ## What phase 2 shipped: undo for what an agent changed
 
