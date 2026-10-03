@@ -477,7 +477,7 @@ fn verdict_fresh(v: &ReadVerdict, now_ms: i64) -> bool {
 /// Would Add turn this URL into a source with something in it? Asked of the
 /// same fast path the importer takes, so a login wall, a JS-only shell, a
 /// 404 layout, or a host that won't answer is never offered as a source.
-async fn probe_readable(url: &str) -> bool {
+pub(crate) async fn probe_readable(url: &str) -> bool {
     let timeout = std::time::Duration::from_secs(READ_PROBE_TIMEOUT_SECS);
     match tokio::time::timeout(timeout, crate::ingest::extract_url(url)).await {
         Ok(Ok(ex)) => ex.source_type == "feed" || crate::ingest::looks_blocked(&ex.text).is_none(),

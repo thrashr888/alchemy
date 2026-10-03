@@ -41,22 +41,28 @@ const LINKS_IMPORT_GAP: std::time::Duration = std::time::Duration::from_millis(4
 /// Living starters: a notebook that is one or more feeds and nothing else.
 /// Each feed connects through the ordinary feed path (its newest entries
 /// land as sources, the poller keeps it current), so these grow on their
-/// own between launches. (title, icon, feed urls)
+/// own between launches. (title, icon, feed urls, the EXAMPLES_VERSION that
+/// introduced it — so an upgrade offers only the new ones, and a starter the
+/// user deleted stays deleted.)
 pub(crate) const PRODUCT_HUNT_TITLE: &str = "Product Hunt Launches";
 pub(crate) const HACKER_NEWS_TITLE: &str = "Hacker News Front Page";
 pub(crate) const WIKIPEDIA_TITLE: &str = "Wikipedia Reading Queue";
 pub(crate) const MARKET_OPEN_TITLE: &str = "Market Open Watch";
-type FeedStarter = (&'static str, &'static str, &'static [&'static str]);
+pub(crate) const AI_LAB_NOTES_TITLE: &str = "AI Lab Notes";
+pub(crate) const APPLE_MAC_TITLE: &str = "Apple & Mac";
+type FeedStarter = (&'static str, &'static str, &'static [&'static str], u32);
 const FEED_STARTERS: &[FeedStarter] = &[
     (
         PRODUCT_HUNT_TITLE,
         "rocket",
         &["https://www.producthunt.com/feed"],
+        6,
     ),
     (
         HACKER_NEWS_TITLE,
         "newspaper",
         &["https://news.ycombinator.com/rss"],
+        6,
     ),
     (
         WIKIPEDIA_TITLE,
@@ -65,6 +71,7 @@ const FEED_STARTERS: &[FeedStarter] = &[
             "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feeds_format=atom",
             "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=onthisday&feeds_format=atom",
         ],
+        6,
     ),
     (
         MARKET_OPEN_TITLE,
@@ -74,11 +81,33 @@ const FEED_STARTERS: &[FeedStarter] = &[
             "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
             "https://www.federalreserve.gov/feeds/press_all.xml",
         ],
+        6,
+    ),
+    (
+        AI_LAB_NOTES_TITLE,
+        "graduation-cap",
+        &[
+            "https://huggingface.co/blog/feed.xml",
+            "https://deepmind.google/blog/rss.xml",
+            "https://jack-clark.net/feed/",
+            "https://simonwillison.net/atom/everything/",
+        ],
+        7,
+    ),
+    (
+        APPLE_MAC_TITLE,
+        "code",
+        &[
+            "https://daringfireball.net/feeds/main",
+            "https://www.apple.com/newsroom/rss-feed.rss",
+            "https://www.macstories.net/feed/",
+        ],
+        7,
     ),
 ];
 
 fn is_feed_starter(title: &str) -> bool {
-    FEED_STARTERS.iter().any(|(t, _, _)| *t == title)
+    FEED_STARTERS.iter().any(|(t, _, _, _)| *t == title)
 }
 
 /// Lucide icon for the alchemy-history notebook. The title-keyword auto-pick
@@ -109,6 +138,8 @@ pub(crate) const STARTER_TITLES: &[&str] = &[
     HACKER_NEWS_TITLE,
     WIKIPEDIA_TITLE,
     MARKET_OPEN_TITLE,
+    AI_LAB_NOTES_TITLE,
+    APPLE_MAC_TITLE,
 ];
 
 /// Is this notebook one the app seeded rather than one the user made?
@@ -992,8 +1023,8 @@ const CURATED_SOURCES: &[CuratedSource] = &[
 /// get one [`top_up_ai_research`] pass. The marker file's CONTENT carries the
 /// version; the original release wrote "1", the papers top-up "2", the
 /// curated-objects notebook "3", the alchemy-history notebook "4", Curated
-/// Links "5", and the feed starters "6".
-const EXAMPLES_VERSION: &str = "6";
+/// Links "5", the feed starters "6", and AI Lab Notes + Apple & Mac "7".
+const EXAMPLES_VERSION: &str = "7";
 
 /// One seeding pass at a time, across the launch tick and the on-demand
 /// command below: two passes reading "no marker" together would seed the
@@ -1047,7 +1078,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // not built-in text, so an import that failed offline is retried
             // here rather than in refill_empty_starters.
             let links = seed_links(state, false).await;
-            return refilled | links | seed_feed_starters(state, false).await;
+            return refilled | links | seed_feed_starters(state, None).await;
         }
         // Every marker so far has held a small integer; anything else reads
         // as the original release.
@@ -1101,9 +1132,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // next launch that can reach GitHub.
             added |= seed_links(state, true).await;
         }
-        if seeded_at < 6 {
-            added |= seed_feed_starters(state, true).await;
-        }
+        added |= seed_feed_starters(state, Some(seeded_at)).await;
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
         }
@@ -1143,7 +1172,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         }
     }
     seeded |= seed_links(state, true).await;
-    seeded |= seed_feed_starters(state, true).await;
+    seeded |= seed_feed_starters(state, Some(0)).await;
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
@@ -1192,19 +1221,22 @@ async fn seed_links(state: &AppState, create: bool) -> bool {
     created
 }
 
-/// The feed starters, with the same `create` contract as [`seed_links`].
+/// The feed starters. `owed_after` is the examples version this install was
+/// seeded at: starters introduced after it are created (Some(0) on a first
+/// seeding offers them all); None, on an ordinary launch, creates nothing.
 /// A feed that could not be connected (offline, a host having a bad day) is
 /// connected on a later launch: any of a starter's feeds missing from it is
 /// retried while the notebook exists. Returns true when a notebook was made.
-async fn seed_feed_starters(state: &AppState, create: bool) -> bool {
+async fn seed_feed_starters(state: &AppState, owed_after: Option<u32>) -> bool {
     let db = &state.db;
     let Ok(notebooks) = db.list_notebooks().await else {
         return false;
     };
     let mut created = false;
     let mut count = notebooks.len();
-    for (title, icon, _) in FEED_STARTERS {
-        if notebooks.iter().any(|n| n.title == *title) || !create {
+    for (title, icon, _, since) in FEED_STARTERS {
+        let owed = owed_after.is_some_and(|seeded| *since > seeded);
+        if !owed || notebooks.iter().any(|n| n.title == *title) {
             continue;
         }
         match insert_notebook(db, title, icon, count, Vec::new()).await {
@@ -1244,7 +1276,7 @@ async fn connect_feed_starters(state: &AppState) {
 
 async fn connect_feed_starters_inner(state: &AppState) -> anyhow::Result<()> {
     let notebooks = state.db.list_notebooks().await?;
-    for (title, _, feeds) in FEED_STARTERS {
+    for (title, _, feeds, _) in FEED_STARTERS {
         let Some(nb) = notebooks.iter().find(|n| n.title == *title) else {
             continue;
         };
@@ -2016,10 +2048,14 @@ mod tests {
         assert!(!is_built_in("My Notes", 0));
         // Feed starters grow on their own; that is not the user's growth.
         assert!(is_built_in(HACKER_NEWS_TITLE, 500));
-        for (title, icon, feeds) in FEED_STARTERS {
+        for (title, icon, feeds, since) in FEED_STARTERS {
             assert!(is_starter_title(title), "{title} is not a starter");
             assert!(!icon.is_empty() && !feeds.is_empty());
             assert!(feeds.iter().all(|f| f.starts_with("https://")));
+            assert!(
+                *since >= 6 && *since <= EXAMPLES_VERSION.parse::<u32>().unwrap(),
+                "{title} was introduced in a version this build doesn't ship"
+            );
         }
         assert_eq!(
             crate::commands::auto_notebook_icon("chemistry lab"),

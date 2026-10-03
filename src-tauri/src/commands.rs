@@ -9295,6 +9295,37 @@ async fn try_global_tool_route(
     if !global_tool_gate(content) {
         return ToolRoute::Fallthrough;
     }
+    // A new notebook goes to the tool loop when the engine can run one: the
+    // chat model names it and can propose starting pages. Agent and
+    // on-device engines can't run the loop, so it is made directly below.
+    let lowered = content.to_lowercase();
+    let wants_notebook = chatloop::asks_for_new_notebook(&lowered);
+    if wants_notebook {
+        if state.ai.read().await.chat_supports_tools() {
+            return ToolRoute::Fallthrough;
+        }
+        // No loop on this engine, and the Small router is the wrong judge:
+        // three live runs picked "save this text" (filing the pasted article
+        // into a notebook it guessed), then "chat". The user said what they
+        // want; all a model has to supply is the name.
+        let title = tokio::select! {
+            t = new_notebook_title(state, content) => t,
+            _ = cancel.cancelled() => return ToolRoute::Cancelled,
+        };
+        meta_step(Some(app), "Creating a notebook", false);
+        let urls = extract_urls(content);
+        return ToolRoute::Answered(
+            match chatloop::create_notebook_with_pages(app, None, state, &title, urls, &lowered)
+                .await
+            {
+                Ok((reply, effect)) => GlobalToolOutcome {
+                    reply,
+                    effect: Some(effect),
+                },
+                Err(err) => GlobalToolOutcome::say(format!("Couldn't make that notebook: {err}")),
+            },
+        );
+    }
 
     // Deterministic fast path: a message that plainly asks to add the URLs it
     // carries skips the router, as it does in a notebook.
@@ -14113,6 +14144,46 @@ pub(crate) async fn spawn_thread_title(state: &AppState, thread_id: &str) {
 /// Name one thread from its opening exchange. Returns Ok when there is
 /// nothing to do (already named, nothing asked, the model declined) — only
 /// engine trouble is an error, and even that only reaches the log.
+/// A name for a notebook the user asked for in chat: one Small-role call,
+/// held to the same "a name, not a summary" limits as thread titles.
+async fn new_notebook_title(state: &AppState, request: &str) -> String {
+    const MAX_WORDS: usize = 8;
+    const MAX_CHARS: usize = 60;
+    let head: String = request.chars().take(1_500).collect();
+    let messages = [
+        crate::ai::ChatTurn::system(
+            "You name research notebooks. Reply with ONLY the notebook's name — at most \
+             six words, no quotes, no trailing punctuation, nothing else.",
+        ),
+        crate::ai::ChatTurn::user(format!("Request:\n{head}\n\nName:")),
+    ];
+    let ai = state.ai.read().await.clone();
+    let title = match ai.chat_role(crate::ai::Role::Small, &messages).await {
+        Ok(out) => out
+            .text
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['"', '“', '”', '*', '#'])
+            .trim()
+            .to_string(),
+        Err(err) => {
+            crate::note!("home chat: notebook name failed: {err:#}");
+            String::new()
+        }
+    };
+    if title.is_empty()
+        || title.chars().count() > MAX_CHARS
+        || title.split_whitespace().count() > MAX_WORDS
+    {
+        "New notebook".to_string()
+    } else {
+        title
+    }
+}
+
 async fn generate_thread_title(
     db: &crate::db::Db,
     ai: &crate::ai::Ai,

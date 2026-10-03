@@ -2339,6 +2339,11 @@ export const useStore = create<AppState>((rawSet, get) => {
       // One nav entry, exactly as clicking the notebook would make.
       if (answer.effect?.kind === "openNotebook" && answer.effect.notebookId) {
         const id = answer.effect.notebookId;
+        // A notebook the chat just made isn't in the list yet; without a
+        // refresh the header names it "Notebook".
+        if (!get().notebooks.some((n) => n.id === id)) {
+          await get().refreshNotebooks();
+        }
         await navAtomic(() => get().selectNotebook(id));
       }
     },

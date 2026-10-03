@@ -31,8 +31,9 @@ use tokio_util::sync::CancellationToken;
 use crate::models::MetaCitation;
 
 use super::{
-    add_urls_from_home, contains_any, host_of, meta_step_to, open_notebook_outcome,
-    retrieve_everything, save_home_note, AppState, MetaEffect, GLOBAL_TOOL_VERBS,
+    add_url_sources, add_urls_from_home, contains_any, host_of, meta_step_to, new_notebook,
+    open_notebook_outcome, retrieve_everything, save_home_note, AppState, MetaEffect,
+    GLOBAL_TOOL_VERBS,
 };
 
 /// Rounds a loop may spend before it has to settle for what it has.
@@ -195,9 +196,28 @@ fn catalog() -> Vec<ToolSpec> {
             },
         },
         ToolSpec {
+            name: "create_notebook",
+            core: false,
+            description: "Create a new notebook when the user asks for one, optionally starting it with web pages. Give it a short title. urls may be pages the user wrote, or well-known public pages you are confident exist for the topic (for company filings, SEC EDGAR submissions JSON: https://data.sec.gov/submissions/CIK##########.json with the 10-digit CIK). Each page you propose is fetched first and only readable ones are added.",
+            params: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "The notebook's title." },
+                        "urls": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Pages to start it with (optional, at most 12)."
+                        }
+                    },
+                    "required": ["title"]
+                })
+            },
+        },
+        ToolSpec {
             name: "tool_search",
             core: true,
-            description: "Find tools beyond the ones listed here. Returns matching tool definitions and makes them callable for the rest of this turn. Use it when you need to read a notebook's sources or notes, or inspect the app's own activity.",
+            description: "Find tools beyond the ones listed here. Returns matching tool definitions and makes them callable for the rest of this turn. Use it when you need to create a notebook, read a notebook's sources or notes, or inspect the app's own activity.",
             params: || {
                 json!({
                     "type": "object",
@@ -447,6 +467,35 @@ async fn dispatch(
                 ..Default::default()
             }
         }
+        "create_notebook" => {
+            let title = arg(args, "title");
+            if title.is_empty() {
+                return ToolReply::say("error: title is required");
+            }
+            if !asks_for_new_notebook(&asked) {
+                return ToolReply::say(
+                    "error: only create a notebook when the user asks for a new one.",
+                );
+            }
+            let urls: Vec<String> = args["urls"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|u| u.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            match create_notebook_with_pages(app, target, state, title, urls, &asked).await {
+                Err(err) => ToolReply::say(format!("error: {err}")),
+                Ok((reply, effect)) => ToolReply {
+                    text: reply.clone(),
+                    reply: Some(reply),
+                    effect: Some(effect),
+                    ..Default::default()
+                },
+            }
+        }
         "tool_search" => {
             let query = arg(args, "query").to_lowercase();
             let words: Vec<&str> = query.split_whitespace().collect();
@@ -545,6 +594,105 @@ async fn dispatch(
     }
 }
 
+/// Pages a chat-made notebook may start with. Each one the model proposed
+/// costs a fetch before it is added, so this also bounds the wait.
+const MAX_STARTING_PAGES: usize = 12;
+
+/// Make the notebook, then fill it. Pages the user wrote go straight in;
+/// pages the model proposed are fetched first and only readable ones are
+/// added, so a guessed address never becomes an errored row in the user's
+/// new notebook — the reply names what was skipped instead.
+///
+/// Shared by the tool loop and the Home router, so a notebook can be made
+/// from chat on every engine, tool-calling or not. `Err` is a message for
+/// the model (or the user) to act on; nothing was created.
+pub(crate) async fn create_notebook_with_pages(
+    app: &AppHandle,
+    target: Option<(&AppHandle, &str)>,
+    state: &AppState,
+    title: &str,
+    urls: Vec<String>,
+    asked: &str,
+) -> Result<(String, MetaEffect), String> {
+    let existing = state
+        .db
+        .list_notebooks()
+        .await
+        .map_err(|_| "couldn't read the notebook list".to_string())?;
+    if let Some(nb) = existing
+        .iter()
+        .find(|n| n.title.eq_ignore_ascii_case(title.trim()))
+    {
+        return Err(format!(
+            "a notebook called “{}” already exists (id: {}). Pick another title, or add to that one.",
+            nb.title, nb.id
+        ));
+    }
+    let urls: Vec<String> = urls
+        .into_iter()
+        .map(|u| u.trim().to_string())
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+        .take(MAX_STARTING_PAGES)
+        .collect();
+    let (written, proposed): (Vec<String>, Vec<String>) = urls.into_iter().partition(|u| {
+        let host = host_of(u).to_lowercase();
+        !host.is_empty() && asked.contains(&host)
+    });
+    if !proposed.is_empty() {
+        meta_step_to(
+            target,
+            format!("Checking {} suggested pages", proposed.len()),
+            false,
+        );
+    }
+    let checked = futures::future::join_all(
+        proposed
+            .iter()
+            .map(|u| async move { (u.clone(), crate::growth::probe_readable(u).await) }),
+    )
+    .await;
+    let skipped: Vec<String> = checked
+        .iter()
+        .filter(|(_, ok)| !ok)
+        .map(|(u, _)| u.clone())
+        .collect();
+    let pages: Vec<String> = written
+        .into_iter()
+        .chain(checked.into_iter().filter(|(_, ok)| *ok).map(|(u, _)| u))
+        .collect();
+    let nb = new_notebook(state, title.to_string())
+        .await
+        .map_err(|err| format!("couldn't create the notebook: {err}"))?;
+    let dest = format!("**{}**", nb.title);
+    let mut reply = if pages.is_empty() {
+        format!("Created the notebook {dest}.")
+    } else {
+        format!(
+            "Created the notebook {dest}.\n\n{}",
+            add_url_sources(app, state, &nb.id, &pages, "meta://step", &dest).await
+        )
+    };
+    if !skipped.is_empty() {
+        reply.push_str(&format!(
+            "\n\nLeft out {} suggested page{} that didn't load as readable content:\n{}",
+            skipped.len(),
+            if skipped.len() == 1 { "" } else { "s" },
+            skipped
+                .iter()
+                .map(|u| format!("- {u}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Ok((
+        reply.trim_end().to_string(),
+        MetaEffect {
+            kind: "openNotebook".into(),
+            notebook_id: nb.id,
+        },
+    ))
+}
+
 /// The assistant row that records a round's tool calls, in the neutral form.
 ///
 /// `arguments` stays an OBJECT. Ollama takes this as-is and rejects a
@@ -604,6 +752,23 @@ fn may_save(asked: &str) -> bool {
     contains_any(asked, &SAVE_WORDS)
 }
 
+/// Did the user ask for a new notebook? `asked` is lowercased. Both halves
+/// are needed: "make a summary" is not a notebook, and "which notebook has
+/// the filings" is a question.
+pub(crate) fn asks_for_new_notebook(asked: &str) -> bool {
+    const VERBS: [&str; 8] = [
+        "create",
+        "make",
+        "start",
+        "new notebook",
+        "set up",
+        "build",
+        "spin up",
+        "new one",
+    ];
+    asked.contains("notebook") && contains_any(asked, &VERBS)
+}
+
 /// Did the user ask to go somewhere? Moving the user's window is an action,
 /// not research: the live run that found this reached for open_notebook
 /// mid-search on a question that never asked to go anywhere.
@@ -624,7 +789,8 @@ fn loop_system() -> String {
      the answer will be written from what you gathered. \
      If two or three searches keep missing, the library probably doesn't have it: stop, \
      and the answer will say so. \
-     Only act on what the user actually asked for; never invent a URL.";
+     Only act on what the user actually asked for; never invent a URL, except the \
+     starting pages create_notebook checks before adding.";
     match crate::fieldnotes::prompt_block() {
         Some(notes) => format!("{base}\n\n{notes}"),
         None => base.to_string(),
@@ -830,6 +996,18 @@ mod tests {
     /// two lists drift. A name here that `dispatch` does not know would reach
     /// the model as a callable tool and answer "no tool named …" every time.
     #[test]
+    fn creating_a_notebook_needs_the_user_to_ask_for_one() {
+        assert!(asks_for_new_notebook(
+            "make me a notebook tracking hyperscaler sec filings"
+        ));
+        assert!(asks_for_new_notebook("start a new notebook on neoclouds"));
+        assert!(!asks_for_new_notebook(
+            "which notebook has the sec filings?"
+        ));
+        assert!(!asks_for_new_notebook("make a summary of the filings"));
+    }
+
+    #[test]
     fn catalog_is_covered() {
         // The arms `dispatch` implements, kept beside the match it mirrors.
         let arms = [
@@ -838,6 +1016,7 @@ mod tests {
             "add_source",
             "save_note",
             "open_notebook",
+            "create_notebook",
             "tool_search",
             "list_sources",
             "list_notes",
