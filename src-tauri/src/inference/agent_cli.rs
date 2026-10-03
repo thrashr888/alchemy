@@ -564,6 +564,31 @@ fn copilot_args(model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
     args
 }
 
+/// Alchemy's read-only MCP server as an `mcpServers` JSON document, for the
+/// CLIs that take one on the command line (RFC-unified-chat 6d). Written to
+/// a private temp file, never argv: argv is visible to every local process.
+fn read_only_mcp_json(name: &str, handoff: &crate::mcp::ReadHandoff) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            name: {
+                "type": "http",
+                "url": handoff.url,
+                "headers": { "Authorization": format!("Bearer {}", handoff.token) },
+                "tools": ["*"],
+            }
+        }
+    })
+    .to_string()
+}
+
+fn private_temp(contents: &str) -> anyhow::Result<tempfile::NamedTempFile> {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().context("create agent MCP config")?;
+    file.write_all(contents.as_bytes())
+        .context("write agent MCP config")?;
+    Ok(file)
+}
+
 /// The MCP servers copilot will auto-load: the keys of `mcpServers` in its
 /// config. Anything unreadable or oddly shaped yields none — the built-ins
 /// still get disabled, and a run with extra tools beats no run.
@@ -1010,6 +1035,15 @@ impl AgentCli {
         } else {
             None
         };
+        // Headless turns get Alchemy read-only (RFC-unified-chat 6d): nothing
+        // can prompt mid-run, so a write would have no check and no undo.
+        // The user's own `alchemy` entry carries the full token, so each CLI
+        // that can take a server on the command line gets the read-only one
+        // in its place; the rest keep their own configuration.
+        let handoff = crate::mcp::read_handoff();
+        // Held to the end of the run, like the system-prompt file: the CLI reads
+        // it after spawn.
+        let mut _mcp_file: Option<tempfile::NamedTempFile> = None;
         match self.kind {
             AgentKind::Claude => {
                 // Streamed structured events; tools restricted to Alchemy's
@@ -1025,6 +1059,15 @@ impl AgentCli {
                     "--allowedTools",
                     "mcp__alchemy__*",
                 ]);
+                // --strict-mcp-config drops every server the user configured,
+                // including an `alchemy` entry with the full token that
+                // --allowedTools would otherwise have pre-approved.
+                cmd.arg("--strict-mcp-config");
+                if let Some(h) = &handoff {
+                    let file = private_temp(&read_only_mcp_json("alchemy", h))?;
+                    cmd.arg("--mcp-config").arg(file.path());
+                    _mcp_file = Some(file);
+                }
                 set_model(&mut cmd);
                 if let Some(file) = &system_file {
                     cmd.arg("--append-system-prompt-file").arg(file.path());
@@ -1036,6 +1079,25 @@ impl AgentCli {
                 // Codex reads the complete folded prompt from stdin when
                 // its positional prompt is '-'; argv has an OS size limit.
                 cmd.args(["exec", "--json", "--skip-git-repo-check"]);
+                // Override the user's `alchemy` entry key by key: its
+                // http_headers carry the full token. The read-only token
+                // rides argv here (codex has no config-file flag); it reads,
+                // and only while this server runs.
+                match &handoff {
+                    Some(h) => {
+                        cmd.args(["-c", &format!("mcp_servers.alchemy.url={:?}", h.url)]);
+                        cmd.args([
+                            "-c",
+                            &format!(
+                                "mcp_servers.alchemy.http_headers={{ Authorization = {:?} }}",
+                                format!("Bearer {}", h.token)
+                            ),
+                        ]);
+                    }
+                    None => {
+                        cmd.args(["-c", "mcp_servers.alchemy.enabled=false"]);
+                    }
+                }
                 set_model(&mut cmd);
                 cmd.arg("-");
             }
@@ -1067,6 +1129,15 @@ impl AgentCli {
                     self.model.as_deref(),
                     &copilot_configured_mcp_servers(),
                 ));
+                // Every configured server stays disabled (cost, and the
+                // user's `alchemy` entry carries the full token); Alchemy
+                // comes back read-only under its own name.
+                if let Some(h) = &handoff {
+                    let file = private_temp(&read_only_mcp_json("alchemy-read", h))?;
+                    cmd.arg("--additional-mcp-config")
+                        .arg(format!("@{}", file.path().display()));
+                    _mcp_file = Some(file);
+                }
                 set_model(&mut cmd);
             }
             AgentKind::Hermes => {
@@ -1883,6 +1954,20 @@ mod tests {
 
     /// The real config shape (keys of `mcpServers`), and every way it can be
     /// absent — the built-ins still get disabled, so this must never fail.
+    #[test]
+    fn read_only_mcp_config_points_at_the_read_endpoint() {
+        let h = crate::mcp::ReadHandoff {
+            url: "http://127.0.0.1:41415/mcp-read".into(),
+            token: "abc".into(),
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&read_only_mcp_json("alchemy", &h)).unwrap();
+        let entry = &v["mcpServers"]["alchemy"];
+        assert_eq!(entry["url"], "http://127.0.0.1:41415/mcp-read");
+        assert_eq!(entry["headers"]["Authorization"], "Bearer abc");
+        assert_eq!(entry["type"], "http");
+    }
+
     #[test]
     fn copilot_mcp_config_names_are_the_mcp_servers_keys() {
         let real = r#"{"mcpServers":{"alchemy":{"type":"http","url":"http://127.0.0.1:41414/mcp"},"open-knowledge":{"command":"/bin/sh","args":["-l"]}}}"#;

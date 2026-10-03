@@ -802,6 +802,49 @@ open question 2 cost, now measured: on slow local models, a loop round in
 front of every notebook question needs a cheaper decision before this
 ships to them. `chatloop.jsonl` records `surface` and `wall_ms` per turn.
 
+### What 6d shipped (2026-10-03)
+
+- **A read-only MCP endpoint.** `/mcp-read` serves a second `AlchemyMcp`
+  instance with `read_only: true`. Its tool list is filtered to
+  `Access::Read` (27 of 67 tools today), and `call_tool` refuses a write
+  with a plain message. Enforcement lives in Alchemy, not in the CLI's
+  config.
+- **A derived token.** The read-only bearer is SHA-256 of the full token
+  with a fixed prefix, so there's no second secret to store or rotate. The
+  auth layer binds each path to one token: `/mcp-read` takes only the
+  derived one, and everything else only the full one.
+- **The handoff.** When the server starts it publishes the read URL and
+  token (`mcp::read_handoff()`), and withdraws them when it stops. The
+  agent runner has no app handle, so it reads them at spawn:
+  - **Claude Code:** `--strict-mcp-config` always, plus `--mcp-config` with
+    the read-only server (a private temp file, not argv). Before this,
+    headless Claude ran `--allowedTools mcp__alchemy__*` against the user's
+    own `alchemy` entry, which carries the full token, so Alchemy's writes
+    were pre-approved with no prompt possible. That hole is closed.
+  - **Codex:** `-c` overrides for `mcp_servers.alchemy.url` and
+    `.http_headers`, replacing the user's full-token entry key by key, or
+    `enabled=false` when the server isn't running. The read token rides
+    argv here, since Codex has no config-file flag. It can only read, and
+    only while this server runs.
+  - **Copilot:** every configured server stays disabled, as before, and
+    `--additional-mcp-config @<temp file>` brings Alchemy back read-only as
+    `alchemy-read`.
+  - **Gemini, Bob, Cursor, opencode, Hermes, Prime and Pi** have no flag to
+    add a server, so they keep their own configuration.
+
+**Verified live** against the dev build:
+- The read token on `/mcp` and the full token on `/mcp-read` both get 401.
+- `/mcp-read` lists 27 tools (`search` yes, `create_note` no).
+- A `create_note` call there is refused.
+- A notebook-chat turn on Claude Code spawned `claude -p … --allowedTools
+  mcp__alchemy__* --strict-mcp-config --mcp-config <temp file>`.
+
+**Seen in the same run, and the case for 6e:** "Use your Alchemy tools to
+create a note titled 'MCP read-only test' that says hello" never reached
+Claude. On an engine without the loop, the keyword gate passed it to the
+Small router, which picked `save_note` and saved *the previous answer*
+under that title.
+
 ### Review (2026-10-03)
 
 A review checked the first draft against the code. It found that the
