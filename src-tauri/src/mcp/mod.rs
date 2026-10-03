@@ -400,6 +400,26 @@ pub(crate) fn tool_catalog() -> Vec<(String, Option<String>)> {
 
 #[tool_handler(router = all_tools())]
 impl ServerHandler for AlchemyMcp {
+    /// What `#[tool_handler]` would generate, plus a field note when the
+    /// model's arguments were rejected. Only INVALID_PARAMS counts: that is
+    /// the model's mistake (an unknown id, a missing field). Internal errors
+    /// are Alchemy's bugs and belong in diagnostics, not in a prompt.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        let tool = request.name.to_string();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = all_tools().call(tcc).await;
+        if let Err(err) = &result {
+            if err.code == ErrorCode::INVALID_PARAMS {
+                crate::fieldnotes::record(&tool, &err.message);
+            }
+        }
+        result
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(

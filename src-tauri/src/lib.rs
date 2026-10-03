@@ -19,6 +19,7 @@ mod events;
 mod examples;
 mod export;
 mod feeds;
+mod fieldnotes;
 mod filesearch;
 mod foreground;
 mod freshness;
@@ -219,6 +220,7 @@ pub fn run() {
             // The global handle serves background work spawned without State
             // (the gist sweep's wiki-index refresh reads retrieval history).
             trace::set_dir(data_dir.join("traces"));
+            fieldnotes::set_dir(data_dir.clone());
             let startup = startup_start.attach(data_dir.join("traces"));
 
             let db_dir = data_dir.join("lancedb");
@@ -706,6 +708,8 @@ pub fn run() {
             acp::acp_stop,
             acp::acp_permission,
             acp::home_brain,
+            commands::undo::agent_changes,
+            commands::undo::undo_agent_changes,
             connectors::list_agent_connectors,
             connectors::connect_agent,
             textsize::get_system_text_scale,

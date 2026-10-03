@@ -255,6 +255,17 @@ Shift's finding: most wasted rounds were the same mistake made again in a
 new session. That is the whole return, and it is available for a file
 append.
 
+**What field notes shipped.** `src-tauri/src/fieldnotes.rs` keeps
+`<app-data>/field-notes.md`, one `- tool: error` line each (error collapsed
+to one line, 200 characters), deduplicated by exact text with a repeat moving
+to the newest slot, newest 40 kept, written by temp file and rename. Two
+things are captured: a Home-loop tool reply that starts with `error:`, and an
+MCP tool call that fails with INVALID_PARAMS (internal errors are bugs and go
+to diagnostics). The block rides the Home loop's system prompt and both ACP
+preambles. The file is re-read on every use, so a line the user deletes stays
+deleted. Deferred: the Settings view beside `recent_errors`, the off switch,
+and the per-line turn tag.
+
 **Explicitly deferred: reflection, distillation, and A/B promotion.** Not
 because they're bad — because the gate that makes them honest is
 measurement against a re-runnable task, and Alchemy doesn't have one. A
@@ -466,6 +477,61 @@ is closed, set Alchemy's MCP port to 41413 so the dev +1 offset lands on
 41414 — this avoids editing `~/.claude.json`, which every running Claude
 Code session writes to. Set it back afterwards: the installed app reads the
 same config.
+
+## What phase 2 shipped: undo for what an agent changed
+
+Built 2026-10-02 as the release-critical slice of phase 2.
+
+**Capture where the change is known exactly: the permission prompt.**
+Nothing kept old content before this — `update_note` replaces a note's
+whole title and body and drops the old row; deletion receipts hold ids
+only. Since every agent write now stops at Alchemy's prompt, the moment the
+user says Yes is when Alchemy knows which session asked, which tool, and
+with which arguments (Claude's are on the request; Codex's on the earlier
+`tool_call`, cached by id). `acp_permission` snapshots the note or source
+then, before answering — the agent is still blocked on that answer, so the
+snapshot is never late. No time-window guessing, no MCP or database hooks.
+
+- **Scope:** `update_note`, `delete_note`, `update_source`, `delete_source`
+  — where data can be lost. What an agent creates the user can remove by
+  hand, and the tool loop only creates, so neither is journaled yet.
+- **Journal:** `<app data>/agent-undo/<session key>.json`, newest 200 per
+  session. For an update it also keeps a hash of exactly what the agent will
+  write (the arguments, normalized the way ingest stores them).
+- **Undo never overwrites the user.** An update is restored only while the
+  note or source still matches that hash; anything edited since is skipped
+  and named in the result. A deleted note or source returns as a new item
+  with the old content (a URL source re-added as its URL) — the old id is
+  held by the deletion receipts that stop sync from resurrecting it.
+- **Where:** Home answers whose turn made such changes show **Undo changes**.
+  A thread's changes are read once and split into turns by time, since each
+  was allowed between its question and its answer. A confirm dialog lists
+  each item; a toast reports what was put back and what was left, and why.
+
+Captured for the notebook Agent pane too (same permission path); its Undo
+button waits for after release.
+
+## Initial release scope (2026-10-02)
+
+Shipping the feature means shipping what keeps the user safe and the answers
+honest; everything else refines after. In:
+
+- **Phases 1 and 4** (merged): the tool loop for local models, the agent as
+  Home's brain for Claude Code and Codex, Alchemy as the permission authority,
+  tool names in the user's words.
+- **Undo for notes and sources** (phase 2, critical slice). The permission
+  prompt asks before a write; it can't take one back. `update_note` replaces
+  a note's whole content, so a "Yes" to a bad rewrite is otherwise data the
+  user has lost. Undo restores what any brain changed — loop or agent.
+- **Field notes** (phase 5): deterministic capture of rejected tool calls,
+  fed into every brain's prompt. No Settings view yet; the file is plain
+  markdown in the app data folder.
+
+Out, until after release: extracting every tool body into shared functions
+(the loop keeps its twelve tools), the loop's full write surface, proposals
+for destructive tools (the prompt already gates them), renderable results
+(phase 3), citations for agent answers, a remembered "allow always" in
+Alchemy, opencode as Home's brain, and the Settings view for field notes.
 
 ## Decisions
 

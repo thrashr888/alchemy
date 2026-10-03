@@ -16,6 +16,7 @@ mod handoff;
 mod registry;
 pub(crate) mod reports;
 mod second_look;
+pub(crate) mod undo;
 pub(crate) use brief::ensure_default_brief;
 pub use diagnostics::*;
 pub use handoff::*;

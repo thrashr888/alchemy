@@ -390,7 +390,7 @@ fn alchemy_mcp_server(app: &AppHandle, url: &str) -> Option<McpServer> {
 /// The Home counterpart of `session_preamble`: no notebook to name, so it
 /// points the agent at the whole library and at the corpus-wide tools.
 fn home_preamble() -> String {
-    "<context>You are running inside Alchemy, the user's local research notebook app, \
+    let base = "<context>You are running inside Alchemy, the user's local research notebook app, \
      answering in its library-wide chat: questions here can span every notebook the user \
      has. Their sources and notes are reachable through the connected `alchemy` MCP tools: \
      start with `ask_everything` (passages from across all notebooks, each naming its \
@@ -398,7 +398,16 @@ fn home_preamble() -> String {
      go deeper in one, and `get_source`/`get_note` to read in full. Ground your answer in \
      what those tools return and name the notebook each fact came from. Only add, change or \
      delete anything when the user asks you to.</context>"
-        .to_string()
+        .to_string();
+    with_field_notes(base)
+}
+
+/// Append the field-notes block, when there is one, to a preamble.
+fn with_field_notes(base: String) -> String {
+    match crate::fieldnotes::prompt_block() {
+        Some(notes) => format!("{base}\n\n{notes}"),
+        None => base,
+    }
 }
 
 // ---- State ------------------------------------------------------------------
@@ -421,6 +430,20 @@ struct SessionHandle {
 
 struct PendingPermission {
     responder: Responder<RequestPermissionResponse>,
+    /// The option ids that mean yes — a Yes to a journaled write is when its
+    /// undo snapshot is taken.
+    allow: Vec<String>,
+    /// A destructive write to a note or source that Undo can take back, if
+    /// this request is one (`commands::undo`).
+    undo: Option<UndoPlan>,
+}
+
+/// What to snapshot if the user allows a write: our tool, its arguments, and
+/// the agent asking, for the record.
+struct UndoPlan {
+    tool: String,
+    args: serde_json::Value,
+    agent: String,
 }
 
 enum HostCmd {
@@ -731,7 +754,7 @@ pub fn acp_stop(app: AppHandle, notebook_id: String) -> Result<(), String> {
 
 /// Answer a pending permission request. `option_id: None` cancels it.
 #[tauri::command]
-pub fn acp_permission(
+pub async fn acp_permission(
     app: AppHandle,
     notebook_id: String,
     request_id: String,
@@ -750,6 +773,24 @@ pub fn acp_permission(
         .unwrap()
         .remove(&request_id)
         .ok_or_else(|| "permission request already answered".to_string())?;
+    // A Yes to a write Undo can take back: keep what it will change first.
+    // The agent is still blocked on this answer, so the snapshot can't be
+    // late — the write starts only after `respond` below.
+    let allowed = option_id
+        .as_ref()
+        .is_some_and(|id| pending.allow.contains(id));
+    if let (true, Some(plan)) = (allowed, &pending.undo) {
+        if let Some(state) = app.try_state::<crate::commands::AppState>() {
+            crate::commands::undo::capture(
+                &state,
+                &notebook_id,
+                &plan.agent,
+                &plan.tool,
+                &plan.args,
+            )
+            .await;
+        }
+    }
     let outcome = match option_id {
         Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
         None => RequestPermissionOutcome::Cancelled,
@@ -861,14 +902,14 @@ fn session_preamble(notebook_title: &str, notebook_id: &str) -> String {
     } else {
         format!("the notebook \"{notebook_title}\"")
     };
-    format!(
+    with_field_notes(format!(
         "<context>You are running inside Alchemy, the user's local research notebook app, \
          attached to {name} (notebook_id: {notebook_id}). The user's questions are usually \
          about this notebook's contents. Its sources are reachable through the connected \
          `alchemy` MCP tools: start with `search` (hybrid search over the notebook's sources \
          and notes; pass this notebook_id), and use `list_sources`/`get_source` to read full \
          documents. Ground answers about the notebook's subject in those sources.</context>"
-    )
+    ))
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -901,6 +942,12 @@ async fn run_session(
     // it so the permission can be judged by what it is for.
     let tool_titles: Arc<Mutex<HashMap<String, String>>> = Arc::default();
     let update_titles = tool_titles.clone();
+    // Its arguments, likewise: Codex puts them on the tool_call update
+    // (`rawInput {server, tool, arguments}`), not on the permission request.
+    // Undo needs them to know which note or source a write will change.
+    let tool_args: Arc<Mutex<HashMap<String, serde_json::Value>>> = Arc::default();
+    let update_args = tool_args.clone();
+    let perm_agent = agent_label.to_string();
     let kind = AcpAgentKind::from_id(&agent_id);
 
     let mut ready_tx = Some(ready_tx);
@@ -924,6 +971,16 @@ async fn run_session(
                         titles.clear();
                     }
                     titles.insert(id.to_string(), title.to_string());
+                }
+                if let (Some(id), Some(raw)) = (
+                    update.get("toolCallId").and_then(|v| v.as_str()),
+                    update.get("rawInput").filter(|v| !v.is_null()),
+                ) {
+                    let mut args = update_args.lock().unwrap();
+                    if args.len() > 512 {
+                        args.clear();
+                    }
+                    args.insert(id.to_string(), raw.clone());
                 }
                 // Our own tools in the user's words, in every trail that
                 // shows them (Home and the Agent pane alike). After the cache
@@ -998,6 +1055,40 @@ async fn run_session(
                     ));
                     return Ok(());
                 }
+                let allow: Vec<String> = request
+                    .options
+                    .iter()
+                    .filter(|o| {
+                        matches!(
+                            o.kind,
+                            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+                        )
+                    })
+                    .map(|o| o.option_id.0.to_string())
+                    .collect();
+                // Which note or source this write targets, if Undo keeps it:
+                // Claude puts the arguments on the request, Codex on the
+                // earlier tool_call (wrapped as `{server, tool, arguments}`).
+                let undo = names
+                    .iter()
+                    .flatten()
+                    .find_map(|n| crate::mcp::access::alchemy_tool(n))
+                    .filter(|t| crate::commands::undo::journals(t))
+                    .and_then(|t| {
+                        let raw = request.tool_call.fields.raw_input.clone().or_else(|| {
+                            tool_args
+                                .lock()
+                                .unwrap()
+                                .get(&*request.tool_call.tool_call_id.0)
+                                .cloned()
+                        })?;
+                        let args = raw.get("arguments").cloned().unwrap_or(raw);
+                        Some(UndoPlan {
+                            tool: t.to_string(),
+                            args,
+                            agent: perm_agent.clone(),
+                        })
+                    });
                 let request_id = uuid::Uuid::new_v4().to_string();
                 let options = per_call_options(&request.options)
                     .into_iter()
@@ -1023,10 +1114,14 @@ async fn run_session(
                     .find_map(|n| crate::mcp::access::human_title(n))
                     .or_else(|| request.tool_call.fields.title.clone())
                     .unwrap_or_default();
-                permissions
-                    .lock()
-                    .unwrap()
-                    .insert(request_id.clone(), PendingPermission { responder });
+                permissions.lock().unwrap().insert(
+                    request_id.clone(),
+                    PendingPermission {
+                        responder,
+                        allow,
+                        undo,
+                    },
+                );
                 let _ = perm_app.emit(
                     "acp://permission",
                     PermissionEvent {
