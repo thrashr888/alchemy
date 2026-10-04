@@ -138,7 +138,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             controls and the pill's 150px floor need — otherwise the pill
             spills out of it and under the centered switcher. The search
             field is what gives after that (it shrinks to 96px). */}
-        <div className="flex flex-1 basis-0 items-center gap-3">
+        {/* Every empty stretch of the toolbar is title bar: drag moves the
+            window and double-click zooms it. The attribute only answers for
+            presses that land on the element carrying it, not its children,
+            so each cluster carries it too, not just the header. */}
+        <div data-tauri-drag-region className="flex flex-1 basis-0 items-center gap-3">
           {/* Show/hide the Sources pane: the Finder position, left of
               Back/Forward, and the same command as ⌘1. */}
           <button
@@ -306,7 +310,7 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             off center only when one side genuinely runs out of room — and
             then it is the search field that gives (96px floor), then the
             title (150px floor), never a navigation control. */}
-        <div className="flex shrink-0 justify-center">
+        <div data-tauri-drag-region className="flex shrink-0 justify-center">
           <CenterModeTabs />
         </div>
 
@@ -314,8 +318,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
             traffic lights) against 14px on the right, so the trailing
             cluster takes those 74px extra and the tabs land on the window's
             center line rather than the content box's. */}
-        <div className="flex min-w-0 flex-1 basis-[74px] items-center justify-end gap-1.5">
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div
+          data-tauri-drag-region
+          className="flex min-w-0 flex-1 basis-[74px] items-center justify-end gap-1.5"
+        >
+        <div data-tauri-drag-region className="flex shrink-0 items-center gap-1.5">
           {/* Left of the DEV pill in dev builds, and the same slot in
               release builds: one place, in every window, that says a model
               is working. It holds its width whether or not anything is
