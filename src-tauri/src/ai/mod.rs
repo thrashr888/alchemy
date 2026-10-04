@@ -731,6 +731,9 @@ pub struct Ai {
     /// person is waiting behind (gap query, outline pick). None = the
     /// engine's own transport timeout.
     small_timeout: Option<std::time::Duration>,
+    /// Set by `small_only()`: a Small-role call with no usable Small engine
+    /// fails instead of falling through to the chat engine.
+    small_only: bool,
     /// Ollama retained directly for the capabilities that haven't joined the
     /// router yet (OCR fallback, model listing).
     ollama: Ollama,
@@ -901,6 +904,7 @@ impl Ai {
         Self {
             yields: false,
             small_timeout: None,
+            small_only: false,
             config,
             router,
             ollama,
@@ -1224,7 +1228,22 @@ impl Ai {
                 return outcome.map_err(|err| err.context("small model unavailable"));
             }
         }
+        if self.small_only && role == Role::Small {
+            anyhow::bail!(
+                "no Small model is available, and this call never borrows the chat model"
+            );
+        }
         self.router.chat_engine(Role::Chat).chat(messages).await
+    }
+
+    /// This handle for work that must never run on the chat model: a
+    /// Small-role call with no usable Small engine fails rather than falling
+    /// through. For ornaments and suggestions, whose absence costs nothing,
+    /// while a slow chat model held for minutes queues the user's next
+    /// question behind them.
+    pub fn small_only(mut self) -> Self {
+        self.small_only = true;
+        self
     }
 
     /// Longest a chat-path helper may hold the answer. Measured: retrieval's

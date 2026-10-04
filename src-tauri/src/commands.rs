@@ -8924,7 +8924,12 @@ async fn send_message_impl(
     // The notebook tool loop (RFC-unified-chat 6c). It acts; the pipeline
     // below answers. A question costs one round with no tool calls and falls
     // through unchanged; an engine that can't call tools skips it entirely.
-    {
+    //
+    // The pipeline's retrieval runs ALONGSIDE that round, not after it: a
+    // question's round only says "no tools", so serializing them made every
+    // question wait for both. A turn the loop answers (an action, a decline,
+    // an error) just drops the retrieval it didn't need.
+    let loop_history = {
         let all = e(state.db.list_messages(&notebook_id).await)?;
         let kept: Vec<&Message> = all
             .iter()
@@ -8937,7 +8942,10 @@ async fn send_message_impl(
                 content: m.content.clone(),
             })
             .collect();
-        let ev = chatloop::run(
+        recent
+    };
+    let loop_round = async {
+        chatloop::run(
             &app,
             &state,
             window.label(),
@@ -8945,10 +8953,181 @@ async fn send_message_impl(
                 notebook_id: &notebook_id,
             },
             &content,
-            &recent,
+            &loop_history,
             &cancel,
         )
-        .await;
+        .await
+    };
+    let retrieval = async {
+        // Retrieve relevant chunks. The selected sources are fetched first so
+        // retrieval depth can scale with how much text is actually in play
+        // (RFC-infinite-context §3) and the manifest reuses the same rows.
+        let ai = state.ai.read().await.clone();
+        // Embedding the question and listing sources are independent — overlap
+        // them; every pre-stream millisecond is felt time-to-first-token.
+        let (query_vec, sources_list) =
+            tokio::join!(ai.embed_one(&content), state.db.list_sources(&notebook_id));
+        let query_vec = e(query_vec)?;
+        let embed_ms = t0.elapsed().as_millis() as u64;
+        let profile = ai.profile(crate::inference::Role::Chat);
+        let selected_sources: Vec<Source> = e(sources_list)?
+            .into_iter()
+            .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
+            .collect();
+        let notebook_chars: i64 = selected_sources.iter().map(|s| s.char_count).sum();
+        let k = profile.retrieve_k_for(notebook_chars);
+        // Cross-encoder tiers retrieve a 3x pool for the reranker to order —
+        // recall from hybrid search, precision from the cross-encoder
+        // (BEIR-measured in beir_eval.rs; tier choice in Router::xenc_model).
+        let fetch_k = if ai.has_xenc() { k * 3 } else { k };
+        // Per-stage clocks: retrievalMs alone showed 1.6-9.2s per turn with no
+        // way to say which stage — hybrid search, the grep leg, the gap
+        // retrieval's model call, or the rerank — was eating it.
+        let t_stage = std::time::Instant::now();
+        let query_vec_for_outline = query_vec.clone();
+        let search = e(state
+            .db
+            .search_chunks_trace(
+                &notebook_id,
+                query_vec,
+                &content,
+                fetch_k,
+                source_ids.as_deref(),
+            )
+            .await)?;
+        let search_ms = t_stage.elapsed().as_millis() as u64;
+        // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
+        // exact-match over the notebook's repo-backed files, and the windows
+        // join the fusion as ordinary citations.
+        let t_stage = std::time::Instant::now();
+        let grep_hits = grep_leg(&state, &notebook_id, &content, source_ids.as_deref()).await;
+        let grep_ms = t_stage.elapsed().as_millis() as u64;
+        // Iterative retrieval (RFC-judged-evals §4.3, measured before shipped):
+        // the small tier names the evidence still missing, one more search
+        // fetches it, and the merged pool reranks. Self-gating — the model
+        // answers NONE when the first pass suffices — and it lifted multi-hop
+        // gold-evidence citation 48%→60% with zero single-hop regression.
+        let mut pool = search.final_hits;
+        let t_stage = std::time::Instant::now();
+        // The helpers ahead of the answer run on the Small role with a short
+        // ceiling and never borrow the chat provider (`Ai::helpers`).
+        let helpers = ai.clone().helpers();
+        let gap_gate = gap_gate(&content, &pool);
+        let gap_query = if gap_gate.is_some() {
+            gap_retrieve(
+                &helpers,
+                &state.db,
+                &notebook_id,
+                &content,
+                &mut pool,
+                k,
+                fetch_k,
+                source_ids.as_deref(),
+            )
+            .await
+        } else {
+            None
+        };
+        let gap_ms = t_stage.elapsed().as_millis() as u64;
+        // Outline-guided escalation (RFC-outline-index Phase 3): when the pool
+        // is thin or sits on look-alike sections of a structured source, the
+        // Small role picks sections from the notebook's outline and their best
+        // passages lead the pool. Self-gating and silent; a failure leaves the
+        // pool as it was.
+        let outline_pick = match crate::outline_index::escalate(
+            &state.db,
+            &helpers,
+            &notebook_id,
+            &content,
+            &query_vec_for_outline,
+            &mut pool,
+        )
+        .await
+        {
+            Ok(pick) => pick,
+            Err(err) => {
+                crate::note!("outline: escalation failed: {err:#}");
+                None
+            }
+        };
+        // Written after the join, and only if the turn answers: a command the
+        // loop carried out is not a question, and Grow reads these lines as
+        // the questions the notebook answered thinly.
+        let retrieval_trace = serde_json::json!({
+            "ts": now(),
+            "surface": "chat",
+            "notebookId": notebook_id,
+            "query": content,
+            "vectorHits": search.vector_hits.len(),
+            "ftsHits": search.fts_hits.len(),
+            "fusedHits": search.fused_hits.len(),
+            "grepHits": grep_hits.len(),
+            "gapGate": gap_gate,
+            "gapQuery": gap_query,
+            "outlinePick": outline_pick,
+            "warnings": search.warnings,
+            "citations": crate::trace::cite_summaries(&pool),
+        });
+        // The one thin-answer gate, asked of exactly the number the trace above
+        // just recorded — so what the chat calls thin and what the Grow surface
+        // later reads off that line are the same verdict.
+        let thin_retrieval = crate::growth::is_thin(pool.len());
+        let pool_cap = pool.len() + grep_hits.len();
+        let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
+        let t_stage = std::time::Instant::now();
+        let citations = ai.rerank_hits(&content, citations, k).await;
+        let rerank_ms = t_stage.elapsed().as_millis() as u64;
+        let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
+
+        // Widen prompt excerpts to ordinal neighbors where the model's window
+        // affords it; persisted citations stay verbatim.
+        let expanded = if profile.neighbor_expansion {
+            state
+                .db
+                .expand_neighbor_excerpts(&citations)
+                .await
+                .unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        // Full source manifest (title + url + user tags) so corpus-level
+        // questions are answerable regardless of which chunks the top-k search
+        // happened to surface, and the model can propose new addable URLs.
+        // Respects the source selection so deselected sources stay out of the
+        // prompt.
+        let source_manifest: Vec<(String, String, String)> = selected_sources
+            .into_iter()
+            .map(|s| (s.title, s.url, s.tags))
+            .collect();
+        Ok::<_, String>((
+            retrieval_trace,
+            embed_ms,
+            profile,
+            search_ms,
+            grep_ms,
+            gap_ms,
+            thin_retrieval,
+            citations,
+            rerank_ms,
+            retrieval_ms,
+            expanded,
+            source_manifest,
+        ))
+    };
+    // Race rather than join: retrieval keeps running while the loop
+    // decides, but a turn the loop ends (Stop, an action, a decline) returns
+    // without waiting for retrieval it won't use.
+    tokio::pin!(loop_round);
+    tokio::pin!(retrieval);
+    let mut retrieved = None;
+    let ev = loop {
+        tokio::select! {
+            ev = &mut loop_round => break ev,
+            r = &mut retrieval, if retrieved.is_none() => retrieved = Some(r),
+        }
+    };
+    {
         if ev.cancelled {
             return finish_tool_reply(&app, &state, &notebook_id, "Stopped.".into()).await;
         }
@@ -8969,149 +9148,36 @@ async fn send_message_impl(
             return finish_tool_reply(&app, &state, &notebook_id, ev.replies.join("\n\n")).await;
         }
     }
-
-    // Retrieve relevant chunks. The selected sources are fetched first so
-    // retrieval depth can scale with how much text is actually in play
-    // (RFC-infinite-context §3) and the manifest reuses the same rows.
-    let ai = state.ai.read().await.clone();
-    // Embedding the question and listing sources are independent — overlap
-    // them; every pre-stream millisecond is felt time-to-first-token.
-    let (query_vec, sources_list) =
-        tokio::join!(ai.embed_one(&content), state.db.list_sources(&notebook_id));
-    let query_vec = e(query_vec)?;
-    let embed_ms = t0.elapsed().as_millis() as u64;
-    let profile = ai.profile(crate::inference::Role::Chat);
-    let selected_sources: Vec<Source> = e(sources_list)?
-        .into_iter()
-        .filter(|s| source_ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
-        .collect();
-    let notebook_chars: i64 = selected_sources.iter().map(|s| s.char_count).sum();
-    let k = profile.retrieve_k_for(notebook_chars);
-    // Cross-encoder tiers retrieve a 3x pool for the reranker to order —
-    // recall from hybrid search, precision from the cross-encoder
-    // (BEIR-measured in beir_eval.rs; tier choice in Router::xenc_model).
-    let fetch_k = if ai.has_xenc() { k * 3 } else { k };
-    // Per-stage clocks: retrievalMs alone showed 1.6-9.2s per turn with no
-    // way to say which stage — hybrid search, the grep leg, the gap
-    // retrieval's model call, or the rerank — was eating it.
-    let t_stage = std::time::Instant::now();
-    let query_vec_for_outline = query_vec.clone();
-    let search = e(state
-        .db
-        .search_chunks_trace(
-            &notebook_id,
-            query_vec,
-            &content,
-            fetch_k,
-            source_ids.as_deref(),
-        )
-        .await)?;
-    let search_ms = t_stage.elapsed().as_millis() as u64;
-    // The ripgrep leg (RFC-git-sources §6): code-shaped queries also
-    // exact-match over the notebook's repo-backed files, and the windows
-    // join the fusion as ordinary citations.
-    let t_stage = std::time::Instant::now();
-    let grep_hits = grep_leg(&state, &notebook_id, &content, source_ids.as_deref()).await;
-    let grep_ms = t_stage.elapsed().as_millis() as u64;
-    // Iterative retrieval (RFC-judged-evals §4.3, measured before shipped):
-    // the small tier names the evidence still missing, one more search
-    // fetches it, and the merged pool reranks. Self-gating — the model
-    // answers NONE when the first pass suffices — and it lifted multi-hop
-    // gold-evidence citation 48%→60% with zero single-hop regression.
-    let mut pool = search.final_hits;
-    let t_stage = std::time::Instant::now();
-    // The helpers ahead of the answer run on the Small role with a short
-    // ceiling and never borrow the chat provider (`Ai::helpers`).
-    let helpers = ai.clone().helpers();
-    let gap_gate = gap_gate(&content, &pool);
-    let gap_query = if gap_gate.is_some() {
-        gap_retrieve(
-            &helpers,
-            &state.db,
-            &notebook_id,
-            &content,
-            &mut pool,
-            k,
-            fetch_k,
-            source_ids.as_deref(),
-        )
-        .await
-    } else {
-        None
-    };
-    let gap_ms = t_stage.elapsed().as_millis() as u64;
-    // Outline-guided escalation (RFC-outline-index Phase 3): when the pool
-    // is thin or sits on look-alike sections of a structured source, the
-    // Small role picks sections from the notebook's outline and their best
-    // passages lead the pool. Self-gating and silent; a failure leaves the
-    // pool as it was.
-    let outline_pick = match crate::outline_index::escalate(
-        &state.db,
-        &helpers,
-        &notebook_id,
-        &content,
-        &query_vec_for_outline,
-        &mut pool,
-    )
-    .await
-    {
-        Ok(pick) => pick,
-        Err(err) => {
-            crate::note!("outline: escalation failed: {err:#}");
-            None
-        }
-    };
-    crate::trace::log(
-        &state.trace_dir,
-        serde_json::json!({
-            "ts": now(),
-            "surface": "chat",
-            "notebookId": notebook_id,
-            "query": content,
-            "vectorHits": search.vector_hits.len(),
-            "ftsHits": search.fts_hits.len(),
-            "fusedHits": search.fused_hits.len(),
-            "grepHits": grep_hits.len(),
-            "gapGate": gap_gate,
-            "gapQuery": gap_query,
-            "outlinePick": outline_pick,
-            "warnings": search.warnings,
-            "citations": crate::trace::cite_summaries(&pool),
-        }),
-    );
-    // The one thin-answer gate, asked of exactly the number the trace above
-    // just recorded — so what the chat calls thin and what the Grow surface
-    // later reads off that line are the same verdict.
-    let thin_retrieval = crate::growth::is_thin(pool.len());
-    let pool_cap = pool.len() + grep_hits.len();
-    let citations = fuse_grep_hits(pool, grep_hits, pool_cap);
-    let t_stage = std::time::Instant::now();
-    let citations = ai.rerank_hits(&content, citations, k).await;
-    let rerank_ms = t_stage.elapsed().as_millis() as u64;
-    let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
+    let (
+        retrieval_trace,
+        embed_ms,
+        profile,
+        search_ms,
+        grep_ms,
+        gap_ms,
+        thin_retrieval,
+        citations,
+        rerank_ms,
+        retrieval_ms,
+        expanded,
+        source_manifest,
+    ) = match retrieved {
+        Some(r) => r,
+        // The loop is done and said "answer"; Stop still has to bite while
+        // the rest of retrieval (gap, outline, rerank) finishes.
+        None => tokio::select! {
+            r = &mut retrieval => r,
+            _ = cancel.cancelled() => {
+                return finish_tool_reply(&app, &state, &notebook_id, "Stopped.".into()).await;
+            }
+        },
+    }?;
+    // Both written only now that the turn answers: a command the loop
+    // carried out is not a question (the trace feeds Grow's thin-answer
+    // list), and its prefetched notes weren't shown to anyone (the usage
+    // counts feed the curator).
+    crate::trace::log(&state.trace_dir, retrieval_trace);
     bump_note_usage(&state.db, &citations, "retrieval_hits").await;
-
-    // Widen prompt excerpts to ordinal neighbors where the model's window
-    // affords it; persisted citations stay verbatim.
-    let expanded = if profile.neighbor_expansion {
-        state
-            .db
-            .expand_neighbor_excerpts(&citations)
-            .await
-            .unwrap_or_default()
-    } else {
-        std::collections::HashMap::new()
-    };
-
-    // Full source manifest (title + url + user tags) so corpus-level
-    // questions are answerable regardless of which chunks the top-k search
-    // happened to surface, and the model can propose new addable URLs.
-    // Respects the source selection so deselected sources stay out of the
-    // prompt.
-    let source_manifest: Vec<(String, String, String)> = selected_sources
-        .into_iter()
-        .map(|s| (s.title, s.url, s.tags))
-        .collect();
 
     // Build prompt with short history (exclude the just-added user msg from window).
     let history = e(state.db.list_messages(&notebook_id).await)?;
@@ -11524,9 +11590,23 @@ pub async fn suggest_followups(
         ),
         crate::ai::ChatTurn::user(format!("Conversation so far:\n{convo}\nJSON array:")),
     ];
+    // On the Small role, as background work. These ran on the chat model,
+    // which on a slow thinking model (muse-glimmer 30B: ~100 s) outlived the
+    // IPC timeout and kept Ollama's one slot busy after the app gave up, so
+    // the user's NEXT question queued behind it and failed as "stuck".
+    // Background yields to a question the user is waiting on.
     let out = {
         let ai = state.ai.read().await.clone();
-        e(ai.chat(&messages).await)?.text
+        // No Small model is no suggestions, not an error row per answer.
+        match ai
+            .background()
+            .small_only()
+            .chat_role(crate::ai::Role::Small, &messages)
+            .await
+        {
+            Ok(out) => out.text,
+            Err(_) => return Ok(vec![]),
+        }
     };
     let mut qs = parse_string_array(&out);
     qs.truncate(3);
@@ -11552,9 +11632,16 @@ pub async fn generate_epigraph(state: State<'_, AppState>, mood: String) -> Resu
         ),
         crate::ai::ChatTurn::user(format!("Mood: {mood}")),
     ];
+    // Small role, background: an ornament must never hold the chat model.
+    // On a slow thinking model it ran for minutes on the one Ollama slot, and
+    // the user's question queued behind it until it timed out as "stuck".
     let out = {
         let ai = state.ai.read().await.clone();
-        e(ai.chat(&messages).await)?.text
+        e(ai.background()
+            .small_only()
+            .chat_role(crate::ai::Role::Small, &messages)
+            .await)?
+        .text
     };
     Ok(out.trim().to_string())
 }

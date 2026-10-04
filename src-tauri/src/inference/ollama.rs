@@ -348,6 +348,14 @@ impl Ollama {
             "stream": false,
         });
         self.apply_keep_alive(&mut body);
+        // A tool round is a short decision (act, or answer from the
+        // notebook), and it sits in front of every question. A thinking
+        // model reasoned ~850 tokens to say "no tools" (muse-glimmer 30B:
+        // 102 s); with thinking off the same prompt was 281 tokens and
+        // 14 s. Models that don't think ignore it. The streamed answer
+        // keeps the model's own thinking setting.
+        // Set after keep-alive, which writes the user's think setting.
+        body["think"] = json!(false);
         let mut attempt = 0;
         let resp = loop {
             let sent = tokio::time::timeout(
@@ -659,6 +667,9 @@ mod tests {
                 // whole, and the preamble is not the answer.
                 assert_eq!(body["stream"], false);
                 assert_eq!(body["tools"][0]["function"]["name"], "search_corpus");
+                // A round never thinks, even with thinking switched on for
+                // answers (the config below).
+                assert_eq!(body["think"], false);
                 json!({
                     "message": {
                         "content": "Let me look.",
@@ -680,6 +691,7 @@ mod tests {
         let engine = Ollama::new(OllamaConfig {
             base_url: format!("http://{address}"),
             chat_model: "test".into(),
+            think: Some(true),
             ..Default::default()
         });
         let tools = vec![json!({

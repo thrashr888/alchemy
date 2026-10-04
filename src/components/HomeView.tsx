@@ -1810,7 +1810,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           />
           Alchemy
         </button>
-        <div className="ml-auto flex items-center gap-3">
+        <div data-tauri-drag-region className="ml-auto flex items-center gap-3">
           {showCollectionControls && (
             <>
               {/* Archived notebooks have one shape — rows with the way back
