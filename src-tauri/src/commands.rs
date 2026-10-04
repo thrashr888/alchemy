@@ -9078,7 +9078,6 @@ async fn send_message_impl(
         let citations = ai.rerank_hits(&content, citations, k).await;
         let rerank_ms = t_stage.elapsed().as_millis() as u64;
         let retrieval_ms = (t0.elapsed().as_millis() as u64).saturating_sub(embed_ms);
-        bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
         // Widen prompt excerpts to ordinal neighbors where the model's window
         // affords it; persisted citations stay verbatim.
@@ -9164,9 +9163,21 @@ async fn send_message_impl(
         source_manifest,
     ) = match retrieved {
         Some(r) => r,
-        None => retrieval.await,
+        // The loop is done and said "answer"; Stop still has to bite while
+        // the rest of retrieval (gap, outline, rerank) finishes.
+        None => tokio::select! {
+            r = &mut retrieval => r,
+            _ = cancel.cancelled() => {
+                return finish_tool_reply(&app, &state, &notebook_id, "Stopped.".into()).await;
+            }
+        },
     }?;
+    // Both written only now that the turn answers: a command the loop
+    // carried out is not a question (the trace feeds Grow's thin-answer
+    // list), and its prefetched notes weren't shown to anyone (the usage
+    // counts feed the curator).
     crate::trace::log(&state.trace_dir, retrieval_trace);
+    bump_note_usage(&state.db, &citations, "retrieval_hits").await;
 
     // Build prompt with short history (exclude the just-added user msg from window).
     let history = e(state.db.list_messages(&notebook_id).await)?;
@@ -11586,10 +11597,16 @@ pub async fn suggest_followups(
     // Background yields to a question the user is waiting on.
     let out = {
         let ai = state.ai.read().await.clone();
-        e(ai.background()
+        // No Small model is no suggestions, not an error row per answer.
+        match ai
+            .background()
+            .small_only()
             .chat_role(crate::ai::Role::Small, &messages)
-            .await)?
-        .text
+            .await
+        {
+            Ok(out) => out.text,
+            Err(_) => return Ok(vec![]),
+        }
     };
     let mut qs = parse_string_array(&out);
     qs.truncate(3);
@@ -11621,6 +11638,7 @@ pub async fn generate_epigraph(state: State<'_, AppState>, mood: String) -> Resu
     let out = {
         let ai = state.ai.read().await.clone();
         e(ai.background()
+            .small_only()
             .chat_role(crate::ai::Role::Small, &messages)
             .await)?
         .text
