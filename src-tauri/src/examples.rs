@@ -1078,7 +1078,7 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // not built-in text, so an import that failed offline is retried
             // here rather than in refill_empty_starters.
             let links = seed_links(state, false).await;
-            return refilled | links | seed_feed_starters(state, None).await;
+            return refilled | links | seed_feed_starters(state, None).await.created;
         }
         // Every marker so far has held a small integer; anything else reads
         // as the original release.
@@ -1132,7 +1132,14 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
             // next launch that can reach GitHub.
             added |= seed_links(state, true).await;
         }
-        added |= seed_feed_starters(state, Some(seeded_at)).await;
+        let feeds = seed_feed_starters(state, Some(seeded_at)).await;
+        added |= feeds.created;
+        // The marker says "everything owed exists". A notebook that failed
+        // to create keeps it at the old version, so the next launch offers
+        // it again (Copilot review, PR #62).
+        if !feeds.complete {
+            return added;
+        }
         if let Err(err) = std::fs::write(&marker, EXAMPLES_VERSION) {
             crate::note!("examples: couldn't write marker: {err}");
         }
@@ -1172,7 +1179,11 @@ pub(crate) async fn ensure_example_notebooks(state: &AppState) -> bool {
         }
     }
     seeded |= seed_links(state, true).await;
-    seeded |= seed_feed_starters(state, Some(0)).await;
+    let feeds = seed_feed_starters(state, Some(0)).await;
+    seeded |= feeds.created;
+    if !feeds.complete {
+        return seeded;
+    }
     if let Err(err) = seed_registry_cards(&state.db).await {
         // Same contract as the notebooks: leave the marker unwritten so the
         // next launch retries, rather than shipping a half-built cast.
@@ -1227,12 +1238,16 @@ async fn seed_links(state: &AppState, create: bool) -> bool {
 /// A feed that could not be connected (offline, a host having a bad day) is
 /// connected on a later launch: any of a starter's feeds missing from it is
 /// retried while the notebook exists. Returns true when a notebook was made.
-async fn seed_feed_starters(state: &AppState, owed_after: Option<u32>) -> bool {
+async fn seed_feed_starters(state: &AppState, owed_after: Option<u32>) -> FeedSeed {
     let db = &state.db;
     let Ok(notebooks) = db.list_notebooks().await else {
-        return false;
+        return FeedSeed {
+            created: false,
+            complete: false,
+        };
     };
     let mut created = false;
+    let mut complete = true;
     let mut count = notebooks.len();
     for (title, icon, _, since) in FEED_STARTERS {
         let owed = owed_after.is_some_and(|seeded| *since > seeded);
@@ -1245,6 +1260,7 @@ async fn seed_feed_starters(state: &AppState, owed_after: Option<u32>) -> bool {
                 count += 1;
             }
             Err(err) => {
+                complete = false;
                 crate::note!("examples: creating \u{201c}{title}\u{201d} failed ({err:#}); will retry next launch");
             }
         }
@@ -1255,7 +1271,38 @@ async fn seed_feed_starters(state: &AppState, owed_after: Option<u32>) -> bool {
             connect_feed_starters(&state).await;
         });
     }
-    created
+    FeedSeed { created, complete }
+}
+
+/// What a feed-starter pass did: whether it made a notebook, and whether
+/// every notebook it owed now exists. Only the second may advance the
+/// examples marker; the feeds connect on their own schedule.
+struct FeedSeed {
+    created: bool,
+    complete: bool,
+}
+
+/// Starter feeds that have connected at least once, by `link_key`. A feed
+/// in this set that is missing from its notebook was removed by the user,
+/// and stays removed: launch retries only feeds that never connected
+/// (Copilot review, PR #62).
+const STARTER_FEEDS_KEY: &str = "examples.starter_feeds_connected";
+
+async fn connected_starter_feeds(db: &Db) -> std::collections::HashSet<String> {
+    db.kv_get(STARTER_FEEDS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+async fn save_connected_starter_feeds(db: &Db, feeds: &std::collections::HashSet<String>) {
+    if let Ok(json) = serde_json::to_string(feeds) {
+        if let Err(err) = db.kv_set(STARTER_FEEDS_KEY, &json).await {
+            crate::note!("examples: starter feed record not saved: {err:#}");
+        }
+    }
 }
 
 static FEEDS_CONNECTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1276,6 +1323,8 @@ async fn connect_feed_starters(state: &AppState) {
 
 async fn connect_feed_starters_inner(state: &AppState) -> anyhow::Result<()> {
     let notebooks = state.db.list_notebooks().await?;
+    let mut connected = connected_starter_feeds(&state.db).await;
+    let before = connected.len();
     for (title, _, feeds, _) in FEED_STARTERS {
         let Some(nb) = notebooks.iter().find(|n| n.title == *title) else {
             continue;
@@ -1289,23 +1338,36 @@ async fn connect_feed_starters_inner(state: &AppState) -> anyhow::Result<()> {
             .map(|s| link_key(&s.url))
             .collect();
         for url in *feeds {
-            if have.contains(&link_key(url)) {
+            let key = link_key(url);
+            if have.contains(&key) {
+                // Installed (now, or by a build before the record existed).
+                connected.insert(key);
                 continue;
             }
-            let connected = match ingest::extract_url(url).await {
+            if connected.contains(&key) {
+                // Connected once and gone now: the user removed it.
+                continue;
+            }
+            let outcome = match ingest::extract_url(url).await {
                 Ok(ex) if ex.source_type == "feed" => {
                     crate::feeds::connect(state, &nb.id, &ex.url, &ex.text).await
                 }
                 Ok(_) => Err(anyhow::anyhow!("{url} no longer serves a feed")),
                 Err(err) => Err(err),
             };
-            match connected {
-                Ok(_) => crate::note!("examples: connected {url} to \u{201c}{title}\u{201d}"),
+            match outcome {
+                Ok(_) => {
+                    connected.insert(key);
+                    crate::note!("examples: connected {url} to \u{201c}{title}\u{201d}")
+                }
                 Err(err) => {
                     crate::note!("examples: {url} not connected ({err:#}); next launch retries")
                 }
             }
         }
+    }
+    if connected.len() != before {
+        save_connected_starter_feeds(&state.db, &connected).await;
     }
     Ok(())
 }

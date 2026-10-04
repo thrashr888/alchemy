@@ -661,9 +661,10 @@ fn is_dropbox_paper_url(u: &str) -> bool {
 }
 
 /// Fetch a URL and strip it down to readable text (naive tag removal).
-pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
-    let url = normalize_url(raw_url);
-
+/// The browser-shaped client every page fetch uses. `redirects` is the
+/// usual follow-them policy for an import; a probe nobody asked for passes
+/// `none` and follows them itself, checking each hop (`extract_url_public`).
+fn browser_client(redirects: reqwest::redirect::Policy) -> Result<reqwest::Client> {
     // A complete, self-consistent Chrome header set. Several listing sites
     // (e.g. carfax.com) reject requests whose headers don't look like a real
     // browser navigation; a bare or branded UA is the usual giveaway.
@@ -693,7 +694,8 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
     headers.insert("Sec-Fetch-User", "?1".parse().unwrap());
     headers.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
 
-    let client = reqwest::Client::builder()
+    reqwest::Client::builder()
+        .redirect(redirects)
         .user_agent(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
@@ -701,7 +703,13 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .default_headers(headers)
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .context("failed to build HTTP client")?;
+        .context("failed to build HTTP client")
+}
+
+/// Fetch a URL and strip it down to readable text (naive tag removal).
+pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
+    let url = normalize_url(raw_url);
+    let client = browser_client(reqwest::redirect::Policy::default())?;
 
     // Google editor documents can't be scraped (JS-rendered), but every kind
     // has a public export endpoint that works for link-shared docs.
@@ -714,7 +722,102 @@ pub async fn extract_url(raw_url: &str) -> Result<Extracted> {
         .send()
         .await
         .with_context(|| format!("could not reach {url}"))?;
+    extract_response(url, resp).await
+}
 
+/// `extract_url` for fetches the user didn't ask for: Grow's readability
+/// probes and the chat loop's check of pages a model proposed. Every hop,
+/// redirects included, must resolve only to public addresses, so a link
+/// mined from a source (`http://192.168.1.1/`) can never make the app
+/// touch the user's own network on its own.
+pub async fn extract_url_public(raw_url: &str) -> Result<Extracted> {
+    let mut url = normalize_url(raw_url);
+    let client = browser_client(reqwest::redirect::Policy::none())?;
+    for _hop in 0..6 {
+        ensure_public(&url).await?;
+        if let Some((kind, export_url)) = google_export(&url) {
+            return extract_google(&client, &url, kind, &export_url).await;
+        }
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("could not reach {url}"))?;
+        if resp.status().is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| anyhow!("{url} redirected without a Location"))?;
+            url = reqwest::Url::parse(&url)
+                .and_then(|base| base.join(next))
+                .map(|u| u.to_string())
+                .with_context(|| format!("{url} redirected to an unreadable Location"))?;
+            continue;
+        }
+        return extract_response(url, resp).await;
+    }
+    Err(anyhow!("{raw_url} redirected too many times"))
+}
+
+/// Refuse a URL whose host is, or resolves to, anything but the public
+/// internet: loopback, private ranges, link-local, CGNAT, and the IPv6
+/// equivalents.
+async fn ensure_public(url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("not a URL: {url}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!("{url} is not a web address"));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("{url} has no host"))?
+        .trim_matches(['[', ']']);
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let addrs: Vec<std::net::IpAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .with_context(|| format!("could not resolve {host}"))?
+        .map(|a| a.ip())
+        .collect();
+    if addrs.is_empty() || addrs.iter().any(|ip| !is_public_ip(*ip)) {
+        return Err(anyhow!(
+            "{host} is on a private network; not fetched automatically"
+        ));
+    }
+    Ok(())
+}
+
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (64..128).contains(&o[1])) // CGNAT 100.64/10
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))) // benchmarking
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
+                || (seg[0] & 0xffc0) == 0xfe80) // link-local fe80::/10
+        }
+    }
+}
+
+/// Everything `extract_url` does once a response is in hand.
+async fn extract_response(url: String, resp: reqwest::Response) -> Result<Extracted> {
     // The status is advisory, not gating: some sites serve the complete
     // article with a 500 (broken SSR that still renders — cerebras.ai).
     // Fetch the body regardless and let readability decide; give up when
@@ -3511,6 +3614,28 @@ mod tests {
             "body: {}",
             ex.text
         );
+    }
+
+    #[test]
+    fn only_public_addresses_pass() {
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(is_public_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:192.168.1.1",
+        ] {
+            assert!(!is_public_ip(ip.parse().unwrap()), "{ip}");
+        }
     }
 
     #[test]

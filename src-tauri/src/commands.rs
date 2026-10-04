@@ -1415,7 +1415,7 @@ pub async fn list_sources(
 /// Google export endpoints return authoritative plain text (not scraped HTML),
 /// so a short public doc is not a blocked page — but an interstitial ("you
 /// need access") can still come through, so the marker check stays.
-fn classify(source_type: &str, url: &str, text: &str) -> (String, String) {
+pub(crate) fn classify(source_type: &str, url: &str, text: &str) -> (String, String) {
     if source_type == "url" {
         let reason = if ingest::is_google_doc_url(url) {
             ingest::blocked_marker(text)
