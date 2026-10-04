@@ -745,6 +745,39 @@ fn strategy_configured(home: &std::path::Path, s: &Strategy, port: u16, token: &
     }
 }
 
+/// Write our entry into a client's JSON config at `pointer`, keeping every
+/// other key. Refuses to touch a file that does not parse.
+fn json_merge(
+    home: &std::path::Path,
+    path: &str,
+    pointer: &[&str],
+    entry: serde_json::Value,
+) -> anyhow::Result<()> {
+    let file = resolve(home, path);
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut root: serde_json::Value = match std::fs::read_to_string(&file) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text).map_err(|e| {
+            anyhow::anyhow!(
+                "{} is not valid JSON ({e}); not touching it",
+                display_path(path)
+            )
+        })?,
+        _ => serde_json::json!({}),
+    };
+    let mut node = &mut root;
+    for key in pointer {
+        if !node.get(*key).map(|v| v.is_object()).unwrap_or(false) {
+            node[*key] = serde_json::json!({});
+        }
+        node = node.get_mut(*key).unwrap();
+    }
+    node["alchemy"] = entry;
+    write_connector_config(&file, &serde_json::to_string_pretty(&root)?)?;
+    Ok(())
+}
+
 fn strategy_apply(
     home: &std::path::Path,
     s: &Strategy,
@@ -756,33 +789,7 @@ fn strategy_apply(
             path,
             pointer,
             entry,
-        } => {
-            let file = resolve(home, path);
-            if let Some(parent) = file.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let mut root: serde_json::Value = match std::fs::read_to_string(&file) {
-                Ok(text) if !text.trim().is_empty() => {
-                    serde_json::from_str(&text).map_err(|e| {
-                        anyhow::anyhow!(
-                            "{} is not valid JSON ({e}); not touching it",
-                            display_path(path)
-                        )
-                    })?
-                }
-                _ => serde_json::json!({}),
-            };
-            let mut node = &mut root;
-            for key in *pointer {
-                if !node.get(*key).map(|v| v.is_object()).unwrap_or(false) {
-                    node[*key] = serde_json::json!({});
-                }
-                node = node.get_mut(*key).unwrap();
-            }
-            node["alchemy"] = entry(port, token);
-            write_connector_config(&file, &serde_json::to_string_pretty(&root)?)?;
-            Ok(())
-        }
+        } => json_merge(home, path, pointer, entry(port, token)),
         Strategy::TomlAppend { path, section } => {
             let file = resolve(home, path);
             if let Some(parent) = file.parent() {
@@ -899,11 +906,15 @@ pub fn refresh_installed_connectors(app: &AppHandle, port: u16) {
             return;
         }
     };
+    refresh_connectors_in(&home, port, &token);
+}
+
+fn refresh_connectors_in(home: &std::path::Path, port: u16, token: &str) {
     for target in TARGETS {
         if !target
             .strategies
             .iter()
-            .any(|strategy| strategy_present(&home, strategy))
+            .any(|strategy| strategy_present(home, strategy))
         {
             continue;
         }
@@ -915,10 +926,22 @@ pub fn refresh_installed_connectors(app: &AppHandle, port: u16) {
             // (Claude Code rewrites ~/.claude.json constantly), and an
             // unconditional read-modify-write on every boot would race
             // their own writes for no gain.
-            if strategy_configured(&home, strategy, port, &token) {
+            if strategy_configured(home, strategy, port, token) {
                 continue;
             }
-            if let Err(err) = strategy_apply(&home, strategy, port, &token) {
+            // An install link is for the first connection only: replaying
+            // it at boot would raise the client's install sheet unasked.
+            // Once our entry is in the file, keep it current in place.
+            let result = match strategy {
+                Strategy::Deeplink {
+                    path,
+                    pointer,
+                    entry,
+                    ..
+                } => json_merge(home, path, pointer, entry(port, token)),
+                _ => strategy_apply(home, strategy, port, token),
+            };
+            if let Err(err) = result {
                 crate::diagnostics::error(
                     "connectors",
                     format!("could not refresh the {} connection: {err:#}", target.name),
@@ -1211,6 +1234,34 @@ mod tests {
         )
         .unwrap();
         assert!(status_of(&home, t, 41414, TEST_TOKEN).configured);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A port change reaches Cursor at launch: the entry it wrote after the
+    /// install sheet is rewritten in place, and the user's other servers stay.
+    #[test]
+    fn refresh_rewrites_cursors_entry_in_place() {
+        let home = tmp_home();
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(
+            home.join(".cursor/mcp.json"),
+            serde_json::json!({ "mcpServers": {
+                "alchemy": cursor_entry(41413, TEST_TOKEN),
+                "other": { "url": "http://example.test" },
+            } })
+            .to_string(),
+        )
+        .unwrap();
+        refresh_connectors_in(&home, 41414, TEST_TOKEN);
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            root["mcpServers"]["alchemy"]["url"],
+            "http://127.0.0.1:41414/mcp"
+        );
+        assert_eq!(root["mcpServers"]["other"]["url"], "http://example.test");
+        assert!(status_of(&home, target("cursor"), 41414, TEST_TOKEN).configured);
         let _ = std::fs::remove_dir_all(home);
     }
 

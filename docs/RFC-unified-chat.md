@@ -312,6 +312,8 @@ data.
    thread. *First slice built — see "What phase 4 shipped" below.* The
    notebook Agent pane and its toggle remain for now.
 5. **Field notes.**
+6. **Every engine calls tools.** Proposed 2026-10-03 — see "Phase 6"
+   below. Narrows §1's "the classifier stays" to exact-shape fast paths.
 
 ## What phase 1 shipped
 
@@ -521,6 +523,428 @@ snapshot is never late. No time-window guessing, no MCP or database hooks.
 
 Captured for the notebook Agent pane too (same permission path); its Undo
 button waits for after release.
+
+## Phase 6 (proposed 2026-10-03): every engine calls tools; no gate decides whether the model may act
+
+**Status: built 2026-10-03 (6a–6f), except the agent-provider half of 6c. Design and amendments below; what each phase shipped follows.**
+
+### Why
+
+The chat feature exists so a model can *act* in the notebooks. Today
+whether it gets to act is decided mostly by string matching on what the
+user typed, before any model sees the message. A live run on 2026-10-03
+showed what that costs. "Make me a notebook like this one: <pasted
+article>" passed the keyword gate. The Small router (an 8B model) then
+picked `add_text` and filed the article into a notebook it guessed (twice:
+agentkernel, then Curated Links). A third run, with stronger prompt
+wording, picked `chat` and created nothing. The model that could have done
+the job never saw the request. Patching it with yet another keyword list
+(`asks_for_new_notebook`) treats the symptom, and nobody would discover a
+feature gated on phrasing.
+
+An inventory of the user-input checks that decide behavior:
+
+| kind | checks | what they decide |
+| --- | --- | --- |
+| Gates | `tool_gate`, `global_tool_gate`, `settings_gate`, `schedule_gate`, `wants_add_sources`, `wants_add_context_urls`, `has_non_add_verb`, `TOOL_VERBS` and the noun lists | Whether a message is a command, and which fast path or router runs |
+| Router | `route_tool` / `route_global_tool` (one Small-role JSON call) | Which verb runs. This is a model call, but it only ever sees messages the gates let through |
+| Write guards | `licensed_urls`, `may_save`, `may_navigate`, `asks_for_new_notebook`, the router's URL-host filter | Whether the model may add, save, navigate, or create |
+| Retrieval strategy | `rag::is_global_query` (phrase and word lists) | Gist route versus pointed search. It also skips the tool loop entirely |
+| Retrieval internal | `gap_gate` | Whether a second search runs. Out of scope here |
+
+Which engines can act today:
+
+| surface | agent over ACP (Claude Code, Codex, opencode) | Ollama, gateway | Foundation Models; agent CLIs without ACP (cursor-cli, gemini-cli, hermes, copilot, bob) |
+| --- | --- | --- | --- |
+| Home | Yes, with MCP tools and Alchemy's write prompts (phase 4) | Tool loop, but behind the gate and router | Gate and router only |
+| Notebook chat | No: gate and router only (the Agent pane is separate) | Gate and router only. No loop | Gate and router only |
+
+### Design
+
+1. **The brain is chosen by engine capability, never by message text.**
+   An engine either runs a loop or it doesn't. Every verb the routers
+   handled becomes a catalog tool: `add_text`, `rename_chat`, `delete_chat`,
+   settings, Night Shift, schedules, `create_notebook`, and the notebook
+   verbs (generate, remove source, and so on). Following §2, they should be
+   read off the MCP catalog rather than listed a second time.
+2. **Fast paths may stay; they must never be the only path.** A
+   deterministic shortcut is fine when it is an exact-shape parser for a
+   common phrasing ("switch to the dusk theme", a bare pasted URL, "make a
+   daily brief") and saves a model round. The test is: does a user who
+   words it differently still get it done? With the loop behind it, the
+   answer is yes; the shortcut only buys speed. `settings_gate`,
+   `schedule_gate` and the add-URL fast path stay on that basis. The fuzzy
+   gates go: `tool_gate`, `global_tool_gate`, the verb and noun lists, and
+   the Small routers. Those decide whether the model gets to act at all,
+   and a miss there means the request silently becomes an answer.
+3. **Notebook chat gets the loop.** It gets the same loop, scoped to the
+   notebook: `search_corpus` becomes notebook search, and the notebook's id
+   is implicit. Agent providers get the Home treatment: the notebook turn
+   runs in the agent's ACP session.
+4. **Writes: Alchemy's prompt where Alchemy owns the prompt.**
+   - **The loop gets a permission channel and undo first.** Today the Yes/No
+     prompt is wired to agent turns only (`answerHomePermission` →
+     `acp_permission`), and the loop dispatches writes inside `run()` with no
+     journal. The loop gains a pending-prompt future, the store's prompt
+     handling generalizes to both brains, and a write takes its undo
+     snapshot at the moment it's approved, as ACP writes do. No router verb
+     moves into the catalog before this exists, or "reversible" breaks.
+   - **The tiered URL rule stays.** A URL whose host appears in the user's
+     message is the user's scope: it's added without asking, as today
+     (`licensed_urls`). Anything the model came up with is a write the user
+     approves, and the prompt lists the URLs. `create_notebook_with_pages`
+     already splits pages this way; only the proposed half prompts.
+   - **The other guards become prompts.** `may_save`, `may_navigate` and
+     `asks_for_new_notebook` are replaced by the `mcp/access.rs`
+     classification: reads run, writes prompt. Navigation is local and
+     reversible, so it runs without asking.
+   - **Codex and opencode keep their own rules** (phase 4 notes). Alchemy
+     cannot prompt for a write those agents don't route through ACP's
+     permission request. This phase changes the loop and Claude Code only.
+5. **A waiting prompt never stalls the app.** The prompt is raised inside
+   the cancel race, since nothing has changed yet when it's showing. Stop
+   answers No. A superseding ask answers No. Closing the window answers No.
+   An unanswered prompt times out to No. While a prompt waits, the turn
+   releases its foreground hold, so Night Shift and background Small calls
+   resume.
+6. **Engines without native tools get a loop anyway.**
+   - *Agent CLIs without ACP* are loops already. Headless, they get
+     Alchemy's MCP server for the turn, **read tools only**: the MCP server
+     itself never prompts and never journals (`mcp/access.rs` is consulted
+     only on the ACP permission path), so a write over this handoff would
+     have no check and no undo. The handoff is filtered to
+     `Access::Read`. Writes stay out of reach until there's a way to hold
+     them as proposals in the thread. The copilot deadlock warning
+     (`agent_cli.rs:531`) still applies: the turn's wait must not hold
+     anything the MCP handler needs.
+   - *Foundation Models* get a text tool protocol: the catalog in the
+     prompt, one JSON tool call per round, parsed and validated against the
+     schema, with a bounded retry on malformed output. The core six fit
+     FM's context, with `tool_search` for the rest. This is the one engine
+     where quality is a genuine open question (see below).
+7. **`is_global_query` becomes a tool.** A "survey notebooks" tool,
+   backed by the gist route, sits in the core set. The model picks it for
+   "which notebooks mention X" the way it picks `search_corpus` for a
+   pointed question. The phrase list has two jobs today: it skips the loop,
+   and it picks the retrieval path (`commands.rs:14741`). The tool replaces
+   both.
+
+### Cost
+
+For ordinary questions on Home, removing the fuzzy gate adds no round: on
+Ollama and gateways the loop already runs for every non-global question,
+and the gate only sits in front of the router. A command-shaped message
+saves the Small router call. Kept fast paths stay instant. Without them,
+"switch to the dusk theme" would cost a loop round (about 19 s on a local
+30B model, per the phase 1 numbers) plus a prompt, since `settings` is a
+write. That's why they stay. The ⌘K palette goes through the same
+`ask_everything`, so it keeps them too.
+
+Notebook chat does gain a loop round on every question that misses a
+fast path, which on a local model is the main latency risk. Jev's typed
+gate (`judge.rs` on the Jev branch) is the cheap way to settle "is this
+just a question?" where a TypeSafe key exists. The design must not depend
+on it: a notebook must work without any particular provider.
+
+Unaffected: MCP's `ask_everything` tool (`mcp/search.rs:278`) calls
+`retrieve_everything` directly and never touches the gates.
+
+### Phases
+
+Each phase ships on its own.
+
+- **6a. Loop prompt channel and undo.** Pending-prompt future in the loop,
+  the store's prompt generalized to both brains, an undo snapshot on
+  approval, the tiered URL rule kept, the waiting-prompt rules from §5. No
+  gate changes.
+- **6b. Catalog verbs, and the router bypassed for tool-capable engines.**
+  Router verbs become catalog tools, and the guards become prompts. On
+  engines where `supports_tools()` is true, Home skips the fuzzy gate and
+  the router. They are *bypassed*, not deleted: Foundation Models and the
+  agent CLIs without ACP still need them until 6e.
+- **6c. Notebook chat gets the loop,** and agent providers get its ACP
+  session.
+- **6d. Agent CLIs without ACP get a read-only MCP handoff.**
+- **6e. Text tool protocol for Foundation Models.** The fuzzy gates and
+  routers are deleted here, once every engine has a loop.
+- **6f. A survey tool replaces `is_global_query`** in both of its uses. It
+  doesn't depend on the others and can go first.
+
+Each phase is verified live per engine class, driven through the real
+composer (`HomeChat`'s `allowAgent` path, not the store's `askHome`
+directly). In dev, the agents' own `alchemy` MCP entry must be pointed at
+41415 first; see the phase 4 notes.
+
+### What 6a shipped (2026-10-03)
+
+- **A prompt channel in the loop.** `Asker::approve` (`commands/chatloop.rs`)
+  emits `chat://permission` with the window, thread, action, and a `detail`
+  list (the URLs), then waits on a oneshot. The wait races the turn's cancel
+  token (Stop and a newer question both cancel it), a 5-minute timeout, and
+  window close (`decline_window_prompts`, called from the Destroyed
+  handler). Anything but Yes is No. `loop_permission` answers it, and
+  `chat://permission-settled` clears a prompt that ended some other way.
+- **One prompt in the UI.** The store maps a loop prompt onto the run's
+  existing `permission` field, marked `fromLoop`, and `answerHomePermission`
+  routes it to `loop_permission`. `PermissionPrompt` names Alchemy as the
+  asker and lists the detail lines.
+- **The foreground stands aside while it waits**
+  (`foreground::stand_aside`), so Night Shift isn't held up by a person.
+- **Undo at approval.** A Yes to a journaled tool snapshots under
+  `home-<threadId>`, the key Home's agent turns use, so the thread's Undo
+  covers both brains. No loop tool is journaled yet; 6b's update and delete
+  tools are the first.
+- **The tiered URL rule.** `licensed_urls` became `split_written`. In
+  `add_source` and `create_notebook`, the user's own URLs go straight in.
+  The model's are listed in a prompt. A decline is said to the user
+  ("Didn't add en.wikipedia.org — you said No."), not left for synthesis to
+  misread as a search miss.
+
+**Verified live** on Ollama (muse-glimmer 30B), through `askHome` with
+`allowAgent`: "add the English Wikipedia page on return on invested
+capital" raised the prompt listing the URL; No added nothing and answered
+with the decline. **Not verified live:** Stop while a prompt is showing. The
+local model proposed a URL in only one of seven tries, so the run never
+reached a prompt to stop. The code path is the same cancel race as the
+rest of the loop.
+
+### What 6b shipped (2026-10-03)
+
+- **The router is bypassed on tool-capable engines.** In
+  `try_global_tool_route`, after the settings and pasted-URL fast paths,
+  an engine with `supports_tools()` goes straight to the loop: no
+  `global_tool_gate`, no Small router. Foundation Models and agent CLIs
+  without ACP keep both until 6e.
+- **The router's verbs are loop tools:** `save_text`, `rename_chat`,
+  `delete_chat`, `settings` and `night_shift` (behind `tool_search`), plus
+  `create_notebook`. They call the router's own code (`add_text_from_home`,
+  `delete_home_thread`, `shared_tool_reply`), so both paths behave alike.
+- **Guards became prompts.** `may_save`, `may_navigate` and
+  `asks_for_new_notebook` are gone. These ask: `save_note`, `save_text`,
+  `delete_chat`, settings `set`/`style`/`theme`, and Night Shift
+  `pause`/`resume`. `create_notebook` asks once, for the notebook and any
+  suggested pages together. These run without asking: `open_notebook` and
+  `rename_chat` (local and reversible), settings reads, `pull` (staged,
+  never run), and `connect` (it confirms itself).
+- **`create_notebook` joined the core set (now seven).** Behind
+  `tool_search`, a local model asked for a notebook searched three times and
+  stopped without ever looking for it.
+- **The loop's system prompt names actions.** It was "gathering evidence to
+  answer a question", which made every request a question. It now says to
+  do what the user asks with the matching tool, and to gather evidence only
+  for questions.
+- **A No ends the turn.** A declined write stops the loop (`stop:
+  "declined"`) and the answer is the decline alone, not the decline followed
+  by whatever the model did next.
+- **`tool_search` output isn't evidence.** As a fact, it sent a pure action
+  turn on to synthesis, which then wrote that it had found nothing about
+  renaming the chat.
+
+**Verified live** on Ollama (muse-glimmer 30B), through `askHome` with
+`allowAgent`:
+- "Start a new notebook for tracking how much the neoclouds are spending
+  on GPUs" called `create_notebook` first, asked "create the notebook
+  “Neocloud GPU Spending”", and on No answered only "Didn't create … — you
+  said No." (trace: `create_notebook`, `declined`).
+- "Rename this chat to GPU spending test" ran `tool_search` → `rename_chat`
+  with no prompt and answered with the rename.
+- The original failure case ("Make me a notebook like this one: <the Satya
+  quote>") now reaches the loop. The model chose to open the existing Cloud
+  SEC Dashboard notebook, which holds that exact brief. That's a defensible
+  reading, not a misfile.
+
+### What 6c shipped (2026-10-03)
+
+- **Notebook chat runs the loop** on tool-capable engines, before
+  retrieval. `chatloop::run` takes a `Surface` (a Home thread, or a
+  notebook) that picks the catalog, the system prompt, the step channel
+  (`meta://step` or `chat://step`), the prompt's scope, and the undo key
+  (`home-<thread>`, or the notebook id the Agent pane already uses).
+- **The loop acts; the pipeline answers.** The notebook catalog has no
+  search tool. Hybrid search, gap retrieval, outline escalation and the
+  rerank answer questions better than a tool round could. A question costs
+  one round with no tool calls, then the pipeline runs unchanged. A write,
+  or a declined write, is the answer on its own.
+- **One implementation per verb.** The notebook router's dispatch moved
+  into `run_tool_action(ToolAction)`, and the notebook loop builds a
+  `ToolAction` from the tool's arguments and calls it. Core tools are
+  `add_source`, `generate`, `save_note`, `remove_source` and
+  `tool_search`. Behind search: `save_text`, `refresh_sources`,
+  `schedule_report`, `update_report`, `commission`, `create_template`,
+  `settings`, `night_shift`, `list_sources`.
+- **Prompts:** every write asks, with the same tiered URL rule. A removal
+  is asked about only once it names exactly one source, and it is
+  journaled as `delete_source`, so Undo can put it back. On tool-capable
+  engines, `try_tool_route` keeps its exact fast paths and skips
+  `tool_gate` and the router.
+- **The prompt in notebook chat:** `chat://permission` carries
+  `surface: "notebook"`. The store holds it as `chatPermission`, and
+  `ChatPanel` draws the same `PermissionPrompt` under the step trail.
+- **Stop reaches the loop:** notebook chat claims its cancel scope before
+  the loop, not at the stream.
+
+**Not done:** the second half of 6c, agent providers answering notebook
+chat in the notebook's ACP session. Notebook chat with an agent provider
+still answers headless over retrieved excerpts, and the Agent pane is
+still separate. That is a front-end merge (RFC §6, "one thread, two
+brains") and gets its own pass.
+
+**Verified live** on Ollama (muse-glimmer 30B) in the SEC Filings (JSON
+test) notebook: "Remove the Applied Digital source" ran `tool_search` →
+`list_sources` → `remove_source`, asked "remove “Applied Digital Corp.
+(CIK0001144879.json)” from this notebook", and on No kept it (trace:
+`declined`).
+
+**The latency risk is real.** A plain question's no-tool round took 65 s
+on the local 30B model before the pipeline started. The first runs also
+hit a stalled Ollama (one generate round timed out at 180 s). That's the
+open question 2 cost, now measured: on slow local models, a loop round in
+front of every notebook question needs a cheaper decision before this
+ships to them. `chatloop.jsonl` records `surface` and `wall_ms` per turn.
+
+### What 6d shipped (2026-10-03)
+
+- **A read-only MCP endpoint.** `/mcp-read` serves a second `AlchemyMcp`
+  instance with `read_only: true`. Its tool list is filtered to
+  `Access::Read` (27 of 67 tools today), and `call_tool` refuses a write
+  with a plain message. Enforcement lives in Alchemy, not in the CLI's
+  config.
+- **A derived token.** The read-only bearer is SHA-256 of the full token
+  with a fixed prefix, so there's no second secret to store or rotate. The
+  auth layer binds each path to one token: `/mcp-read` takes only the
+  derived one, and everything else only the full one.
+- **The handoff.** When the server starts it publishes the read URL and
+  token (`mcp::read_handoff()`), and withdraws them when it stops. The
+  agent runner has no app handle, so it reads them at spawn:
+  - **Claude Code:** `--strict-mcp-config` always, plus `--mcp-config` with
+    the read-only server (a private temp file, not argv). Before this,
+    headless Claude ran `--allowedTools mcp__alchemy__*` against the user's
+    own `alchemy` entry, which carries the full token, so Alchemy's writes
+    were pre-approved with no prompt possible. That hole is closed.
+  - **Codex:** `-c` overrides for `mcp_servers.alchemy.url` and
+    `.http_headers`, replacing the user's full-token entry key by key, or
+    `enabled=false` when the server isn't running. The read token rides
+    argv here, since Codex has no config-file flag. It can only read, and
+    only while this server runs.
+  - **Copilot:** every configured server stays disabled, as before, and
+    `--additional-mcp-config @<temp file>` brings Alchemy back read-only as
+    `alchemy-read`.
+  - **Gemini, Bob, Cursor, opencode, Hermes, Prime and Pi** have no flag to
+    add a server, so they keep their own configuration.
+
+**Verified live** against the dev build:
+- The read token on `/mcp` and the full token on `/mcp-read` both get 401.
+- `/mcp-read` lists 27 tools (`search` yes, `create_note` no).
+- A `create_note` call there is refused.
+- A notebook-chat turn on Claude Code spawned `claude -p … --allowedTools
+  mcp__alchemy__* --strict-mcp-config --mcp-config <temp file>`.
+
+**Seen in the same run, and the case for 6e:** "Use your Alchemy tools to
+create a note titled 'MCP read-only test' that says hello" never reached
+Claude. On an engine without the loop, the keyword gate passed it to the
+Small router, which picked `save_note` and saved *the previous answer*
+under that title.
+
+### What 6e and 6f shipped (2026-10-03)
+
+**6e: every engine runs the loop; the fuzzy gates and routers are gone.**
+
+- **A text tool protocol** (`inference/text_tools.rs`) for engines with no
+  tool-call API, which means Foundation Models and the agent CLIs. The loop's
+  tool conversation becomes plain chat turns. The system prompt lists the
+  offered tools as `name(param, optional?): description` and asks for one
+  JSON object, `{"tool": …, "arguments": {…}}`, or `{"done": true}`. The
+  reply is parsed: the first balanced object, fenced or not, with string
+  arguments accepted. It is then checked against what was offered. A
+  malformed reply gets one corrective retry, and a second is read as done,
+  never guessed at. Foundation Models' turns are fitted to its window.
+  `ChatEngine::supports_tools()` is now true for every engine.
+- **Deleted**, about 1,400 lines: `tool_gate`, `global_tool_gate`, the verb
+  and noun lists, `contains_any`, both Small routers (`route_tool`,
+  `route_global_tool`), their prompts and JSON parsers, `GlobalToolAction`,
+  `RouterJson`, the router-only `ToolAction` variants, and 20 tests that
+  pinned them. `try_tool_route` and `try_global_tool_route` are now only
+  their exact-shape fast paths: settings, schedules, and pasted URLs.
+
+**6f: `is_global_query` is gone.** `survey_notebooks` (core, so the core set
+is now eight) runs the gist route (`global_meta_route`) from inside the loop
+and returns its coverage as cited evidence. Home runs the loop on every
+question, and when the loop gathers nothing, the fallback is the pointed
+path. The phrase list and its test are deleted.
+
+**Verified live:**
+
+| engine | surface | message | result |
+| --- | --- | --- | --- |
+| Claude Code (headless, text protocol) | notebook | "Remove the Applied Digital source." | one round, `remove_source`, the prompt named the source, No kept it; 6.8 s |
+| Foundation Models (text protocol) | notebook | same | one round, same prompt, same decline; 2.8 s |
+| Foundation Models | notebook | "What exchange is Applied Digital listed on…?" | no tool call (1.25 s), then the pipeline answered "Nasdaq, APLD" with a citation |
+| Claude Code (headless) | Home, via the loop | "Across all of my notebooks, what are the recurring themes?" | `survey_notebooks` ×3 plus `list_notebooks`; a library-wide answer with 17 citations; 125 s |
+| Foundation Models | Home | "Which of my notebooks talk about neoclouds or GPU spending?" | chose `search_corpus` ×5 rather than the survey; a reasonable answer |
+
+So open question 1 has a first answer: the ~3B on-device model picked the
+right tool, and correctly made no call on a plain question. The cost to watch
+moved: on a headless agent, every loop round is a full CLI run (about 30 s
+on Claude Code).
+
+### Release-readiness fixes (2026-10-03)
+
+- **A provider failure is no longer an answer.** Claude Code on an expired
+  sign-in streams the failure as assistant text, then sends a result marked
+  `is_error`. Because text had arrived, the runner returned it as a
+  successful answer, in loop rounds and in plain chat alike.
+  `is_echoed_error` now makes that text the error it is, with the sign-in
+  fix attached. A real partial answer followed by an error keeps its words.
+- **A failed loop round ends the turn.** `LoopEvidence.failure` carries
+  the error, and Home returns it while notebook chat writes the usual error
+  row. The answer step no longer calls the same broken provider a second
+  time. One case still degrades to a plain answer: a model that can't call
+  tools (`tools_unsupported`: Ollama's "does not support tools", a gateway's
+  "function calling is not enabled").
+- **Tool rounds on OpenAI reasoning models.** `/chat/completions` refuses
+  function tools alongside reasoning ("Function tools with reasoning_effort
+  are not supported … set reasoning_effort to 'none'"), and with nothing
+  sent the model applies its own default. Every loop round on
+  gpt-5.6-terra failed, silently falling back to retrieval until the fix
+  above made it visible. Tool rounds now send no effort, and retry once
+  with `"none"` only when the endpoint asks for it (`wants_no_reasoning`).
+
+**Verified live:**
+- Claude Code on the expired sign-in: one error row, "Failed to
+  authenticate … — Fix: open Terminal, run `claude` …" (3.2 s).
+- Gateway (gpt-5.6-terra), notebook chat: "Remove the Applied Digital
+  source" ran `remove_source` in 2.75 s and asked by name.
+- Stop pressed while that prompt was showing: the turn settled in 1 s, the
+  prompt cleared, and the source was kept.
+
+### Review (2026-10-03)
+
+A review checked the first draft against the code. It found that the
+read-only MCP handoff was missing (the draft would have let headless CLIs
+write with no check), and that "one rule for every brain" contradicted the
+Codex/opencode decision. It found that the loop had no prompt channel or
+undo to replace the guards with, that a waiting prompt could stall Night
+Shift and block a superseding ask, and that 6a couldn't delete gates other
+engines still need. It also found that the cost section ignored the instant
+fast paths, which the draft's wording would have removed. The design above
+takes all of these. It also suggested adding `create_notebook` to the Small
+router as a smaller fix, which was not taken: it keeps the model's ability
+to act behind the router's verb list, which is the problem this phase
+exists to remove.
+
+### Open questions
+
+1. **FM quality.** Can a ~3B model choose among six tools reliably? If it
+   can't, FM stays a Small-role engine and Settings says Home and notebook
+   chat need a different chat provider. The alternative is to keep the
+   router alive for one engine.
+2. **Notebook-chat latency** on local models with a loop round per
+   question. Measure it with the `chatloop.jsonl` traces before deciding
+   whether a typed gate (Jev, or the Small role asked for one Choice) is
+   worth keeping.
+3. **Holding writes for headless CLIs.** A proposal-in-the-thread mode for
+   MCP writes from a chat turn would let 6d go beyond read-only. Is it
+   worth the protocol work?
 
 ## Initial release scope (2026-10-02)
 

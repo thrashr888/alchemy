@@ -19,6 +19,7 @@ import { AudioPlayer, DialogueScript } from "./AudioNote";
 import { Flashcards } from "./Flashcards";
 import { Infographic } from "./Infographic";
 import { Markdown } from "./Markdown";
+import { JsonTree, LiveJson, parseJsonDoc } from "./JsonTree";
 import { MindMap } from "./MindMap";
 import { UmlDiagram } from "./UmlDiagram";
 import { DiagramView } from "./DiagramView";
@@ -1819,6 +1820,12 @@ function SourceReader({
   const [hydrating, setHydrating] = useState(false);
   const [hydrateTick, setHydrateTick] = useState(0);
   const [content, setContent] = useState<string | null>(null);
+  // A JSON document (an API response, an SEC submissions file) reads as a
+  // tree, cached and live, instead of one long line.
+  const jsonDoc = useMemo(() => parseJsonDoc(content), [content]);
+  const jsonUrl =
+    isWebUrl(source.url) && /\.json($|[?#])/i.test(source.url);
+  const jsonLive = live && (jsonUrl || jsonDoc !== null);
   // Most sources land in well under 250ms — flashing a spinner for that
   // blink is distracting. Only slow loads (PDFs) earn the indicator.
   const showLoading = useDelayedFlag(content === null);
@@ -1858,7 +1865,7 @@ function SourceReader({
   // toolbar's address line and its "Add as source" offer.
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!live) return;
+    if (!live || jsonLive) return;
     const el = liveRef.current;
     if (!el) return;
     const rect = () => {
@@ -1890,7 +1897,7 @@ function SourceReader({
       setLiveUrl(null);
       void api.liveViewClose();
     };
-  }, [live, source.url]);
+  }, [live, jsonLive, source.url]);
 
   // "Linked from" — who in this notebook points at the open document.
   useEffect(() => {
@@ -2069,6 +2076,9 @@ function SourceReader({
   // syntax colors; find-in-source over the colored view re-anchors on the
   // rendered DOM each keystroke.
   const codeMode = source.sourceType === "code" && !highlight;
+  // Same rule for the JSON tree: find and citation anchors need the
+  // verbatim text view, so the tree yields to them.
+  const jsonMode = jsonDoc !== null && !query.trim() && !highlight;
   // A Reminders list renders as live checkboxes (complete-in-place) instead
   // of inert markdown — except during find or a citation anchor, which need
   // the text views' highlight machinery.
@@ -2289,6 +2299,10 @@ function SourceReader({
 
   if (isPdfFile(source) && pageView) {
     return <PdfPageView sourceId={source.id} title={source.title} />;
+  }
+
+  if (jsonLive) {
+    return <LiveJson url={source.url} />;
   }
 
   if (live) {
@@ -2556,6 +2570,8 @@ function SourceReader({
               sourceId={source.id}
               onCompleted={() => setHydrateTick((t) => t + 1)}
             />
+          ) : jsonMode && jsonDoc !== null ? (
+            <JsonTree value={jsonDoc} />
           ) : codeMode ? (
             <CodeView path={source.title} code={content} lineNums />
           ) : richMode ? (

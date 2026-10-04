@@ -1,6 +1,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/lib/store";
+import { PermissionPrompt } from "./PermissionPrompt";
 import { api } from "@/lib/api";
 import {
   Button,
@@ -147,6 +148,11 @@ export function ChatPanel() {
   const waiting = useStore((s) =>
     s.sendingFor === s.currentId ? s.waiting : "",
   );
+  // A write the notebook's tool loop is waiting on (RFC-unified-chat 6c).
+  const chatPermission = useStore((s) =>
+    s.chatPermission?.notebookId === s.currentId ? s.chatPermission : null,
+  );
+  const answerChatPermission = useStore((s) => s.answerChatPermission);
   // Hosted-agent mode (docs/RFC-acp-agents.md) swaps the RAG transcript for
   // the user's own coding agent. The pane itself stays mounted behind the
   // chat view (its session is a live subprocess and its transcript persists
@@ -929,10 +935,16 @@ export function ChatPanel() {
                   done={!!streamingText}
                 />
               )}
+              {chatPermission && (
+                <PermissionPrompt
+                  request={chatPermission}
+                  onAnswer={answerChatPermission}
+                />
+              )}
               {streamingText ? (
                 <Markdown>{streamingText}</Markdown>
               ) : (
-                steps.length === 0 && <ThinkingDots />
+                steps.length === 0 && !chatPermission && <ThinkingDots />
               )}
             </div>
           )}

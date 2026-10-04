@@ -32,6 +32,29 @@ impl Drop for Guard {
     }
 }
 
+/// A foreground request parked on the person, not the model: while one is
+/// held, the request it was taken from stops counting, so background work
+/// isn't held up by a question waiting on a Yes. Dropping it counts the
+/// request again.
+pub struct StandAside(bool);
+
+/// Stop counting one in-flight request until the returned value drops.
+/// Never takes the count below zero.
+pub fn stand_aside() -> StandAside {
+    let took = ACTIVE
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_ok();
+    StandAside(took)
+}
+
+impl Drop for StandAside {
+    fn drop(&mut self) {
+        if self.0 {
+            ACTIVE.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Foreground requests currently in flight.
 pub fn active() -> usize {
     ACTIVE.load(Ordering::SeqCst)

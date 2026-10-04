@@ -564,6 +564,39 @@ fn copilot_args(model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
     args
 }
 
+/// Is the streamed text nothing but the error the CLI then reported?
+fn is_echoed_error(text: &str, msg: &str) -> bool {
+    let (text, msg) = (text.trim(), msg.trim());
+    !text.is_empty()
+        && (text == msg || msg.contains(text) || text.contains(msg))
+        && text.len() <= msg.len() + 80
+}
+
+/// Alchemy's read-only MCP server as an `mcpServers` JSON document, for the
+/// CLIs that take one on the command line (RFC-unified-chat 6d). Written to
+/// a private temp file, never argv: argv is visible to every local process.
+fn read_only_mcp_json(name: &str, handoff: &crate::mcp::ReadHandoff) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            name: {
+                "type": "http",
+                "url": handoff.url,
+                "headers": { "Authorization": format!("Bearer {}", handoff.token) },
+                "tools": ["*"],
+            }
+        }
+    })
+    .to_string()
+}
+
+fn private_temp(contents: &str) -> anyhow::Result<tempfile::NamedTempFile> {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().context("create agent MCP config")?;
+    file.write_all(contents.as_bytes())
+        .context("write agent MCP config")?;
+    Ok(file)
+}
+
 /// The MCP servers copilot will auto-load: the keys of `mcpServers` in its
 /// config. Anything unreadable or oddly shaped yields none — the built-ins
 /// still get disabled, and a run with extra tools beats no run.
@@ -1010,6 +1043,15 @@ impl AgentCli {
         } else {
             None
         };
+        // Headless turns get Alchemy read-only (RFC-unified-chat 6d): nothing
+        // can prompt mid-run, so a write would have no check and no undo.
+        // The user's own `alchemy` entry carries the full token, so each CLI
+        // that can take a server on the command line gets the read-only one
+        // in its place; the rest keep their own configuration.
+        let handoff = crate::mcp::read_handoff();
+        // Held to the end of the run, like the system-prompt file: the CLI reads
+        // it after spawn.
+        let mut _mcp_file: Option<tempfile::NamedTempFile> = None;
         match self.kind {
             AgentKind::Claude => {
                 // Streamed structured events; tools restricted to Alchemy's
@@ -1025,6 +1067,15 @@ impl AgentCli {
                     "--allowedTools",
                     "mcp__alchemy__*",
                 ]);
+                // --strict-mcp-config drops every server the user configured,
+                // including an `alchemy` entry with the full token that
+                // --allowedTools would otherwise have pre-approved.
+                cmd.arg("--strict-mcp-config");
+                if let Some(h) = &handoff {
+                    let file = private_temp(&read_only_mcp_json("alchemy", h))?;
+                    cmd.arg("--mcp-config").arg(file.path());
+                    _mcp_file = Some(file);
+                }
                 set_model(&mut cmd);
                 if let Some(file) = &system_file {
                     cmd.arg("--append-system-prompt-file").arg(file.path());
@@ -1036,6 +1087,25 @@ impl AgentCli {
                 // Codex reads the complete folded prompt from stdin when
                 // its positional prompt is '-'; argv has an OS size limit.
                 cmd.args(["exec", "--json", "--skip-git-repo-check"]);
+                // Override the user's `alchemy` entry key by key: its
+                // http_headers carry the full token. The read-only token
+                // rides argv here (codex has no config-file flag); it reads,
+                // and only while this server runs.
+                match &handoff {
+                    Some(h) => {
+                        cmd.args(["-c", &format!("mcp_servers.alchemy.url={:?}", h.url)]);
+                        cmd.args([
+                            "-c",
+                            &format!(
+                                "mcp_servers.alchemy.http_headers={{ Authorization = {:?} }}",
+                                format!("Bearer {}", h.token)
+                            ),
+                        ]);
+                    }
+                    None => {
+                        cmd.args(["-c", "mcp_servers.alchemy.enabled=false"]);
+                    }
+                }
                 set_model(&mut cmd);
                 cmd.arg("-");
             }
@@ -1067,6 +1137,15 @@ impl AgentCli {
                     self.model.as_deref(),
                     &copilot_configured_mcp_servers(),
                 ));
+                // Every configured server stays disabled (cost, and the
+                // user's `alchemy` entry carries the full token); Alchemy
+                // comes back read-only under its own name.
+                if let Some(h) = &handoff {
+                    let file = private_temp(&read_only_mcp_json("alchemy-read", h))?;
+                    cmd.arg("--additional-mcp-config")
+                        .arg(format!("@{}", file.path().display()));
+                    _mcp_file = Some(file);
+                }
                 set_model(&mut cmd);
             }
             AgentKind::Hermes => {
@@ -1554,6 +1633,12 @@ impl AgentCli {
                 // tradr's scar: an error event may still be followed by more
                 // lines — only decide after the stream closes.
                 Some(msg) if text.is_empty() => Err(anyhow!("{msg}")),
+                // The CLI echoed its own failure as the assistant's text
+                // before reporting it (Claude Code on an expired sign-in:
+                // "Failed to authenticate…" streamed, then a result with
+                // is_error). That text is the error, not an answer; only a
+                // real partial answer keeps its words.
+                Some(msg) if is_echoed_error(&text, &msg) => Err(anyhow!("{msg}")),
                 _ if text.is_empty() => Err(anyhow!("agent produced no output")),
                 _ => match plain_text_error_transcript(kind, &text) {
                     // A plain-text CLI prints its failures to stdout, where
@@ -1741,6 +1826,34 @@ mod tests {
     /// EXITS SUCCESSFULLY while printing its whole failure to stdout (Paul's
     /// live transcript, footer on stderr) — the app must report an error, and
     /// that error must carry the fix hint, not the stderr footer.
+    /// Claude Code on an expired sign-in streams the failure as assistant
+    /// text, then a result marked is_error. That is a failure, with the
+    /// sign-in hint, never an answer row.
+    #[tokio::test]
+    async fn an_echoed_sign_in_failure_is_an_error() {
+        let msg = "Failed to authenticate: OAuth session expired and could not be refreshed";
+        let stdout = format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{msg}\"}}]}}}}\n\
+             {{\"type\":\"result\",\"is_error\":true,\"result\":\"{msg}\"}}"
+        );
+        let bin = fake_cli(&stdout, "", 1);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Claude, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("an echoed failure must surface as an error");
+        assert!(
+            format!("{err:#}").contains("Failed to authenticate"),
+            "{err:#}"
+        );
+        // A real answer that stopped early keeps its words.
+        assert!(!is_echoed_error(
+            "The fiscal year ends in May, per the filing. The second point is",
+            msg
+        ));
+    }
+
     #[tokio::test]
     async fn a_cli_that_prints_errors_and_exits_zero_is_reported_as_an_error() {
         let stdout = "\u{00d7} Model call failed: {\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}\n\
@@ -1883,6 +1996,20 @@ mod tests {
 
     /// The real config shape (keys of `mcpServers`), and every way it can be
     /// absent — the built-ins still get disabled, so this must never fail.
+    #[test]
+    fn read_only_mcp_config_points_at_the_read_endpoint() {
+        let h = crate::mcp::ReadHandoff {
+            url: "http://127.0.0.1:41415/mcp-read".into(),
+            token: "abc".into(),
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&read_only_mcp_json("alchemy", &h)).unwrap();
+        let entry = &v["mcpServers"]["alchemy"];
+        assert_eq!(entry["url"], "http://127.0.0.1:41415/mcp-read");
+        assert_eq!(entry["headers"]["Authorization"], "Bearer abc");
+        assert_eq!(entry["type"], "http");
+    }
+
     #[test]
     fn copilot_mcp_config_names_are_the_mcp_servers_keys() {
         let real = r#"{"mcpServers":{"alchemy":{"type":"http","url":"http://127.0.0.1:41414/mcp"},"open-knowledge":{"command":"/bin/sh","args":["-l"]}}}"#;

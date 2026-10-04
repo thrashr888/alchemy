@@ -20,6 +20,7 @@ import {
   useConfirm,
   SearchField,
   Segmented,
+  ResizeHandle,
 } from "./ui";
 import { AlchemyHero, AlchemySymbol } from "./AlchemyHero";
 import { notebookVerbs } from "@/lib/notebookMenu";
@@ -93,10 +94,11 @@ import type { SortDir, TableColumn, TableSort } from "./HomeViewControls";
 const CAPS =
   "text-micro font-semibold uppercase tracking-[0.04em] text-subtle-foreground";
 
-/** The shared list row: 28px, padding 0 8px, radius 6, gap 8, 13px, selected
- *  washed in `--selection`. Settings' sidebar already reads this way. */
+/** The shared list row: 30px, padding 0 8px, radius 6, gap 8, 14px, selected
+ *  washed in `--selection` — the size macOS sidebars take at "Large", which
+ *  is what Notes, Reminders and Finder users are reading next to it. */
 const ROW =
-  "flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-body transition-colors";
+  "flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-[0.875rem] transition-colors";
 
 /** The spec's pop-up button, as the Library wears it: 26px, surface-2 with an
  *  inset hairline, the current choice as its label. */
@@ -460,7 +462,7 @@ function ChatsRow({
   return (
     <div
       className={cn(
-        "group/chats relative flex h-7 w-full items-center gap-0.5 rounded-md pr-1 transition-colors",
+        "group/chats relative flex h-[30px] w-full items-center gap-0.5 rounded-md pr-1 transition-colors",
         selected ? "bg-[var(--selection)]" : "hover:bg-surface-2",
       )}
     >
@@ -482,7 +484,7 @@ function ChatsRow({
         title={title ?? "Ask across every notebook"}
         aria-current={selected ? "page" : undefined}
         className={cn(
-          "flex h-full min-w-0 flex-1 items-center gap-2 text-left text-body",
+          "flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[0.875rem]",
           selected ? "font-medium text-foreground" : "text-muted-foreground",
         )}
       >
@@ -820,6 +822,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(
     () => localStorage.getItem("homeSidebarOpen") !== "0",
   );
+  const sidebarWidth = useStore((s) => s.libraryWidth);
+  const setPanelWidth = useStore((s) => s.setPanelWidth);
   const toggleSidebar = () =>
     setSidebarOpen((on) => {
       localStorage.setItem("homeSidebarOpen", on ? "0" : "1");
@@ -1526,7 +1530,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           rowMenu={rowMenuFor}
         />
       ) : (
-        <div className="flex flex-col gap-[18px]">
+        <div className="flex flex-col gap-8">
           {[
             ...recencyGroups(ownNotebooks),
             // After Earlier, and last whatever the sort says: the shipped
@@ -1536,7 +1540,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               : []),
           ].map((group) => (
             <section key={group.label}>
-              <div className={cn(CAPS, "pb-2.5")}>{group.label}</div>
+              {/* A heading, not a caps label: the cards' own eyebrows are
+                  caps, and a shelf header in the same voice read as one
+                  more card. The hairline carries the band to the edge. */}
+              <h2 className="flex items-center gap-3 pb-3 text-section font-semibold text-foreground">
+                {group.label}
+                <span aria-hidden className="h-px flex-1 bg-border" />
+              </h2>
               <div className="flex flex-wrap gap-5">
                 {group.rows.map((nb) => (
                   <NotebookCard
@@ -1950,10 +1960,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           {/* The Library's sidebar: the Brief on its own above three blocks
               of places, the material itself rather than a card on it
               (RFC-mac-chrome §2). */}
+          {/* The handle sits on a wrapper, not the scrolling nav: inside a
+              scroller it would scroll away with the rows. */}
           {sidebarOpen && (
+            <div
+              style={{ width: sidebarWidth }}
+              className="relative z-10 hidden shrink-0 lg:flex"
+            >
             <nav
               aria-label="Library"
-              className="side-pane relative z-10 hidden w-[220px] shrink-0 flex-col gap-3.5 overflow-y-auto border-r border-border p-2.5 lg:flex"
+              className="side-pane flex min-w-0 flex-1 flex-col gap-3.5 overflow-y-auto border-r border-border p-2.5"
             >
               {/* No caps label of its own — the arrival point sits above the
                   Library rather than inside it, the way Mail's Inbox sits
@@ -2083,6 +2099,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                 </SidebarBlock>
               )}
             </nav>
+              <ResizeHandle
+                edge="right"
+                width={sidebarWidth}
+                defaultWidth={220}
+                onResize={(w) => setPanelWidth("library", w)}
+                label="Resize sidebar"
+              />
+            </div>
           )}
 
           <div className="sheet relative flex min-w-0 flex-1 flex-col overflow-hidden">

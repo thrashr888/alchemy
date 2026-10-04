@@ -52,6 +52,7 @@ export type { ExternalAdd, Migration, QueueItem } from "./storeTypes";
 import type {
   AcpPermissionEvent,
   AcpStateEvent,
+  LoopPermissionEvent,
   AcpUpdateEvent,
   ChatConfig,
   HomeBrain,
@@ -162,10 +163,21 @@ export async function removeSourcesGuarded(
 
 // Side panels stay usable at any drag position: wide enough for content,
 // narrow enough to leave the chat column room at the 1040px minimum window.
-const PANEL_BOUNDS = { sources: [220, 400], studio: [260, 460] } as const;
+const PANEL_BOUNDS = {
+  sources: [220, 400],
+  studio: [260, 460],
+  // The Library's sidebar: room for a long notebook name, never a column.
+  library: [180, 360],
+} as const;
+type Panel = keyof typeof PANEL_BOUNDS;
+const PANEL_KEYS = {
+  sources: "sourcesWidth",
+  studio: "studioWidth",
+  library: "libraryWidth",
+} as const;
 const CHAT_PAGE_SIZE = 80;
 
-function clampPanel(panel: "sources" | "studio", width: number): number {
+function clampPanel(panel: Panel, width: number): number {
   const [min, max] = PANEL_BOUNDS[panel];
   return Math.round(Math.min(max, Math.max(min, width)));
 }
@@ -860,6 +872,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     sendingFor: null,
     streamingText: "",
     steps: [],
+    chatPermission: null,
     waiting: "",
     agentMode: localStorage.getItem("agentMode") === "true",
     chatConfig: DEFAULT_CHAT_CONFIG,
@@ -904,6 +917,10 @@ export const useStore = create<AppState>((rawSet, get) => {
     studioWidth: clampPanel(
       "studio",
       Number(localStorage.getItem("studioWidth")) || 300,
+    ),
+    libraryWidth: clampPanel(
+      "library",
+      Number(localStorage.getItem("libraryWidth")) || 220,
     ),
     onboardingDismissed: localStorage.getItem("onboardingDismissed") === "true",
     settingsOpen: false,
@@ -1236,6 +1253,58 @@ export const useStore = create<AppState>((rawSet, get) => {
         turn.fold = next;
         flushAgentTurn();
       });
+      // Alchemy's own loop asking before a write. Same prompt as an agent's,
+      // matched to this window's run by the payload, since Any-listeners
+      // aren't filtered by target.
+      void listen<LoopPermissionEvent>("chat://permission", (e) => {
+        if (e.payload.window !== thisWindow) return;
+        if (e.payload.surface === "notebook") {
+          // The notebook chat's loop: shown under that chat's step trail
+          // while its send is in flight.
+          if (!get().sending || get().sendingFor !== e.payload.threadId) return;
+          set({
+            chatPermission: {
+              notebookId: e.payload.threadId,
+              requestId: e.payload.requestId,
+              toolTitle: e.payload.toolTitle,
+              action: e.payload.action,
+              options: e.payload.options,
+              detail: e.payload.detail,
+              fromLoop: true,
+            },
+          });
+          return;
+        }
+        const run = get().homeRun;
+        if (!run || run.queued || run.threadId !== e.payload.threadId) return;
+        set({
+          homeRun: {
+            ...run,
+            permission: {
+              notebookId: "",
+              requestId: e.payload.requestId,
+              toolTitle: e.payload.toolTitle,
+              action: e.payload.action,
+              options: e.payload.options,
+              detail: e.payload.detail,
+              fromLoop: true,
+            },
+          },
+        });
+      });
+      // A loop prompt that settled without this window's answer (timed out,
+      // Stop, a newer question) goes away.
+      void listen<{ window: string; requestId: string }>(
+        "chat://permission-settled",
+        (e) => {
+          if (e.payload.window !== thisWindow) return;
+          if (get().chatPermission?.requestId === e.payload.requestId)
+            set({ chatPermission: null });
+          const run = get().homeRun;
+          if (run?.permission?.requestId === e.payload.requestId)
+            set({ homeRun: { ...run, permission: null } });
+        },
+      );
       void listen<AcpPermissionEvent>("acp://permission", (e) => {
         const turn = agentTurn;
         if (!turn || e.payload.notebookId !== turn.key) return;
@@ -2339,6 +2408,11 @@ export const useStore = create<AppState>((rawSet, get) => {
       // One nav entry, exactly as clicking the notebook would make.
       if (answer.effect?.kind === "openNotebook" && answer.effect.notebookId) {
         const id = answer.effect.notebookId;
+        // A notebook the chat just made isn't in the list yet; without a
+        // refresh the header names it "Notebook".
+        if (!get().notebooks.some((n) => n.id === id)) {
+          await get().refreshNotebooks();
+        }
         await navAtomic(() => get().selectNotebook(id));
       }
     },
@@ -2353,10 +2427,32 @@ export const useStore = create<AppState>((rawSet, get) => {
       if (!run.queued) cancelHomeRun();
     },
 
+    answerChatPermission: (optionId) => {
+      const request = get().chatPermission;
+      if (!request) return;
+      set({ chatPermission: null });
+      const allow = request.options.some(
+        (o) => o.id === optionId && o.kind.startsWith("allow"),
+      );
+      void api
+        .loopPermission(request.requestId, allow)
+        .catch((e) => get().pushToast("error", describe(e)));
+    },
+
     answerHomePermission: (optionId) => {
-      const turn = agentTurn;
       const run = get().homeRun;
       const request = run?.permission;
+      if (run && request?.fromLoop) {
+        set({ homeRun: { ...run, permission: null } });
+        const allow = request.options.some(
+          (o) => o.id === optionId && o.kind.startsWith("allow"),
+        );
+        void api
+          .loopPermission(request.requestId, allow)
+          .catch((e) => get().pushToast("error", describe(e)));
+        return;
+      }
+      const turn = agentTurn;
       if (!turn || !run || !request || request.notebookId !== turn.key) return;
       turn.permission = null;
       set({ homeRun: { ...run, permission: null } });
@@ -2507,11 +2603,13 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
     setPanelWidth: (panel, width) => {
       const w = clampPanel(panel, width);
-      localStorage.setItem(
-        panel === "sources" ? "sourcesWidth" : "studioWidth",
-        String(w),
-      );
-      set(panel === "sources" ? { sourcesWidth: w } : { studioWidth: w });
+      const key = PANEL_KEYS[panel];
+      try {
+        localStorage.setItem(key, String(w));
+      } catch {
+        // A width that can't be remembered still applies for this session.
+      }
+      set({ [key]: w } as Pick<AppState, typeof key>);
     },
 
     createNotebook: async (title, look) => {

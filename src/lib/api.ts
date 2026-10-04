@@ -322,6 +322,8 @@ export const api = {
   liveViewForward: () => run(query<void>("live_view_forward")),
   /** Where the live view actually is right now (null when closed). */
   liveViewUrl: () => run(query<string | null>("live_view_url")),
+  /** A JSON source's document fetched now, indented (the Live view for data). */
+  fetchJsonLive: (url: string) => run(query<string>("fetch_json_live", { url })),
   relatedPassages: (notebookId: string, text: string, limit?: number) =>
     run(query<Citation[]>("related_passages", { notebookId, text, limit })),
   sourceBacklinks: (sourceId: string) =>
@@ -951,6 +953,9 @@ export const api = {
     requestId: string,
     optionId: string | null,
   ) => run(cmd<void>("acp_permission", { notebookId, requestId, optionId })),
+  /** Answer a Yes/No Alchemy's own tool loop is waiting on. */
+  loopPermission: (requestId: string, allow: boolean) =>
+    run(cmd<void>("loop_permission", { requestId, allow })),
 
   // Agent access (MCP)
   mcpStatus: () => run(query<McpStatus>("mcp_status")),

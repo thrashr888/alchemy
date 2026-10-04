@@ -88,6 +88,7 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
                 r.shutdown.cancel();
                 *running = None;
                 remove_port_file(app);
+                *READ_HANDOFF.write().unwrap() = None;
             }
             Some(_) => return, // already running on the right port
             None => {}
@@ -99,6 +100,10 @@ pub async fn apply_config(app: &AppHandle, enabled: bool, port: u16) {
     match start_server(app.clone(), port, token.clone()).await {
         Ok(shutdown) => {
             *mcp.running.lock().unwrap() = Some(Running { port, shutdown });
+            *READ_HANDOFF.write().unwrap() = Some(ReadHandoff {
+                url: format!("http://127.0.0.1:{port}/mcp-read"),
+                token: derive_read_only(&token),
+            });
             if let Err(err) = write_port_file(app, port, &token) {
                 crate::diagnostics::error(
                     "mcp",
@@ -155,6 +160,32 @@ pub(crate) fn auth_token(app: &AppHandle) -> anyhow::Result<String> {
     Ok(token)
 }
 
+/// Where a headless agent turn reads from while the server is up: the
+/// read-only endpoint and its token (RFC-unified-chat 6d). Published when
+/// the server starts and withdrawn when it stops, so the agent runner, which
+/// has no app handle, can hand it to the CLIs that accept one.
+#[derive(Clone)]
+pub(crate) struct ReadHandoff {
+    pub url: String,
+    pub token: String,
+}
+
+static READ_HANDOFF: std::sync::RwLock<Option<ReadHandoff>> = std::sync::RwLock::new(None);
+
+/// The read-only connection for this run, if the server is serving.
+pub(crate) fn read_handoff() -> Option<ReadHandoff> {
+    READ_HANDOFF.read().unwrap().clone()
+}
+
+/// The read-only bearer token for `/mcp-read`, derived from the full token:
+/// there is no second secret to store or rotate, and it can never be used
+/// against `/mcp` itself.
+fn derive_read_only(full: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("alchemy-mcp-read-only:{full}").as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -182,6 +213,9 @@ fn bearer_authorized(headers: &axum::http::HeaderMap, expected: &str) -> bool {
 /// Authenticate every request before rmcp allocates a session. The Origin
 /// rejection remains useful defense in depth against a token ever being
 /// exposed to renderer content.
+///
+/// Each path takes exactly one token: `/mcp-read` the derived read-only
+/// one, everything else the full one. The read token opens nothing else.
 async fn authorize_request(
     axum::extract::State(expected): axum::extract::State<String>,
     req: axum::extract::Request,
@@ -190,10 +224,19 @@ async fn authorize_request(
     if req.headers().contains_key(axum::http::header::ORIGIN) {
         return Err(axum::http::StatusCode::FORBIDDEN);
     }
-    if !bearer_authorized(req.headers(), &expected) {
+    let token = if is_read_only_path(req.uri().path()) {
+        derive_read_only(&expected)
+    } else {
+        expected
+    };
+    if !bearer_authorized(req.headers(), &token) {
         return Err(axum::http::StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(req).await)
+}
+
+fn is_read_only_path(path: &str) -> bool {
+    path == "/mcp-read" || path.starts_with("/mcp-read/")
 }
 
 async fn start_server(
@@ -218,9 +261,17 @@ async fn start_server(
     let mut sessions = LocalSessionManager::default();
     sessions.session_config.keep_alive = Some(std::time::Duration::from_secs(30 * 60));
     let handle = app.clone();
+    let read_app = app.clone();
     let service = StreamableHttpService::new(
         move || Ok(AlchemyMcp::new(app.clone())),
         sessions.into(),
+        StreamableHttpServerConfig::default(),
+    );
+    let mut read_sessions = LocalSessionManager::default();
+    read_sessions.session_config.keep_alive = Some(std::time::Duration::from_secs(30 * 60));
+    let read_service = StreamableHttpService::new(
+        move || Ok(AlchemyMcp::new_read_only(read_app.clone())),
+        read_sessions.into(),
         StreamableHttpServerConfig::default(),
     );
     // /events (docs/RFC-events.md §8) sits beside /mcp under the same
@@ -229,6 +280,7 @@ async fn start_server(
         .route("/events", axum::routing::get(crate::events::sse))
         .with_state(handle)
         .nest_service("/mcp", service)
+        .nest_service("/mcp-read", read_service)
         .layer(axum::middleware::from_fn_with_state(
             token,
             authorize_request,
@@ -300,6 +352,10 @@ pub(super) struct NotebookIdReq {
 #[derive(Clone)]
 pub struct AlchemyMcp {
     app: AppHandle,
+    /// Served at `/mcp-read` for headless agent turns (RFC-unified-chat 6d):
+    /// only read tools are listed, and a write is refused here, not trusted
+    /// to the agent. Nothing on this path can prompt or journal.
+    read_only: bool,
 }
 
 fn internal(err: impl std::fmt::Display) -> McpError {
@@ -338,7 +394,24 @@ pub(crate) fn client_actor(info: Option<&Implementation>) -> String {
 
 impl AlchemyMcp {
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            read_only: false,
+        }
+    }
+
+    /// The instance behind `/mcp-read`: reads only.
+    pub fn new_read_only(app: AppHandle) -> Self {
+        Self {
+            app,
+            read_only: true,
+        }
+    }
+
+    /// May this instance run `tool`? Every tool on the full server; only
+    /// the read list on the read-only one (unknown names count as writes).
+    fn permits(&self, tool: &str) -> bool {
+        !self.read_only || access::access(tool) == access::Access::Read
     }
 
     fn state(&self) -> tauri::State<'_, AppState> {
@@ -410,6 +483,12 @@ impl ServerHandler for AlchemyMcp {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let tool = request.name.to_string();
+        if !self.permits(&tool) {
+            return Err(McpError::invalid_request(
+                format!("{tool} changes the user's notebooks, and this connection is read-only. Answer from what you can read."),
+                None,
+            ));
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let result = all_tools().call(tcc).await;
         if let Err(err) = &result {
@@ -418,6 +497,35 @@ impl ServerHandler for AlchemyMcp {
             }
         }
         result
+    }
+
+    /// The macro's listing, narrowed to reads on the read-only instance.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: all_tools()
+                .list_all()
+                .into_iter()
+                .filter(|t| self.permits(&t.name))
+                .collect(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Public),
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.permits(name)
+            .then(|| all_tools().get(name).cloned())
+            .flatten()
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -439,6 +547,22 @@ impl ServerHandler for AlchemyMcp {
 #[cfg(test)]
 mod auth_tests {
     use super::*;
+
+    /// The read-only token opens `/mcp-read` and nothing else, and it is
+    /// never the full token.
+    #[test]
+    fn read_only_token_is_derived_and_path_bound() {
+        let full = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let read = derive_read_only(full);
+        assert_ne!(read, full);
+        assert_eq!(read.len(), 64);
+        assert_eq!(read, derive_read_only(full), "stable across calls");
+        assert!(is_read_only_path("/mcp-read"));
+        assert!(is_read_only_path("/mcp-read/"));
+        assert!(!is_read_only_path("/mcp"));
+        assert!(!is_read_only_path("/mcp-reader"));
+        assert!(!is_read_only_path("/events"));
+    }
 
     #[test]
     fn bearer_auth_requires_exact_scheme_and_token() {

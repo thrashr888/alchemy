@@ -177,6 +177,8 @@ pub fn run() {
                     diagnostics::Event::new(diagnostics::Level::Info, "rust", "window-close")
                         .message(format!("Window {} closed.", window.label())),
                 );
+                // A chat turn waiting on a Yes in this window can't get one.
+                commands::chatloop::decline_window_prompts(window.label());
                 if let Some(state) = window.app_handle().try_state::<commands::AppState>() {
                     state.glass_applied.lock().unwrap().remove(window.label());
                     // Whatever notebook this window had open is no longer
@@ -642,6 +644,8 @@ pub fn run() {
             commands::live_view_back,
             commands::live_view_forward,
             commands::live_view_url,
+            commands::fetch_json_live,
+            commands::chatloop::loop_permission,
             commands::update_note,
             commands::note_opened,
             commands::convert_note_to_source,

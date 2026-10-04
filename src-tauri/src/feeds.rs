@@ -561,15 +561,23 @@ pub fn parse(body: &str, base: &str) -> Result<Parsed> {
                 .or(e.updated)
                 .map(|d| d.timestamp_millis())
                 .unwrap_or(0);
-            let content = e
-                .content
-                .as_ref()
-                .and_then(|c| c.body.as_ref())
-                .map(|b| plain(b))
-                .filter(|t| !t.trim().is_empty());
-            let (text, full) = match content {
+            let raw = e.content.as_ref().and_then(|c| c.body.as_deref());
+            let content = raw.map(plain).filter(|t| !t.trim().is_empty());
+            let (mut text, mut full) = match content {
                 Some(c) => (c, true),
                 None => (text_of(&e.summary), false),
+            };
+            // An aggregator entry is a blurb about a page elsewhere: the
+            // entry is the thing it links out to, the blurb is a summary
+            // (so the page gets fetched), and the aggregator's own page is
+            // kept as the discussion.
+            let link = match raw.and_then(outbound_link) {
+                Some(out) => {
+                    text = format!("{}\n\nDiscussion: {link}", text.trim());
+                    full = false;
+                    out
+                }
+                None => link,
             };
             let title = text_of(&e.title);
             let title = if title.trim().is_empty() {
@@ -598,6 +606,58 @@ pub fn parse(body: &str, base: &str) -> Result<Parsed> {
         entries,
         sitemap: false,
     })
+}
+
+/// Aggregators whose entries point at their own page about a product and
+/// carry the product's real address as a redirect in the content.
+const OUTBOUND_REDIRECTS: &[&str] = &["https://www.producthunt.com/r/"];
+
+/// The redirect to the real page in an aggregator entry's content, if any.
+fn outbound_link(html: &str) -> Option<String> {
+    OUTBOUND_REDIRECTS.iter().find_map(|prefix| {
+        let start = html.find(&format!("href=\"{prefix}"))? + "href=\"".len();
+        let end = html[start..].find('"')? + start;
+        Some(html[start..end].replace("&amp;", "&"))
+    })
+}
+
+/// Follow an aggregator redirect to the page it names, without fetching
+/// that page: one HEAD, read the Location. The aggregator's tracking
+/// parameter is dropped so the source's address is the page's own.
+async fn resolve_outbound(link: &str) -> Option<String> {
+    if !OUTBOUND_REDIRECTS.iter().any(|p| link.starts_with(p)) {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .build()
+        .ok()?;
+    let resp = client.head(link).send().await.ok()?;
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)?
+        .to_str()
+        .ok()?;
+    Some(strip_ref(&resolve(link, location)?))
+}
+
+/// `?ref=producthunt` and its like: the referrer tag an aggregator adds to
+/// its outbound links, which would otherwise make the same page two sources.
+fn strip_ref(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| !kv.starts_with("ref=") && !kv.starts_with("utm_"))
+        .collect();
+    if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    }
 }
 
 /// HTML or text → plain text. Feeds carry HTML in content and often in
@@ -1125,6 +1185,14 @@ async fn ingest_entries(
     let mut landed = Vec::new();
     let mut fetched_any = false;
     for e in entries {
+        let resolved;
+        let e = match resolve_outbound(&e.link).await {
+            Some(link) => {
+                resolved = Entry { link, ..e.clone() };
+                &resolved
+            }
+            None => e,
+        };
         let mut text = entry_text(e);
         let mut title = e.title.clone();
         // A sitemap entry is a bare link: without the page there is nothing
@@ -1794,6 +1862,39 @@ mod tests {
     /// The Grow gate, on the three cases one blog import produced: a real
     /// feed is offered, an empty one never is, and a WordPress comment
     /// stream is dropped before anything is fetched at all.
+    /// Product Hunt's entry links to its own page; the product is the
+    /// "Link" redirect in the content, and the Product Hunt page is kept
+    /// as the discussion.
+    #[test]
+    fn aggregator_entries_point_at_the_product() {
+        let atom = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Product Hunt</title><id>ph</id><updated>2026-10-03T00:00:00Z</updated>
+<entry><id>Post/1</id><updated>2026-10-03T00:00:00Z</updated>
+<link rel="alternate" type="text/html" href="https://www.producthunt.com/products/thanor-ai"/>
+<title>Thanor AI</title>
+<content type="html">&lt;p&gt;Make sites look expensive&lt;/p&gt;&lt;p&gt;&lt;a href="https://www.producthunt.com/products/thanor-ai?utm_campaign=x"&gt;Discussion&lt;/a&gt; | &lt;a href="https://www.producthunt.com/r/p/1266098?app_id=339"&gt;Link&lt;/a&gt;&lt;/p&gt;</content>
+</entry></feed>"#;
+        let e = &parse(atom, "https://www.producthunt.com/feed")
+            .unwrap()
+            .entries[0];
+        assert_eq!(e.link, "https://www.producthunt.com/r/p/1266098?app_id=339");
+        assert!(
+            !e.full,
+            "the blurb is a summary; the product page is fetched"
+        );
+        assert!(e
+            .text
+            .contains("Discussion: https://www.producthunt.com/products/thanor-ai"));
+        assert_eq!(
+            strip_ref("https://thanor.ai/?ref=producthunt"),
+            "https://thanor.ai/"
+        );
+        assert_eq!(
+            strip_ref("https://a.test/p?id=3&ref=producthunt"),
+            "https://a.test/p?id=3"
+        );
+    }
+
     #[test]
     fn grow_only_proposes_a_feed_with_something_in_it() {
         let live = r#"<?xml version="1.0"?><rss version="2.0"><channel>

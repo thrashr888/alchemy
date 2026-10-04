@@ -451,7 +451,10 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
     let fast = ingest::extract_url(url).await;
     // A feed document is final: nothing about a render pass would improve
     // raw XML, and its entry text could trip the blocked-page markers.
-    if fast.as_ref().is_ok_and(|ex| ex.source_type == "feed") {
+    if fast
+        .as_ref()
+        .is_ok_and(|ex| ex.source_type == "feed" || is_json_text(&ex.text))
+    {
         return fast;
     }
     if let Err(err) = &fast {
@@ -508,6 +511,13 @@ pub async fn extract_url_rescued(url: &str) -> Result<Extracted> {
             fast
         }
     }
+}
+
+/// A JSON document fetched straight: nothing a render pass could add.
+fn is_json_text(text: &str) -> bool {
+    let t = text.trim_start();
+    (t.starts_with('{') || t.starts_with('['))
+        && serde_json::from_str::<serde_json::Value>(text).is_ok()
 }
 
 struct Rendered {

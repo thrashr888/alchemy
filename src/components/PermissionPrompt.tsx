@@ -16,7 +16,8 @@ export function PermissionPrompt({
   agent?: string | null;
   onAnswer: (optionId: string | null) => void;
 }) {
-  const who = agent || "The agent";
+  // The loop is Alchemy's own model; an agent turn names its agent.
+  const who = request.fromLoop ? "Alchemy" : agent || "The agent";
   return (
     <div className="rounded-lg border border-border bg-surface-2 px-3 py-2.5">
       <p className="text-caption text-foreground">
@@ -35,6 +36,17 @@ export function PermissionPrompt({
           </>
         )}
       </p>
+      {request.detail && request.detail.length > 0 && (
+        // What exactly would change, one URL per line: selectable, with the
+        // full address on hover when a long one is cut short.
+        <ul className="mt-1.5 flex flex-col gap-0.5 text-caption text-muted-foreground">
+          {request.detail.map((line) => (
+            <li key={line} className="selectable truncate font-mono" title={line}>
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="mt-2 flex flex-wrap gap-1.5">
         {request.options.map((opt) => (
           <Button
