@@ -564,6 +564,14 @@ fn copilot_args(model: Option<&str>, mcp_servers: &[String]) -> Vec<String> {
     args
 }
 
+/// Is the streamed text nothing but the error the CLI then reported?
+fn is_echoed_error(text: &str, msg: &str) -> bool {
+    let (text, msg) = (text.trim(), msg.trim());
+    !text.is_empty()
+        && (text == msg || msg.contains(text) || text.contains(msg))
+        && text.len() <= msg.len() + 80
+}
+
 /// Alchemy's read-only MCP server as an `mcpServers` JSON document, for the
 /// CLIs that take one on the command line (RFC-unified-chat 6d). Written to
 /// a private temp file, never argv: argv is visible to every local process.
@@ -1625,6 +1633,12 @@ impl AgentCli {
                 // tradr's scar: an error event may still be followed by more
                 // lines — only decide after the stream closes.
                 Some(msg) if text.is_empty() => Err(anyhow!("{msg}")),
+                // The CLI echoed its own failure as the assistant's text
+                // before reporting it (Claude Code on an expired sign-in:
+                // "Failed to authenticate…" streamed, then a result with
+                // is_error). That text is the error, not an answer; only a
+                // real partial answer keeps its words.
+                Some(msg) if is_echoed_error(&text, &msg) => Err(anyhow!("{msg}")),
                 _ if text.is_empty() => Err(anyhow!("agent produced no output")),
                 _ => match plain_text_error_transcript(kind, &text) {
                     // A plain-text CLI prints its failures to stdout, where
@@ -1812,6 +1826,34 @@ mod tests {
     /// EXITS SUCCESSFULLY while printing its whole failure to stdout (Paul's
     /// live transcript, footer on stderr) — the app must report an error, and
     /// that error must carry the fix hint, not the stderr footer.
+    /// Claude Code on an expired sign-in streams the failure as assistant
+    /// text, then a result marked is_error. That is a failure, with the
+    /// sign-in hint, never an answer row.
+    #[tokio::test]
+    async fn an_echoed_sign_in_failure_is_an_error() {
+        let msg = "Failed to authenticate: OAuth session expired and could not be refreshed";
+        let stdout = format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{msg}\"}}]}}}}\n\
+             {{\"type\":\"result\",\"is_error\":true,\"result\":\"{msg}\"}}"
+        );
+        let bin = fake_cli(&stdout, "", 1);
+        let cli = AgentCli::with_binary_for_test(AgentKind::Claude, bin);
+        let err = cli
+            .chat(&[ChatTurn::user("hi")])
+            .await
+            .err()
+            .expect("an echoed failure must surface as an error");
+        assert!(
+            format!("{err:#}").contains("Failed to authenticate"),
+            "{err:#}"
+        );
+        // A real answer that stopped early keeps its words.
+        assert!(!is_echoed_error(
+            "The fiscal year ends in May, per the filing. The second point is",
+            msg
+        ));
+    }
+
     #[tokio::test]
     async fn a_cli_that_prints_errors_and_exits_zero_is_reported_as_an_error() {
         let stdout = "\u{00d7} Model call failed: {\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}\n\

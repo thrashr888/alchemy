@@ -92,6 +92,11 @@ pub(crate) struct LoopEvidence {
     /// from one that was stopped.
     pub stop: &'static str,
     pub cancelled: bool,
+    /// The provider failed a round for a reason other than "this model
+    /// can't call tools" (a sign-in expired, a server down). The turn ends
+    /// on that error: the answer step would only call the same provider and
+    /// fail again, twice as slowly.
+    pub failure: Option<String>,
 }
 
 impl LoopEvidence {
@@ -1650,6 +1655,22 @@ async fn dispatch_notebook(
     }
 }
 
+/// Does this provider error say the model can't call tools, rather than that
+/// the provider failed? Ollama: "… does not support tools"; OpenAI-style
+/// gateways: "tools is not supported", "function calling is not enabled".
+fn tools_unsupported(err: &str) -> bool {
+    let e = err.to_lowercase();
+    [
+        "does not support tools",
+        "does not support tool",
+        "tools is not supported",
+        "tool use is not supported",
+        "function calling",
+    ]
+    .iter()
+    .any(|p| e.contains(p))
+}
+
 /// The assistant row that records a round's tool calls, in the neutral form.
 ///
 /// `arguments` stays an OBJECT. Ollama takes this as-is and rejects a
@@ -1803,10 +1824,14 @@ pub(crate) async fn run(
         let out = match out {
             Ok(out) => out,
             Err(err) => {
-                // A provider that cannot do tools after all, or a transport
-                // failure: the caller still has the ordinary retrieval path,
-                // so this degrades rather than fails the turn.
+                // A model that can't call tools after all degrades to the
+                // ordinary answer, which it can still give. Anything else is
+                // the provider failing, and the turn ends on it.
                 crate::note!("chat loop round {round} failed: {err:#}");
+                let raw = format!("{err:#}");
+                if !tools_unsupported(&raw) {
+                    ev.failure = Some(raw);
+                }
                 ev.stop = "error";
                 break;
             }
@@ -2120,6 +2145,24 @@ mod tests {
         let (written, _) =
             split_written(vec!["https://made-up.test/".into()], "what's in my notes");
         assert!(written.is_empty());
+    }
+
+    /// Only "this model can't call tools" degrades to a plain answer; a
+    /// provider failure ends the turn.
+    #[test]
+    fn tool_support_errors_degrade_and_provider_failures_do_not() {
+        assert!(tools_unsupported(
+            "registry.ollama.ai/library/gemma3:4b does not support tools"
+        ));
+        assert!(tools_unsupported(
+            "400: Function calling is not enabled for this model"
+        ));
+        assert!(!tools_unsupported(
+            "Failed to authenticate: OAuth session expired and could not be refreshed"
+        ));
+        assert!(!tools_unsupported(
+            "error sending request: connection refused"
+        ));
     }
 
     /// An empty loop is the signal to fall back to plain retrieval.

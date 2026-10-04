@@ -223,28 +223,48 @@ impl OpenAiClient {
         round: usize,
     ) -> Result<super::ToolOutcome> {
         let started = std::time::Instant::now();
-        let mut body = json!({
+        let body = json!({
             "model": self.model,
             "messages": super::to_openai_dialect(messages),
             "tools": tools,
             "stream": false,
         });
-        if !self.effort.is_empty() {
-            body["reasoning_effort"] = json!(self.effort);
-        }
-        let mut attempt = 0;
+        // No reasoning_effort on a tool round, and an explicit "none" when the
+        // endpoint asks for it. OpenAI's reasoning models refuse function
+        // tools alongside reasoning on /chat/completions ("Function tools
+        // with reasoning_effort are not supported … set reasoning_effort to
+        // 'none'"), and with nothing sent they apply their own default, so
+        // every loop round on one failed. "none" isn't valid everywhere,
+        // so it's sent only as the one retry that error asks for. A round is
+        // a short decision; the streamed answer keeps the effort setting.
+        let mut body = body;
+        let mut retried_effort = false;
         let resp = loop {
-            let resp = self
-                .with_team_headers(self.request("/chat/completions"))
-                .await
-                .json(&body)
-                .send()
-                .await
-                .context("Couldn't reach the provider — check the base URL and your connection")?;
-            if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+            let mut attempt = 0;
+            let resp = loop {
+                let resp = self
+                    .with_team_headers(self.request("/chat/completions"))
+                    .await
+                    .json(&body)
+                    .send()
+                    .await
+                    .context(
+                        "Couldn't reach the provider — check the base URL and your connection",
+                    )?;
+                if resp.status().is_success() || !Self::backoff_if_retryable(&resp, attempt).await {
+                    break resp;
+                }
+                attempt += 1;
+            };
+            if resp.status().is_success() || retried_effort {
                 break resp;
             }
-            attempt += 1;
+            let err = gateway_error(resp).await;
+            if !wants_no_reasoning(&format!("{err:#}")) {
+                return Err(err);
+            }
+            body["reasoning_effort"] = json!("none");
+            retried_effort = true;
         };
         if !resp.status().is_success() {
             return Err(gateway_error(resp).await);
@@ -532,6 +552,13 @@ fn looks_like_jwt(key: &str) -> bool {
     parts.len() == 3 && parts.iter().all(|p| !p.is_empty())
 }
 
+/// Is this the endpoint saying function tools need reasoning turned off
+/// (OpenAI reasoning models on /chat/completions)?
+fn wants_no_reasoning(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("reasoning_effort") && e.contains("tools")
+}
+
 async fn gateway_error(resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -599,6 +626,17 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reasoning_conflict_is_recognized_and_nothing_else() {
+        assert!(wants_no_reasoning(
+            "400 Bad Request: Function tools with reasoning_effort are not supported for gpt-5.6-terra in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
+        ));
+        assert!(!wants_no_reasoning("401 Unauthorized: invalid api key"));
+        assert!(!wants_no_reasoning(
+            "400: unknown parameter reasoning_effort"
+        ));
+    }
 
     #[test]
     fn key_formats_infer_provider_urls() {

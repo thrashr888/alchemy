@@ -8952,6 +8952,17 @@ async fn send_message_impl(
         if ev.cancelled {
             return finish_tool_reply(&app, &state, &notebook_id, "Stopped.".into()).await;
         }
+        // The provider failed (not "this model can't call tools"): the same
+        // durable error row the answer step writes, with its fix, once.
+        if let Some(raw) = &ev.failure {
+            let msg = Message {
+                kind: "error".into(),
+                ..tool_message(&notebook_id, friendly_error(raw))
+            };
+            e(state.db.add_message(&msg).await)?;
+            let _ = app.emit("chat://done", &msg);
+            return Ok(msg);
+        }
         // What the loop did is the answer: a declined write ends on the
         // user's word, and a done write needs no synthesis to restate it.
         if ev.declined || !ev.replies.is_empty() {
@@ -13988,6 +13999,9 @@ pub async fn ask_everything(
     .await;
     if loop_ev.cancelled {
         return Ok(MetaAnswer::chat(String::new(), vec![]));
+    }
+    if let Some(raw) = &loop_ev.failure {
+        return Err(friendly_error(raw));
     }
     // A turn that only DID things has nothing to synthesize from: answer with
     // what it did, the way the classifier route answers a command. Synthesis

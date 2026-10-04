@@ -887,6 +887,36 @@ right tool, and correctly made no call on a plain question. The cost to watch
 moved: on a headless agent, every loop round is a full CLI run (about 30 s
 on Claude Code).
 
+### Release-readiness fixes (2026-10-03)
+
+- **A provider failure is no longer an answer.** Claude Code on an expired
+  sign-in streams the failure as assistant text, then sends a result marked
+  `is_error`. Because text had arrived, the runner returned it as a
+  successful answer, in loop rounds and in plain chat alike.
+  `is_echoed_error` now makes that text the error it is, with the sign-in
+  fix attached. A real partial answer followed by an error keeps its words.
+- **A failed loop round ends the turn.** `LoopEvidence.failure` carries
+  the error, and Home returns it while notebook chat writes the usual error
+  row. The answer step no longer calls the same broken provider a second
+  time. One case still degrades to a plain answer: a model that can't call
+  tools (`tools_unsupported`: Ollama's "does not support tools", a gateway's
+  "function calling is not enabled").
+- **Tool rounds on OpenAI reasoning models.** `/chat/completions` refuses
+  function tools alongside reasoning ("Function tools with reasoning_effort
+  are not supported … set reasoning_effort to 'none'"), and with nothing
+  sent the model applies its own default. Every loop round on
+  gpt-5.6-terra failed, silently falling back to retrieval until the fix
+  above made it visible. Tool rounds now send no effort, and retry once
+  with `"none"` only when the endpoint asks for it (`wants_no_reasoning`).
+
+**Verified live:**
+- Claude Code on the expired sign-in: one error row, "Failed to
+  authenticate … — Fix: open Terminal, run `claude` …" (3.2 s).
+- Gateway (gpt-5.6-terra), notebook chat: "Remove the Applied Digital
+  source" ran `remove_source` in 2.75 s and asked by name.
+- Stop pressed while that prompt was showing: the turn settled in 1 s, the
+  prompt cleared, and the source was kept.
+
 ### Review (2026-10-03)
 
 A review checked the first draft against the code. It found that the
