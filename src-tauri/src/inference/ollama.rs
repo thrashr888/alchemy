@@ -346,6 +346,13 @@ impl Ollama {
             "messages": messages,
             "tools": tools,
             "stream": false,
+            // A tool round is a short decision (act, or answer from the
+            // notebook), and it sits in front of every question. A thinking
+            // model reasoned ~850 tokens to say "no tools" (muse-glimmer 30B:
+            // 102 s); with thinking off the same prompt was 281 tokens and
+            // 14 s. Models that don't think ignore it. The streamed answer
+            // keeps the model's own thinking setting.
+            "think": false,
         });
         self.apply_keep_alive(&mut body);
         let mut attempt = 0;
