@@ -277,22 +277,33 @@ Gate: `judged_calibrate` already grades verdicts against an LLM judge on a
 fixed sample. Run it with the Jev judge and the Small judge side by side
 before switching the default.
 
-### 2. Tool routing (`route_tool`, `route_global_tool`)
+### 2. Tool shortlisting in the chat loop
 
-The intent-routing pattern. One request per turn past the lexical gate:
+*(Rewritten 2026-10-04.)* Phase 1 shipped a typed gate in front of the
+two JSON routers: a confident "chat" skipped the Small-role classifier.
+It measured well (0.99 on both probes, ~230 ms) and then lost its home:
+RFC-unified-chat phase 6 removed the classifier altogether. Every engine
+now calls tools natively inside `commands/chatloop.rs`, and no gate
+decides whether the model may act. The gate was dropped when this branch
+rebased onto v0.68.
 
-- `action`: Choice over the tool vocabulary plus `chat`, with a rubric per
-  option.
-- `target_source`, `target_template`, `target_notebook`: speculative
-  Choices over the sanitized title lists already in the prompt. Code reads
-  only the one the action needs.
-- Free-text arguments (a URL, a new name) are pre-parsed in code and
-  offered as candidates; Jev selects, code copies. Nothing is generated.
+What survives is the other half of the pattern. The loop offers the model
+a catalog of 60+ tools, and RFC-unified-chat §3 already narrows it with
+tool search. The skill-suggestion cookbook is exactly this problem: one
+Choice over the catalog ranks every tool against the turn, one Noul asks
+whether the turn needs a tool at all, and the winner goes into one line
+of the system prompt as a hint, not a decision. The model keeps its
+catalog and its judgment; the hint tells it where to look first. Measured
+in the cookbook: wrong-tool loads halved, loads-when-nothing-fits cut by
+more than half.
 
-This removes the JSON parse and the worst-case latency: an agent-CLI
-provider took over 30 s to classify "open the ferrari notebook" (RFC
-inference-providers §2). Confidence gates the imperative: a low-confidence
-action falls through to chat instead of acting. Gate: `eval_router`.
+Design, when phase 2 is picked up: state = the user turn plus the tool
+catalog's one-line descriptions; questions = `tool` (Choice over tool
+names plus `none`) and `needs_tool` (Noul). Code injects a hint only when
+`needs_tool` clears a threshold and the Choice is confident; otherwise
+the loop runs exactly as today. Gate: the tool-loop evals in
+RFC-unified-chat, and the 16-case routing battery reused as a
+shortlisting battery.
 
 ### 3. Answer verification (`verify.rs`) and judged evals
 
@@ -357,12 +368,12 @@ Not replacements; things there was no cheap way to do before.
 
 1. `inference/judge.rs`: `Question`, `Answer`, the Jev client, credential
    resolution, the trace line. Second Look judged by Jev with confidence
-   bands; a typed gate in front of both tool routers that settles
-   "this is just a question" without the JSON router. *(Built
-   2026-09-21; the Activity tile and `judged_calibrate` comparison are
-   still open.)*
-2. Full tool routing through the judge (action plus speculative target
-   Choices); run `eval_router` for accuracy and latency.
+   bands. *(Built 2026-09-21. The routing gate built alongside it was
+   dropped on the 2026-10-04 rebase: unified chat phase 6 removed the
+   classifier it gated. The Activity tile and `judged_calibrate`
+   comparison are still open.)*
+2. Tool shortlisting in the chat loop (§"Where it pays" 2): a ranked hint
+   from one Choice + one Noul, never a decision.
 3. Port answer verification; wire `ALCHEMY_JEV_EVALS=1` into the judged
    harness.
 4. Port notebook suggestion, card triage, global fan-out gating.
