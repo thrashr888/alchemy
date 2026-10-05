@@ -413,6 +413,68 @@ audit"; both strong judges called it contradicted, and they were right).
 The case was replaced, and the table above is the corrected run. Rows
 append to `~/alchemy-benchmarks.csv`.
 
+## Benchmark: the tool gate (2026-10-05)
+
+`judge_eval.rs::eval_judge_routes` runs 36 labeled chat messages (24
+notebook, 12 Home; `fixtures/judge_routes.json`) through the gate as the
+loop calls it: one Choice over the surface's action tools plus `none`,
+over the message alone. There is no baseline row: without a judge the
+gate does not exist, and every message pays the loop round. *Acted* is
+the share of answers at or above the 0.7 margin and how many of those
+were right; *drops* are commands judged `none` (a silent drop if the loop
+were skipped on them), split by whether the margin cleared the threshold.
+Clean run, no compiles alongside, M5 Max.
+
+| judge | accuracy | median per decision | acted (right) | confident drops | wrong hints |
+| --- | --- | --- | --- | --- | --- |
+| **Jev 1.13** | **36/36** | **108 ms** | 30/30 (100%) | 0 | 0 |
+| gemma4:12b-mlx | 33/36 | 2.4 s | 33/35 (94%) | 2 | 0 |
+| qwen3.8:27b-mlx | 32/36 | 5.3 s | 28/30 (93%) | 2 | 0 |
+
+Both local judges' confident drops were the same two messages: "surprise
+me with a theme" (notebook) and "keep this for later: …" (Home). In the
+app neither reaches the gate as a skip: the first is caught by the
+`settings_gate` regex fast path that runs before the loop, and Home never
+skips. An earlier run had every judge sending "call me Paul", "shorter
+answers in this notebook" and "what models do I have" to `none`; the
+notebook catalog's `settings` description said only "same ops as Home",
+and naming what settings covers (the user's name, answer length, theme)
+fixed three of those for every judge. The regex fast path catches "call
+me …" and the models question too.
+
+What the latencies decide:
+
+- **A local gate is a few seconds per turn.** The prompt is small: about
+  1,700 characters of action-tool names and descriptions on a notebook
+  (roughly 430 tokens) plus the rubric and the message. A 27B still spent
+  5.3 s per decision on it and a 12B 2.4 s; a plain 335-token probe of
+  the same shape had taken the 27B 1.2 to 1.7 s warm, so the
+  enum-constrained decode over twelve options is part of the cost. On a
+  notebook that still pays: a confident `none` saves a loop round that
+  costs 19 s or more on the same hardware, and questions are most turns.
+  It does not pay for a hint alone.
+- **So the gate runs only where it can skip.** `chatloop::run` asks a
+  judge only when it is allowed to skip (Jev, or a local model of 20B or
+  more by its tag), and on Home, where nothing skips, only the cloud
+  judge, whose 108 ms is free. A 12B judge never runs the gate: 2.4 s per
+  turn for a hint the loop would have found in one `tool_search` round.
+- **Jev is the gate's natural backend.** 36 of 36, every confident answer
+  right, a tenth of a second. This is the one site where the cloud judge
+  is not merely faster but the only one cheap enough to run on every
+  turn of every surface.
+
+### Batching, measured
+
+The local backend answers every question in one schema-constrained call
+(one object, one enum field per question). It was built to halve prompt
+processing on Second Look's two questions. It did not: the clean verdict
+run on qwen3.8:27b went from 4.1 s to 5.6 s median per claim. Ollama's
+prefix cache already made the second of two calls over the same state
+cheap, and the combined rubric is a longer prompt. Batching stays, for
+one call and one parse per claim, but it is not a latency win, and the
+per-claim cost of a local 27B judge on real Second Look state (six
+excerpts) is 5 to 15 s against Jev's 0.1 s.
+
 ## What Jev is not for
 
 - Anything that writes prose: titles, gists, situating sentences, facts,

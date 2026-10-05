@@ -1322,7 +1322,7 @@ fn notebook_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "settings",
             core: false,
-            description: "Read or change Alchemy's settings; style changes apply to this notebook. Same ops as Home: get, models, test, setup, set, style, theme, pull, connect. Changes ask the user first.",
+            description: "Read or change Alchemy's settings: the AI provider and models, what the user wants to be called and their profile, the answer style and length for this notebook, the app theme, guided setup, or connecting an agent client. Same ops as Home: get, models, test, setup, set, style, theme, pull, connect. Changes ask the user first.",
             params: || {
                 json!({
                     "type": "object",
@@ -1877,14 +1877,23 @@ pub(crate) async fn run(
     // enabled and named in one line of the system prompt — a hint the
     // model may ignore, never a decision. Anything else, including every
     // failure, leaves the loop exactly as it was.
+    // Only where the gate can pay for itself. A local 27B reads the catalog
+    // in 2–5 s (routing benchmark, 2026-10-05): worth it on a notebook,
+    // where a confident `none` saves a round that costs 19 s or more on the
+    // same hardware, and not worth it for a hint alone. A judge that may
+    // not skip (a 12B: 2.4 s per turn, hint-only) never runs here. On Home
+    // nothing skips, so only the cloud judge (~100 ms) runs, for the hint
+    // that saves a `tool_search` round on a non-core tool.
+    let home = matches!(surface, Surface::Home { .. });
     let judge = {
         let ai = state.ai.read().await.clone();
         ai.judge()
+            .filter(|j| j.trusted_to_skip())
+            .filter(|j| !home || j.is_cloud())
     };
     let mut gate_trace = Value::Null;
     let mut rounds = budget;
     if let Some(judge) = judge {
-        let home = matches!(surface, Surface::Home { .. });
         let specs = gate_specs(home);
         let gated = tokio::select! {
             g = typed_tool_gate(&judge, &specs, question) => g,

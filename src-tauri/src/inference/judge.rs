@@ -580,6 +580,13 @@ impl Judge {
     /// qualifies when its tag says 20B parameters or more; anything else
     /// is hint-only. A wrong skip turns a command into an answer, which is
     /// the failure the unified-chat RFC removed the lexical gates for.
+    /// A judge that costs no local prompt processing: its decision is a
+    /// network round trip (~100 ms measured), so a per-turn gate is free
+    /// where a local 27B pays 2–5 s to read the tool catalog.
+    pub fn is_cloud(&self) -> bool {
+        matches!(self.backend, Backend::Jev { .. })
+    }
+
     pub fn trusted_to_skip(&self) -> bool {
         match &self.backend {
             Backend::Jev { .. } => true,
