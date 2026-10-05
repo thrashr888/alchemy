@@ -350,6 +350,221 @@ async fn eval_judge_verdicts() {
     eprintln!("\n{}\n", lines.join("\n"));
 }
 
+// ---- Tool gate -----------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct RouteCase {
+    id: String,
+    surface: String,
+    gold: String,
+    msg: String,
+}
+
+fn route_cases() -> Vec<RouteCase> {
+    serde_json::from_str(include_str!("../fixtures/judge_routes.json"))
+        .expect("fixtures/judge_routes.json parses")
+}
+
+struct RouteOutcome {
+    id: String,
+    gold: String,
+    got: String,
+    confidence: f64,
+    ms: u128,
+}
+
+/// What the gate's policy would do with each answer, split by the two
+/// failures that matter: a command judged `none` (a silent drop if the
+/// loop were skipped) and a question judged a tool (a wasted hint).
+#[derive(Default)]
+struct RouteSummary {
+    n: usize,
+    correct: usize,
+    median_ms: u128,
+    /// gold ≠ none, got == none, confident: the skip policy would drop it.
+    drops_confident: usize,
+    /// gold ≠ none, got == none, under threshold: the loop still runs.
+    drops_caught: usize,
+    /// gold == none, got a tool, confident: a wrong hint.
+    wrong_hints: usize,
+    /// Correct answers the policy acts on (confident).
+    acted_correct: usize,
+    acted: usize,
+    misses: Vec<String>,
+}
+
+fn summarize_routes(outcomes: &[RouteOutcome]) -> RouteSummary {
+    let mut s = RouteSummary {
+        n: outcomes.len(),
+        ..Default::default()
+    };
+    let mut lat: Vec<u128> = outcomes.iter().map(|o| o.ms).collect();
+    lat.sort_unstable();
+    if !lat.is_empty() {
+        s.median_ms = lat[lat.len() / 2];
+    }
+    for o in outcomes {
+        let ok = o.got == o.gold;
+        let confident = o.confidence >= REVIEW_BELOW;
+        if ok {
+            s.correct += 1;
+        } else {
+            s.misses
+                .push(format!("{}:{}→{}@{:.2}", o.id, o.gold, o.got, o.confidence));
+        }
+        if confident {
+            s.acted += 1;
+            if ok {
+                s.acted_correct += 1;
+            }
+        }
+        match (o.gold.as_str(), o.got.as_str()) {
+            (g, "none") if g != "none" => {
+                if confident {
+                    s.drops_confident += 1
+                } else {
+                    s.drops_caught += 1
+                }
+            }
+            ("none", t) if t != "none" && confident => s.wrong_hints += 1,
+            _ => {}
+        }
+    }
+    s
+}
+
+fn report_routes(label: &str, s: &RouteSummary) -> String {
+    format!(
+        "{label:<28} acc {:>5.1}% ({}/{}) | median {:>5} ms | acted {:>2}/{:<2} right {:>5.1}% | commands→none: {} confident, {} caught | wrong hints {}",
+        pct(s.correct, s.n),
+        s.correct,
+        s.n,
+        s.median_ms,
+        s.acted_correct,
+        s.acted,
+        pct(s.acted_correct, s.acted),
+        s.drops_confident,
+        s.drops_caught,
+        s.wrong_hints
+    )
+}
+
+async fn run_routes(judge: &Judge, cases: &[RouteCase]) -> Vec<RouteOutcome> {
+    use crate::commands::chatloop::{gate_specs, typed_tool_gate};
+    let home_specs = gate_specs(true);
+    let notebook_specs = gate_specs(false);
+    let mut out = Vec::with_capacity(cases.len());
+    for case in cases {
+        let specs = if case.surface == "home" {
+            &home_specs
+        } else {
+            &notebook_specs
+        };
+        let started = Instant::now();
+        let (got, confidence) =
+            match tokio::time::timeout(PER_CASE_TIMEOUT, typed_tool_gate(judge, specs, &case.msg))
+                .await
+            {
+                Ok(Ok(g)) => (g.tool, g.confidence),
+                Ok(Err(err)) => {
+                    eprintln!("  {} {}: {err:#}", judge.label(), case.id);
+                    ("error".into(), 0.0)
+                }
+                Err(_) => ("timeout".into(), 0.0),
+            };
+        out.push(RouteOutcome {
+            id: case.id.clone(),
+            gold: case.gold.clone(),
+            got,
+            confidence,
+            ms: started.elapsed().as_millis(),
+        });
+    }
+    out
+}
+
+/// The tool gate over the labeled routing cases, per judge. There is no
+/// "baseline" row here: without a judge the gate does not exist and every
+/// message pays the loop round, so the baseline is 0 drops, 0 hints, and
+/// one round per message.
+///
+///   ALCHEMY_OLLAMA_TESTS=1 ALCHEMY_JEV_TESTS=1 JUDGE_MODELS=qwen3.8:27b-mlx,gemma4:12b-mlx \
+///     cargo test --lib eval_judge_routes -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "live models — run with --ignored --nocapture and the ALCHEMY_*_TESTS flags"]
+async fn eval_judge_routes() {
+    let cases = route_cases();
+    let ollama_on = crate::evals::ollama_tests_enabled();
+    let jev_on = std::env::var("ALCHEMY_JEV_TESTS").is_ok();
+    if !ollama_on && !jev_on {
+        eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 and/or ALCHEMY_JEV_TESTS=1");
+        return;
+    }
+    let models: Vec<String> = std::env::var("JUDGE_MODELS")
+        .unwrap_or_else(|_| "qwen3.8:27b-mlx".into())
+        .split(',')
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect();
+    let base_url = crate::ai::ollama_config(&AiConfig::default()).base_url;
+    let home = std::env::var("HOME").unwrap_or_default();
+    let today = chrono::Local::now().format("%Y-%m-%d");
+    eprintln!(
+        "\n{} routing cases ({} notebook, {} home), gate threshold {REVIEW_BELOW}\n",
+        cases.len(),
+        cases.iter().filter(|c| c.surface == "notebook").count(),
+        cases.iter().filter(|c| c.surface == "home").count()
+    );
+    let mut judges: Vec<Judge> = Vec::new();
+    if ollama_on {
+        judges.extend(models.iter().map(|m| Judge::ollama(&base_url, m)));
+    }
+    if jev_on {
+        match Judge::jev() {
+            Some(j) => judges.push(j),
+            None => eprintln!("jev skipped (no credential)"),
+        }
+    }
+    let mut lines = Vec::new();
+    for judge in &judges {
+        let outcomes = run_routes(judge, &cases).await;
+        let s = summarize_routes(&outcomes);
+        let label = format!(
+            "{}{}",
+            judge.label(),
+            if judge.trusted_to_skip() {
+                ""
+            } else {
+                " (hint-only)"
+            }
+        );
+        let line = report_routes(&label, &s);
+        eprintln!("{line}");
+        if !s.misses.is_empty() {
+            eprintln!("    misses: {}", s.misses.join("  "));
+        }
+        let row = format!(
+            "{today},judge,{},tool gate,{:.4},,,{},median_ms={} acted={}/{} drops_confident={} drops_caught={} wrong_hints={}\n",
+            judge.label(),
+            s.correct as f64 / s.n.max(1) as f64,
+            s.n,
+            s.median_ms,
+            s.acted_correct,
+            s.acted,
+            s.drops_confident,
+            s.drops_caught,
+            s.wrong_hints
+        );
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(format!("{home}/alchemy-benchmarks.csv"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, row.as_bytes()));
+        lines.push(line);
+    }
+    eprintln!("\n{}\n", lines.join("\n"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +584,49 @@ mod tests {
             assert!(c.excerpts.len() >= 2, "{} needs a distractor", c.id);
             assert!(c.claim.chars().count() >= 20, "{} claim too short", c.id);
         }
+    }
+
+    #[test]
+    fn routing_fixture_names_real_tools() {
+        use crate::commands::chatloop::gate_specs;
+        let cases = route_cases();
+        assert!(cases.len() >= 30);
+        for c in &cases {
+            let specs = gate_specs(c.surface == "home");
+            assert!(
+                c.gold == "none" || specs.iter().any(|(n, _)| *n == c.gold),
+                "{}: {} is not an action tool on {}",
+                c.id,
+                c.gold,
+                c.surface
+            );
+        }
+        assert!(cases.iter().filter(|c| c.gold == "none").count() >= 10);
+    }
+
+    #[test]
+    fn route_summary_separates_drops_from_hints() {
+        let o = |id: &str, gold: &str, got: &str, c: f64| RouteOutcome {
+            id: id.into(),
+            gold: gold.into(),
+            got: got.into(),
+            confidence: c,
+            ms: 5,
+        };
+        let s = summarize_routes(&[
+            o("a", "generate", "generate", 0.9),
+            o("b", "generate", "none", 0.9),
+            o("c", "generate", "none", 0.2),
+            o("d", "none", "settings", 0.95),
+            o("e", "none", "none", 0.1),
+        ]);
+        assert_eq!((s.n, s.correct), (5, 2));
+        assert_eq!(
+            (s.drops_confident, s.drops_caught, s.wrong_hints),
+            (1, 1, 1)
+        );
+        assert_eq!((s.acted, s.acted_correct), (3, 1));
+        assert!(report_routes("x", &s).contains("commands→none: 1 confident, 1 caught"));
     }
 
     #[test]

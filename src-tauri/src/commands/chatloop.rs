@@ -1717,6 +1717,88 @@ fn split_written(urls: Vec<String>, asked: &str) -> (Vec<String>, Vec<String>) {
 /// Deliberately short. It is prepended to a prompt that already carries the
 /// persona and the conversation, and every extra line is paid for on every
 /// round by a model that may have 8k of room.
+/// A typed judge's read of the turn before the loop runs
+/// (docs/RFC-typesafe-jev.md §"Tool shortlisting"): which action tool the
+/// message asks for, or `none` for a question. Confidence is the judge's
+/// top-two margin; `trusted` says whether this judge may skip a round on
+/// a confident `none` (`Judge::trusted_to_skip`).
+pub(crate) struct ToolGate {
+    pub tool: String,
+    pub confidence: f64,
+    pub judge: String,
+    pub trusted: bool,
+}
+
+/// Below this margin the gate neither skips nor hints: the loop runs as if
+/// there were no judge. Same threshold Second Look flags verdicts at.
+const GATE_CONFIDENCE: f64 = 0.7;
+
+/// The action tools a surface offers, as (name, description): what the
+/// gate chooses among. Read tools are left out on purpose — a question is
+/// `none`, and the loop's reads are how it answers one.
+pub(crate) fn gate_specs(home: bool) -> Vec<(&'static str, &'static str)> {
+    const READS: [&str; 10] = [
+        "search_corpus",
+        "survey_notebooks",
+        "list_notebooks",
+        "list_sources",
+        "list_notes",
+        "get_note",
+        "get_source",
+        "recent_errors",
+        "list_receipts",
+        "tool_search",
+    ];
+    let specs = if home { catalog() } else { notebook_catalog() };
+    specs
+        .into_iter()
+        .filter(|t| !READS.contains(&t.name))
+        .map(|t| (t.name, t.description))
+        .collect()
+}
+
+/// One Choice over the surface's action tools plus `none`, over the
+/// message alone. History is deliberately absent: "add that too" is
+/// ambiguous without it, and an ambiguous turn should come back under the
+/// threshold and go to the loop, which has the history.
+pub(crate) async fn typed_tool_gate(
+    judge: &crate::inference::judge::Judge,
+    specs: &[(&'static str, &'static str)],
+    question: &str,
+) -> anyhow::Result<ToolGate> {
+    use crate::inference::judge::Question;
+    let mut options: Vec<(String, String)> = specs
+        .iter()
+        .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
+        .collect();
+    options.push((
+        "none".into(),
+        "not an instruction to the app: an ordinary question or request for an answer, \
+         including a question about what the sources or notebooks contain, or a request \
+         for advice about what to do"
+            .into(),
+    ));
+    let question_text = "Which tool does `user_message` ask the app to run? Choose none for a \
+                         question, however it is phrased, and whenever the message does not \
+                         ask the app to do one of the listed things.";
+    let answers = judge
+        .ask(
+            "tool_gate",
+            json!({ "user_message": question }),
+            &[("tool", Question::choice(question_text, options))],
+        )
+        .await?;
+    let (tool, confidence, _) = answers
+        .choice("tool")
+        .ok_or_else(|| anyhow::anyhow!("no tool answer"))?;
+    Ok(ToolGate {
+        tool: tool.to_string(),
+        confidence,
+        judge: judge.label(),
+        trusted: judge.trusted_to_skip(),
+    })
+}
+
 fn loop_system() -> String {
     let base = "You work in the user's research library. If the user asks you to DO something \
      (make a notebook, add or save something, change a setting, rename or delete this \
@@ -1785,8 +1867,69 @@ pub(crate) async fn run(
         .collect();
     let mut used: Vec<String> = Vec::new();
 
-    ev.stop = "budget";
-    for round in 0..budget {
+    // The typed gate (docs/RFC-typesafe-jev.md §"Tool shortlisting"), when
+    // the configuration has a judge. On a notebook a confident, trusted
+    // `none` skips the round: the loop there only acts, and retrieval is
+    // already running alongside, so the message is answered as it would
+    // be without a judge, one model round sooner. On Home the loop is how
+    // questions get answered well (several searches, a survey), so the
+    // gate never skips there. On either surface a confident tool is
+    // enabled and named in one line of the system prompt — a hint the
+    // model may ignore, never a decision. Anything else, including every
+    // failure, leaves the loop exactly as it was.
+    let judge = {
+        let ai = state.ai.read().await.clone();
+        ai.judge()
+    };
+    let mut gate_trace = Value::Null;
+    let mut rounds = budget;
+    if let Some(judge) = judge {
+        let home = matches!(surface, Surface::Home { .. });
+        let specs = gate_specs(home);
+        let gated = tokio::select! {
+            g = typed_tool_gate(&judge, &specs, question) => g,
+            _ = cancel.cancelled() => {
+                ev.cancelled = true;
+                ev.stop = "cancelled";
+                return ev;
+            }
+        };
+        match gated {
+            Ok(g) => {
+                let confident = g.confidence >= GATE_CONFIDENCE;
+                let skip = !home && g.tool == "none" && confident && g.trusted;
+                let hinted = confident && g.tool != "none";
+                gate_trace = json!({
+                    "judge": g.judge,
+                    "tool": g.tool,
+                    "confidence": g.confidence,
+                    "trusted": g.trusted,
+                    "skipped": skip,
+                    "hinted": hinted,
+                });
+                if skip {
+                    rounds = 0;
+                    ev.stop = "judged_question";
+                } else if hinted {
+                    enabled.insert(g.tool.clone());
+                    if let Some(system) = messages[0]["content"].as_str() {
+                        let with_hint = format!(
+                            "{system}\n\nA typed judge rated `{}` as the tool this request \
+                             most likely needs. Ignore that if it does not fit.",
+                            g.tool
+                        );
+                        messages[0]["content"] = json!(with_hint);
+                    }
+                }
+            }
+            Err(err) => crate::note!("tool gate: {err:#}"),
+        }
+    }
+
+    if rounds > 0 {
+        ev.stop = "budget";
+    }
+    for round in 0..rounds {
         // Honest progress from the first second. Without this the user
         // watched the front end's "Searching every notebook…" placeholder
         // for the whole first round — up to a minute on a 30b model — while
@@ -1922,6 +2065,7 @@ pub(crate) async fn run(
                 "wall_ms": started.elapsed().as_millis() as u64,
                 "tools": used,
                 "citations": ev.citations.len(),
+                "gate": gate_trace,
             }),
         );
     }
