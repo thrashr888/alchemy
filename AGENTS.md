@@ -59,9 +59,11 @@ Add or update Rust tests with behavior changes; place unit tests near the releva
 Recent commits use short, imperative summaries such as `Split mcp.rs into per-domain tool modules`. Keep each commit narrowly scoped. PRs should explain user-facing behavior and implementation constraints, link the issue when applicable, and include screenshots or recordings for UI changes. Do not mix release, generated assets, or unrelated local edits into a feature PR.
 ## Task tracking
 
-Work items live in Apple Reminders (the "Alchemy" list), read and written
-through `cider reminders`; there is no in-repo issue tracker. Keep
-follow-ups there, not in TODO lists or markdown files.
+Work items live in Linear: the "Alchemy" project on the "Paul Thrasher"
+team (issue keys `PAUL-n`), read and written through the Linear MCP
+connector. There is no in-repo issue tracker. Keep follow-ups there, not
+in TODO lists or markdown files. The Apple Reminders "Alchemy" list is
+retired; its open items were imported into Linear on 2026-10-04.
 
 ## Session completion
 

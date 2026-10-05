@@ -122,9 +122,11 @@ the compile gate. See `.claude/skills/shaders/SKILL.md` for the workflow.
 - Keep test notebooks/fixtures after verifying — they double as examples.
 ## Task tracking
 
-Work items live in Apple Reminders (the "Alchemy" list), read and written
-through `cider reminders`; there is no in-repo issue tracker. Keep
-follow-ups there, not in TODO lists or markdown files.
+Work items live in Linear: the "Alchemy" project on the "Paul Thrasher"
+team (issue keys `PAUL-n`), read and written through the Linear MCP
+connector. There is no in-repo issue tracker. Keep follow-ups there, not
+in TODO lists or markdown files. The Apple Reminders "Alchemy" list is
+retired; its open items were imported into Linear on 2026-10-04.
 
 ## Session completion
 
