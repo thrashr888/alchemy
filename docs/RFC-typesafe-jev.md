@@ -27,9 +27,11 @@ probability), **Choice** (one of N → distribution + confidence), **Score**
 answers. No generated text, no parsing, calibrated probabilities, one HTTP
 round trip for any number of questions over the same state.
 
-This RFC adds a typed question API in `inference/judge.rs`, backed by
-Jev when a key is present and absent otherwise: a site asks the judge
-first and keeps its Small-role path when there is none. Jev is a cloud
+This RFC adds a typed question API in `inference/judge.rs` with two
+backends: an Ollama model through schema-constrained decoding and
+logprobs (local, default when one resolves), and Jev when a key is
+present. A site asks the judge first and keeps its Small-role path when
+there is none. Jev is a cloud
 service, so the design is explicit about what leaves the machine, when,
 and how the user sees it. Nothing a notebook does may depend on it, and
 nothing new depends on any local engine either.
@@ -354,6 +356,62 @@ Not replacements; things there was no cheap way to do before.
   LLM path today, one Score per candidate replaces the `{"keep":[]}`
   call. The builtin tier keeps the on-device cross-encoder: 30 ms and
   free beats 200 ms and off-machine. `beir_eval` decides.
+
+## Benchmark: with a typed judge and without (2026-10-05)
+
+`judge_eval.rs` runs the same 40 labeled Second Look cases (ten per
+verdict class, each with a distractor excerpt; `fixtures/judge_verdicts.json`)
+through every way the app can judge a claim. *Baseline* is what runs
+without a typed judge: the Small-role three-line prompt-and-parse on the
+same model. *Typed* is `judge_typed` on the same model through Ollama's
+schema-constrained decoding and logprobs, two questions per claim.
+Accuracy counts unjudged as wrong, because the reader sees "unjudged".
+*Confident* is the share of verdicts at or above the review threshold
+(0.7 margin) and their accuracy. M5 Max, 128 GB.
+
+| judge | model | accuracy | unjudged | median per claim | confident (acc) | wrong verdicts flagged |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline | Foundation Models sidecar (Paul's config today) | 30.0% (12/40) | 18 | 3.3 s | none | 0 of 28 |
+| baseline | digitsflow/bonsai-8b | 77.5% | 4 | 0.5 s | none | 0 of 9 |
+| typed | digitsflow/bonsai-8b | 55.0% | 0 | 0.6 s | 18/27 (66.7%) | 9 of 18 |
+| baseline | gemma4:12b-mlx | 77.5% | 0 | 1.3 s | none | 0 of 9 |
+| typed | gemma4:12b-mlx | 87.5% | 0 | 1.8 s | 35/40 (87.5%) | 0 of 5 |
+| baseline | qwen3.8:27b-mlx | 95.0% | 0 | 3.4 s | none | 0 of 2 |
+| **typed** | **qwen3.8:27b-mlx** | **100%** | 0 | 4.1 s | 37/37 (100%) | — |
+| **typed** | **Jev 1.13** | **100%** | 0 | **0.10 s** | 38/38 (100%) | — |
+
+What it says:
+
+- **The "without" column is worse than the measurements before this
+  suggested.** With no typed judge and no Ollama Small model, Second Look
+  judges on the Foundation Models sidecar, and that path gets 12 of 40
+  right with 18 unjudged: the 3B model mostly cannot produce the three
+  strict lines. That is the shipped behavior for any Mac without an Ollama
+  model in the Small slot, including Paul's.
+- **On a 27B model the typed path is perfect and the parse is not.** 38
+  vs 40 on the same weights; the two parse misses were `weak` and
+  `unsupported` cases. Typed costs one more call per claim (two instead of
+  one) and about 20% more wall time.
+- **On a 12B the typed path gains 10 points but its confidence means
+  nothing.** Gemma reports a wide margin on 35 of 40 answers including all
+  five wrong ones. Accuracy improves; the review flag does not fire. That
+  matches the earlier word-sense probe: Gemma's logprobs do not spread.
+- **On an 8B the typed path is harmful.** Bonsai 8B collapses to `weak`
+  for every unsupported and contradicted case under the constrained
+  prompt, 55% against the parse's 77.5%. Half its errors are flagged,
+  which is the only consolation. The judge therefore prefers the Ollama
+  chat model over the Small model (`Ai::judge`), since the Small slot is
+  where an 8B tends to sit.
+- **Jev matches the best local judge at 40× the speed.** 97 ms median
+  against 4.1 s. On a machine that cannot hold a 27B, it is the only way
+  to get this quality; on one that can, the local judge gets the same
+  verdicts with no egress.
+
+An earlier run of the same matrix found one gold label wrong (`u07`
+read "conducted by an outside firm" against an excerpt saying "internal
+audit"; both strong judges called it contradicted, and they were right).
+The case was replaced, and the table above is the corrected run. Rows
+append to `~/alchemy-benchmarks.csv`.
 
 ## What Jev is not for
 

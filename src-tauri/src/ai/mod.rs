@@ -1037,6 +1037,46 @@ impl Ai {
         .then(crate::inference::budget::fm_input_budget_tokens)
     }
 
+    /// The typed judge for this configuration (docs/RFC-typesafe-jev.md),
+    /// or None, in which case every judging site keeps its Small-role
+    /// prompt-and-parse path. Local first: an Ollama model answers through
+    /// schema-constrained decoding and logprobs, and Jev only when no local
+    /// judge model resolves and a TypeSafe key does. `ALCHEMY_JUDGE` forces
+    /// `off`, `ollama`, or `jev`; `ALCHEMY_JUDGE_MODEL` names the Ollama
+    /// model, else the Ollama chat model when Ollama answers chat, else the
+    /// configured Small model. Chat before Small on purpose: the judge
+    /// benchmark (`judge_eval.rs`) puts the typed path at 100% on a 27B
+    /// model and 87.5% on a 12B, but at 55% on an 8B — below the parse it
+    /// replaces — and the Small slot is where an 8B tends to live.
+    pub fn judge(&self) -> Option<crate::inference::judge::Judge> {
+        use crate::inference::judge::Judge;
+        let forced = std::env::var("ALCHEMY_JUDGE").unwrap_or_default();
+        let forced = forced.trim().to_ascii_lowercase();
+        if forced == "off" {
+            return None;
+        }
+        let local_model = std::env::var("ALCHEMY_JUDGE_MODEL")
+            .ok()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .or_else(|| {
+                (self.chat_engine_id(Role::Chat) == "ollama")
+                    .then(|| self.config.chat_model.trim().to_string())
+                    .filter(|m| !m.is_empty())
+            })
+            .or_else(|| {
+                let small = self.config.small_model.trim();
+                (!small.is_empty()).then(|| small.to_string())
+            });
+        let local =
+            local_model.map(|model| Judge::ollama(&ollama_config(&self.config).base_url, &model));
+        match forced.as_str() {
+            "ollama" => local,
+            "jev" => Judge::jev(),
+            _ => local.or_else(Judge::jev),
+        }
+    }
+
     pub fn config(&self) -> &AiConfig {
         &self.config
     }

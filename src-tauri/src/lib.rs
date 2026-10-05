@@ -75,6 +75,8 @@ mod fidelity;
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]
+mod judge_eval;
+#[cfg(test)]
 mod judged_eval;
 #[cfg(test)]
 mod perf_budgets;

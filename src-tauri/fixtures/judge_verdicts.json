@@ -1,0 +1,165 @@
+[
+  {"id": "s01", "gold": "supported", "claim": "The 2019 internal audit found that vendor onboarding lacked a documented risk review step.",
+   "excerpts": [
+     {"source": "Audit 2019", "text": "The 2019 internal audit found that vendor onboarding lacked a documented risk review step, and recommended one be added before Q2."},
+     {"source": "Procurement handbook", "text": "Vendors are onboarded through the procurement portal, which collects tax forms and banking details."}]},
+  {"id": "s02", "gold": "supported", "claim": "The bridge was closed to vehicles after the March inspection.",
+   "excerpts": [
+     {"source": "County notice", "text": "Following the structural inspection on March 3, engineers ordered the bridge shut to all vehicles until repairs were complete."},
+     {"source": "Local news", "text": "Residents say the detour adds twenty minutes to their commute."}]},
+  {"id": "s03", "gold": "supported", "claim": "The study found no statistically significant link between daily coffee intake and arrhythmia.",
+   "excerpts": [
+     {"source": "Cardiology journal", "text": "Across 12,000 participants, daily coffee consumption showed no statistically significant association with arrhythmia incidence over the eight-year follow-up."},
+     {"source": "Press release", "text": "The research group plans a follow-up study on energy drinks."}]},
+  {"id": "s04", "gold": "supported", "claim": "The library's east wing opened in 1912.",
+   "excerpts": [
+     {"source": "City archive", "text": "The east wing, funded by the Carnegie grant, opened to readers in October 1912."},
+     {"source": "Visitor guide", "text": "The reading room on the second floor is the quietest spot in the building."}]},
+  {"id": "s05", "gold": "supported", "claim": "Fourth-quarter revenue rose 14 percent year over year.",
+   "excerpts": [
+     {"source": "Earnings release", "text": "Revenue for the fourth quarter was $412 million, up 14% from the same quarter a year earlier."},
+     {"source": "Analyst note", "text": "Margins remain under pressure from input costs."}]},
+  {"id": "s06", "gold": "supported", "claim": "The treaty set fishing quotas for both nations through 2030.",
+   "excerpts": [
+     {"source": "Treaty summary", "text": "The agreement establishes a joint commission and sets annual fishing quotas for both nations through the 2030 season."},
+     {"source": "Op-ed", "text": "Critics argue the quotas favor the larger fleet."}]},
+  {"id": "s07", "gold": "supported", "claim": "The reactor was taken offline as a precaution when the storm reached the coast.",
+   "excerpts": [
+     {"source": "Operator log", "text": "Operators took the reactor offline at 02:14 as a precaution when the storm reached the coast, restarting it two days later."},
+     {"source": "Weather service", "text": "Sustained winds peaked at 71 mph near the harbor."}]},
+  {"id": "s08", "gold": "supported", "claim": "The vaccine was approved for adults aged 18 and over.",
+   "excerpts": [
+     {"source": "Agency release", "text": "The agency approved the vaccine for adults aged 18 and over; pediatric trials are ongoing."},
+     {"source": "Hospital memo", "text": "Staff clinics begin next Monday."}]},
+  {"id": "s09", "gold": "supported", "claim": "The 1986 Ferrari 328 GTS sold on Bring a Trailer for $109,000.",
+   "excerpts": [
+     {"source": "BaT listing", "text": "This 1986 Ferrari 328 GTS shows 42k miles and is finished in Rosso Corsa. Sold for USD $109,000 on 08/10/2026."},
+     {"source": "Dealer inventory", "text": "1989 Ferrari 328 GTS, $279,900, 8,728 miles, Fort Lauderdale."}]},
+  {"id": "s10", "gold": "supported", "claim": "The city council voted 7 to 2 to approve the zoning change.",
+   "excerpts": [
+     {"source": "Council minutes", "text": "Motion to approve the zoning change for parcel 14B carried, 7 ayes, 2 nays."},
+     {"source": "Neighborhood newsletter", "text": "The next council meeting is scheduled for the 18th."}]},
+
+  {"id": "w01", "gold": "weak", "claim": "The company's revenue grew because of the new pricing plan.",
+   "excerpts": [
+     {"source": "Earnings release", "text": "Revenue rose 14% in the quarter. The new pricing plan launched in the same period alongside two product releases."},
+     {"source": "Analyst note", "text": "Several factors contributed to the quarter, including seasonal demand."}]},
+  {"id": "w02", "gold": "weak", "claim": "The library's east wing was built in the 1910s.",
+   "excerpts": [
+     {"source": "City archive", "text": "The library expanded early in the twentieth century; the east wing is the oldest of the later additions."},
+     {"source": "Visitor guide", "text": "The building's original core dates to 1888."}]},
+  {"id": "w03", "gold": "weak", "claim": "Remote work improved employee retention at the firm.",
+   "excerpts": [
+     {"source": "Internal survey", "text": "After the firm adopted remote work, several managers said their teams seemed happier, though turnover figures were not reported."},
+     {"source": "HR policy", "text": "Employees may work remotely up to four days a week."}]},
+  {"id": "w04", "gold": "weak", "claim": "The storm caused the reactor's two-day outage.",
+   "excerpts": [
+     {"source": "Operator log", "text": "Operators took the reactor offline at 02:14 and restarted it two days later; the log does not record the reason for the delay."},
+     {"source": "Weather service", "text": "The storm reached the coast shortly after 2 a.m."}]},
+  {"id": "w05", "gold": "weak", "claim": "The vaccine is safe for children under five.",
+   "excerpts": [
+     {"source": "Agency release", "text": "Pediatric trials for ages six months to four years are enrolling; early safety data has shown no unexpected signals."},
+     {"source": "Hospital memo", "text": "Adult clinics begin next Monday."}]},
+  {"id": "w06", "gold": "weak", "claim": "Ferrari 328 GTS asking prices are rising.",
+   "excerpts": [
+     {"source": "Dealer inventory", "text": "1989 Ferrari 328 GTS, $279,900; 1989 Ferrari 328 GTS, $159,900; 1986 Ferrari 328 GTS, $144,900."},
+     {"source": "Forum post", "text": "Prices feel high this year compared to what I remember."}]},
+  {"id": "w07", "gold": "weak", "claim": "The zoning change will increase traffic on Elm Street.",
+   "excerpts": [
+     {"source": "Council minutes", "text": "Two residents spoke against the zoning change, citing traffic concerns on Elm Street. The motion carried."},
+     {"source": "Planning report", "text": "A traffic study has not yet been commissioned."}]},
+  {"id": "w08", "gold": "weak", "claim": "The treaty improved relations between the two nations.",
+   "excerpts": [
+     {"source": "Treaty summary", "text": "The agreement establishes a joint commission that meets twice a year."},
+     {"source": "News report", "text": "Both foreign ministers described the signing ceremony as cordial."}]},
+  {"id": "w09", "gold": "weak", "claim": "The bridge repairs will take six months.",
+   "excerpts": [
+     {"source": "County notice", "text": "Engineers ordered the bridge shut until repairs were complete; a timeline will be published after the contractor is selected."},
+     {"source": "Local news", "text": "Similar repairs on the north bridge took about half a year."}]},
+  {"id": "w10", "gold": "weak", "claim": "Coffee protects against arrhythmia.",
+   "excerpts": [
+     {"source": "Cardiology journal", "text": "Daily coffee consumption showed no statistically significant association with arrhythmia incidence; a non-significant trend toward lower incidence was observed among moderate drinkers."},
+     {"source": "Press release", "text": "The authors caution against drawing causal conclusions."}]},
+
+  {"id": "u01", "gold": "unsupported", "claim": "The treaty was signed in Geneva.",
+   "excerpts": [
+     {"source": "Treaty summary", "text": "The treaty established a joint commission and set fishing quotas for both nations through 2030."},
+     {"source": "Op-ed", "text": "Critics argue the quotas favor the larger fleet."}]},
+  {"id": "u02", "gold": "unsupported", "claim": "The CEO resigned over the accounting scandal.",
+   "excerpts": [
+     {"source": "Board statement", "text": "The board announced a routine review of executive compensation and a new share buyback program."},
+     {"source": "Earnings release", "text": "Revenue for the quarter was $412 million."}]},
+  {"id": "u03", "gold": "unsupported", "claim": "The vaccine was approved for children under five.",
+   "excerpts": [
+     {"source": "Agency release", "text": "The agency's press release described manufacturing capacity and the distribution timeline for adult doses."},
+     {"source": "Hospital memo", "text": "Staff clinics begin next Monday."}]},
+  {"id": "u04", "gold": "unsupported", "claim": "The bridge was built in 1954.",
+   "excerpts": [
+     {"source": "County notice", "text": "Following the structural inspection on March 3, engineers ordered the bridge shut to all vehicles until repairs were complete."},
+     {"source": "Local news", "text": "Residents say the detour adds twenty minutes to their commute."}]},
+  {"id": "u05", "gold": "unsupported", "claim": "The library's east wing houses the rare books collection.",
+   "excerpts": [
+     {"source": "City archive", "text": "The east wing, funded by the Carnegie grant, opened to readers in October 1912."},
+     {"source": "Visitor guide", "text": "The reading room on the second floor is the quietest spot in the building."}]},
+  {"id": "u06", "gold": "unsupported", "claim": "Ferrari of San Francisco offers a lifetime powertrain warranty on every 488 Spider.",
+   "excerpts": [
+     {"source": "Dealer inventory", "text": "Used 488 Spider for sale in Mill Valley: 2017, 9,200 miles, Rosso Corsa, $249,900."},
+     {"source": "Forum post", "text": "The 488 Spider's roof folds in 14 seconds."}]},
+  {"id": "u07", "gold": "unsupported", "claim": "The audit took three months to complete.",
+   "excerpts": [
+     {"source": "Audit 2019", "text": "The 2019 internal audit found that vendor onboarding lacked a documented risk review step."},
+     {"source": "Procurement handbook", "text": "Vendors are onboarded through the procurement portal."}]},
+  {"id": "u08", "gold": "unsupported", "claim": "The reactor is the largest in the region.",
+   "excerpts": [
+     {"source": "Operator log", "text": "Operators took the reactor offline at 02:14 as a precaution, restarting it two days later."},
+     {"source": "Weather service", "text": "Sustained winds peaked at 71 mph near the harbor."}]},
+  {"id": "u09", "gold": "unsupported", "claim": "The council approved a budget increase for the fire department.",
+   "excerpts": [
+     {"source": "Council minutes", "text": "Motion to approve the zoning change for parcel 14B carried, 7 ayes, 2 nays."},
+     {"source": "Neighborhood newsletter", "text": "The next council meeting is scheduled for the 18th."}]},
+  {"id": "u10", "gold": "unsupported", "claim": "The study was funded by a coffee industry group.",
+   "excerpts": [
+     {"source": "Cardiology journal", "text": "Across 12,000 participants, daily coffee consumption showed no statistically significant association with arrhythmia incidence."},
+     {"source": "Press release", "text": "The research group plans a follow-up study on energy drinks."}]},
+
+  {"id": "c01", "gold": "contradicted", "claim": "The 2019 audit praised vendor risk handling.",
+   "excerpts": [
+     {"source": "Audit 2019", "text": "The 2019 internal audit found that vendor onboarding lacked a documented risk review step, and recommended one be added before Q2."},
+     {"source": "Procurement handbook", "text": "Vendors are onboarded through the procurement portal."}]},
+  {"id": "c02", "gold": "contradicted", "claim": "The reactor remained online throughout the storm.",
+   "excerpts": [
+     {"source": "Operator log", "text": "Operators took the reactor offline at 02:14 as a precaution when the storm reached the coast, restarting it two days later."},
+     {"source": "Weather service", "text": "Sustained winds peaked at 71 mph near the harbor."}]},
+  {"id": "c03", "gold": "contradicted", "claim": "Fourth-quarter sales fell year over year.",
+   "excerpts": [
+     {"source": "Earnings release", "text": "Fourth-quarter sales climbed 9% year over year, the strongest quarter in the company's history."},
+     {"source": "Analyst note", "text": "Margins remain under pressure from input costs."}]},
+  {"id": "c04", "gold": "contradicted", "claim": "The bridge stayed open to vehicles after the inspection.",
+   "excerpts": [
+     {"source": "County notice", "text": "Following the structural inspection on March 3, engineers ordered the bridge shut to all vehicles until repairs were complete."},
+     {"source": "Local news", "text": "Residents say the detour adds twenty minutes to their commute."}]},
+  {"id": "c05", "gold": "contradicted", "claim": "The study found that coffee significantly raises arrhythmia risk.",
+   "excerpts": [
+     {"source": "Cardiology journal", "text": "Across 12,000 participants, daily coffee consumption showed no statistically significant association with arrhythmia incidence."},
+     {"source": "Press release", "text": "The research group plans a follow-up study on energy drinks."}]},
+  {"id": "c06", "gold": "contradicted", "claim": "The library's east wing opened in 1888.",
+   "excerpts": [
+     {"source": "City archive", "text": "The east wing, funded by the Carnegie grant, opened to readers in October 1912."},
+     {"source": "Visitor guide", "text": "The building's original core dates to 1888."}]},
+  {"id": "c07", "gold": "contradicted", "claim": "The treaty expires in 2025.",
+   "excerpts": [
+     {"source": "Treaty summary", "text": "The agreement sets annual fishing quotas for both nations through the 2030 season and renews automatically unless either party withdraws."},
+     {"source": "Op-ed", "text": "Critics argue the quotas favor the larger fleet."}]},
+  {"id": "c08", "gold": "contradicted", "claim": "The vaccine was rejected for adults.",
+   "excerpts": [
+     {"source": "Agency release", "text": "The agency approved the vaccine for adults aged 18 and over; pediatric trials are ongoing."},
+     {"source": "Hospital memo", "text": "Staff clinics begin next Monday."}]},
+  {"id": "c09", "gold": "contradicted", "claim": "The 1986 Ferrari 328 GTS on Bring a Trailer failed to sell.",
+   "excerpts": [
+     {"source": "BaT listing", "text": "This 1986 Ferrari 328 GTS shows 42k miles. Sold for USD $109,000 on 08/10/2026."},
+     {"source": "Dealer inventory", "text": "1989 Ferrari 328 GTS, $279,900, 8,728 miles."}]},
+  {"id": "c10", "gold": "contradicted", "claim": "The zoning change was voted down.",
+   "excerpts": [
+     {"source": "Council minutes", "text": "Motion to approve the zoning change for parcel 14B carried, 7 ayes, 2 nays."},
+     {"source": "Neighborhood newsletter", "text": "The next council meeting is scheduled for the 18th."}]}
+]
