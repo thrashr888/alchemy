@@ -589,49 +589,66 @@ Three ways to try it before it replaces anything:
 ### Measured
 
 `eval_judge_triage`, 24 labeled candidates (12 recommended, 12 routine),
-one request per judge, clean run. The verdict is the probability the
-level is 2 or above (not the expectation: a 1.7 whose mass sits on
-levels 2 and 3 is a confident recommend, which the expectation and a
-four-way margin each misread; the first run made exactly that mistake).
-*Confident* is a two-outcome margin of 0.7 or more.
+clean runs. The verdict is the probability the level is 2 or above (not
+the expectation: a 1.7 whose mass sits on levels 2 and 3 is a confident
+recommend, which the expectation and a four-way margin each misread;
+the first run made exactly that mistake). *Confident* is a two-outcome
+margin of 0.7 or more.
 
-| judge | accuracy | one request | confident (right) | errors flagged |
+Two runs, because the first taught the second. Sent as one request of
+24 candidates:
+
+| judge | accuracy | request | confident (right) | errors flagged |
 | --- | --- | --- | --- | --- |
-| **Jev 1.13** | **24/24** | **0.8 s** | 19/19 | — |
+| Jev 1.13 | 24/24 | 0.8 s | 19/19 | — |
 | clef (27B) | 21/24 | 51 s | 11/11 | 3 of 3 |
 | nimble (9B) | 12/24 | 27 s | 9/9 | 12 of 12 |
 | clef-flash (9B) | 10/24 | 6.6 s | 1/1 | 14 of 14 |
-| tev1:4b | — | HTTP 400 on a 24-question request | | |
+
+Sent twelve to a request (`TRIAGE_CHUNK`), same cases, same judges:
+
+| judge | accuracy | per 24 cards | confident (right) | errors flagged |
+| --- | --- | --- | --- | --- |
+| **Jev 1.13** | **24/24** | **0.5 s** | 17/17 | — |
+| **clef-flash (9B)** | **24/24** | 4.4 s | 5/5 | — |
+| **nimble (9B)** | **24/24** | 7.3 s | 19/19 | — |
+| clef (27B) | 21/24 | 19 s | 15/15 | 3 of 3 |
+| tev1:4b | — | HTTP 400: 2,050-token input ceiling | | |
 
 What it says:
 
-- **Rubric scoring is the hard primitive.** The two 9B models that were
-  perfect on verdicts and routing fail here in opposite directions:
-  Clef Flash spreads its mass across the levels and lands everything
-  near 1.1 at 0.3 probability, Nimble recommends everything. Nimble's own
-  card warned of this ("~50% on scoring rubrics"). Both flag every error,
-  so neither would silently mis-rule; neither is useful.
-- **Jev and Clef clear it.** Jev at 24 of 24 in under a second; Clef at
-  21 of 24 with every confident answer right and all three misses
-  flagged, at 51 s per 24-card request through Ollama's runner. For a
-  background sweep that runs once per pass, 51 s is acceptable; it is
-  not a per-turn number.
-- **So trust is per site.** `Judge::trusted_for_scores` admits Jev and
-  the `clef` family (and any decision model of 20B or more by tag); the
-  live pass (`ALCHEMY_JUDGE_TRIAGE=1`) runs typed only on such a judge,
-  else the Small pass. Every judge may still preview. This is a thin
-  fixture, which is why the preview exists.
-- **On the real queue** (40 pending cards, Clef Flash): 36 agreed with
-  the stored verdicts, 4 differed, every row flagged for review, which
-  is the model saying it does not know; the right reading of that
-  preview is "run it with a judge that does." Of the four it would have
-  demoted, all were tech topics from newsletters ("Frontier
+- **State size was the failure, not the models.** The two 9B decision
+  models that were perfect on verdicts and routing fell to 42% and 50%
+  with 24 candidates in one state, in opposite directions (Clef Flash
+  uncertain on everything, Nimble recommending everything), and came
+  back to 24 of 24 at twelve. That is the jaggedness page's "large state
+  full of irrelevant detail" at an unexpectedly small size, and it is
+  why the chunk is a named constant with the measurement beside it.
+  Both flagged every error in the bad run, so neither would have
+  mis-ruled silently; they would have been useless.
+- **Decision models cap the prompt, not the question count.** The 400s
+  carry the number: Tev1 allows 2,050 input tokens, Nimble 8,194; twelve
+  cards with their snippets is about 1,200. The client now surfaces a
+  4xx body, since that is the one thing a caller can act on.
+- **Clef is the odd one out,** 21 of 24 in both runs, the same three
+  recommended cards read as "a real thing but not the person's" (a
+  person, a dealer, a laptop), all flagged. Larger is not better at this.
+- **Trust is per site, and now admits the three that pass.**
+  `Judge::trusted_for_scores` is Jev and any decision model the skip rule
+  trusts; a chat model through logprobs is not, because its level
+  distributions were never measured here. The live pass
+  (`ALCHEMY_JUDGE_TRIAGE=1`) runs typed only on such a judge, else the
+  Small pass; every judge may preview.
+- **On the real queue** (40 pending cards) through Jev: 36 agreed with
+  the stored verdicts, 4 differed, 4 flagged. The four it demoted, all
+  confidently, were tech topics from newsletters ("Frontier
   Intelligence," "agentOS," "OpenCV," "workload identity federation")
-  that the Small pass had recommended; under the rubric's "owns, insures,
-  pays for, works on" that demotion is defensible, and whether the
-  rubric fits a registry full of such topics is a product question, not
-  a model one.
-
+  that the Small pass had recommended; under the rubric's "owns,
+  insures, pays for, works on" the demotion is defensible, and whether
+  that rubric fits a registry full of such topics is a product question,
+  not a model one. The same preview through Clef Flash before chunking
+  flagged every row, which is the uncertain-on-everything failure above
+  seen live.
 
 ## What Jev is not for
 

@@ -2017,7 +2017,7 @@
         </tbody>
       </table>
     </div>
-    <p class="models-foot">Claim verdicts: 40 labeled claim-and-excerpt cases, four verdict classes, through the Second Look path. Chat commands: 36 messages judged command-or-question over the real tool catalog. Per decision is the median on an M5&nbsp;Max with nothing else running. Without a decision model the same work runs through the chat model, where the best local result was 38&nbsp;/&nbsp;40 and the on-device Apple model 12&nbsp;/&nbsp;40. Scoring on a rubric (which registry cards to recommend) is harder: on 24 labeled cards only <code>clef</code> (21) and the hosted model (24) cleared it, and the 9B models did not, so Alchemy lets those two rule that pass and keeps the others to verdicts and commands. Reproducible: <code>cargo test --lib eval_judge_</code>.</p>
+    <p class="models-foot">Claim verdicts: 40 labeled claim-and-excerpt cases, four verdict classes, through the Second Look path. Chat commands: 36 messages judged command-or-question over the real tool catalog. Per decision is the median on an M5&nbsp;Max with nothing else running. Without a decision model the same work runs through the chat model, where the best local result was 38&nbsp;/&nbsp;40 and the on-device Apple model 12&nbsp;/&nbsp;40. Scoring on a rubric (which registry cards to recommend) is more sensitive to how much you send at once: on 24 labeled cards, <code>clef-flash</code>, <code>nimble</code> and the hosted model scored 24 when asked a dozen at a time and under half when asked all 24 together, so Alchemy keeps those requests small. Reproducible: <code>cargo test --lib eval_judge_</code>.</p>
   </section>
 
   <section class="etc" aria-labelledby="more-title">

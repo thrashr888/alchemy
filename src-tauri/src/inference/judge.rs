@@ -490,8 +490,24 @@ impl Judge {
         })?;
         let status = response.status();
         if !status.is_success() {
-            // Bodies and headers stay out of the log: they can carry secrets.
-            bail!("judge backend returned HTTP {}", status.as_u16());
+            // A 4xx body is the server saying what was wrong with the request
+            // ("prompt 0 has 3390 tokens; expected 1–2050"), which is the one
+            // thing a caller can act on; it is kept short and never includes
+            // our headers. Anything else stays out of the log.
+            let reason = if status.is_client_error() {
+                response
+                    .text()
+                    .await
+                    .ok()
+                    .map(|t| t.chars().take(200).collect::<String>())
+                    .filter(|t| !t.trim().is_empty())
+            } else {
+                None
+            };
+            match reason {
+                Some(r) => bail!("judge backend returned HTTP {}: {r}", status.as_u16()),
+                None => bail!("judge backend returned HTTP {}", status.as_u16()),
+            }
         }
         response
             .json()
@@ -638,21 +654,18 @@ impl Judge {
         matches!(&self.backend, Backend::SystemOne { key: Some(_), .. })
     }
 
-    /// Whether this judge's rubric Scores may act unattended. Scoring on
-    /// ordered levels is the hard primitive: on the 24-candidate registry
-    /// triage fixture (2026-10-05) Jev scored 24/24 and Clef 21/24 with
-    /// every confident answer right, while the 9B decision models that
-    /// were perfect on verdicts and routing fell to 42% and 50% here. So
-    /// Jev and the `clef` family qualify; everything else may preview,
-    /// never rule. A thin fixture — the preview tool is how a queue checks
-    /// this for itself.
+    /// Whether this judge's rubric Scores may act unattended. On the
+    /// 24-candidate registry triage fixture (2026-10-05), with candidates
+    /// sent twelve to a request, Jev, Clef Flash and Nimble scored 24/24
+    /// and Clef 21/24 with every confident answer right. (Sent all 24 at
+    /// once, the two 9B models had fallen to 42% and 50%: state size, not
+    /// the models.) So every decision model the skip rule trusts qualifies;
+    /// a chat model through logprobs does not — its level distributions
+    /// were never measured here. Thin fixture; the preview tool is how a
+    /// queue checks this for itself.
     pub fn trusted_for_scores(&self) -> bool {
         match &self.backend {
-            Backend::SystemOne { key: Some(_), .. } => true,
-            Backend::SystemOne { model, .. } => {
-                model.split(':').next() == Some("clef")
-                    || tag_billions(model).is_some_and(|b| b >= 20.0)
-            }
+            Backend::SystemOne { .. } => self.trusted_to_skip(),
             Backend::Ollama { .. } => false,
         }
     }
@@ -1168,8 +1181,8 @@ mod tests {
         assert!(Judge::local_decision("http://x", "tev1:4b").trusted_to_skip());
         assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_to_skip());
         assert!(Judge::local_decision("http://x", "clef:latest").trusted_for_scores());
-        assert!(!Judge::local_decision("http://x", "clef-flash:latest").trusted_for_scores());
-        assert!(!Judge::local_decision("http://x", "nimble:latest").trusted_for_scores());
+        assert!(Judge::local_decision("http://x", "clef-flash:latest").trusted_for_scores());
+        assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_for_scores());
         assert!(!Judge::ollama("http://x", "qwen3.8:27b-mlx").trusted_for_scores());
         assert!(!Judge::ollama("http://x", "gemma4:12b-mlx").trusted_to_skip());
         assert!(!Judge::ollama("http://x", "laguna-s-2.1:latest").trusted_to_skip());

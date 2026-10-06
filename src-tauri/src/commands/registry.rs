@@ -1151,11 +1151,27 @@ pub(crate) async fn triage_typed(
     judge: &crate::inference::judge::Judge,
     candidates: &[TriageCandidate],
 ) -> anyhow::Result<Vec<TriageScore>> {
+    anyhow::ensure!(!candidates.is_empty(), "triage batch is empty");
+    let mut out = Vec::with_capacity(candidates.len());
+    for chunk in candidates.chunks(TRIAGE_CHUNK) {
+        out.extend(triage_chunk(judge, chunk).await?);
+    }
+    Ok(out)
+}
+
+/// Candidates per request. Decision models cap the prompt, not the
+/// question count: Tev1 refuses over 2,050 tokens ("prompt 0 has 3390
+/// tokens; expected 1–2050"), and Clef refused the live queue's 40 cards
+/// with their snippets. Twelve cards with 140-character snippets is
+/// about 1,200 tokens, under every ceiling seen. Jev takes 64 at once;
+/// chunking costs it an extra round trip per dozen, a few hundred ms.
+const TRIAGE_CHUNK: usize = 12;
+
+async fn triage_chunk(
+    judge: &crate::inference::judge::Judge,
+    candidates: &[TriageCandidate],
+) -> anyhow::Result<Vec<TriageScore>> {
     use crate::inference::judge::Question;
-    anyhow::ensure!(
-        !candidates.is_empty() && candidates.len() <= 64,
-        "triage batch must hold 1–64 candidates"
-    );
     let state = serde_json::json!({ "candidates": candidates });
     let ids: Vec<String> = (0..candidates.len()).map(|k| format!("c{k}")).collect();
     let questions: Vec<(&str, Question)> = ids
