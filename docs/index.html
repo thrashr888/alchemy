@@ -452,6 +452,15 @@
   .models-table .m-note { color: var(--muted); font-size: 12px; }
   .models-table .m-pick { color: var(--accent-text); font-size: 11px; font-weight: 500; margin-left: 6px; }
   .models-foot { margin-top: 12px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .models + .models { margin-top: 72px; }
+  .models-table .m-name .brew {
+    display: inline-flex;
+    margin: 7px 0 0;
+    padding: 4px 9px 4px 11px;
+    font-size: 12px;
+    font-weight: 400;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
   .feature-visual {
     min-height: 216px;
     border-color: var(--border);
@@ -625,12 +634,16 @@
   .utility-card--native { grid-column: span 5; grid-row: span 2; padding: 0; }
   .utility-card--command { grid-column: span 3; }
   .utility-card--reader { grid-column: span 4; }
-  .utility-card--share { grid-column: span 4; }
-  .utility-card--theme { grid-column: span 3; }
+  /* The files card needs two rows for its paragraph; the 5x2 slot beside
+     Night Shift and Morning Brief was empty, so it goes there (by `order`,
+     so the narrower breakpoints keep their own flow) and the theme card
+     widens to fill the row it leaves beside the Mac card. */
+  .utility-card--share { grid-column: span 5; grid-row: span 2; order: 1; padding: 20px; }
+  .utility-card--theme { grid-column: span 7; }
   .utility-card--capture { grid-column: span 7; grid-row: span 2; padding: 20px; isolation: isolate; }
   .utility-card--ledger { grid-column: span 5; grid-row: span 2; padding: 20px; isolation: isolate; }
   .utility-card--staff { grid-column: span 4; grid-row: span 2; padding: 20px; }
-  .utility-card--grow { grid-column: span 7; grid-row: span 2; padding: 20px; }
+  .utility-card--grow { grid-column: span 7; grid-row: span 2; padding: 20px; order: 2; }
   .utility-card--brief { grid-column: span 3; grid-row: span 2; padding: 20px; isolation: isolate; }
   .utility-card--reports {
     display: grid;
@@ -638,6 +651,7 @@
     grid-template-areas: "copy chart";
     grid-column: span 5;
     grid-row: span 2;
+    order: 2;
     gap: 20px;
     align-items: stretch;
     padding: 20px;
@@ -1209,6 +1223,8 @@
     .utility-card--brief,
     .utility-card--grow,
     .utility-card--reports { grid-column: 1 / -1; grid-row: auto; }
+    .utility-card--share, .utility-card--grow, .utility-card--reports { order: 0; }
+    .utility-card--share { padding: 16px; }
     .utility-card--compact { min-height: 184px; }
     .utility-card--native { min-height: 356px; }
     .utility-card--capture { min-height: 340px; }
@@ -1241,6 +1257,8 @@
     .utility-card--reader,
     .utility-card--share,
     .utility-card--theme { grid-column: span 3; grid-row: auto; }
+    .utility-card--share { padding: 16px; }
+    .utility-card--share, .utility-card--grow, .utility-card--reports { order: 0; }
     .utility-card--ledger,
     .utility-card--staff { grid-column: span 3; grid-row: span 2; }
     .utility-card--brief,
@@ -1280,8 +1298,9 @@
     .utility-card--native { grid-column: span 7; grid-row: span 2; }
     .utility-card--command,
     .utility-card--reader { grid-column: span 5; }
-    .utility-card--share { grid-column: span 7; }
+    .utility-card--share { grid-column: span 7; grid-row: auto; padding: 16px; }
     .utility-card--theme { grid-column: span 5; }
+    .utility-card--share, .utility-card--grow, .utility-card--reports { order: 0; }
     .utility-card--capture { grid-column: span 7; grid-row: span 2; }
     .utility-card--ledger { grid-column: span 5; grid-row: span 2; }
     .utility-card--staff { grid-column: span 5; grid-row: span 2; }
@@ -1980,35 +1999,35 @@
         </thead>
         <tbody>
           <tr>
-            <td class="m-name">clef-flash<span class="m-pick">default</span></td>
+            <td class="m-name">clef-flash<span class="m-pick">default</span><br><code class="brew"><span class="prompt">$</span> ollama pull clef-flash</code></td>
             <td>40 / 40</td>
             <td>36 / 36</td>
             <td>1.8&ndash;2.3&nbsp;s</td>
             <td class="m-note">9B, 12&nbsp;GB. Every answer it was confident about was right.</td>
           </tr>
           <tr>
-            <td class="m-name">clef</td>
+            <td class="m-name">clef<br><code class="brew"><span class="prompt">$</span> ollama pull clef</code></td>
             <td>40 / 40</td>
             <td>36 / 36</td>
             <td>4&ndash;7&nbsp;s</td>
             <td class="m-note">27B, 18&nbsp;GB. Same verdicts as Flash, at twice the wait.</td>
           </tr>
           <tr>
-            <td class="m-name">nimble</td>
+            <td class="m-name">nimble<br><code class="brew"><span class="prompt">$</span> ollama pull nimble</code></td>
             <td>38 / 40</td>
             <td>34 / 36</td>
             <td>2&nbsp;s</td>
             <td class="m-note">9B. Flagged both of its wrong verdicts as uncertain.</td>
           </tr>
           <tr>
-            <td class="m-name">tev1:4b</td>
+            <td class="m-name">tev1:4b<br><code class="brew"><span class="prompt">$</span> ollama pull tev1:4b</code></td>
             <td>35 / 40</td>
             <td>33 / 36</td>
             <td>1.4&nbsp;s</td>
             <td class="m-note">4.5&nbsp;GB. Reads &ldquo;weak&rdquo; support as none.</td>
           </tr>
           <tr>
-            <td class="m-name">jev-1.13<span class="m-pick">cloud</span></td>
+            <td class="m-name">jev-1.13<span class="m-pick">cloud</span><br><code class="brew"><span class="prompt">~/.config/typesafe/</span>api-key</code></td>
             <td>40 / 40</td>
             <td>36 / 36</td>
             <td>0.1&nbsp;s</td>
