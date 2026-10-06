@@ -7,6 +7,8 @@
 //!   is the "without" column.
 //! - **ollama**: the typed judge on the same model — schema-constrained
 //!   decoding plus logprobs, a margin confidence per verdict.
+//! - **decision**: a local System One model behind Ollama's `/v1/systemone`
+//!   (Clef, Clef Flash, Nimble, Tev1), named in `JUDGE_DECISION_MODELS`.
 //! - **jev**: TypeSafe's judge, when a key resolves.
 //! - **fm**: the baseline on the Foundation Models sidecar — what Paul's
 //!   own configuration runs today (`JUDGE_FM=1`).
@@ -263,6 +265,18 @@ fn append_csv(label: &str, s: &Summary) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, row.as_bytes()));
 }
 
+/// Local decision models (Ollama `/v1/systemone`) to measure, from
+/// `JUDGE_DECISION_MODELS`; empty by default so a run without them pulls
+/// nothing. Example: `clef-flash,clef,nimble,tev1:4b,tev1:0.8b`.
+fn decision_models() -> Vec<String> {
+    std::env::var("JUDGE_DECISION_MODELS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect()
+}
+
 fn ollama_ai(model: &str) -> Ai {
     Ai::new(
         AiConfig {
@@ -327,6 +341,13 @@ async fn eval_judge_verdicts() {
                 let outcomes = run_typed(&judge, &cases).await;
                 emit(judge.label(), &outcomes);
             }
+        }
+    }
+    if ollama_on && runs("decision") {
+        for model in decision_models() {
+            let judge = Judge::local_decision(&base_url, &model);
+            let outcomes = run_typed(&judge, &cases).await;
+            emit(judge.label(), &outcomes);
         }
     }
     if ollama_on && runs("fm") && std::env::var("JUDGE_FM").is_ok() {
@@ -518,6 +539,11 @@ async fn eval_judge_routes() {
     let mut judges: Vec<Judge> = Vec::new();
     if ollama_on {
         judges.extend(models.iter().map(|m| Judge::ollama(&base_url, m)));
+        judges.extend(
+            decision_models()
+                .iter()
+                .map(|m| Judge::local_decision(&base_url, m)),
+        );
     }
     if jev_on {
         match Judge::jev() {

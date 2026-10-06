@@ -192,7 +192,7 @@ async fn judge(ai: &crate::ai::Ai, claim: &str, hits: &[Citation]) -> ClaimVerdi
             confidence: None,
         };
     }
-    if let Some(judge) = ai.judge() {
+    if let Some(judge) = ai.judge().await {
         match judge_typed(&judge, claim, hits).await {
             Ok(v) => return v,
             Err(err) => {

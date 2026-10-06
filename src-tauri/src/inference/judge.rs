@@ -6,8 +6,10 @@
 //!   answer is an enum, so it is always valid) and `top_logprobs` at the
 //!   value token (so there is a distribution, not just a pick). Local, no
 //!   egress, no new requirement — it uses an engine the user already runs.
-//! - **Jev** (TypeSafe): a cloud model trained for calibrated decisions.
-//!   Present only when a key resolves.
+//! - **System One endpoints**: TypeSafe's Jev over the network (present
+//!   only when a key resolves), and the local decision models Ollama 0.35
+//!   serves at `/v1/systemone` (Clef, Clef Flash, Nimble, Tev1). Same
+//!   request and answer contract; one forward pass per request.
 //!
 //! When neither is configured, `Ai::judge()` is `None` and every call site
 //! keeps its Small-role prompt-and-parse path — nothing depends on this
@@ -282,7 +284,18 @@ fn resolve(
 }
 
 enum Backend {
-    Jev { key: String, model: String },
+    /// A System One endpoint: TypeSafe's Jev over the network, or a local
+    /// decision model behind Ollama's `/v1/systemone` (0.35+). Same
+    /// request and answer shape; the only differences are the URL, whether
+    /// a bearer key goes with it, and the label.
+    SystemOne {
+        endpoint: String,
+        key: Option<String>,
+        model: String,
+        label: &'static str,
+    },
+    /// Any Ollama chat model, through schema-constrained decoding and
+    /// logprobs. The slow road: a full prompt per request.
     Ollama { base_url: String, model: String },
 }
 
@@ -310,15 +323,33 @@ impl Judge {
             );
         });
         Some(Self {
-            backend: Backend::Jev {
-                key: credential.key,
+            backend: Backend::SystemOne {
+                endpoint: JEV_ENDPOINT.to_string(),
+                key: Some(credential.key),
                 model: std::env::var("ALCHEMY_JEV_MODEL")
                     .ok()
                     .filter(|m| !m.trim().is_empty())
                     .unwrap_or_else(|| JEV_MODEL.to_string()),
+                label: "jev",
             },
             client: http(JEV_TIMEOUT),
         })
+    }
+
+    /// A local decision model behind Ollama's `/v1/systemone`: Clef,
+    /// Clef Flash, Nimble, Tev1 and the other System One models Ollama
+    /// 0.35 serves. Same contract as Jev, no key, no egress. Nothing is
+    /// probed here; a missing model surfaces as an `Err` from `ask`.
+    pub fn local_decision(base_url: &str, model: &str) -> Self {
+        Self {
+            backend: Backend::SystemOne {
+                endpoint: format!("{}/v1/systemone", base_url.trim_end_matches('/')),
+                key: None,
+                model: model.trim().to_string(),
+                label: "decision",
+            },
+            client: http(OLLAMA_TIMEOUT),
+        }
     }
 
     /// The local backend on one Ollama model. Nothing is probed here; a
@@ -337,7 +368,7 @@ impl Judge {
     /// Backend and model, for traces and eval rows.
     pub fn label(&self) -> String {
         match &self.backend {
-            Backend::Jev { model, .. } => format!("jev:{model}"),
+            Backend::SystemOne { label, model, .. } => format!("{label}:{model}"),
             Backend::Ollama { model, .. } => format!("ollama:{model}"),
         }
     }
@@ -356,7 +387,12 @@ impl Judge {
         }
         let started = Instant::now();
         let (answers, usage, native) = match &self.backend {
-            Backend::Jev { key, model } => {
+            Backend::SystemOne {
+                endpoint,
+                key,
+                model,
+                ..
+            } => {
                 let qmap: serde_json::Map<String, Value> = questions
                     .iter()
                     .map(|(id, q)| (id.to_string(), q.to_jev_json()))
@@ -366,7 +402,7 @@ impl Judge {
                 if bytes > MAX_STATE_BYTES {
                     bail!("judge request for {site} is {bytes} bytes; clip the state first");
                 }
-                let raw = self.post_json(JEV_ENDPOINT, Some(key), &body).await?;
+                let raw = self.post_json(endpoint, key.as_deref(), &body).await?;
                 let answers = parse_jev_answers(&raw, questions)?;
                 // Jev's own confidence, kept beside ours for calibration work.
                 let native: BTreeMap<String, f64> = raw["answers"]
@@ -580,16 +616,20 @@ impl Judge {
     /// qualifies when its tag says 20B parameters or more; anything else
     /// is hint-only. A wrong skip turns a command into an answer, which is
     /// the failure the unified-chat RFC removed the lexical gates for.
-    /// A judge that costs no local prompt processing: its decision is a
-    /// network round trip (~100 ms measured), so a per-turn gate is free
-    /// where a local 27B pays 2–5 s to read the tool catalog.
+    /// The cloud judge: a network round trip and nothing local. Measured
+    /// at ~100 ms per decision, where a local decision model through
+    /// Ollama's runner took 1.8–2.3 s on an M5 Max (its card says 39 ms on
+    /// its own hardware). That gap decides which surfaces run a gate.
     pub fn is_cloud(&self) -> bool {
-        matches!(self.backend, Backend::Jev { .. })
+        matches!(&self.backend, Backend::SystemOne { key: Some(_), .. })
     }
 
     pub fn trusted_to_skip(&self) -> bool {
         match &self.backend {
-            Backend::Jev { .. } => true,
+            // Jev and the local decision models the benchmark cleared. The
+            // one it did not: a sub-2B decision model (Tev1 0.8B judged 55%
+            // of routes right and dropped two commands with confidence).
+            Backend::SystemOne { model, .. } => tag_billions(model).is_none_or(|b| b >= 2.0),
             Backend::Ollama { model, .. } => tag_billions(model).is_some_and(|b| b >= 20.0),
         }
     }
@@ -621,6 +661,120 @@ fn tag_billions(model: &str) -> Option<f64> {
         }
     }
     best
+}
+
+/// Preference among installed decision models, by family (the tag before
+/// the colon). Set by the judge benchmark (`judge_eval.rs`, 2026-10-05):
+/// Clef Flash and Clef were both perfect on the verdict and routing
+/// batteries (40/40, 36/36) and Flash answered in half the time (1.8 s
+/// vs 4.0 s per Second Look claim through Ollama's runner); Nimble lost
+/// two verdicts and two routes, flagging both verdict errors; Tev1 4B
+/// lost five and three. Tev1 0.8B is listed only so a machine with
+/// nothing else still gets a judge; `trusted_to_skip` keeps it from
+/// skipping rounds.
+const DECISION_FAMILIES: [&str; 4] = ["clef-flash", "clef", "nimble", "tev1"];
+
+/// The best installed local decision model, or None. Lists Ollama's tags
+/// and asks `/api/show` which of them report the `decision` capability
+/// (Ollama 0.35+ marks System One models that way, and hides them from
+/// chat). Per-tag answers are cached for the process; the tag list is
+/// re-read every minute so a model pulled while the app runs is picked
+/// up. Any failure is "none": the caller falls back to the next backend.
+pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    /// The tag list and when it was read.
+    type TagCache = Mutex<Option<(Instant, Vec<String>)>>;
+    static TAGS: std::sync::OnceLock<TagCache> = std::sync::OnceLock::new();
+    static IS_DECISION: std::sync::OnceLock<Mutex<HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    let base = base_url.trim_end_matches('/');
+    let client = http(Duration::from_secs(5));
+    let cached = TAGS
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .filter(|(at, _)| at.elapsed() < Duration::from_secs(60))
+        .map(|(_, tags)| tags);
+    let tags = match cached {
+        Some(t) => t,
+        None => {
+            let raw: Value = client
+                .get(format!("{base}/api/tags"))
+                .send()
+                .await
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            let tags: Vec<String> = raw["models"]
+                .as_array()?
+                .iter()
+                .filter_map(|m| m["name"].as_str().map(str::to_string))
+                .collect();
+            if let Ok(mut g) = TAGS.get_or_init(|| Mutex::new(None)).lock() {
+                *g = Some((Instant::now(), tags.clone()));
+            }
+            tags
+        }
+    };
+    let mut decision: Vec<String> = Vec::new();
+    for tag in tags {
+        let known = IS_DECISION
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&tag).copied());
+        let is_decision = match known {
+            Some(v) => v,
+            None => {
+                // A tag whose metadata Ollama cannot read (a GGUF it has no
+                // kernels for) answers `/api/show` with an error. That tag is
+                // not a decision model; it must not end the scan.
+                let shown: Option<Value> = match client
+                    .post(format!("{base}/api/show"))
+                    .json(&json!({"model": tag}))
+                    .send()
+                    .await
+                {
+                    Ok(r) if r.status().is_success() => r.json().await.ok(),
+                    _ => None,
+                };
+                let v = shown
+                    .and_then(|v| v["capabilities"].as_array().cloned())
+                    .is_some_and(|caps| caps.iter().any(|c| c == "decision"));
+                if let Ok(mut g) = IS_DECISION
+                    .get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock()
+                {
+                    g.insert(tag.clone(), v);
+                }
+                v
+            }
+        };
+        if is_decision {
+            decision.push(tag);
+        }
+    }
+    pick_decision_model(decision)
+}
+
+/// Order candidates by `DECISION_FAMILIES`, unknown decision families
+/// last; within a family the larger tag wins.
+fn pick_decision_model(mut candidates: Vec<String>) -> Option<String> {
+    let rank = |tag: &str| {
+        let family = tag.split(':').next().unwrap_or(tag);
+        let fam = DECISION_FAMILIES
+            .iter()
+            .position(|f| *f == family)
+            .unwrap_or(DECISION_FAMILIES.len());
+        let size = tag_billions(tag).unwrap_or(0.0);
+        (fam, std::cmp::Reverse((size * 10.0) as u64))
+    };
+    candidates.sort_by_key(|t| rank(t));
+    candidates.into_iter().next()
 }
 
 fn http(timeout: Duration) -> reqwest::Client {
@@ -929,6 +1083,27 @@ mod tests {
     }
 
     #[test]
+    fn decision_models_are_picked_by_family_then_size() {
+        let picked = pick_decision_model(vec![
+            "tev1:0.8b".into(),
+            "nimble:latest".into(),
+            "clef-flash:9b".into(),
+            "clef:27b".into(),
+            "tev1:4b".into(),
+        ]);
+        assert_eq!(picked.as_deref(), Some("clef-flash:9b"));
+        assert_eq!(
+            pick_decision_model(vec!["tev1:0.8b".into(), "tev1:4b".into()]).as_deref(),
+            Some("tev1:4b")
+        );
+        assert_eq!(
+            pick_decision_model(vec!["laya:latest".into(), "clef-flash:9b".into()]).as_deref(),
+            Some("clef-flash:9b")
+        );
+        assert!(pick_decision_model(vec![]).is_none());
+    }
+
+    #[test]
     fn model_tags_say_their_size() {
         assert_eq!(tag_billions("qwen3.8:27b-mlx"), Some(27.0));
         assert_eq!(tag_billions("gemma4:12b"), Some(12.0));
@@ -938,6 +1113,9 @@ mod tests {
         assert_eq!(tag_billions("nemotron-3-super:latest"), None);
         assert_eq!(tag_billions("gemma4:31b-it-bf16"), Some(31.0));
         assert!(Judge::ollama("http://x", "qwen3.8:27b-mlx").trusted_to_skip());
+        assert!(Judge::local_decision("http://x", "clef:latest").trusted_to_skip());
+        assert!(Judge::local_decision("http://x", "tev1:4b").trusted_to_skip());
+        assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_to_skip());
         assert!(!Judge::ollama("http://x", "gemma4:12b-mlx").trusted_to_skip());
         assert!(!Judge::ollama("http://x", "laguna-s-2.1:latest").trusted_to_skip());
     }

@@ -1877,17 +1877,20 @@ pub(crate) async fn run(
     // enabled and named in one line of the system prompt — a hint the
     // model may ignore, never a decision. Anything else, including every
     // failure, leaves the loop exactly as it was.
-    // Only where the gate can pay for itself. A local 27B reads the catalog
-    // in 2–5 s (routing benchmark, 2026-10-05): worth it on a notebook,
-    // where a confident `none` saves a round that costs 19 s or more on the
-    // same hardware, and not worth it for a hint alone. A judge that may
-    // not skip (a 12B: 2.4 s per turn, hint-only) never runs here. On Home
-    // nothing skips, so only the cloud judge (~100 ms) runs, for the hint
-    // that saves a `tool_search` round on a non-core tool.
+    // Only where the gate can pay for itself. A local 27B chat model reads
+    // the catalog in 2–5 s (routing benchmark, 2026-10-05): worth it on a
+    // notebook, where a confident `none` saves a round that costs 19 s or
+    // more on the same hardware, and not worth it for a hint alone. A judge
+    // that may not skip (a 12B: 2.4 s per turn, hint-only) never runs here.
+    // On Home nothing skips, so only the cloud judge (~100 ms) runs, for
+    // the hint that saves a `tool_search` round on a non-core tool; a local
+    // decision model measured 1.8–2.3 s per decision through Ollama's
+    // runner, too much to spend on a hint every turn.
     let home = matches!(surface, Surface::Home { .. });
     let judge = {
         let ai = state.ai.read().await.clone();
         ai.judge()
+            .await
             .filter(|j| j.trusted_to_skip())
             .filter(|j| !home || j.is_cloud())
     };

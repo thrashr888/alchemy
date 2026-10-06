@@ -1039,26 +1039,41 @@ impl Ai {
 
     /// The typed judge for this configuration (docs/RFC-typesafe-jev.md),
     /// or None, in which case every judging site keeps its Small-role
-    /// prompt-and-parse path. Local first: an Ollama model answers through
-    /// schema-constrained decoding and logprobs, and Jev only when no local
-    /// judge model resolves and a TypeSafe key does. `ALCHEMY_JUDGE` forces
-    /// `off`, `ollama`, or `jev`; `ALCHEMY_JUDGE_MODEL` names the Ollama
-    /// model, else the Ollama chat model when Ollama answers chat, else the
-    /// configured Small model. Chat before Small on purpose: the judge
-    /// benchmark (`judge_eval.rs`) puts the typed path at 100% on a 27B
-    /// model and 87.5% on a 12B, but at 55% on an 8B — below the parse it
-    /// replaces — and the Small slot is where an 8B tends to live.
-    pub fn judge(&self) -> Option<crate::inference::judge::Judge> {
-        use crate::inference::judge::Judge;
+    /// prompt-and-parse path. Local first, decision models before chat
+    /// models, and the cloud judge last:
+    ///
+    /// 1. an installed local decision model behind Ollama's `/v1/systemone`
+    ///    (Clef, Nimble, Clef Flash, Tev1; detected by the `decision`
+    ///    capability Ollama 0.35 reports) — one forward pass, no egress;
+    /// 2. an Ollama chat model through constrained decoding and logprobs:
+    ///    the Ollama chat model when Ollama answers chat, else the Small
+    ///    model (chat before Small because an 8B in the Small slot judged
+    ///    worse than the parse it replaces, per the benchmark);
+    /// 3. Jev, when a TypeSafe key resolves.
+    ///
+    /// `ALCHEMY_JUDGE` forces `off`, `decision`, `ollama`, or `jev`;
+    /// `ALCHEMY_JUDGE_MODEL` names the local model for either local route.
+    pub async fn judge(&self) -> Option<crate::inference::judge::Judge> {
+        use crate::inference::judge::{detect_local_decision_model, Judge};
         let forced = std::env::var("ALCHEMY_JUDGE").unwrap_or_default();
         let forced = forced.trim().to_ascii_lowercase();
         if forced == "off" {
             return None;
         }
-        let local_model = std::env::var("ALCHEMY_JUDGE_MODEL")
+        let base_url = ollama_config(&self.config).base_url;
+        let named = std::env::var("ALCHEMY_JUDGE_MODEL")
             .ok()
             .map(|m| m.trim().to_string())
-            .filter(|m| !m.is_empty())
+            .filter(|m| !m.is_empty());
+        let decision = match forced.as_str() {
+            "ollama" | "jev" => None,
+            _ => match &named {
+                Some(m) => Some(m.clone()),
+                None => detect_local_decision_model(&base_url).await,
+            },
+        }
+        .map(|m| Judge::local_decision(&base_url, &m));
+        let chat_model = named
             .or_else(|| {
                 (self.chat_engine_id(Role::Chat) == "ollama")
                     .then(|| self.config.chat_model.trim().to_string())
@@ -1068,12 +1083,12 @@ impl Ai {
                 let small = self.config.small_model.trim();
                 (!small.is_empty()).then(|| small.to_string())
             });
-        let local =
-            local_model.map(|model| Judge::ollama(&ollama_config(&self.config).base_url, &model));
+        let local = chat_model.map(|model| Judge::ollama(&base_url, &model));
         match forced.as_str() {
+            "decision" => decision,
             "ollama" => local,
             "jev" => Judge::jev(),
-            _ => local.or_else(Judge::jev),
+            _ => decision.or(local).or_else(Judge::jev),
         }
     }
 

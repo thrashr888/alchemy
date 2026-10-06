@@ -27,11 +27,12 @@ probability), **Choice** (one of N → distribution + confidence), **Score**
 answers. No generated text, no parsing, calibrated probabilities, one HTTP
 round trip for any number of questions over the same state.
 
-This RFC adds a typed question API in `inference/judge.rs` with two
-backends: an Ollama model through schema-constrained decoding and
-logprobs (local, default when one resolves), and Jev when a key is
-present. A site asks the judge first and keeps its Small-role path when
-there is none. Jev is a cloud
+This RFC adds a typed question API in `inference/judge.rs` with three
+backends behind one `Judge`: a local decision model behind Ollama's
+`/v1/systemone` (Clef, Clef Flash, Nimble, Tev1; the default when one is
+installed), any Ollama chat model through schema-constrained decoding
+and logprobs, and Jev when a key is present. A site asks the judge first
+and keeps its Small-role path when there is none. Jev is a cloud
 service, so the design is explicit about what leaves the machine, when,
 and how the user sees it. Nothing a notebook does may depend on it, and
 nothing new depends on any local engine either.
@@ -126,9 +127,10 @@ applied.
 
 ### Without a key
 
-There is no local judge engine, and no new requirement. When no credential
-resolves, `judge::available()` is `None` and every site runs the code it
-runs today: the Small role, whatever engine answers it (Foundation Models,
+There is no new requirement. When no decision model is installed, no
+Ollama chat model answers chat or the Small role, and no credential
+resolves, `Ai::judge()` is `None` and every site runs the code it runs
+today: the Small role, whatever engine answers it (Foundation Models,
 Ollama, an agent CLI, a gateway), with the site's own strict parse. A
 Jev-backed site is a branch in front of that code, never a replacement
 for it. This is the sovereignty invariant ("access to a notebook must
@@ -357,6 +359,66 @@ Not replacements; things there was no cheap way to do before.
   call. The builtin tier keeps the on-device cross-encoder: 30 ms and
   free beats 200 ms and off-machine. `beir_eval` decides.
 
+## Local decision models (2026-10-05)
+
+The provider question this RFC opened with — a cloud judge is the only
+calibrated one, so is it worth a third-party dependency — closed the
+week it was asked. Ollama 0.35 (2026-09-29) ships a `/v1/systemone`
+endpoint with the same request and answer contract as TypeSafe's: a
+`state`, a map of `choice` / `noul` / `score` questions, answers with
+probabilities and a confidence, usage. llama.cpp 0.6.0 carries it for
+five decision-model families. Four are on the Ollama library today, all
+Apache-2.0, all 256k context, all one non-autoregressive forward pass per
+request:
+
+| model | maker | base | size | card's own numbers |
+| --- | --- | --- | --- | --- |
+| `clef` | Cloudflare | Qwen 27B | 18 GB | BFCL 98.5%, BANKING77 macro-F1 94.2%, 209 ms median; tops Cloudflare's Decision Index |
+| `clef-flash` | Cloudflare | Qwen3.5 9B | 12 GB | 38.8 ms median, "the lowest measured latency of any decision model" |
+| `nimble` | Bespoke Labs | Qwen3.5 9B | 9.5 GB | 75.7% over 13 public sets (3,880 decisions), <100 ms on an M5 Max |
+| `tev1` | Together AI | Qwen3.5 4B / 0.8B | 4.5 GB / 0.8 GB | 73.3% / 63.5% on the same 13 sets; "experimental" |
+
+Ollama marks them with a `decision` capability and hides them from chat,
+tools and thinking. Clef and Clef Flash also take images beside the state.
+
+What this does to the design:
+
+- **The Jev client is the local client.** `Backend::SystemOne` carries an
+  endpoint, an optional bearer key, and a model. Jev is that backend
+  pointed at TypeSafe with a key; a local decision model is the same code
+  pointed at `127.0.0.1:11434/v1/systemone` with none. Validation,
+  margin confidence and the trace line are shared.
+- **Selection is local-first, decision models first.** `Ai::judge()`
+  lists Ollama's tags, asks `/api/show` which carry `decision`, and takes
+  the best installed one. The order is set by the benchmarks below:
+  `clef-flash`, then `clef`, `nimble`, `tev1`, larger tag first. A
+  sub-2B decision model may answer but never skip a round. Only without one does it fall to a chat model through
+  constrained decoding, and only without that to Jev.
+- **The gate's surface rule holds.** A local decision model measured
+  1.8–2.3 s per decision here, not the tens of milliseconds its card
+  claims, so it runs the notebook gate (where a skip pays) and not the
+  Home one (which only hints); Jev still runs both.
+- **Nothing is required.** No decision model installed, no key: every
+  site keeps its Small-role path, as before.
+- **In the app, with no configuration**, a Second Look on the Ferrari
+  notebook logged `decision:clef-flash` the first time it ran after the
+  pull. On real state (six excerpts of 700 characters) it took 3.4 s per
+  claim warm, and on one smoke draft it called an unsupported claim
+  supported at 0.24 confidence; the review flag caught it. The fixture
+  cases are shorter than real retrieval, so the 40/40 above is the
+  ceiling, not the floor, and the flag is doing the work it exists for.
+  One scan bug found on the way: a tag Ollama cannot read (the Bonsai 2
+  GGUF) answers `/api/show` with an error, which must mean "not a
+  decision model," not "stop scanning."
+
+What Jev still has: calibration verified against outcomes by a team
+whose only product this is, vision and a 1.13 jaggedness page that says
+exactly where it fails, and zero local memory. What it no longer has is
+being the only typed judge. The honest position is the one this RFC
+reaches after the numbers: a local decision model is the default, Jev is
+the backend for machines that cannot hold one or for the cases where its
+calibration proves measurably better, and the code treats them the same.
+
 ## Benchmark: with a typed judge and without (2026-10-05)
 
 `judge_eval.rs` runs the same 40 labeled Second Look cases (ten per
@@ -379,6 +441,11 @@ Accuracy counts unjudged as wrong, because the reader sees "unjudged".
 | baseline | qwen3.8:27b-mlx | 95.0% | 0 | 3.4 s | none | 0 of 2 |
 | **typed** | **qwen3.8:27b-mlx** | **100%** | 0 | 4.1 s | 37/37 (100%) | — |
 | **typed** | **Jev 1.13** | **100%** | 0 | **0.10 s** | 38/38 (100%) | — |
+| **decision** | **clef-flash (9B)** | **100%** | 0 | 1.8 s | 26/26 (100%) | — |
+| decision | clef (27B) | 100% | 0 | 4.0 s | 30/30 (100%) | — |
+| decision | nimble (9B) | 95.0% | 0 | 2.2 s | 37/37 (100%) | 2 of 2 |
+| decision | tev1:4b | 87.5% | 0 | 1.4 s | 30/31 (96.8%) | 4 of 5 |
+| decision | tev1:0.8b | 37.5% | 0 | 0.6 s | 10/13 (76.9%) | 22 of 25 |
 
 What it says:
 
@@ -406,6 +473,14 @@ What it says:
   against 4.1 s. On a machine that cannot hold a 27B, it is the only way
   to get this quality; on one that can, the local judge gets the same
   verdicts with no egress.
+- **The local decision models change the floor** (rows added after the
+  Ollama 0.35 models landed; same cases, same clean conditions). Clef
+  Flash, a 9B, is perfect on the battery in 1.8 s per claim and flags
+  nothing because it gets nothing wrong; Clef is perfect in 4.0 s; Nimble
+  misses two `weak` cases and flags both. A 12 GB download now gives any
+  Mac the verdict quality that previously needed a 27B chat model or a
+  key. Tev1 0.8B is not a judge for this: 37.5%, nearly every `weak`
+  read as `supported`.
 
 An earlier run of the same matrix found one gold label wrong (`u07`
 read "conducted by an outside firm" against an excerpt saying "internal
@@ -430,6 +505,11 @@ Clean run, no compiles alongside, M5 Max.
 | **Jev 1.13** | **36/36** | **108 ms** | 30/30 (100%) | 0 | 0 |
 | gemma4:12b-mlx | 33/36 | 2.4 s | 33/35 (94%) | 2 | 0 |
 | qwen3.8:27b-mlx | 32/36 | 5.3 s | 28/30 (93%) | 2 | 0 |
+| **clef-flash (9B)** | **36/36** | 2.3 s | 26/26 (100%) | 0 | 0 |
+| clef (27B) | 36/36 | 6.8 s | 29/29 (100%) | 0 | 0 |
+| nimble (9B) | 34/36 | 2.0 s | 31/32 (97%) | 0 | 1 |
+| tev1:4b | 33/36 | 1.4 s | 24/24 (100%) | 0 | 0 |
+| tev1:0.8b | 20/36 | 0.5 s | 9/11 (82%) | 2 | 0 |
 
 Both local judges' confident drops were the same two messages: "surprise
 me with a theme" (notebook) and "keep this for later: …" (Home). In the
@@ -458,10 +538,13 @@ What the latencies decide:
   more by its tag), and on Home, where nothing skips, only the cloud
   judge, whose 108 ms is free. A 12B judge never runs the gate: 2.4 s per
   turn for a hint the loop would have found in one `tool_search` round.
-- **Jev is the gate's natural backend.** 36 of 36, every confident answer
-  right, a tenth of a second. This is the one site where the cloud judge
-  is not merely faster but the only one cheap enough to run on every
-  turn of every surface.
+- **Jev is the gate's natural backend, and Clef Flash is the local one.**
+  Both 36 of 36 with every confident answer right. Jev in a tenth of a
+  second; Clef Flash in 2.3 s through Ollama's runner, against the 39 ms
+  its card measures on Cloudflare's hardware. That gap is why the policy
+  splits by surface: a local decision model skips rounds on a notebook,
+  where 2 s buys back 19, and only the cloud judge runs the Home gate,
+  which can only hint.
 
 ### Batching, measured
 
