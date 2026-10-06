@@ -646,9 +646,21 @@ What it says:
   that the Small pass had recommended; under the rubric's "owns,
   insures, pays for, works on" the demotion is defensible, and whether
   that rubric fits a registry full of such topics is a product question,
-  not a model one. The same preview through Clef Flash before chunking
-  flagged every row, which is the uncertain-on-everything failure above
-  seen live.
+  not a model one.
+- **The real queue is harder than the fixture.** Chunked, on the same
+  40 cards: Clef Flash still flagged 38 of 40 (probabilities 0.15–0.48,
+  all routine), Clef flagged 9 and was decisive on the rest, Jev flagged
+  4. These are newsletter topics with thin snippets, nothing like the
+  fixture's insurance policies and term sheets, and a 9B decision model
+  that is perfect on the fixture does not know what to make of them.
+  The fixture says which judges can do the task; the preview says which
+  can do it on this corpus. Two more things the preview showed: the
+  Small pass's stored verdicts changed between two previews an hour
+  apart (four cards "recommended," then seven, overlapping in one), so
+  the baseline being replaced is not stable either; and every judge
+  agreed on demoting the cards the Small pass had promoted. Default
+  for the live pass, when it is switched on: Jev where a key exists,
+  else Clef; Clef Flash only when nothing else is installed.
 
 ## What Jev is not for
 
