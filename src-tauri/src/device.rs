@@ -74,6 +74,26 @@ pub fn same_device(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// The name without its serial: "MacBook Pro (C02XYZ)" -> "MacBook Pro".
+pub fn bare_name(device: &str) -> &str {
+    device
+        .rsplit_once(" (")
+        .filter(|(_, tail)| tail.ends_with(')'))
+        .map(|(name, _)| name)
+        .unwrap_or(device)
+        .trim()
+}
+
+/// Could this recorded device name be this Mac? Exact match, or a legacy
+/// record written before serials were appended that carries only the bare
+/// name — "MacBook Pro" on a "MacBook Pro (C02XYZ)". Such a bare name is
+/// ambiguous by construction (two Macs bought the same year share it), so
+/// a peer list treats it as unresolved rather than as a second device.
+pub fn could_be_this_device(recorded: &str, this: &str) -> bool {
+    same_device(recorded, this)
+        || (bare_name(recorded) == recorded.trim() && same_device(recorded, bare_name(this)))
+}
+
 /// Is this source remote — its text here, its origin somewhere else?
 ///
 /// Three facts and no I/O, so the rule can be read in one place and asserted
@@ -222,6 +242,18 @@ pub fn mark_remote(data_dir: &Path, notebook_id: &str, sources: &mut [Source]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_legacy_name_matching_ours_is_not_a_peer() {
+        let this = "MacBook Pro (K64YXRLH2N)";
+        assert!(could_be_this_device("MacBook Pro (K64YXRLH2N)", this));
+        assert!(could_be_this_device("MacBook Pro", this));
+        assert!(could_be_this_device(" macbook pro ", this));
+        assert!(!could_be_this_device("MacBook Pro (D6G9QDW445)", this));
+        assert!(!could_be_this_device("thrashr888-D6G9QDW445", this));
+        assert_eq!(bare_name("Anne's MacBook (C02ABC)"), "Anne's MacBook");
+        assert_eq!(bare_name("no serial"), "no serial");
+    }
 
     fn src(id: &str, url: &str, parent: &str) -> Source {
         Source {

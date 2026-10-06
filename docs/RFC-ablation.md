@@ -100,6 +100,12 @@ Each line: what, the evidence, what it costs to keep, the proposal.
    sweep on every import are worth a count before the next pass.
    Proposal: measure (`list_registry` size, cards opened from the palette
    trace) and decide next round. Flagged, not cut.
+   *2026-09-28:* Paul's store holds 229 entries and a queue of 0–10
+   suggestions per day. Opens are now traced: every Home place change
+   writes `traces/ui.jsonl` (`home.place` with section, scope, tag, card),
+   so `registry` / `suggested` visits and card opens can be counted after
+   two weeks. In 0.66.0 the Registry became two Home sections (Entries,
+   Suggested) rather than a card.
 5. **Themes: 31.** Cost is one file and the harness; each shader mode is
    real work to keep alive. Proposal: keep the 31 — they are cheap at rest
    and the reminder is about *feature* bloat — but stop adding shader
@@ -111,6 +117,10 @@ Each line: what, the evidence, what it costs to keep, the proposal.
    Shift roster. With the Ledger gone the Brief has fewer things to say.
    Proposal: measure Brief opens (add a trace line) for two weeks before
    touching Home; if the Brief is read, it stays.
+   *2026-09-28:* the trace exists — `traces/ui.jsonl`, `home.place` records
+   with `section: "brief"` — and 0.66.0 already moved the four cards into
+   sidebar rows (Chats, Staff, Nightly Reports) and a Brief row above the
+   Library. Count from mid-October.
 8. **Two web-clip paths.** The Chrome extension and the in-app capture
    both exist; the extension's logged-in capture shipped in 1.2.0.
    Proposal: keep both — they answer different pages — but the assisted

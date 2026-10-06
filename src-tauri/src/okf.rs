@@ -5561,8 +5561,8 @@ pub struct OkfBindingView {
     pub binding: OkfBinding,
     /// The OTHER Macs that have written material into this notebook, by the
     /// name `device::this_device()` gives them ("Anne's MacBook (C02ABC)").
-    /// Empty for a folder nobody else has written to yet, and for every
-    /// binding that is not shared.
+    /// Empty for a folder nobody else has written to yet. Present for any
+    /// binding another device has written to, shared or merely synced.
     pub peers: Vec<String>,
 }
 
@@ -5582,14 +5582,14 @@ pub struct OkfBindingView {
 /// item through Foundation resource keys, which is why ownership detection
 /// was left out (docs/RFC-shared-notebook.md §1) — so a device name is the
 /// truest thing there is to say.
-fn binding_peers(data_dir: &Path, notebook_id: &str, binding: &OkfBinding) -> Vec<String> {
-    if !binding.shared {
-        return Vec::new();
-    }
+fn binding_peers(data_dir: &Path, notebook_id: &str, _binding: &OkfBinding) -> Vec<String> {
+    // Not gated on `shared`: two Macs on one iCloud Drive folder are peers
+    // too, and the shelf's Shared row is where a person expects to find the
+    // notebooks their other laptop has touched (Paul, 2026-09-28).
     let this = crate::device::this_device();
     let mut peers: Vec<String> = crate::device::load_origin_devices(data_dir, notebook_id)
         .into_values()
-        .filter(|d| !d.trim().is_empty() && !crate::device::same_device(d, this))
+        .filter(|d| !d.trim().is_empty() && !crate::device::could_be_this_device(d, this))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
