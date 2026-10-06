@@ -57,10 +57,8 @@ pub enum Question {
         /// Option name → rubric (None when the name is self-explaining).
         options: Vec<(String, Option<String>)>,
     },
-    /// A position on ordered, described levels (low → high). Its first
-    /// caller is registry card triage (RFC §4); parsing is tested now so
-    /// the site can land without touching this module.
-    #[allow(dead_code)]
+    /// A position on ordered, described levels (low → high). Registry card
+    /// triage scores every queued card this way.
     Score {
         instructions: String,
         levels: Vec<String>,
@@ -213,12 +211,28 @@ impl Answers {
         }
     }
 
-    #[allow(dead_code)] // arrives with the first Score site (RFC §4)
     pub fn score(&self, id: &str) -> Option<(f64, f64)> {
         match self.0.get(id)? {
             Answer::Score {
                 score, confidence, ..
             } => Some((*score, *confidence)),
+            _ => None,
+        }
+    }
+
+    /// The probability a Score answer puts at or above `level`. The way to
+    /// read an ordered scale as a yes/no: mass split between two levels
+    /// that both mean "yes" is a confident yes, which the expectation and
+    /// the four-way margin would each misreport.
+    pub fn score_at_least(&self, id: &str, level: u8) -> Option<f64> {
+        match self.0.get(id)? {
+            Answer::Score { probabilities, .. } => Some(
+                probabilities
+                    .iter()
+                    .filter(|(k, _)| **k >= level)
+                    .map(|(_, v)| v)
+                    .sum(),
+            ),
             _ => None,
         }
     }
@@ -624,6 +638,25 @@ impl Judge {
         matches!(&self.backend, Backend::SystemOne { key: Some(_), .. })
     }
 
+    /// Whether this judge's rubric Scores may act unattended. Scoring on
+    /// ordered levels is the hard primitive: on the 24-candidate registry
+    /// triage fixture (2026-10-05) Jev scored 24/24 and Clef 21/24 with
+    /// every confident answer right, while the 9B decision models that
+    /// were perfect on verdicts and routing fell to 42% and 50% here. So
+    /// Jev and the `clef` family qualify; everything else may preview,
+    /// never rule. A thin fixture — the preview tool is how a queue checks
+    /// this for itself.
+    pub fn trusted_for_scores(&self) -> bool {
+        match &self.backend {
+            Backend::SystemOne { key: Some(_), .. } => true,
+            Backend::SystemOne { model, .. } => {
+                model.split(':').next() == Some("clef")
+                    || tag_billions(model).is_some_and(|b| b >= 20.0)
+            }
+            Backend::Ollama { .. } => false,
+        }
+    }
+
     pub fn trusted_to_skip(&self) -> bool {
         match &self.backend {
             // Jev and the local decision models the benchmark cleared. The
@@ -663,6 +696,11 @@ fn tag_billions(model: &str) -> Option<f64> {
     best
 }
 
+/// Per-tag answer to "does `/api/show` report `decision`?", for the process.
+static IS_DECISION_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, bool>>,
+> = std::sync::OnceLock::new();
+
 /// Preference among installed decision models, by family (the tag before
 /// the colon). Set by the judge benchmark (`judge_eval.rs`, 2026-10-05):
 /// Clef Flash and Clef were both perfect on the verdict and routing
@@ -687,8 +725,6 @@ pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
     /// The tag list and when it was read.
     type TagCache = Mutex<Option<(Instant, Vec<String>)>>;
     static TAGS: std::sync::OnceLock<TagCache> = std::sync::OnceLock::new();
-    static IS_DECISION: std::sync::OnceLock<Mutex<HashMap<String, bool>>> =
-        std::sync::OnceLock::new();
     let base = base_url.trim_end_matches('/');
     let client = http(Duration::from_secs(5));
     let cached = TAGS
@@ -722,7 +758,7 @@ pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
     };
     let mut decision: Vec<String> = Vec::new();
     for tag in tags {
-        let known = IS_DECISION
+        let known = IS_DECISION_CACHE
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .ok()
@@ -745,7 +781,7 @@ pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
                 let v = shown
                     .and_then(|v| v["capabilities"].as_array().cloned())
                     .is_some_and(|caps| caps.iter().any(|c| c == "decision"));
-                if let Ok(mut g) = IS_DECISION
+                if let Ok(mut g) = IS_DECISION_CACHE
                     .get_or_init(|| Mutex::new(HashMap::new()))
                     .lock()
                 {
@@ -759,6 +795,18 @@ pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
         }
     }
     pick_decision_model(decision)
+}
+
+/// Whether one installed tag is a decision model, by the same `/api/show`
+/// capability check (and cache) the scan uses.
+pub async fn is_decision_model(base_url: &str, tag: &str) -> bool {
+    detect_local_decision_model(base_url).await; // warms the cache
+    IS_DECISION_CACHE
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|g| g.get(tag).copied())
+        .unwrap_or(false)
 }
 
 /// Order candidates by `DECISION_FAMILIES`, unknown decision families
@@ -1033,9 +1081,12 @@ mod tests {
         )];
         let ok = json!({"answers":{"s":{"type":"score","score":1.3,"confidence":0.54,
             "probabilities":{"0":0.0,"1":0.7,"2":0.3}}}});
-        let (score, confidence) = parse_jev_answers(&ok, &q).unwrap().score("s").unwrap();
+        let answers = parse_jev_answers(&ok, &q).unwrap();
+        let (score, confidence) = answers.score("s").unwrap();
         assert!((score - 1.3).abs() < 1e-9);
         assert!((confidence - 0.4).abs() < 1e-9);
+        assert!((answers.score_at_least("s", 1).unwrap() - 1.0).abs() < 1e-9);
+        assert!((answers.score_at_least("s", 2).unwrap() - 0.3).abs() < 1e-9);
         let drift = json!({"answers":{"s":{"type":"score","score":2.0,"confidence":0.54,
             "probabilities":{"0":0.0,"1":0.7,"2":0.3}}}});
         assert!(parse_jev_answers(&drift, &q).is_err());
@@ -1116,6 +1167,10 @@ mod tests {
         assert!(Judge::local_decision("http://x", "clef:latest").trusted_to_skip());
         assert!(Judge::local_decision("http://x", "tev1:4b").trusted_to_skip());
         assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_to_skip());
+        assert!(Judge::local_decision("http://x", "clef:latest").trusted_for_scores());
+        assert!(!Judge::local_decision("http://x", "clef-flash:latest").trusted_for_scores());
+        assert!(!Judge::local_decision("http://x", "nimble:latest").trusted_for_scores());
+        assert!(!Judge::ollama("http://x", "qwen3.8:27b-mlx").trusted_for_scores());
         assert!(!Judge::ollama("http://x", "gemma4:12b-mlx").trusted_to_skip());
         assert!(!Judge::ollama("http://x", "laguna-s-2.1:latest").trusted_to_skip());
     }

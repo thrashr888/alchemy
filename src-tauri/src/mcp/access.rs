@@ -85,6 +85,7 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ("list_notes", Read, "list a notebook's notes"),
     ("list_receipts", Read, "check recent background runs"),
     ("list_registry", Read, "list registry entries"),
+    ("triage_preview", Read, "preview the typed registry triage"),
     ("list_schedules", Read, "list scheduled reports"),
     ("list_shared_notebooks", Read, "list shared notebooks"),
     ("list_source_events", Read, "check recent source changes"),

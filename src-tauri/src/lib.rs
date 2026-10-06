@@ -679,6 +679,7 @@ pub fn run() {
             commands::restore_snapshot,
             commands::toggle_night_shift_pause,
             commands::list_registry,
+            commands::preview_registry_triage,
             commands::desktop_apps,
             examples::seed_examples_now,
             commands::handoff_prompt,

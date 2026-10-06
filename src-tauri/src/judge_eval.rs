@@ -591,6 +591,154 @@ async fn eval_judge_routes() {
     eprintln!("\n{}\n", lines.join("\n"));
 }
 
+// ---- Registry triage ---------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct TriageCase {
+    id: String,
+    gold: String,
+    kind: String,
+    name: String,
+    documents: usize,
+    context: String,
+}
+
+fn triage_cases() -> Vec<TriageCase> {
+    serde_json::from_str(include_str!("../fixtures/judge_triage.json"))
+        .expect("fixtures/judge_triage.json parses")
+}
+
+/// The typed registry triage over labeled candidates: one request per
+/// judge carrying every candidate, one Score each. Reports accuracy on
+/// recommended-vs-routine, accuracy among confident verdicts, and how many
+/// wrong verdicts the review flag would catch. No baseline row: the
+/// Small-role pass picks numbers from a list and carries no confidence.
+///
+///   ALCHEMY_OLLAMA_TESTS=1 ALCHEMY_JEV_TESTS=1 JUDGE_DECISION_MODELS=clef-flash,clef,nimble \
+///     cargo test --lib eval_judge_triage -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "live models — run with --ignored --nocapture and the ALCHEMY_*_TESTS flags"]
+async fn eval_judge_triage() {
+    use crate::commands::{triage_typed, TriageCandidate};
+    let cases = triage_cases();
+    let ollama_on = crate::evals::ollama_tests_enabled();
+    let jev_on = std::env::var("ALCHEMY_JEV_TESTS").is_ok();
+    if !ollama_on && !jev_on {
+        eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 and/or ALCHEMY_JEV_TESTS=1");
+        return;
+    }
+    let base_url = crate::ai::ollama_config(&AiConfig::default()).base_url;
+    let mut judges: Vec<Judge> = Vec::new();
+    if ollama_on {
+        judges.extend(
+            decision_models()
+                .iter()
+                .map(|m| Judge::local_decision(&base_url, m)),
+        );
+        for m in std::env::var("JUDGE_MODELS").unwrap_or_default().split(',') {
+            let m = m.trim();
+            if !m.is_empty() {
+                judges.push(Judge::ollama(&base_url, m));
+            }
+        }
+    }
+    if jev_on {
+        match Judge::jev() {
+            Some(j) => judges.push(j),
+            None => eprintln!("jev skipped (no credential)"),
+        }
+    }
+    let candidates: Vec<TriageCandidate> = cases
+        .iter()
+        .map(|c| TriageCandidate {
+            kind: c.kind.clone(),
+            name: c.name.clone(),
+            documents: c.documents,
+            context: c.context.clone(),
+        })
+        .collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let today = chrono::Local::now().format("%Y-%m-%d");
+    eprintln!(
+        "\n{} triage candidates ({} recommended, {} routine), one request per judge\n",
+        cases.len(),
+        cases.iter().filter(|c| c.gold == "recommended").count(),
+        cases.iter().filter(|c| c.gold == "routine").count()
+    );
+    for judge in &judges {
+        let started = Instant::now();
+        let scores = match triage_typed(judge, &candidates).await {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("{:<28} failed: {err:#}", judge.label());
+                continue;
+            }
+        };
+        let ms = started.elapsed().as_millis();
+        let (mut correct, mut confident, mut confident_correct, mut errors, mut flagged) =
+            (0, 0, 0, 0, 0);
+        let mut misses = Vec::new();
+        for (c, sc) in cases.iter().zip(&scores) {
+            let got = if sc.recommended() {
+                "recommended"
+            } else {
+                "routine"
+            };
+            let ok = got == c.gold;
+            if ok {
+                correct += 1;
+            } else {
+                errors += 1;
+                misses.push(format!(
+                    "{}:{}→{:.1}@{:.2}",
+                    c.id, c.gold, sc.score, sc.confidence
+                ));
+            }
+            if !sc.needs_review() {
+                confident += 1;
+                if ok {
+                    confident_correct += 1;
+                }
+            } else if !ok {
+                flagged += 1;
+            }
+        }
+        let line = format!(
+            "{:<28} acc {:>5.1}% ({}/{}) | one request {:>6} ms | confident {:>2}/{:<2} acc {:>5.1}% | errors flagged {}/{}",
+            judge.label(),
+            pct(correct, cases.len()),
+            correct,
+            cases.len(),
+            ms,
+            confident_correct,
+            confident,
+            pct(confident_correct, confident),
+            flagged,
+            errors
+        );
+        eprintln!("{line}");
+        if !misses.is_empty() {
+            eprintln!("    misses: {}", misses.join("  "));
+        }
+        let row = format!(
+            "{today},judge,{},registry triage,{:.4},,,{},ms={} confident={}/{} errors_flagged={}/{}\n",
+            judge.label(),
+            correct as f64 / cases.len().max(1) as f64,
+            cases.len(),
+            ms,
+            confident_correct,
+            confident,
+            flagged,
+            errors
+        );
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(format!("{home}/alchemy-benchmarks.csv"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, row.as_bytes()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,6 +801,16 @@ mod tests {
         );
         assert_eq!((s.acted, s.acted_correct), (3, 1));
         assert!(report_routes("x", &s).contains("commands→none: 1 confident, 1 caught"));
+    }
+
+    #[test]
+    fn triage_fixture_is_balanced() {
+        let cases = triage_cases();
+        assert_eq!(cases.len(), 24);
+        assert_eq!(cases.iter().filter(|c| c.gold == "recommended").count(), 12);
+        assert!(cases
+            .iter()
+            .all(|c| c.documents >= 1 && !c.context.is_empty()));
     }
 
     #[test]

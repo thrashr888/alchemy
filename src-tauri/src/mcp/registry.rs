@@ -113,6 +113,14 @@ struct SourceIdReq {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+struct TriagePreviewReq {
+    /// Backend to compare: "jev", or an installed Ollama tag (a decision
+    /// model such as clef, or a chat model). Omit for the configured judge.
+    #[serde(default)]
+    judge: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SuggestCardsReq {
     /// Limit the pass to one notebook's sources; omit to read every
     /// notebook (the Registry is corpus-scoped).
@@ -369,6 +377,21 @@ impl AlchemyMcp {
         if !out.created.is_empty() {
             self.changed("registry", None);
         }
+        json_result(&out)
+    }
+
+    #[tool(
+        description = "Dry run of the typed registry triage (docs/RFC-typesafe-jev.md): score every pending suggested card with the configured decision judge — level 0 passing mention, 1 a thing but not the person's, 2 owned/insured/paid/worked on, 3 the same and recurring — side by side with the verdict each card carries today. Reads only; nothing is written. Use it to judge the judge before `ALCHEMY_JUDGE_TRIAGE=1` makes it the live pass."
+    )]
+    async fn triage_preview(
+        &self,
+        Parameters(TriagePreviewReq { judge }): Parameters<TriagePreviewReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let ai = state.ai.read().await.clone();
+        let out = commands::triage_preview(&state.db, &ai, judge.as_deref())
+            .await
+            .map_err(internal)?;
         json_result(&out)
     }
 

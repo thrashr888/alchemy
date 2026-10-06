@@ -1962,6 +1962,64 @@
     <p class="models-foot">Rows sort by evidence cited, then two-source score. SciFact claims and HotpotQA two-source questions, 25–50 per model, run through the same pipeline the app ships, on the built-in search engine. Faithfulness is the share of cited sentences the source actually supports, checked on your Mac and calibrated against a stronger cloud model (shown SciFact&nbsp;/&nbsp;HotpotQA). Every number is reproducible: <code>cargo test --lib judged_</code>.</p>
   </section>
 
+  <section class="models wrap" id="decision-guide" aria-labelledby="decisions-title">
+    <div class="models-intro">
+      <h2 id="decisions-title">Which decision model should you run?</h2>
+      <p>Some of what Alchemy asks a model is not writing but deciding: is this claim supported by these excerpts, is this message a command or a question, is this name worth a registry card. Since Ollama 0.35, decision models answer those in one pass with a probability per option, and Alchemy uses one when it finds it installed. Pull one with <code>ollama pull clef-flash</code>; nothing else changes.</p>
+    </div>
+    <div class="models-table-wrap">
+      <table class="models-table" aria-label="Measured decision model results">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Claim verdicts</th>
+            <th>Chat commands</th>
+            <th>Per decision</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="m-name">clef-flash<span class="m-pick">default</span></td>
+            <td>40 / 40</td>
+            <td>36 / 36</td>
+            <td>1.8&ndash;2.3&nbsp;s</td>
+            <td class="m-note">9B, 12&nbsp;GB. Every answer it was confident about was right.</td>
+          </tr>
+          <tr>
+            <td class="m-name">clef</td>
+            <td>40 / 40</td>
+            <td>36 / 36</td>
+            <td>4&ndash;7&nbsp;s</td>
+            <td class="m-note">27B, 18&nbsp;GB. Same verdicts as Flash, at twice the wait.</td>
+          </tr>
+          <tr>
+            <td class="m-name">nimble</td>
+            <td>38 / 40</td>
+            <td>34 / 36</td>
+            <td>2&nbsp;s</td>
+            <td class="m-note">9B. Flagged both of its wrong verdicts as uncertain.</td>
+          </tr>
+          <tr>
+            <td class="m-name">tev1:4b</td>
+            <td>35 / 40</td>
+            <td>33 / 36</td>
+            <td>1.4&nbsp;s</td>
+            <td class="m-note">4.5&nbsp;GB. Reads &ldquo;weak&rdquo; support as none.</td>
+          </tr>
+          <tr>
+            <td class="m-name">jev-1.13<span class="m-pick">cloud</span></td>
+            <td>40 / 40</td>
+            <td>36 / 36</td>
+            <td>0.1&nbsp;s</td>
+            <td class="m-note">TypeSafe&rsquo;s hosted model; used only when you add a key and have no local decision model.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="models-foot">Claim verdicts: 40 labeled claim-and-excerpt cases, four verdict classes, through the Second Look path. Chat commands: 36 messages judged command-or-question over the real tool catalog. Per decision is the median on an M5&nbsp;Max with nothing else running. Without a decision model the same work runs through the chat model, where the best local result was 38&nbsp;/&nbsp;40 and the on-device Apple model 12&nbsp;/&nbsp;40. Scoring on a rubric (which registry cards to recommend) is harder: on 24 labeled cards only <code>clef</code> (21) and the hosted model (24) cleared it, and the 9B models did not, so Alchemy lets those two rule that pass and keeps the others to verdicts and commands. Reproducible: <code>cargo test --lib eval_judge_</code>.</p>
+  </section>
+
   <section class="etc" aria-labelledby="more-title">
     <div class="etc-head">
       <h2 id="more-title">Also in the box:</h2>

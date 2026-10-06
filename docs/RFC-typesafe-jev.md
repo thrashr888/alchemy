@@ -558,6 +558,81 @@ one call and one parse per claim, but it is not a latency win, and the
 per-claim cost of a local 27B judge on real Second Look state (six
 excerpts) is 5 to 15 s against Jev's 0.1 s.
 
+## Registry card triage, typed (2026-10-05)
+
+The first Score site, and the first one built to be tried before it is
+switched on. Today `triage_suggested_cards` hands the Small role a
+numbered list of up to 40 pending cards ("kind|name — in N documents;
+…snippet…") and parses back the numbers it recommends, with a floor of
+four cards before it spends the call.
+
+Typed, the pass is one request: a state holding every candidate (kind,
+name, document count, first-mention context), and one Score per
+candidate on four described levels — named in passing; a real thing but
+not the person's; something they own, insure, pay for or work on; the
+same and recurring. Level 2 and up reads as recommended. Absolute
+per-item scores, not a Choice across the batch, so ten weak candidates
+come back as ten low scores. The floor goes away: one card costs what
+forty do. The margin flags verdicts under 0.7 for a human look, which
+the Small pass could never do.
+
+Three ways to try it before it replaces anything:
+
+- `fixtures/judge_triage.json` and `eval_judge_triage`: 24 labeled
+  candidates, half recommended, through every judge.
+- The `triage_preview` MCP tool (and `preview_registry_triage` command):
+  the live queue, scored by the configured judge, each row beside the
+  verdict the card carries today. Reads only.
+- `ALCHEMY_JUDGE_TRIAGE=1` switches the live sweep to the typed pass.
+  The default stays the Small pass until the preview has been read.
+
+### Measured
+
+`eval_judge_triage`, 24 labeled candidates (12 recommended, 12 routine),
+one request per judge, clean run. The verdict is the probability the
+level is 2 or above (not the expectation: a 1.7 whose mass sits on
+levels 2 and 3 is a confident recommend, which the expectation and a
+four-way margin each misread; the first run made exactly that mistake).
+*Confident* is a two-outcome margin of 0.7 or more.
+
+| judge | accuracy | one request | confident (right) | errors flagged |
+| --- | --- | --- | --- | --- |
+| **Jev 1.13** | **24/24** | **0.8 s** | 19/19 | — |
+| clef (27B) | 21/24 | 51 s | 11/11 | 3 of 3 |
+| nimble (9B) | 12/24 | 27 s | 9/9 | 12 of 12 |
+| clef-flash (9B) | 10/24 | 6.6 s | 1/1 | 14 of 14 |
+| tev1:4b | — | HTTP 400 on a 24-question request | | |
+
+What it says:
+
+- **Rubric scoring is the hard primitive.** The two 9B models that were
+  perfect on verdicts and routing fail here in opposite directions:
+  Clef Flash spreads its mass across the levels and lands everything
+  near 1.1 at 0.3 probability, Nimble recommends everything. Nimble's own
+  card warned of this ("~50% on scoring rubrics"). Both flag every error,
+  so neither would silently mis-rule; neither is useful.
+- **Jev and Clef clear it.** Jev at 24 of 24 in under a second; Clef at
+  21 of 24 with every confident answer right and all three misses
+  flagged, at 51 s per 24-card request through Ollama's runner. For a
+  background sweep that runs once per pass, 51 s is acceptable; it is
+  not a per-turn number.
+- **So trust is per site.** `Judge::trusted_for_scores` admits Jev and
+  the `clef` family (and any decision model of 20B or more by tag); the
+  live pass (`ALCHEMY_JUDGE_TRIAGE=1`) runs typed only on such a judge,
+  else the Small pass. Every judge may still preview. This is a thin
+  fixture, which is why the preview exists.
+- **On the real queue** (40 pending cards, Clef Flash): 36 agreed with
+  the stored verdicts, 4 differed, every row flagged for review, which
+  is the model saying it does not know; the right reading of that
+  preview is "run it with a judge that does." Of the four it would have
+  demoted, all were tech topics from newsletters ("Frontier
+  Intelligence," "agentOS," "OpenCV," "workload identity federation")
+  that the Small pass had recommended; under the rubric's "owns, insures,
+  pays for, works on" that demotion is defensible, and whether the
+  rubric fits a registry full of such topics is a product question, not
+  a model one.
+
+
 ## What Jev is not for
 
 - Anything that writes prose: titles, gists, situating sentences, facts,

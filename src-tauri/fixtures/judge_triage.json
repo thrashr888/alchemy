@@ -1,0 +1,27 @@
+[
+  {"id": "t01", "gold": "recommended", "kind": "vehicle", "name": "2015 Ferrari 458 Spider", "documents": 6, "context": "Purchased Ferrari 458 Spider — VIN ending 4471, delivered March 2026; insurance bound with Hagerty; first service due at 5,000 miles"},
+  {"id": "t02", "gold": "recommended", "kind": "organization", "name": "Hagerty", "documents": 3, "context": "Your Hagerty policy renews on 12/01; agreed value $262,000; premium $2,140 billed annually"},
+  {"id": "t03", "gold": "recommended", "kind": "property", "name": "14 Alder Court", "documents": 5, "context": "Closing statement for 14 Alder Court; property tax bill, second installment; HVAC service contract for the Alder Court house"},
+  {"id": "t04", "gold": "recommended", "kind": "organization", "name": "Meridian Capital", "documents": 4, "context": "Meridian Capital term sheet draft v3; Meridian agreed to fund the pilot through Q3; Dana at Meridian will send the signature page"},
+  {"id": "t05", "gold": "recommended", "kind": "project", "name": "OKF live sharing", "documents": 7, "context": "OKF live sharing spec: phases 0–6; sync holds per file; the iCloud entitlement is the blocker for OKF live sharing"},
+  {"id": "t06", "gold": "recommended", "kind": "person", "name": "Dana Okafor", "documents": 3, "context": "Dana Okafor (Meridian) — owns the term sheet; follow-up call with Dana on the 18th; Dana's redline attached"},
+  {"id": "t07", "gold": "recommended", "kind": "account", "name": "Chase Sapphire 4471", "documents": 8, "context": "Statement for Chase Sapphire ending 4471; autopay set; annual fee posted; dispute filed on the 4471 card"},
+  {"id": "t08", "gold": "recommended", "kind": "organization", "name": "Ferrari of San Francisco", "documents": 2, "context": "Service appointment at Ferrari of San Francisco for the 458; invoice from Ferrari of San Francisco, $1,840"},
+  {"id": "t09", "gold": "recommended", "kind": "device", "name": "MacBook Pro M5 Max", "documents": 3, "context": "AppleCare+ for MacBook Pro (M5 Max) through 2029; receipt; the M5 Max laptop is the release machine"},
+  {"id": "t10", "gold": "recommended", "kind": "project", "name": "Alchemy", "documents": 12, "context": "Alchemy v0.68.0 release notes; Alchemy sync backend RFC; Alchemy MCP server port 41414"},
+  {"id": "t11", "gold": "recommended", "kind": "organization", "name": "Black Horse Motors", "documents": 2, "context": "Deposit paid to Black Horse Motors toward the 1986 328 GTS; Black Horse Motors purchase agreement, Naples FL"},
+  {"id": "t12", "gold": "recommended", "kind": "policy", "name": "Lemonade renters policy", "documents": 3, "context": "Lemonade renters policy #LR-55120 renewed; claim filed under the Lemonade policy for the water damage"},
+
+  {"id": "t13", "gold": "routine", "kind": "organization", "name": "Bring a Trailer", "documents": 5, "context": "This 1986 Ferrari 328 GTS sold on Bring a Trailer for $109,000; another 328 listed on Bring a Trailer"},
+  {"id": "t14", "gold": "routine", "kind": "person", "name": "Enzo Ferrari", "documents": 2, "context": "Enzo Ferrari founded the company in 1939, as the article recounts; a quote attributed to Enzo Ferrari"},
+  {"id": "t15", "gold": "routine", "kind": "place", "name": "Portland", "documents": 2, "context": "met in Portland to review the sync backend; flight to Portland on the 3rd"},
+  {"id": "t16", "gold": "routine", "kind": "organization", "name": "Toyota", "documents": 1, "context": "compared the 458's reliability to a Toyota's in passing"},
+  {"id": "t17", "gold": "routine", "kind": "person", "name": "Daniel Kahneman", "documents": 1, "context": "The System One name comes from the concept Daniel Kahneman popularized in Thinking, Fast and Slow"},
+  {"id": "t18", "gold": "routine", "kind": "organization", "name": "Cloudflare", "documents": 2, "context": "Clef is Cloudflare's new open decision model; Cloudflare's Decision Index leaderboard"},
+  {"id": "t19", "gold": "routine", "kind": "place", "name": "Fort Lauderdale", "documents": 1, "context": "1989 Ferrari 328 GTS, $279,900, Fort Lauderdale, FL, dealer listing"},
+  {"id": "t20", "gold": "routine", "kind": "organization", "name": "Exotic Car List", "documents": 3, "context": "Used Ferrari 328 For Sale | Exotic Car List; Motorcar Classics Inventory | Exotic Car List"},
+  {"id": "t21", "gold": "routine", "kind": "person", "name": "Paul Krugman", "documents": 1, "context": "as Paul Krugman argued in a column the article cites"},
+  {"id": "t22", "gold": "routine", "kind": "organization", "name": "Reuters", "documents": 4, "context": "Reuters reported the quarterly figures; according to Reuters"},
+  {"id": "t23", "gold": "routine", "kind": "place", "name": "Geneva", "documents": 1, "context": "the treaty was signed in Geneva, the summary notes"},
+  {"id": "t24", "gold": "routine", "kind": "organization", "name": "Supabase", "documents": 2, "context": "the auth docs corpus was copied from Supabase's guides; Supabase JWT signing keys article"}
+]
