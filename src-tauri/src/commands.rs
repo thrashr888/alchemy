@@ -14558,6 +14558,7 @@ pub async fn check_models(
     let ai = state.ai.read().await.clone();
     let cfg = ai.config().clone();
     let norm = |m: &str| m.trim_end_matches(":latest").to_string();
+    let judge = judge_status(&ai).await;
 
     // Chat status comes from the ACTIVE chat provider. Only an Ollama-kind
     // provider is Ollama's problem — Apple FM, gateways, and agent CLIs
@@ -14661,6 +14662,7 @@ pub async fn check_models(
                 chat,
                 embed,
                 vision: unknown(cfg.vision_model.clone(), "Ollama not reachable"),
+                judge,
             });
         }
     };
@@ -14748,6 +14750,50 @@ pub async fn check_models(
         chat,
         embed,
         vision,
+        judge,
+    })
+}
+
+/// Which typed judge the configuration resolves to right now, for
+/// Settings → Models. None when nothing resolves (no decision model, no
+/// Ollama chat or Small model, no TypeSafe key) and every judging site
+/// keeps its Small-role path.
+async fn judge_status(ai: &crate::ai::Ai) -> Option<ModelStatus> {
+    let judge = ai.judge().await?;
+    let label = judge.label();
+    let chosen = !ai.config().judge_model.trim().is_empty();
+    let (name, detail) = match label.split_once(':') {
+        Some(("decision", model)) => (
+            model.to_string(),
+            if chosen {
+                "Decision model, chosen here. One pass per request, nothing leaves the Mac."
+            } else {
+                "Decision model, found installed. One pass per request, nothing leaves the Mac."
+            }
+            .to_string(),
+        ),
+        Some(("ollama", model)) => (
+            model.to_string(),
+            "Chat model judged through its logprobs. Pull a decision model (clef-flash) for \
+             faster, surer answers."
+                .to_string(),
+        ),
+        Some(("jev", model)) => (
+            model.to_string(),
+            format!(
+                "TypeSafe, {}. Decisions leave the Mac; pull a decision model to keep them local.",
+                crate::inference::judge::credential()
+                    .map(|c| format!("key from {}", c.source))
+                    .unwrap_or_else(|| "key".into())
+            ),
+        ),
+        _ => (label.clone(), String::new()),
+    };
+    Some(ModelStatus {
+        name,
+        installed: true,
+        working: true,
+        detail,
     })
 }
 

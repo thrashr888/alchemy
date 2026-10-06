@@ -173,6 +173,12 @@ pub struct ModelHealth {
     pub embed: ModelStatus,
     /// Optional — only needed for image / scanned-PDF OCR.
     pub vision: ModelStatus,
+    /// The typed judge (docs/RFC-typesafe-jev.md): a decision model, a chat
+    /// model through constrained decoding, or TypeSafe. `installed` is
+    /// false when nothing resolves and every judging site keeps its
+    /// Small-role path.
+    #[serde(default)]
+    pub judge: Option<ModelStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

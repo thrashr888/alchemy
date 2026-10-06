@@ -278,7 +278,7 @@ fn catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "settings",
             core: false,
-            description: "Read or change Alchemy's settings. op: get (current AI settings, redacted), models (installed models and provider readiness), test (probe a provider or model; field = its name, or empty for the chat provider), setup (the next setup step), set (field = chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|embedder|profile.name|profile.profession|profile.instructions|profile.assistantName, value = new value), style (field = answer style, value = default|shorter|longer), theme (field = theme name, \"random\", or empty to list), pull (field = Ollama model; staged for the user to run, never run), connect (field = agent client, or empty to list). API keys can never be read or set. Changes ask the user first.",
+            description: "Read or change Alchemy's settings. op: get (current AI settings, redacted), models (installed models and provider readiness), test (probe a provider or model; field = its name, or empty for the chat provider), setup (the next setup step), set (field = chatProvider|studioProvider|chatModel|effort|baseUrl|smallModel|judgeModel|embedder|profile.name|profile.profession|profile.instructions|profile.assistantName, value = new value), style (field = answer style, value = default|shorter|longer), theme (field = theme name, \"random\", or empty to list), pull (field = Ollama model; staged for the user to run, never run), connect (field = agent client, or empty to list). API keys can never be read or set. Changes ask the user first.",
             params: || {
                 json!({
                     "type": "object",

@@ -614,6 +614,9 @@ export interface ModelHealth {
   chat: ModelStatus;
   embed: ModelStatus;
   vision: ModelStatus;
+  /** The typed judge in use (a decision model, a chat model through
+   *  logprobs, or TypeSafe); null when none resolves. */
+  judge?: ModelStatus | null;
 }
 
 export interface ModelStat {
@@ -888,6 +891,10 @@ export interface AiConfig {
    *  suggestions). Empty = Apple Foundation Models when available, else the
    *  chat provider. */
   smallModel: string;
+  /** The typed judge's model: a decision model (clef-flash, clef, nimble)
+   *  or a chat model judged through logprobs. Empty = automatic; "off"
+   *  disables typed judgments. */
+  judgeModel: string;
   embedModel: string;
   visionModel: string;
   openaiBaseUrl: string;

@@ -6,7 +6,7 @@ import { Button, Input, Modal, Select } from "../ui";
 import { Field } from "./SettingsTabs";
 import { OllamaModelPicker } from "./OllamaModelPicker";
 import { cn } from "@/lib/utils";
-import type { AiConfig, ProviderEntry } from "@/lib/types";
+import type { AiConfig, ModelStatus, ProviderEntry } from "@/lib/types";
 import {
   ChevronRight,
   CheckCircle2,
@@ -148,6 +148,24 @@ export function ModelsTab({
    *  shouldn't depend on finding the Save button. */
   commit: (c: AiConfig) => void;
 }) {
+  // Which judge the current configuration resolves to, for the hint under
+  // the picker. undefined = not asked yet; null = none resolves.
+  const [judgeStatus, setJudgeStatus] = useState<ModelStatus | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    api
+      .checkModels()
+      .then((h) => {
+        if (live) setJudgeStatus(h.judge ?? null);
+      })
+      .catch(() => {
+        if (live) setJudgeStatus(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const [probes, setProbes] = useState<Record<string, ProviderProbe>>(() => ({
     ...statusCache.probes,
   }));
@@ -672,6 +690,25 @@ export function ModelsTab({
                 onChange={(v) => setDraft({ ...draft, smallModel: v })}
                 emptyLabel="On-device (Apple) or chat model"
                 placeholder="gemma4:12b-mlx"
+              />
+            </Field>
+
+            <Field
+              label="Judge"
+              hint={
+                judgeStatus === undefined
+                  ? "Decisions with a probability: Second Look verdicts, which message is a command, which registry cards to recommend. A decision model (clef-flash, clef, nimble) answers in one pass; a chat model works through its logprobs; a TypeSafe key is the hosted option."
+                  : judgeStatus === null
+                    ? "Nothing to judge with yet: pull a decision model (ollama pull clef-flash) or add a TypeSafe key. Until then these decisions use the Small model's text replies."
+                    : `In use: ${judgeStatus.name} — ${judgeStatus.detail}`
+              }
+            >
+              <OllamaModelPicker
+                label="Judge"
+                value={draft.judgeModel ?? ""}
+                onChange={(v) => setDraft({ ...draft, judgeModel: v })}
+                emptyLabel="Automatic (best installed decision model)"
+                placeholder="clef-flash"
               />
             </Field>
           </div>

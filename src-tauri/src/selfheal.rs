@@ -188,6 +188,14 @@ pub(crate) fn settings_get(config: &AiConfig) -> String {
         }
     ));
     out.push_str(&format!(
+        "- Judge: {}\n",
+        if config.judge_model.trim().is_empty() {
+            "auto (best installed decision model, else chat model, else TypeSafe key)"
+        } else {
+            config.judge_model.trim()
+        }
+    ));
+    out.push_str(&format!(
         "- Embedder: {} ({})\n",
         config.embedder, config.embed_model
     ));
@@ -338,6 +346,17 @@ pub(crate) fn settings_set(
                 "Reset the Small model to automatic (Apple on-device when available).".to_string()
             } else {
                 format!("Set the Small model to {value}")
+            })
+        }
+        "judgeModel" if target_id.is_none() => {
+            config.judge_model = value.to_string();
+            Ok(if value.is_empty() {
+                "Reset the judge to automatic (best installed decision model).".to_string()
+            } else if value.eq_ignore_ascii_case("off") {
+                "Turned typed judgments off; decisions use the Small model's text replies."
+                    .to_string()
+            } else {
+                format!("Set the judge to {value}")
             })
         }
         "embedder" if target_id.is_none() => match value {

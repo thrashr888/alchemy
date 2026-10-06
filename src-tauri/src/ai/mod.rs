@@ -63,6 +63,13 @@ pub struct AiConfig {
     /// chat-model latency for them is waste.
     #[serde(default)]
     pub small_model: String,
+    /// The typed judge's model (docs/RFC-typesafe-jev.md): an Ollama tag,
+    /// a decision model (clef-flash, clef, nimble) or a chat model judged
+    /// through logprobs. Empty = automatic: the best installed decision
+    /// model, else the Ollama chat model, else the Small model, else a
+    /// TypeSafe key. `off` disables typed judgments.
+    #[serde(default)]
+    pub judge_model: String,
     pub embed_model: String,
     /// Vision model used to OCR image sources (empty disables OCR).
     #[serde(default)]
@@ -590,6 +597,7 @@ impl Default for AiConfig {
             // land on, so it stays the safe middle-tier pick.
             chat_model: "gpt-oss:20b".to_string(),
             small_model: String::new(),
+            judge_model: String::new(),
             // A/B'd on BEIR (2026-08-09): mxbai beat nomic-embed-text on
             // every dataset pair tried (scifact 0.743 vs 0.727, fiqa 0.390
             // vs 0.347 fused nDCG@10). Fresh configs only — persisted
@@ -1057,18 +1065,25 @@ impl Ai {
         use crate::inference::judge::{detect_local_decision_model, Judge};
         let forced = std::env::var("ALCHEMY_JUDGE").unwrap_or_default();
         let forced = forced.trim().to_ascii_lowercase();
-        if forced == "off" {
+        let configured = self.config.judge_model.trim();
+        if forced == "off" || (forced.is_empty() && configured.eq_ignore_ascii_case("off")) {
             return None;
         }
         let base_url = ollama_config(&self.config).base_url;
+        // The env override is for evals; the setting is the user's choice.
         let named = std::env::var("ALCHEMY_JUDGE_MODEL")
             .ok()
             .map(|m| m.trim().to_string())
-            .filter(|m| !m.is_empty());
+            .filter(|m| !m.is_empty())
+            .or_else(|| (!configured.is_empty()).then(|| configured.to_string()));
         let decision = match forced.as_str() {
             "ollama" | "jev" => None,
             _ => match &named {
-                Some(m) => Some(m.clone()),
+                // A named decision model is a decision judge; a named chat
+                // model goes through logprobs below.
+                Some(m) => crate::inference::judge::is_decision_model(&base_url, m)
+                    .await
+                    .then(|| m.clone()),
                 None => detect_local_decision_model(&base_url).await,
             },
         }
