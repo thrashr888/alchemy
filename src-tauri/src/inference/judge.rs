@@ -814,11 +814,17 @@ pub async fn detect_local_decision_model(base_url: &str) -> Option<String> {
 /// capability check (and cache) the scan uses.
 pub async fn is_decision_model(base_url: &str, tag: &str) -> bool {
     detect_local_decision_model(base_url).await; // warms the cache
+                                                 // Ollama lists `clef-flash:latest`; people type `clef-flash`.
+    let full = if tag.contains(':') {
+        tag.to_string()
+    } else {
+        format!("{tag}:latest")
+    };
     IS_DECISION_CACHE
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
         .ok()
-        .and_then(|g| g.get(tag).copied())
+        .and_then(|g| g.get(&full).or_else(|| g.get(tag)).copied())
         .unwrap_or(false)
 }
 
