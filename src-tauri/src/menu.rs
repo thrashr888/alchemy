@@ -170,6 +170,16 @@ const CMD: &[Command] = &[
         context: "Home",
     },
     Command {
+        id: "menu-home-builtin",
+        menu_label: "Built in",
+        accelerator: None,
+        keys: "",
+        // No digit left, so no Shortcuts-tab row: an empty label keeps it
+        // menu-only, the way the Timeline is.
+        label: "",
+        context: "Home",
+    },
+    Command {
         id: "menu-home-reports",
         menu_label: "Nightly Reports",
         accelerator: None,
@@ -604,6 +614,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         cmd_item(app, "menu-home-notebooks")?,
         cmd_item(app, "menu-home-chats")?,
         cmd_item(app, "menu-home-shared")?,
+        cmd_item(app, "menu-home-builtin")?,
         cmd_item(app, "menu-home-reports")?,
         cmd_item(app, "menu-home-archived")?,
         cmd_item(app, "menu-home-staff")?,
@@ -836,6 +847,7 @@ mod tests {
         ("menu-home-notebooks", "⌘ 1"),
         ("menu-home-chats", "⌘ 2"),
         ("menu-home-shared", "⌘ 3"),
+        ("menu-home-builtin", ""),
         ("menu-home-reports", "⌘ 4"),
         ("menu-home-archived", "⌘ 5"),
         ("menu-home-staff", "⌘ 6"),
@@ -901,8 +913,8 @@ mod tests {
     }
 
     /// The Shortcuts tab renders one key cap per space-separated token, so a
-    /// listed row with no keys draws an empty cap. Timeline is the one place
-    /// with no digit left, and it stays menu-only for exactly that reason.
+    /// listed row with no keys draws an empty cap. Timeline and the Built in
+    /// shelf have no digit left, and both stay menu-only for that reason.
     #[test]
     fn nine_home_rows_reach_the_shortcuts_tab() {
         let rows: Vec<_> = shortcut_rows()
@@ -915,6 +927,7 @@ mod tests {
             9
         );
         assert!(cmd("menu-home-timeline").label.is_empty());
+        assert!(cmd("menu-home-builtin").label.is_empty());
     }
 
     /// The fold-able Home cards and the three unkeyed "Go to" items they

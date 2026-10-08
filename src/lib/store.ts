@@ -209,7 +209,9 @@ const HOME_DRAFTS_KEY = "homeChatDrafts";
  *  next launch disagreeing with the last thing on screen. */
 function loadHomeScope(): HomeScope {
   const raw = localStorage.getItem("homeScope");
-  return raw === "shared" || raw === "archived" ? raw : "all";
+  return raw === "shared" || raw === "builtin" || raw === "archived"
+    ? raw
+    : "all";
 }
 
 function writeHomeScope(scope: HomeScope): void {

@@ -18,7 +18,8 @@ export interface HomePlace {
   /** Which notebooks the shelf shows, for `section: "notebooks"`. Shared
    *  and Archived are the same shelf narrowed, not shelves of their own. */
   scope?: HomeScope;
-  /** ⌘-digit, 1–9. The Timeline has none: the digits ran out. */
+  /** ⌘-digit, 1–9. Built in and the Timeline have none: the digits ran
+   *  out, and a filter over the shelf earns one less than a place does. */
   key?: number;
   /** Going here means the whole shelf — a tag left running would narrow a
    *  place the user just asked for in full. */
@@ -38,6 +39,7 @@ export const HOME_PLACES: HomePlace[] = [
   },
   { id: "menu-home-chats", section: "chat", key: 2 },
   { id: "menu-home-shared", section: "notebooks", scope: "shared", key: 3 },
+  { id: "menu-home-builtin", section: "notebooks", scope: "builtin" },
   { id: "menu-home-reports", section: "reports", key: 4 },
   { id: "menu-home-archived", section: "notebooks", scope: "archived", key: 5 },
   { id: "menu-home-staff", section: "staff", key: 6 },
