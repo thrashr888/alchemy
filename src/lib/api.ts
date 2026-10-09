@@ -27,6 +27,9 @@ import type {
   CloudFolder,
   ConnectorStatus,
   FolderScan,
+  CoverApplyReport,
+  CoverPick,
+  CoverScanReport,
   GrepHit,
   HomeActivity,
   NotebookPreview,
@@ -284,6 +287,20 @@ export const api = {
    *  backfill auto-pick again). Returns the updated source, content stripped. */
   setSourceImage: (sourceId: string, imageUrl: string) =>
     run(cmd<Source>("set_source_image", { sourceId, imageUrl })),
+  /** Look for cover-image candidates for a notebook's cover-less sources.
+   *  Bounded: at most 25 sources per call, web pages fetched four at a time.
+   *  Changes nothing. */
+  scanCoverImages: (notebookId: string, sourceIds?: string[], limit?: number) =>
+    run(
+      slow<CoverScanReport>("scan_cover_images", {
+        notebookId,
+        sourceIds: sourceIds ?? null,
+        limit: limit ?? null,
+      }),
+    ),
+  /** Write chosen covers onto sources that still have none. */
+  applyCoverImages: (notebookId: string, picks: CoverPick[]) =>
+    run(cmd<CoverApplyReport>("apply_cover_images", { notebookId, picks })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
   /** Correct a web source's URL in place and re-fetch it (Grow's attention

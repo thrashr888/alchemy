@@ -43,7 +43,7 @@ pub struct Notebook {
     pub built_in: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
     pub id: String,

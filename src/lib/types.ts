@@ -259,6 +259,33 @@ export interface MacFileHit {
   ingestible: boolean;
 }
 
+/** One cover-less source and the images found for it (Cover images sheet). */
+export interface CoverScan {
+  sourceId: string;
+  title: string;
+  sourceType: string;
+  /** Absolute image URLs, best first. */
+  candidates: string[];
+  /** Why the scan came up short, or "" when it went as planned. */
+  note: string;
+}
+
+export interface CoverScanReport {
+  rows: CoverScan[];
+  /** Sources in the notebook with no cover, before this batch. */
+  missing: number;
+}
+
+export interface CoverPick {
+  sourceId: string;
+  imageUrl: string;
+}
+
+export interface CoverApplyReport {
+  applied: number;
+  skipped: { sourceId: string; reason: string }[];
+}
+
 /** Tally of what a folder rescan changed. */
 export interface FolderScan {
   added: number;

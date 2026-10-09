@@ -53,6 +53,7 @@ import {
   visibleGrowthProposals,
 } from "@/lib/growth";
 import { useSourceActions } from "./SourceMenu";
+import { CoverImagesSheet } from "./CoverImagesSheet";
 import { DeletionProposalMark, OkfBadges } from "./OkfBadges";
 import type { Source } from "@/lib/types";
 import {
@@ -71,6 +72,7 @@ import {
   Tag,
   ListFilter,
   ChevronDown,
+  Image as ImageIcon,
 } from "lucide-react";
 
 // Reference scale for the "how big is this notebook" gauge. Not a capacity —
@@ -227,6 +229,7 @@ export function SourcesPanel() {
   const sources = useStore((s) => s.sources);
   const notebookLoading = useStore((s) => s.notebookLoading);
   const currentId = useStore((s) => s.currentId);
+  const [coversOpen, setCoversOpen] = useState(false);
   const queue = useStore((s) => s.ingestQueue);
   const importingFolders = useStore((s) => s.importingFolders);
   const clearQueueItem = useStore((s) => s.clearQueueItem);
@@ -830,6 +833,20 @@ export function SourcesPanel() {
           >
             <Plus className="h-3.5 w-3.5" />
           </button>
+          {/* Notebook-wide verbs that don't earn a button of their own. */}
+          <RowMenu
+            alwaysVisible
+            rowContext={false}
+            label="More source actions"
+            triggerClassName={cn(CHROME_BUTTON, "min-w-6 p-0")}
+            items={[
+              {
+                label: "Cover Images…",
+                icon: <ImageIcon className="h-3.5 w-3.5" />,
+                onClick: () => setCoversOpen(true),
+              },
+            ]}
+          />
           {/* No collapse button: the toolbar's sidebar toggle is visible
               whether this pane is open or shut, and ⌘1 works from anywhere.
               Two controls for one state is the thing the toolbar was for. */}
@@ -1620,6 +1637,13 @@ export function SourcesPanel() {
       )}
 
       {actions.modals}
+      {currentId && (
+        <CoverImagesSheet
+          open={coversOpen}
+          onClose={() => setCoversOpen(false)}
+          notebookId={currentId}
+        />
+      )}
 
       {marquee}
       {confirmDialog}
