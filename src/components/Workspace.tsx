@@ -432,7 +432,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
               already the notebook's wash at full size. */}
           {notebook &&
             !(chatBlank && !readerOpen && !galleryOpen && !growOpen && !glassOn) && (
-              <NotebookCoverBand id={notebook.id} color={notebook.color} />
+              <NotebookCoverBand
+                id={notebook.id}
+                color={notebook.color}
+                choice={notebook.cover}
+              />
             )}
           <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
             {growOpen ? (

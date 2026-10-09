@@ -326,6 +326,7 @@ async fn a_nightly_record_that_swapped_folders_with_a_twin_heals_on_the_next_cop
     // A second notebook with the same title, created later: its copy goes
     // to `shared-notebook-2` whatever the table order says.
     a.db.create_notebook(&Notebook {
+        cover: String::new(),
         id: "twin".into(),
         title: "Shared notebook".into(),
         color: String::new(),

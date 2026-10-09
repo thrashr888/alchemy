@@ -2679,6 +2679,21 @@ export const useStore = create<AppState>((rawSet, get) => {
         }
       }),
 
+    setNotebookCover: (id, cover) =>
+      guard(async () => {
+        const prev = get().notebooks;
+        set({
+          notebooks: prev.map((n) => (n.id === id ? { ...n, cover } : n)),
+        });
+        try {
+          await api.setNotebookCover(id, cover);
+        } catch (e) {
+          set({ notebooks: prev });
+          await get().refreshNotebooks();
+          throw e;
+        }
+      }),
+
     setNotebookIcon: (id, icon) =>
       guard(async () => {
         const prev = get().notebooks;

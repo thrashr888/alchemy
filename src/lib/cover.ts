@@ -41,20 +41,50 @@ type Scheme = "dark" | "light";
  *  characters by brightness. TRIAL: `localStorage.coverStyle` picks one for
  *  the whole shelf, or `mix` (the default) spreads the three by id. */
 export type CoverStyle = "mist" | "dither" | "ascii";
-const STYLES: readonly CoverStyle[] = ["mist", "dither", "ascii"];
-export function coverStyleFor(id: string): CoverStyle {
+export const COVER_STYLES: readonly CoverStyle[] = ["mist", "dither", "ascii"];
+export const COVER_STYLE_LABEL: Record<CoverStyle, string> = {
+  mist: "Mist",
+  dither: "Dither",
+  ascii: "ASCII",
+};
+
+/** The style and picture for a notebook. A stored choice
+ *  ("<style>:<seed>", `Notebook.cover`) wins; otherwise the style is spread
+ *  across the shelf by id (or fixed by `localStorage.coverStyle`) and the
+ *  picture is the id's own. */
+export function coverChoice(
+  id: string,
+  cover?: string,
+): { style: CoverStyle; seed: string } {
+  const stored = parseCover(cover);
+  if (stored) return stored;
   let pick = "mix";
   try {
     pick = localStorage.getItem("coverStyle") || "mix";
   } catch {
     // Private mode: the default still works.
   }
-  if ((STYLES as readonly string[]).includes(pick)) return pick as CoverStyle;
-  return STYLES[hash32(id + "|style") % STYLES.length];
+  const style = (COVER_STYLES as readonly string[]).includes(pick)
+    ? (pick as CoverStyle)
+    : COVER_STYLES[hash32(id + "|style") % COVER_STYLES.length];
+  return { style, seed: id };
+}
+
+export function parseCover(
+  cover: string | undefined,
+): { style: CoverStyle; seed: string } | null {
+  if (!cover) return null;
+  const at = cover.indexOf(":");
+  if (at <= 0) return null;
+  const style = cover.slice(0, at);
+  const seed = cover.slice(at + 1);
+  if (!(COVER_STYLES as readonly string[]).includes(style) || !seed) return null;
+  return { style: style as CoverStyle, seed };
 }
 
 interface Request {
   key: string;
+  /** The picture's name: the notebook id, or a seed the picker chose. */
   id: string;
   color: string;
   scheme: Scheme;
@@ -490,14 +520,15 @@ function request(req: Request, onReady: () => void): () => void {
  *  drawn (or if WebGL is unavailable). Re-renders only when the id, color or
  *  light/dark scheme changes. */
 export function useNotebookCover(
-  id: string,
+  notebookId: string,
   color: string,
   w = COVER_W,
   h = COVER_H,
+  cover?: string,
 ): string | null {
   const scheme = useSyncExternalStore(subscribeScheme, getScheme);
   const dpr = Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
-  const style = coverStyleFor(id);
+  const { style, seed: id } = coverChoice(notebookId, cover);
   const key = `${id}|${color}|${scheme}|${dpr}|${style}|${w}x${h}`;
   const subscribe = useCallback(
     (cb: () => void) => {

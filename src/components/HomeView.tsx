@@ -709,7 +709,7 @@ function NotebookCard({
   menu: React.ReactNode;
 }) {
   const color = nb.color || NOTEBOOK_PALETTE[0];
-  const cover = useNotebookCover(nb.id, color);
+  const cover = useNotebookCover(nb.id, color, undefined, undefined, nb.cover);
   const images = preview?.images ?? [];
   // An image strip and three lines don't both fit in 140px; the pictures win,
   // because they say more per pixel than a third title does.

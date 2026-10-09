@@ -16,6 +16,10 @@ pub struct Notebook {
     /// at creation; user-set from the rename dialog thereafter.
     #[serde(default)]
     pub icon: String,
+    /// The cover the user chose: "<style>:<seed>" (`mist`, `dither` or
+    /// `ascii`; the seed names the picture), or "" for the automatic one.
+    #[serde(default)]
+    pub cover: String,
     /// "" (active) | "archived" | "system". Archived notebooks are hidden
     /// from the main grid but keep all their data and can be unarchived;
     /// system notebooks (Briefs) never appear on the shelf at all.

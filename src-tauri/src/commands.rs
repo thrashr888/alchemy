@@ -1115,6 +1115,7 @@ pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Note
         title.trim().to_string()
     };
     let nb = Notebook {
+        cover: String::new(),
         id: new_id(),
         icon: auto_notebook_icon(&title),
         title,
@@ -1330,6 +1331,29 @@ pub async fn set_notebook_icon(
         return Err("icon must be a lucide icon slug".into());
     }
     e(state.db.set_notebook_icon(&id, icon).await)
+}
+
+/// The cover choice: "<style>:<seed>" or "" for automatic. The seed is the
+/// picture's name (the notebook id, or the id with a suffix from the
+/// picker), kept to the characters a URL path and a cache key both like.
+#[tauri::command]
+pub async fn set_notebook_cover(
+    state: State<'_, AppState>,
+    id: String,
+    cover: String,
+) -> Result<(), String> {
+    let cover = cover.trim();
+    let ok = cover.is_empty()
+        || cover.split_once(':').is_some_and(|(style, seed)| {
+            matches!(style, "mist" | "dither" | "ascii")
+                && !seed.is_empty()
+                && seed.len() <= 64
+                && seed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !ok {
+        return Err("cover must be <mist|dither|ascii>:<seed>, or empty for automatic".into());
+    }
+    e(state.db.set_notebook_cover(&id, cover).await)
 }
 
 #[tauri::command]
@@ -11251,6 +11275,7 @@ pub async fn seed_scale_fixture(
     let total = count.unwrap_or(5_000).clamp(100, 20_000);
     let ts = now();
     let nb = Notebook {
+        cover: String::new(),
         id: new_id(),
         icon: auto_notebook_icon("Scale fixture"),
         title: format!("Scale fixture ({total} sources)"),
@@ -12982,6 +13007,7 @@ pub(crate) async fn import_bundle(
                 .filter(|id| !existing.iter().any(|n| &n.id == id))
                 .unwrap_or_else(new_id);
             let nb = Notebook {
+                cover: String::new(),
                 id,
                 created_at: ts,
                 updated_at: ts,
@@ -15486,6 +15512,7 @@ mod tool_tests {
     #[test]
     fn open_notebook_resolves_by_name() {
         let nb = |id: &str, title: &str| Notebook {
+            cover: String::new(),
             id: id.into(),
             icon: String::new(),
             title: title.into(),

@@ -20,6 +20,9 @@ export interface Notebook {
   color: string;
   /** Lucide icon slug, "" → default book. See lib/notebookIcons.ts. */
   icon: string;
+  /** The chosen cover, "<mist|dither|ascii>:<seed>", or "" for automatic
+   *  (the style spread by id, the picture seeded by the id). */
+  cover?: string;
   /** "" (active) | "archived" | "system". Archived notebooks leave the main
    *  grid; system notebooks (Briefs) never appear on the shelf at all but
    *  work like any other notebook when opened. */

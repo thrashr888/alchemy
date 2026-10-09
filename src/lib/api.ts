@@ -203,6 +203,8 @@ export const api = {
     run(cmd<void>("set_notebook_color", { id, color })),
   setNotebookIcon: (id: string, icon: string) =>
     run(cmd<void>("set_notebook_icon", { id, icon })),
+  setNotebookCover: (id: string, cover: string) =>
+    run(cmd<void>("set_notebook_cover", { id, cover })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
   setNotebookStatus: (id: string, status: "" | "archived") =>
     run(cmd<NotebookStatusOutcome>("set_notebook_status", { id, status })),

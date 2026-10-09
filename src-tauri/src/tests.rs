@@ -47,6 +47,7 @@ async fn rag_round_trip() {
 
     // 1. Notebook
     let nb = Notebook {
+        cover: String::new(),
         id: uuid::Uuid::new_v4().to_string(),
         title: "Photosynthesis".into(),
         created_at: now(),
@@ -1000,6 +1001,7 @@ async fn notebook_counts_follow_writes_through_the_cache() {
     let db = Db::open(&dir).await.expect("open db");
     let nb_id = uuid::Uuid::new_v4().to_string();
     db.create_notebook(&Notebook {
+        cover: String::new(),
         id: nb_id.clone(),
         title: "Counts".into(),
         created_at: now(),
@@ -4762,6 +4764,7 @@ fn okf_notebook_folders_dedupe() {
 fn okf_system_notebooks_never_bind() {
     use crate::okf::is_system_notebook;
     let nb = |status: &str| crate::models::Notebook {
+        cover: String::new(),
         id: "n".into(),
         title: "Briefs".into(),
         created_at: 0,

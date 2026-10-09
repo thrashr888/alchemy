@@ -136,6 +136,7 @@ pub(crate) async fn library(sources: usize) -> Option<Library> {
 /// number of chunk rows written.
 async fn seed(ai: &Ai, db: &Db, notebook_id: &str, sources: usize) -> usize {
     db.create_notebook(&Notebook {
+        cover: String::new(),
         id: notebook_id.to_string(),
         title: "Fixture Library".into(),
         created_at: 0,

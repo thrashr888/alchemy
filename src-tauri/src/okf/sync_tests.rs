@@ -17,6 +17,7 @@ impl Lab {
         let db = crate::db::Db::open(&dir.join("db")).await.unwrap();
         if db.list_notebooks().await.unwrap().is_empty() {
             db.create_notebook(&Notebook {
+                cover: String::new(),
                 id: "shared-notebook".into(),
                 title: "Shared notebook".into(),
                 color: String::new(),

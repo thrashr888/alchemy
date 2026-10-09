@@ -263,6 +263,7 @@ impl AlchemyMcp {
             updated_at: ts,
             color: NOTEBOOK_PALETTE[0].to_string(),
             icon,
+            cover: String::new(),
             status: String::new(),
             growth_web: false,
             source_count: 0,

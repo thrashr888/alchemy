@@ -666,6 +666,7 @@ impl Db {
                     updated_at: updated.value(i),
                     color: NOTEBOOK_PALETTE[idx % NOTEBOOK_PALETTE.len()].to_string(),
                     icon: String::new(),
+                    cover: String::new(),
                     status: String::new(),
                     growth_web: false,
                     source_count: 0,
@@ -694,7 +695,9 @@ impl Db {
             return Ok(());
         }
         self.add_string_column(T_NOTEBOOKS, "status", "").await?;
-        self.add_string_column(T_NOTEBOOKS, "icon", "").await
+        self.add_string_column(T_NOTEBOOKS, "icon", "").await?;
+        // The chosen cover (2026-10-09); "" is the automatic one.
+        self.add_string_column(T_NOTEBOOKS, "cover", "").await
     }
 
     /// Backfill the `kind` column ("chat") on pre-existing `messages` tables.
@@ -1204,6 +1207,7 @@ impl Db {
             let icon = opt_str_col(b, "icon");
             let status = opt_str_col(b, "status");
             let growth_web = i64_col(b, "growth_web")?;
+            let cover = opt_str_col(b, "cover");
             for i in 0..b.num_rows() {
                 notebooks.push(Notebook {
                     id: id.value(i).to_string(),
@@ -1214,6 +1218,7 @@ impl Db {
                     icon: icon.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     growth_web: growth_web.value(i) != 0,
+                    cover: cover.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
@@ -1404,6 +1409,16 @@ impl Db {
         Ok(())
     }
 
+    pub async fn set_notebook_cover(&self, id: &str, cover: &str) -> Result<()> {
+        let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(id)))
+            .column("cover", format!("'{}'", esc(cover)))
+            .execute()
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_notebook_icon(&self, id: &str, icon: &str) -> Result<()> {
         let tbl = self.conn.open_table(T_NOTEBOOKS).execute().await?;
         tbl.update()
@@ -1464,6 +1479,7 @@ impl Db {
             let icon = opt_str_col(b, "icon");
             let status = opt_str_col(b, "status");
             let growth_web = i64_col(b, "growth_web")?;
+            let cover = opt_str_col(b, "cover");
             for i in 0..b.num_rows() {
                 rows.push(Notebook {
                     id: id.value(i).to_string(),
@@ -1474,6 +1490,7 @@ impl Db {
                     icon: icon.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     status: status.map(|s| s.value(i).to_string()).unwrap_or_default(),
                     growth_web: growth_web.value(i) != 0,
+                    cover: cover.map(|c| c.value(i).to_string()).unwrap_or_default(),
                     source_count: 0,
                     note_count: 0,
                     report_count: 0,
@@ -5648,6 +5665,7 @@ fn notebook_batch(schema: &SchemaRef, notebooks: &[Notebook]) -> Result<RecordBa
             s(|x| x.icon.clone()),
             s(|x| x.status.clone()),
             i(|x| x.growth_web as i64),
+            s(|x| x.cover.clone()),
         ],
     )?)
 }
@@ -5781,6 +5799,7 @@ fn notebooks_schema() -> SchemaRef {
         Field::new("icon", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
         Field::new("growth_web", DataType::Int64, false),
+        Field::new("cover", DataType::Utf8, false),
     ]))
 }
 
@@ -6739,6 +6758,7 @@ mod tests {
             updated_at: 5,
             color: String::new(),
             icon: String::new(),
+            cover: String::new(),
             status: "archived".into(),
             growth_web: false,
             source_count: 0,

@@ -554,6 +554,7 @@ export interface AppState {
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
   setNotebookIcon: (id: string, icon: string) => Promise<void>;
+  setNotebookCover: (id: string, cover: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   /** Resolves to the registry cards the backend retired — cards that only
    *  archived notebooks pointed at. Empty on restore. */
