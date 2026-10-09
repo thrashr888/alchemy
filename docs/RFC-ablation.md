@@ -15,7 +15,73 @@ an ablation experiment, removing unnecessary abstractions and designs."
 The Ledger and the Arrivals strip went on 2026-09-15 (main e2f089b) as
 the first two cuts; this is the rest of the list, with the evidence.
 
-## Method
+## Review: 2026-10-09 (PAUL-26)
+
+The decisions above still govern this pass: keep Notion, every generator
+and template, the separate Personalization and Shortcuts tabs, themes,
+meta-chat, MCP, Grow, OKF, and capture. The proposals below are the original
+September candidates, not approval to reverse those decisions.
+
+The current code at `a9e5dcb3` has Home place tracing and a single notebook
+shelf. Registry appears as Entries plus Suggested. This review separates
+code that is no longer reached from capabilities whose use needs evidence.
+
+### Code cuts
+
+- **Retired automatic evidence prompt and merge branch:**
+  `build_auto_evidence_messages` has one caller, `build_evidence_messages`,
+  which always passes `None` for the prior record and immediately replaces
+  the automatic system prompt. Build the requested record directly and
+  remove the old prompt and unreachable prior-record branch. The system
+  prompt and user message sent by Save as Evidence stay identical, including
+  excerpt order and text. Keep the shared parser and the curator's separate
+  consolidation prompt: both still have live callers.
+- **Collapsed Home rail:** `SidebarRail` has no callers after the Library
+  restructure. Remove it and its two exclusive icon imports. Active Brief
+  and Staff sections keep their current controls and markup.
+
+Together these cuts remove 119 lines and add 15: **104 net source lines**,
+with no data changes or user-visible feature removal. This measures code
+reduction; it does not claim faster startup or smaller built assets.
+
+### Feature evidence
+
+Read-only snapshot of `traces/ui.jsonl`, taken October 9 in America/Los_Angeles:
+44 `home.place` records from September 28 through October 9, on four local
+calendar dates (September 28, October 7, October 8, October 9).
+
+| Home destination | Recorded transitions |
+| --- | ---: |
+| Notebooks | 31 |
+| Chat | 4 |
+| Inbox | 4 |
+| Staff | 2 |
+| Suggested | 2 |
+| Reports | 1 |
+| Brief | 0 |
+| Entries (`registry`) | 0 |
+
+These are navigation records, not people, sessions, completed reads, or
+exposure time. A restored view, Back/Forward navigation, and access through
+notes, search, or agents can bypass this trace. Four observed dates are not
+the two-week usage sample called for by this RFC. Zero records therefore
+does not justify removing Brief or Entries. The installed MCP endpoint was
+unreachable during this review, so September's 229 Registry entries are a
+historical count, not a current inventory.
+
+The maintenance footprint helps prioritize inspection, not decide removal:
+Registry has 2,954 lines in its command module and 1,928 in its UI; Brief has
+511 in its command module and shares Home surfaces. These counts include
+tests and comments and omit shared DB, model, and MCP code. Registry also
+feeds chat context, source filing, and portability: deleting only its Home
+section would leave most of its machinery. Brief uses ordinary report
+schedules and notes, so removing it would not remove the report engine.
+
+The feature decision remains open until broader usage and a current corpus
+inventory support a reversible cut. Follow-up tracking belongs to PAUL-26
+in Linear.
+
+## Original method and September evidence
 
 An ablation removes one thing and measures. Here the measurement is
 usage, and the store is the instrument: the 47 notebooks on Paul's Mac
@@ -154,14 +220,14 @@ reverting the commit — the invariant's *recoverable* clause applies to
 features too, which is why every cut here is code-only and leaves data
 (the Ledger's table, the Notion cache dir) in place.
 
-## Proposal
+## Original proposal (superseded by the reviewed decisions)
 
 Do items 1, 2, 3 and 6 now — they are a day's work and remove the most
 visible bloat (the tile wall) and the most dead code (Notion, the auto
 passes). Measure 4 and 7 before deciding. Leave 5 and 8 as written
 policy, not code changes.
 
-## Open questions for Paul
+## Original questions (answered in the reviewed decisions)
 
 - Are any of the four unused generators (PRD, PR/FAQ, RFC, Skill) or the
   ten unused templates ones you *want* to use and simply haven't?
