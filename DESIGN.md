@@ -498,8 +498,9 @@ counts as one run with no headings — a heading that is not the sort key
 is a second order fighting the first. Headings are section-title with a
 hairline to the edge — sentence case, never the caps the cards' own
 eyebrows use — 32px apart, and the shelf draws
-each as a 212px card whose thumb stands in for the notebook: its color, its
-name in caps, and then what is actually inside — two or three of its newest
+each as a 212px card whose thumb stands in for the notebook: its cover — the
+backdrop's mist, or a stock photo seeded by the notebook and reduced to its
+colour as an ordered dither or a grid of characters — and what is actually inside — two or three of its newest
 source titles behind their type glyphs, the newest note among them, and its
 lead images as a strip of three tiles along the bottom — with the counts
 moved to the tooltip, because a card has room to say what a notebook holds

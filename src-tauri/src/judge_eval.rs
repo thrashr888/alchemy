@@ -739,6 +739,161 @@ async fn eval_judge_triage() {
     }
 }
 
+// ---- Notebook suggestion ----------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct SuggestCandidate {
+    id: String,
+    title: String,
+    about: String,
+    contains: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct SuggestCase {
+    id: String,
+    title: String,
+    location: String,
+    excerpt: String,
+    candidates: Vec<SuggestCandidate>,
+    /// A candidate id, or `new`.
+    gold: String,
+}
+
+fn suggest_cases() -> Vec<SuggestCase> {
+    serde_json::from_str(include_str!("../fixtures/judge_suggest.json"))
+        .expect("fixtures/judge_suggest.json parses")
+}
+
+/// The typed notebook suggestion over labeled items: one Choice per case
+/// over 4-5 candidate notebooks plus `new`, through every judge. Reports
+/// accuracy, latency, accuracy among confident answers, how many wrong
+/// answers the margin flags, and the number that matters most: wrong
+/// answers the decision rule would have filed without asking.
+///
+///   ALCHEMY_OLLAMA_TESTS=1 ALCHEMY_JEV_TESTS=1 JUDGE_DECISION_MODELS=clef-flash,clef,nimble \
+///     cargo test --lib eval_judge_suggest -- --nocapture
+#[tokio::test]
+async fn eval_judge_suggest() {
+    use crate::router::{suggest_typed, JudgeCandidate, Pick};
+    let cases = suggest_cases();
+    let ollama_on = crate::evals::ollama_tests_enabled();
+    let jev_on = std::env::var("ALCHEMY_JEV_TESTS").is_ok();
+    if !ollama_on && !jev_on {
+        eprintln!("SKIP: set ALCHEMY_OLLAMA_TESTS=1 and/or ALCHEMY_JEV_TESTS=1");
+        return;
+    }
+    let base_url = crate::ai::ollama_config(&AiConfig::default()).base_url;
+    let mut judges: Vec<Judge> = Vec::new();
+    if ollama_on {
+        judges.extend(
+            decision_models()
+                .iter()
+                .map(|m| Judge::local_decision(&base_url, m)),
+        );
+        for m in std::env::var("JUDGE_MODELS").unwrap_or_default().split(',') {
+            let m = m.trim();
+            if !m.is_empty() {
+                judges.push(Judge::ollama(&base_url, m));
+            }
+        }
+    }
+    if jev_on {
+        match Judge::jev() {
+            Some(j) => judges.push(j),
+            None => eprintln!("jev skipped (no credential)"),
+        }
+    }
+    eprintln!(
+        "\n{} suggestion cases ({} expect a new notebook), review threshold {REVIEW_BELOW}\n",
+        cases.len(),
+        cases.iter().filter(|c| c.gold == "new").count()
+    );
+    for judge in &judges {
+        let mut outcomes = Vec::with_capacity(cases.len());
+        let (mut auto_filed, mut auto_wrong) = (0usize, 0usize);
+        for case in &cases {
+            let candidates: Vec<JudgeCandidate> = case
+                .candidates
+                .iter()
+                .map(|c| JudgeCandidate {
+                    id: c.id.clone(),
+                    title: c.title.clone(),
+                    about: Some(c.about.clone()),
+                    contains: c.contains.clone(),
+                })
+                .collect();
+            let started = Instant::now();
+            let asked = tokio::time::timeout(
+                PER_CASE_TIMEOUT,
+                suggest_typed(
+                    judge,
+                    &case.title,
+                    &case.location,
+                    &case.excerpt,
+                    &candidates,
+                ),
+            )
+            .await;
+            let (got, confidence) = match asked {
+                Ok(Ok(v)) => {
+                    let got = match v.pick {
+                        Pick::New => "new".to_string(),
+                        Pick::Notebook(i) => candidates[i].id.clone(),
+                    };
+                    if v.auto {
+                        auto_filed += 1;
+                        if got != case.gold {
+                            auto_wrong += 1;
+                        }
+                    }
+                    (got, Some(v.confidence))
+                }
+                Ok(Err(err)) => {
+                    eprintln!("  {} {}: {err:#}", judge.label(), case.id);
+                    ("unjudged".to_string(), None)
+                }
+                Err(_) => ("unjudged".to_string(), None),
+            };
+            outcomes.push(Outcome {
+                id: case.id.clone(),
+                gold: case.gold.clone(),
+                got,
+                confidence,
+                ms: started.elapsed().as_millis(),
+            });
+        }
+        let s = summarize(&outcomes);
+        eprintln!(
+            "{} | auto-filed {auto_filed}, wrong {auto_wrong}",
+            report(&judge.label(), &s)
+        );
+        if !s.misses.is_empty() {
+            eprintln!("    misses: {}", s.misses.join("  "));
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let today = chrono::Local::now().format("%Y-%m-%d");
+        let row = format!(
+            "{today},judge,{},suggest notebook,{:.4},,,{},unjudged={} median_ms={} p90_ms={} confident={}/{} errors_flagged={}/{} auto_filed={auto_filed} auto_wrong={auto_wrong}\n",
+            judge.label(),
+            s.correct as f64 / s.n.max(1) as f64,
+            s.n,
+            s.unjudged,
+            s.median_ms,
+            s.p90_ms,
+            s.confident_correct,
+            s.confident,
+            s.errors_flagged,
+            s.errors
+        );
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(format!("{home}/alchemy-benchmarks.csv"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, row.as_bytes()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,6 +956,25 @@ mod tests {
         );
         assert_eq!((s.acted, s.acted_correct), (3, 1));
         assert!(report_routes("x", &s).contains("commands→none: 1 confident, 1 caught"));
+    }
+
+    #[test]
+    fn suggest_fixture_is_well_formed() {
+        let cases = suggest_cases();
+        assert!(cases.len() >= 20);
+        assert!(cases.iter().filter(|c| c.gold == "new").count() >= 4);
+        let mut gold_positions = std::collections::HashSet::new();
+        for c in &cases {
+            assert!((3..=5).contains(&c.candidates.len()), "{}", c.id);
+            if c.gold != "new" {
+                let pos = c.candidates.iter().position(|n| n.id == c.gold);
+                assert!(pos.is_some(), "{}: gold {} not offered", c.id, c.gold);
+                gold_positions.insert(pos);
+            }
+            assert!(!c.excerpt.is_empty() && !c.title.is_empty(), "{}", c.id);
+        }
+        // The answer is not always the first option.
+        assert!(gold_positions.len() >= 3);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 mod brief;
 pub(crate) mod chatloop;
+mod covers;
 mod diagnostics;
 mod handoff;
 mod registry;
@@ -18,6 +19,7 @@ pub(crate) mod reports;
 mod second_look;
 pub(crate) mod undo;
 pub(crate) use brief::ensure_default_brief;
+pub use covers::*;
 pub use diagnostics::*;
 pub use handoff::*;
 pub use registry::*;
@@ -579,16 +581,11 @@ pub async fn suggest_notebook(
     suggest_notebook_for(&state, title, text, url).await
 }
 
-/// The routing itself, callable from inside the process — the chat tools that
-/// file something "wherever it belongs" ask the same question the picker
-/// does, and must get the same answer.
-pub(crate) async fn suggest_notebook_for(
-    state: &AppState,
-    title: String,
-    text: String,
-    url: String,
-) -> Result<crate::router::NotebookSuggestion, String> {
-    let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
+/// What an incoming source says, for routing it: a bare URL is fetched and
+/// extracted (a failed fetch routes on the URL string itself); anything with
+/// text already is taken as given.
+pub(crate) async fn resolve_incoming(title: String, text: String, url: String) -> (String, String) {
+    if text.trim().is_empty() && !url.trim().is_empty() {
         match ingest::extract_url(&url).await {
             Ok(ex) => (
                 if title.trim().is_empty() {
@@ -602,11 +599,24 @@ pub(crate) async fn suggest_notebook_for(
         }
     } else {
         (title, text)
-    };
+    }
+}
+
+/// The routing itself, callable from inside the process — the chat tools that
+/// file something "wherever it belongs" ask the same question the picker
+/// does, and must get the same answer.
+pub(crate) async fn suggest_notebook_for(
+    state: &AppState,
+    title: String,
+    text: String,
+    url: String,
+) -> Result<crate::router::NotebookSuggestion, String> {
+    let location = url.clone();
+    let (title, text) = resolve_incoming(title, text, url).await;
     // Snapshot the Ai under a momentary read guard — never held across the
     // awaits below.
     let ai = state.ai.read().await.clone();
-    e(crate::router::suggest_notebook(&state.db, &ai, &title, &text).await)
+    e(crate::router::suggest_notebook(&state.db, &ai, &title, &text, &location).await)
 }
 
 /// How many pages a PDF has, for the reader's page view. Zero when the file
@@ -1105,6 +1115,7 @@ pub(crate) async fn new_notebook(state: &AppState, title: String) -> Result<Note
         title.trim().to_string()
     };
     let nb = Notebook {
+        cover: String::new(),
         id: new_id(),
         icon: auto_notebook_icon(&title),
         title,
@@ -1320,6 +1331,29 @@ pub async fn set_notebook_icon(
         return Err("icon must be a lucide icon slug".into());
     }
     e(state.db.set_notebook_icon(&id, icon).await)
+}
+
+/// The cover choice: "<style>:<seed>" or "" for automatic. The seed is the
+/// picture's name (the notebook id, or the id with a suffix from the
+/// picker), kept to the characters a URL path and a cache key both like.
+#[tauri::command]
+pub async fn set_notebook_cover(
+    state: State<'_, AppState>,
+    id: String,
+    cover: String,
+) -> Result<(), String> {
+    let cover = cover.trim();
+    let ok = cover.is_empty()
+        || cover.split_once(':').is_some_and(|(style, seed)| {
+            matches!(style, "mist" | "dither" | "ascii")
+                && !seed.is_empty()
+                && seed.len() <= 64
+                && seed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !ok {
+        return Err("cover must be <mist|dither|ascii>:<seed>, or empty for automatic".into());
+    }
+    e(state.db.set_notebook_cover(&id, cover).await)
 }
 
 #[tauri::command]
@@ -3261,8 +3295,8 @@ pub(crate) async fn set_source_image_impl(
         .get_source(source_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
-    if existing.source_type != "url" {
-        anyhow::bail!("Only URL sources carry a gallery image");
+    if matches!(existing.source_type.as_str(), "pdf" | "image") {
+        anyhow::bail!("PDFs and images render their own thumbnail");
     }
     let image_url = image_url.trim();
     if !image_url.is_empty() && image_url != "-" && !is_web_url(image_url) {
@@ -3830,9 +3864,10 @@ pub async fn source_thumbnail(
             let _ = std::fs::write(&cache, &png);
             Ok(format!("data:image/png;base64,{}", b64(&png)))
         }
-        // URL sources: download the og:image once and serve it from disk —
-        // reopening the gallery must not re-fetch a page's hero image.
-        "url" => {
+        // Every other source (a URL page, or a note or file given a cover in
+        // the Cover images sheet): download the cover once and serve it from
+        // disk — reopening the gallery must not re-fetch a hero image.
+        _ if src.source_type != "image" => {
             let img = &src.image_url;
             if img.is_empty() || img == "-" || !is_web_url(img) {
                 return Ok(String::new());
@@ -11240,6 +11275,7 @@ pub async fn seed_scale_fixture(
     let total = count.unwrap_or(5_000).clamp(100, 20_000);
     let ts = now();
     let nb = Notebook {
+        cover: String::new(),
         id: new_id(),
         icon: auto_notebook_icon("Scale fixture"),
         title: format!("Scale fixture ({total} sources)"),
@@ -12594,6 +12630,21 @@ pub async fn corpus_timeline(
     e(corpus_timeline_impl(&state, notebook_id.as_deref(), true).await)
 }
 
+/// The Judge tile on Settings → Activity: recent typed-judge calls read off
+/// `traces/judge.jsonl`. Infallible from the UI's side; an absent or
+/// unreadable file is zero counts.
+#[tauri::command]
+pub async fn judge_activity(
+    state: State<'_, AppState>,
+) -> Result<crate::models::JudgeActivity, String> {
+    let dir = state.trace_dir.clone();
+    Ok(tokio::task::spawn_blocking(move || {
+        crate::activity::judge_activity(&dir, chrono::Local::now())
+    })
+    .await
+    .unwrap_or_default())
+}
+
 /// Everything Settings → Activity renders — see activity.rs and
 /// docs/RFC-activity-view.md. Read-only; aggregated fresh per call.
 #[tauri::command]
@@ -12956,6 +13007,7 @@ pub(crate) async fn import_bundle(
                 .filter(|id| !existing.iter().any(|n| &n.id == id))
                 .unwrap_or_else(new_id);
             let nb = Notebook {
+                cover: String::new(),
                 id,
                 created_at: ts,
                 updated_at: ts,
@@ -15460,6 +15512,7 @@ mod tool_tests {
     #[test]
     fn open_notebook_resolves_by_name() {
         let nb = |id: &str, title: &str| Notebook {
+            cover: String::new(),
             id: id.into(),
             icon: String::new(),
             title: title.into(),

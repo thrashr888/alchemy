@@ -21,6 +21,7 @@ async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
     let ts = now();
     let color = NOTEBOOK_PALETTE[notebooks.len() % NOTEBOOK_PALETTE.len()];
     let nb = Notebook {
+        cover: String::new(),
         id: new_id(),
         title: BRIEFS_NOTEBOOK.into(),
         created_at: ts,

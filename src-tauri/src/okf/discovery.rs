@@ -156,6 +156,7 @@ pub(crate) async fn discover_bundle(state: &AppState, folder: &Path) -> Result<S
         let reservation = Reservation {
             folder: folder.clone(),
             notebook: Notebook {
+                cover: doc.nested("alchemy", "cover").unwrap_or_default(),
                 id,
                 title: title.clone(),
                 color: doc.nested("alchemy", "color").unwrap_or_else(|| {

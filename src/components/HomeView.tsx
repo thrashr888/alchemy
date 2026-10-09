@@ -27,6 +27,7 @@ import { notebookVerbs } from "@/lib/notebookMenu";
 import { currentEpigraph } from "@/lib/epigraph";
 import { THEMES, resolveThemeId } from "@/lib/themes";
 import { DitherBackground } from "./DitherBackground";
+import { useNotebookCover } from "@/lib/cover";
 import { useHomeActivity } from "./useHomeActivity";
 import { AwayDigest, ReportsFeed, lastNightLine } from "./HomeReportsFeed";
 import {
@@ -50,6 +51,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Inbox,
   MessagesSquare,
   Moon,
   PanelLeft,
@@ -79,6 +81,7 @@ import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
 import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
 import { TimelineSection } from "./TimelineSection";
+import { InboxSection } from "./InboxSection";
 import {
   HOME_VIEWS,
   HomeTable,
@@ -706,6 +709,7 @@ function NotebookCard({
   menu: React.ReactNode;
 }) {
   const color = nb.color || NOTEBOOK_PALETTE[0];
+  const cover = useNotebookCover(nb.id, color, undefined, undefined, nb.cover);
   const images = preview?.images ?? [];
   // An image strip and three lines don't both fit in 140px; the pictures win,
   // because they say more per pixel than a third title does.
@@ -785,21 +789,21 @@ function NotebookCard({
           picked &&
             "bg-primary/10 shadow-[inset_0_0_0_1.5px_var(--primary)] group-hover:bg-primary/15",
         )}
+        // The procedural cover is a translucent wash on the background layer:
+        // the hairline (an inset shadow) paints over it, the surface and hover
+        // tint show through it, and the text above stays on theme tokens.
+        style={
+          cover
+            ? { backgroundImage: `url(${cover})`, backgroundSize: "100% 100%" }
+            : undefined
+        }
       >
-        <div className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: color }}
-          />
-          <span className="truncate text-badge font-semibold uppercase tracking-[0.04em] text-muted-foreground">
-            {nb.title}
-          </span>
-        </div>
+        {/* No eyebrow: the name sits under the card and the colour is the
+            cover, so the thumb opens straight on what is inside. */}
         {!preview ? (
           // Still loading. Widths come from the notebook id, so the skeleton
           // is steady instead of shimmering as React re-runs.
-          <div className="mt-3 flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5">
             {thumbLines(nb.id).map((w, i) => (
               <span
                 key={i}
@@ -810,11 +814,11 @@ function NotebookCard({
             ))}
           </div>
         ) : contentRows.length === 0 ? (
-          <div className="mt-2.5 truncate text-micro text-subtle-foreground">
+          <div className="truncate text-micro text-subtle-foreground">
             Add a source…
           </div>
         ) : (
-          <div className="mt-2.5 flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             {contentRows.map(({ key, Glyph, text }) => (
               <div
                 key={key}
@@ -923,6 +927,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const scope = useStore((s) => s.homeScope);
   const goShelf = useStore((s) => s.goHomeShelf);
   const goSection = useStore((s) => s.goHomeSection);
+  const inboxCount = useStore((s) => s.inbox.length);
 
   // "system" notebooks (Briefs) are working infrastructure, not shelf items.
   const activeNotebooks = notebooks.filter((n) => !n.status);
@@ -1413,6 +1418,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       const n = registrySignal?.shown ?? 0;
       return n > 0 ? `${n} waiting` : "Nothing waiting";
     }
+    if (homeSection === "inbox")
+      return inboxCount > 0 ? `${inboxCount} waiting` : "Nothing waiting";
     if (homeSection === "timeline")
       return "Every source and note, by the day it arrived.";
     // Notebooks — Shared and Archived are the same shelf, narrowed.
@@ -1490,6 +1497,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         ),
       };
+    if (homeSection === "inbox") return { title: "Inbox", actions: null };
     if (homeSection === "suggested")
       return { title: "Suggested", actions: null };
     if (homeSection === "timeline")
@@ -1715,6 +1723,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (homeSection === "suggested")
       return <RegistrySection view="suggested" />;
     if (homeSection === "timeline") return <TimelineSection />;
+    if (homeSection === "inbox") return <InboxSection />;
     if (homeSection === "staff")
       return (
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -2113,6 +2122,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
 
               <SidebarBlock title="Library">
+                <LibraryRow
+                  icon={<Inbox className="h-3.5 w-3.5" />}
+                  label="Inbox"
+                  // A badge, like Suggested: captures waiting on a decision.
+                  badge={inboxCount || undefined}
+                  count={inboxCount || undefined}
+                  selected={homeSection === "inbox"}
+                  title="Captures waiting to be filed"
+                  onClick={() => goSection("inbox")}
+                />
                 <LibraryRow
                   icon={<Library className="h-3.5 w-3.5" />}
                   label="Notebooks"

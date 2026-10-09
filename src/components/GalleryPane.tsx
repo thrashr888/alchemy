@@ -96,9 +96,22 @@ const GALLERY_SORTS = [
 /** Kinds whose card leads with opening lines of the text. URL sources join
  *  when their page yielded no lead image. */
 function wantsSnippet(s: Source): boolean {
+  if (hasCoverImage(s)) return false;
   if (["text", "markdown", "html", "code", "mac"].includes(s.sourceType))
     return true;
   return s.sourceType === "url" && (s.imageUrl === "" || s.imageUrl === "-");
+}
+
+/** Whether a source carries a picked cover (a page's lead image, or one
+ *  chosen in the Cover images sheet for a note or file). PDFs and local
+ *  images draw their own thumbnail instead. */
+function hasCoverImage(s: Source): boolean {
+  return (
+    s.sourceType !== "pdf" &&
+    s.sourceType !== "image" &&
+    s.imageUrl !== "" &&
+    s.imageUrl !== "-"
+  );
 }
 
 /** The host a domain group row named, spelled the way the sources panel
@@ -707,8 +720,7 @@ function estimateCardHeight(
     return PADDING + 20 + (peekRows ? 8 + peekRows * 26 : 0) + 24;
   }
 
-  const leadImage =
-    s.sourceType === "url" && s.imageUrl !== "" && s.imageUrl !== "-";
+  const leadImage = hasCoverImage(s);
   const hasVisual =
     s.sourceType === "pdf" || s.sourceType === "image" || leadImage;
   // PDFs crop to 4:3; everything else keeps its ratio capped at max-h-64.
@@ -889,10 +901,7 @@ function GalleryCard({
 }) {
   const openSourceViewer = useStore((st) => st.openSourceViewer);
   const web = isWebUrl(s.url);
-  const leadImage =
-    s.sourceType === "url" && s.imageUrl !== "" && s.imageUrl !== "-"
-      ? s.imageUrl
-      : null;
+  const leadImage = hasCoverImage(s) ? s.imageUrl : null;
   // PDFs, images, and og-imaged pages resolve their visual through the
   // thumbnail command (disk-cached in Rust) with a session memory in front;
   // null = pending, "" = checked-none.

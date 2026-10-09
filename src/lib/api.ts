@@ -12,6 +12,7 @@ import type {
   AgentChange,
   UndoReport,
   ActivityStats,
+  JudgeActivity,
   Citation,
   AiConfig,
   BuildInfo,
@@ -27,6 +28,9 @@ import type {
   CloudFolder,
   ConnectorStatus,
   FolderScan,
+  CoverApplyReport,
+  CoverPick,
+  CoverScanReport,
   GrepHit,
   HomeActivity,
   NotebookPreview,
@@ -54,6 +58,8 @@ import type {
   Notebook,
   NotebookGraph,
   NotebookSuggestion,
+  InboxItem,
+  InboxAccepted,
   IcloudMoveOffer,
   OkfBinding,
   OkfLifecycle,
@@ -197,6 +203,8 @@ export const api = {
     run(cmd<void>("set_notebook_color", { id, color })),
   setNotebookIcon: (id: string, icon: string) =>
     run(cmd<void>("set_notebook_icon", { id, icon })),
+  setNotebookCover: (id: string, cover: string) =>
+    run(cmd<void>("set_notebook_cover", { id, cover })),
   deleteNotebook: (id: string) => run(cmd<void>("delete_notebook", { id })),
   setNotebookStatus: (id: string, status: "" | "archived") =>
     run(cmd<NotebookStatusOutcome>("set_notebook_status", { id, status })),
@@ -284,6 +292,20 @@ export const api = {
    *  backfill auto-pick again). Returns the updated source, content stripped. */
   setSourceImage: (sourceId: string, imageUrl: string) =>
     run(cmd<Source>("set_source_image", { sourceId, imageUrl })),
+  /** Look for cover-image candidates for a notebook's cover-less sources.
+   *  Bounded: at most 25 sources per call, web pages fetched four at a time.
+   *  Changes nothing. */
+  scanCoverImages: (notebookId: string, sourceIds?: string[], limit?: number) =>
+    run(
+      slow<CoverScanReport>("scan_cover_images", {
+        notebookId,
+        sourceIds: sourceIds ?? null,
+        limit: limit ?? null,
+      }),
+    ),
+  /** Write chosen covers onto sources that still have none. */
+  applyCoverImages: (notebookId: string, picks: CoverPick[]) =>
+    run(cmd<CoverApplyReport>("apply_cover_images", { notebookId, picks })),
   refreshSourceUrl: (sourceId: string) =>
     run(ai<Source>("refresh_source_url", { sourceId })),
   /** Correct a web source's URL in place and re-fetch it (Grow's attention
@@ -450,6 +472,38 @@ export const api = {
         url: input.url ?? "",
       }),
     ),
+  /** The Inbox, newest first. */
+  inboxList: () => run(cmd<InboxItem[]>("inbox_list")),
+  /** Save a capture to the Inbox; its suggestion is computed behind it. */
+  inboxAdd: (input: {
+    url?: string | null;
+    text?: string | null;
+    title?: string | null;
+    files?: string[];
+  }) =>
+    run(
+      cmd<InboxItem>("inbox_add", {
+        url: input.url ?? "",
+        text: input.text ?? "",
+        title: input.title ?? "",
+        files: input.files ?? [],
+      }),
+    ),
+  /** File an Inbox item: into `notebookId`, or into the suggestion (creating
+   *  the notebook first when the suggestion is a new one). `newTitle` names
+   *  the notebook when the item has no suggested title. */
+  inboxAccept: (
+    id: string,
+    opts: { notebookId?: string | null; newTitle?: string | null } = {},
+  ) =>
+    run(
+      cmd<InboxAccepted>("inbox_accept", {
+        id,
+        notebookId: opts.notebookId ?? null,
+        newTitle: opts.newTitle ?? null,
+      }),
+    ),
+  inboxDismiss: (id: string) => run(cmd<void>("inbox_dismiss", { id })),
   /** Page count of a PDF on disk; 0 when it can't be read. */
   pdfPageCount: (path: string) => run(cmd<number>("pdf_page_count", { path })),
   /** One rendered PDF page (1-indexed) as a `data:` PNG URL. */
@@ -485,9 +539,15 @@ export const api = {
   listNotes: (notebookId: string) =>
     run(query<Note[]>("list_notes", { notebookId })),
   activityStats: () => run(query<ActivityStats>("activity_stats")),
+  judgeActivity: () => run(query<JudgeActivity>("judge_activity")),
   corpusTimeline: (notebookId?: string) =>
     run(query<CorpusTimeline>("corpus_timeline", { notebookId })),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
+  /** A stock photo for a notebook cover, seeded by the notebook, as a data
+   *  URL. Fetched by Rust: the webview cannot read a cross-origin image back
+   *  off a canvas, and a data URL never taints one. */
+  coverPhoto: (seed: string, width: number, height: number) =>
+    invoke<string>("cover_photo", { seed, width, height }),
   /** Fire-and-forget: a trace line in traces/ui.jsonl. Never awaited by UI. */
   uiEvent: (name: string, detail: unknown) =>
     invoke("ui_event", { name, detail }).catch(() => {}),

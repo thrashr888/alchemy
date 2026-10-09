@@ -1253,8 +1253,9 @@ pub struct TriagePreview {
 /// Dry run of the typed triage over the live queue: every pending
 /// suggestion scored by the configured judge, side by side with the verdict
 /// it carries today. Reads and the mention recount only; no verdict is
-/// written. This is how the typed pass is tried before it replaces the
-/// Small-role one (`ALCHEMY_JUDGE_TRIAGE=1` switches the live pass).
+/// written. This is how the typed pass was tried before it took over the
+/// live sweep (`ALCHEMY_JUDGE_TRIAGE=0` hands the sweep back to the Small
+/// role).
 pub(crate) async fn triage_preview(
     db: &crate::db::Db,
     ai: &crate::ai::Ai,
@@ -1329,11 +1330,13 @@ pub(crate) async fn triage_preview(
     })
 }
 
-fn env_truthy(name: &str) -> bool {
+/// Set to `0`, `false` or `off`: the one way to say no. Unset, empty, or
+/// anything else keeps the default.
+fn env_off(name: &str) -> bool {
     std::env::var(name)
         .map(|v| {
             let v = v.trim();
-            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+            v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")
         })
         .unwrap_or(false)
 }
@@ -1341,10 +1344,12 @@ fn env_truthy(name: &str) -> bool {
 /// Mark the suggested cards worth recommending. Returns how many cards got
 /// a verdict (recommended or routine); 0 when the queue is too short.
 ///
-/// Two judges can answer. The typed judge (`ALCHEMY_JUDGE_TRIAGE=1`, a
-/// decision model or Jev) scores every candidate in one request and has
-/// no queue floor, since one card costs what forty do; otherwise the
-/// Small role picks from a numbered list as it always has.
+/// Two judges can answer. The typed judge (a decision model or Jev, the
+/// default whenever one the triage fixture cleared is configured) scores
+/// every candidate in one request and has no queue floor, since one card
+/// costs what forty do; otherwise — no such judge, or
+/// `ALCHEMY_JUDGE_TRIAGE=0` — the Small role picks from a numbered list
+/// as it always has.
 pub(crate) async fn triage_suggested_cards(
     db: &crate::db::Db,
     ai: &crate::ai::Ai,
@@ -1370,11 +1375,12 @@ pub(crate) async fn triage_suggested_cards(
         batch,
     } = b;
     // Only a judge the triage fixture cleared may rule unattended; the
-    // others are for the preview (`Judge::trusted_for_scores`).
-    let typed = if env_truthy("ALCHEMY_JUDGE_TRIAGE") {
-        ai.judge().await.filter(|j| j.trusted_for_scores())
-    } else {
+    // others are for the preview (`Judge::trusted_for_scores`). On by
+    // default (smart defaults ship on); the env is the off switch.
+    let typed = if env_off("ALCHEMY_JUDGE_TRIAGE") {
         None
+    } else {
+        ai.judge().await.filter(|j| j.trusted_for_scores())
     };
     if typed.is_none() && batch.len() < MIN_QUEUE_TO_TRIAGE {
         return Ok(0);

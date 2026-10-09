@@ -7,6 +7,7 @@ mod capture;
 mod clip;
 mod commands;
 mod connectors;
+mod covers;
 mod crashwatch;
 mod db;
 mod device;
@@ -31,6 +32,7 @@ mod graph;
 mod grepsearch;
 mod growth;
 mod hygiene;
+mod inbox;
 mod inference;
 mod ingest;
 mod integrations;
@@ -473,6 +475,17 @@ pub fn run() {
                 });
             }
 
+            // Captures saved while no model answered, or still waiting when
+            // the app quit, get their suggestion now. Unhurried: the embedder
+            // and the picker's models are busy at launch.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                    inbox::fill_missing(&handle).await;
+                });
+            }
+
             // Seed the current accessibility text scale so the first window
             // focus doesn't spuriously broadcast; the frontend reads it at boot
             // via get_system_text_scale, and window-focus republishes changes.
@@ -499,6 +512,7 @@ pub fn run() {
             commands::create_notebook,
             commands::rename_notebook,
             commands::set_notebook_color,
+            commands::set_notebook_cover,
             commands::set_notebook_icon,
             commands::set_notebook_status,
             commands::delete_notebook,
@@ -532,6 +546,9 @@ pub fn run() {
             commands::set_source_note,
             commands::set_source_image,
             commands::source_image_candidates,
+            commands::scan_cover_images,
+            commands::cover_photo,
+            commands::apply_cover_images,
             commands::peek_url,
             commands::refresh_source_url,
             commands::refresh_sources,
@@ -553,6 +570,10 @@ pub fn run() {
             commands::open_in_terminal,
             commands::start_ollama,
             commands::suggest_notebook,
+            inbox::inbox_list,
+            inbox::inbox_add,
+            inbox::inbox_accept,
+            inbox::inbox_dismiss,
             commands::pdf_page_count,
             commands::pdf_page_image,
             commands::pdf_local_path,
@@ -562,6 +583,7 @@ pub fn run() {
             commands::list_note_summaries,
             commands::read_note,
             commands::activity_stats,
+            commands::judge_activity,
             commands::corpus_timeline,
             okf::shared_bundle_offers_cmd,
             okf::open_shared_bundle_cmd,

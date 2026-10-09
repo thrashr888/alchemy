@@ -3,10 +3,11 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Spinner } from "../ui";
 import { TileShader } from "./TileShader";
-import type { ActivityStats, ModelStat } from "@/lib/types";
+import type { ActivityStats, JudgeActivity, ModelStat } from "@/lib/types";
 import {
   BookOpen,
   CalendarDays,
+  Cloud,
   NotebookText,
   PenLine,
   Clock,
@@ -21,6 +22,7 @@ import {
   Sunrise,
   Sunset,
   Receipt,
+  Scale,
   Trophy,
   type LucideIcon,
 } from "lucide-react";
@@ -99,6 +101,25 @@ function growthSeries(
   return out.length >= 2 ? out : [];
 }
 
+/** Normalized running total of a short per-day series, for a spark wash.
+ *  Empty when nothing happened or there are fewer than two points. */
+function cumulativeSeries(values: number[]): number[] {
+  const out: number[] = [];
+  let cum = 0;
+  for (const v of values) {
+    cum += v;
+    out.push(cum);
+  }
+  return cum > 0 && out.length >= 2 ? out.map((v) => v / cum) : [];
+}
+
+/** "decision:clef-flash:latest" -> "clef-flash:latest": the backend prefix is
+ *  plumbing, the model name is what a person recognises. */
+function judgeName(label: string): string {
+  const i = label.indexOf(":");
+  return i >= 0 ? label.slice(i + 1) : label;
+}
+
 /** Micro-dollars as money. Sub-cent spend rounds to "$0.00" rather than
  *  being dressed up in extra decimals: the point of the tile is the order of
  *  magnitude, and a fake precision on a cost is the thing to avoid. */
@@ -113,9 +134,12 @@ function Tile({
   tone,
   wash,
   shader,
+  detail,
 }: {
   label: string;
   value: string;
+  /** A quieter second line under the value: the other window, the unit. */
+  detail?: string;
   icon?: LucideIcon;
   /** Icon color class — reserved for live state (the burning streak);
    *  everything else stays neutral. */
@@ -145,9 +169,14 @@ function Tile({
           </span>
         )}
       </div>
-      <div className="relative mt-0.5 text-[1.0625rem] font-semibold tabular-nums">
+      <div className="relative mt-0.5 truncate text-[1.0625rem] font-semibold tabular-nums">
         {value}
       </div>
+      {detail && (
+        <div className="relative truncate text-caption tabular-nums text-subtle-foreground">
+          {detail}
+        </div>
+      )}
     </div>
   );
 }
@@ -380,9 +409,69 @@ function Heatmap({ stats }: { stats: ActivityStats }) {
   );
 }
 
+/** The typed judge (inference/judge.rs): what it was asked, what it cost in
+ *  tokens, who answered, and whether the question left the Mac. Hidden until
+ *  the judge has run once, so a fresh install shows no empty tiles. */
+function JudgeTiles({ judge }: { judge: JudgeActivity }) {
+  const curve = cumulativeSeries(judge.daily);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-4 gap-2">
+        <Tile
+          label="Judge requests"
+          value={`${compact.format(judge.requestsToday)} today`}
+          detail={`${compact.format(judge.requests7d)} in 7 days`}
+          icon={Scale}
+          shader={
+            curve.length > 0 ? (
+              <TileShader
+                mode="spark"
+                series={curve}
+                tintVar="--primary"
+                intensity={0.8}
+              />
+            ) : undefined
+          }
+        />
+        <Tile
+          label="Judge tokens"
+          value={`${compact.format(judge.tokensToday)} today`}
+          detail={`${compact.format(judge.tokens7d)} in 7 days`}
+          icon={Zap}
+        />
+        <Tile
+          label="Median latency"
+          value={judge.medianMs > 0 ? fmtMs(judge.medianMs) : "\u2014"}
+          detail="last 7 days"
+          icon={Clock}
+        />
+        {/* Color only where it means something: a cloud judge is the one
+            state where a decision leaves the machine. */}
+        <Tile
+          label="Judge"
+          value={judgeName(judge.judge)}
+          detail={judge.cloud ? "TypeSafe cloud" : "On this Mac"}
+          icon={judge.cloud ? Cloud : Scale}
+          tone={judge.cloud ? "text-warning" : undefined}
+        />
+      </div>
+      <div className="text-caption text-subtle-foreground">
+        {judge.cloud
+          ? "Decisions leave the Mac. Each judge request sends its state to TypeSafe."
+          : "Nothing leaves the Mac."}
+      </div>
+      <CountList
+        title="Judge calls by site, 7 days"
+        rows={judge.sites}
+      />
+    </div>
+  );
+}
+
 export function ActivityTab() {
   const [stats, setStats] = useState<ActivityStats | null>(null);
   const [modelStats, setModelStats] = useState<ModelStat[]>([]);
+  const [judge, setJudge] = useState<JudgeActivity | null>(null);
   const [error, setError] = useState(false);
   const [range, setRange] = useState<RangeId>("all");
 
@@ -394,6 +483,10 @@ export function ActivityTab() {
     api
       .getModelStats()
       .then(setModelStats)
+      .catch(() => {});
+    api
+      .judgeActivity()
+      .then(setJudge)
       .catch(() => {});
   }, []);
 
@@ -639,6 +732,8 @@ export function ActivityTab() {
           models are free, so only paid-provider runs show up here.
         </div>
       )}
+
+      {judge && judge.judge !== "" && <JudgeTiles judge={judge} />}
 
       <Heatmap stats={stats} />
 

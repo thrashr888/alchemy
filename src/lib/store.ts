@@ -954,6 +954,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     growOpen: false,
     readerEditIntent: null,
     registryBump: 0,
+    inbox: [],
     registryCounts: null,
     homeChatUnread: false,
     registrySeenAt: (() => {
@@ -1100,6 +1101,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       void get().refreshModelStats();
       void get().refreshKokoroStatus();
       void get().refreshHomeThreads();
+      void get().refreshInbox();
       // One-shot probe: are the Mac providers (cider) installed and reachable?
       void api
         .macAvailable()
@@ -1512,6 +1514,9 @@ export const useStore = create<AppState>((rawSet, get) => {
               void get().refreshNotebooks();
             }, 250);
           }
+          // The Inbox is app-global too: a capture landed, or its suggestion
+          // arrived behind it.
+          if (scope === "inbox") void get().refreshInbox();
           // Templates are app-global — refresh before the notebook gate.
           if (scope === "templates") void get().refreshTemplates();
           // So is the Registry (it has no notebook), and its surface is Home
@@ -1887,6 +1892,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           const wanted = tail as HomeSection;
           const section: HomeSection = (
             [
+              "inbox",
               "notebooks",
               "registry",
               "suggested",
@@ -1930,6 +1936,20 @@ export const useStore = create<AppState>((rawSet, get) => {
             title: p.get("title"),
           };
           if (!payload.files.length && !payload.url && !payload.text) return;
+          const nb = p.get("notebook");
+          if (!nb) {
+            // External adds can't know which notebook the user meant, and a
+            // capture should never block on the question: save it to the
+            // Inbox, where the judge's suggestion waits beside it and one
+            // key files it. Nothing is imported until then.
+            await api.inboxAdd(payload);
+            await get().refreshInbox();
+            get().pushToast("success", "Saved to Inbox", () => {
+              const place = homePlaceById("menu-home-inbox");
+              if (place) void goHomePlace(place);
+            });
+            return;
+          }
           // Cold start: the browser extension (or any deep link) launches the
           // app, and the backend replays the buffered URL as soon as the
           // listeners bind — which is BEFORE init's first `listNotebooks`
@@ -1943,15 +1963,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             );
             return;
           }
-          const nb = p.get("notebook");
-          if (nb) {
-            // The caller named a notebook — no need to ask.
-            await get().confirmExternalAdd(nb, payload);
-          } else {
-            // External adds can't know which notebook the user meant (there
-            // may be several windows) — ask, defaulting to the most recent.
-            set({ pendingExternalAdd: payload });
-          }
+          // The caller named a notebook — no need to ask.
+          await get().confirmExternalAdd(nb, payload);
         }
       } catch (e) {
         get().pushToast("error", e instanceof Error ? e.message : String(e));
@@ -2126,6 +2139,14 @@ export const useStore = create<AppState>((rawSet, get) => {
     // The conversation used to die with the view. It persists per thread now,
     // so the Chat tab can be left and come back to — and so back/forward can
     // land on a conversation the way it lands on a notebook.
+
+    refreshInbox: async () => {
+      try {
+        set({ inbox: await api.inboxList() });
+      } catch {
+        /* keep the last list; run() already logged the failure */
+      }
+    },
 
     refreshHomeThreads: async () => {
       try {
@@ -2651,6 +2672,21 @@ export const useStore = create<AppState>((rawSet, get) => {
         });
         try {
           await api.setNotebookColor(id, color);
+        } catch (e) {
+          set({ notebooks: prev });
+          await get().refreshNotebooks();
+          throw e;
+        }
+      }),
+
+    setNotebookCover: (id, cover) =>
+      guard(async () => {
+        const prev = get().notebooks;
+        set({
+          notebooks: prev.map((n) => (n.id === id ? { ...n, cover } : n)),
+        });
+        try {
+          await api.setNotebookCover(id, cover);
         } catch (e) {
           set({ notebooks: prev });
           await get().refreshNotebooks();

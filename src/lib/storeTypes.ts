@@ -6,6 +6,7 @@ import type {
   DeletionProposal,
   GrowthProposal,
   HygieneIssue,
+  InboxItem,
   KokoroStatus,
   Message,
   MetaAnswer,
@@ -96,6 +97,8 @@ export interface NavEntry {
  *  `notebooks` is the shelf itself; the rest are the surfaces that used to
  *  be rails or cards around it (docs/RFC-mac-chrome.md, "Home"). */
 export type HomeSection =
+  /** Captures waiting to be filed: save now, organize later. */
+  | "inbox"
   | "notebooks"
   /** The Registry's accepted cards — the cast, with its own sort and
    *  filters. Visiting it does NOT clear the Suggested badge: looking at
@@ -366,6 +369,10 @@ export interface AppState {
   /** Bumped when the registry changes (agents, or the arrival sweep filing
    *  a document). Corpus-scoped, so it fires with no notebook open. */
   registryBump: number;
+  /** The Inbox, newest first. Captures land here instead of raising a
+   *  blocking "which notebook?" modal; Home's Inbox section files them. */
+  inbox: InboxItem[];
+  refreshInbox: () => Promise<void>;
   /** Home's Chat tab has an answer you haven't seen: a corpus question
    *  settled while you were in a notebook or on another tab. Cleared the
    *  moment the tab is on screen. */
@@ -547,6 +554,7 @@ export interface AppState {
   renameNotebook: (id: string, title: string) => Promise<void>;
   setNotebookColor: (id: string, color: string) => Promise<void>;
   setNotebookIcon: (id: string, icon: string) => Promise<void>;
+  setNotebookCover: (id: string, cover: string) => Promise<void>;
   deleteNotebook: (id: string) => Promise<void>;
   /** Resolves to the registry cards the backend retired — cards that only
    *  archived notebooks pointed at. Empty on restore. */

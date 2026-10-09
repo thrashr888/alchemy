@@ -35,6 +35,7 @@ fn notebook() -> OkfNotebook {
         title: "Alchemy Development".into(),
         color: String::new(),
         icon: String::new(),
+        cover: String::new(),
         generated_at: 1,
     }
 }

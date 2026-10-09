@@ -978,6 +978,13 @@ pub fn looks_like_error_page(title: &str, text: &str) -> bool {
     if text.trim().chars().count() < THIN {
         return true;
     }
+    title_looks_like_error(title)
+}
+
+/// The title half of [`looks_like_error_page`]: the words a soft-404 puts in
+/// its `<title>`. Also the guard for a page re-fetched only to look at its
+/// pictures, which came back 200 but says it is not the page.
+pub fn title_looks_like_error(title: &str) -> bool {
     let lower = title.trim().to_lowercase();
     const MARKERS: &[&str] = &[
         "not found",
@@ -1015,7 +1022,7 @@ fn readable_page(body: String, status: reqwest::StatusCode, url: String) -> Resu
         }
         .into());
     }
-    let image_url = og_image(&body, &url).unwrap_or_default();
+    let image_url = crate::covers::pick_cover(&body, &url).unwrap_or_default();
     Ok(Extracted {
         feeds: crate::feeds::discover_in_html(&body, &url),
         author: String::new(),
@@ -1314,7 +1321,7 @@ pub fn extracted_from_html(html: &str, url: &str, dom_title: &str, meta: &PageMe
     };
     let image_url = Some(meta.og_image.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| og_image(html, url))
+        .or_else(|| crate::covers::pick_cover(html, url))
         .unwrap_or_default();
     Extracted {
         feeds: crate::feeds::discover_in_html(html, url),
@@ -2176,7 +2183,7 @@ fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
     (0..=h.len() - n.len()).find(|&k| h[k..k + n.len()].eq_ignore_ascii_case(n))
 }
 
-fn decode_entities(s: &str) -> String {
+pub(crate) fn decode_entities(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -2259,7 +2266,76 @@ pub async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
 pub async fn fetch_lead_image(url: &str) -> Option<String> {
     let client = page_client(15)?;
     let body = client.get(url).send().await.ok()?.text().await.ok()?;
-    og_image(&body, url)
+    crate::covers::pick_cover(&body, url)
+}
+
+/// A page's markup, fetched once to look at its pictures (the Cover images
+/// sheet). Bounded the way a peek is: a short timeout and a byte cap, and
+/// the same two refusals an import makes — a failing status, and a page
+/// whose own title says it is the error page. `Err` is the reason in words
+/// the sheet can show.
+pub async fn fetch_page_html(raw_url: &str) -> Result<String, &'static str> {
+    const CAP: usize = 2 * 1024 * 1024;
+    if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
+        return Err("Not a web page");
+    }
+    // Unattended, like Grow's probes (`extract_url_public`): every hop,
+    // redirects included, must land on the public internet, so a stored
+    // source URL on the user's own network is never refetched by a sweep.
+    let client =
+        browser_client(reqwest::redirect::Policy::none()).map_err(|_| "Couldn't fetch the page")?;
+    let mut url = raw_url.to_string();
+    for _hop in 0..6 {
+        ensure_public(&url)
+            .await
+            .map_err(|_| "Not on the public internet; not refetched")?;
+        let mut resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|_| "Couldn't fetch the page")?;
+        if resp.status().is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("Couldn't fetch the page")?;
+            url = reqwest::Url::parse(&url)
+                .and_then(|base| base.join(next))
+                .map(|u| u.to_string())
+                .map_err(|_| "Couldn't fetch the page")?;
+            continue;
+        }
+        if !resp.status().is_success() {
+            return Err("The page returned an error");
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !(content_type.is_empty()
+            || content_type.contains("html")
+            || content_type.contains("xml"))
+        {
+            return Err("Not a web page");
+        }
+        let mut body: Vec<u8> = Vec::new();
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            body.extend_from_slice(&chunk);
+            if body.len() >= CAP {
+                body.truncate(CAP);
+                break;
+            }
+        }
+        let html = String::from_utf8_lossy(&body).into_owned();
+        if extract_title(&html).is_some_and(|t| title_looks_like_error(&t)) {
+            return Err("The page looks like an error page");
+        }
+        return Ok(html);
+    }
+    Err("The page redirected too many times")
 }
 
 /// What a link is before it is added: the Grow pane's hover preview

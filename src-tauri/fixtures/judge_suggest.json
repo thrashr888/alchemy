@@ -1,0 +1,1052 @@
+[
+ {
+  "id": "s01",
+  "title": "Form 8829: Expenses for Business Use of Your Home",
+  "location": "https://www.irs.gov/forms-pubs/about-form-8829",
+  "excerpt": "Use Form 8829 to figure the allowable expenses for business use of your home and the carryover of unallowed expenses. The simplified method lets you deduct $5 per square foot up to 300 square feet.",
+  "candidates": [
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   }
+  ],
+  "gold": "tax"
+ },
+ {
+  "id": "s02",
+  "title": "Heat pump water heaters: what to ask your contractor",
+  "location": "https://www.energystar.gov/products/water_heaters/heat_pump_water_heaters",
+  "excerpt": "Before signing a quote, ask about the unit's uniform energy factor, the clearance needed around the cabinet, whether a condensate drain is required, and which state rebates apply.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   }
+  ],
+  "gold": "house"
+ },
+ {
+  "id": "s03",
+  "title": "Why futures need to be pinned before polling",
+  "location": "https://rust-lang.github.io/async-book/04_pinning/01_chapter.html",
+  "excerpt": "A future that holds a reference into its own state cannot be moved once it has been polled. Pin<&mut T> guarantees the pointee will not move, which is what lets async blocks borrow across await points.",
+  "candidates": [
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   },
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   }
+  ],
+  "gold": "rust"
+ },
+ {
+  "id": "s04",
+  "title": "Kyoto in April: cherry blossom forecast and crowds",
+  "location": "https://www.japan-guide.com/blog/sakura26.html",
+  "excerpt": "Peak bloom in Kyoto is expected between April 1 and April 7. Philosopher's Path and Maruyama Park fill by mid-morning; go before 7 a.m. or in the evening when the lanterns are lit.",
+  "candidates": [
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   },
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   }
+  ],
+  "gold": "japan"
+ },
+ {
+  "id": "s05",
+  "title": "Tapering for your first marathon",
+  "location": "https://www.runnersworld.com/training/a20795206/marathon-taper/",
+  "excerpt": "Cut weekly mileage by 20 percent three weeks out, 40 percent two weeks out, and 60 percent the final week, while keeping a few short runs at goal pace so your legs stay sharp.",
+  "candidates": [
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   },
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   }
+  ],
+  "gold": "marathon"
+ },
+ {
+  "id": "s06",
+  "title": "Retrieval evaluation with graded relevance",
+  "location": "~/Downloads/ndcg-notes.pdf",
+  "excerpt": "nDCG rewards ranking highly relevant documents early. We compare BM25, dense retrieval and a hybrid with reciprocal rank fusion across five BEIR datasets, reporting nDCG@10 and recall@100.",
+  "candidates": [
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   },
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   }
+  ],
+  "gold": "llm"
+ },
+ {
+  "id": "s07",
+  "title": "How to tell when your starter is ready to bake with",
+  "location": "https://www.kingarthurbaking.com/blog/starter-ready",
+  "excerpt": "A ripe starter doubles within four to eight hours of feeding, smells pleasantly sour, and a spoonful floats in water. If it collapses before you use it, feed it a little earlier next time.",
+  "candidates": [
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   }
+  ],
+  "gold": "bread"
+ },
+ {
+  "id": "s08",
+  "title": "Can my landlord enter without notice?",
+  "location": "https://www.nolo.com/legal-encyclopedia/landlord-entry",
+  "excerpt": "In most states a landlord must give 24 to 48 hours' written notice before entering a rental unit, except in an emergency. Repeated unannounced entry can be harassment and grounds to break the lease.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   }
+  ],
+  "gold": "lease"
+ },
+ {
+  "id": "s09",
+  "title": "2026 401(k) and IRA contribution limits",
+  "location": "https://www.irs.gov/newsroom/401k-limit-increases-for-2026",
+  "excerpt": "The employee deferral limit for 401(k) plans rises to $24,500 for 2026, and the IRA limit to $7,500. Catch-up contributions for people 50 and older also increase.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   },
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   }
+  ],
+  "gold": "retire"
+ },
+ {
+  "id": "s10",
+  "title": "Blossom end rot in tomatoes",
+  "location": "https://extension.umd.edu/resource/blossom-end-rot-tomatoes",
+  "excerpt": "Blossom end rot shows up as a dark, sunken patch on the bottom of the fruit. It is caused by uneven watering that prevents calcium uptake, not by a lack of calcium in the soil.",
+  "candidates": [
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   },
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   }
+  ],
+  "gold": "garden"
+ },
+ {
+  "id": "s11",
+  "title": "Fingerstyle exercise: the thumb independence drill",
+  "location": "https://www.justinguitar.com/classes/fingerstyle-thumb-independence",
+  "excerpt": "Play a steady alternating bass on the fifth and fourth strings while the index and middle fingers pick the melody. Start at sixty beats per minute and only speed up when every note is even.",
+  "candidates": [
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   }
+  ],
+  "gold": "guitar"
+ },
+ {
+  "id": "s12",
+  "title": "Subaru Outback 2019 recall: fuel pump relay",
+  "location": "https://www.nhtsa.gov/vehicle/2019/SUBARU/OUTBACK",
+  "excerpt": "Subaru is recalling certain 2019 Outback vehicles because the fuel pump relay may fail, causing the engine to stall while driving. Dealers will replace the relay free of charge.",
+  "candidates": [
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   }
+  ],
+  "gold": "car"
+ },
+ {
+  "id": "s13",
+  "title": "A beginner's guide to watercolor washes",
+  "location": "https://www.winsornewton.com/articles/watercolor-washes/",
+  "excerpt": "A flat wash is laid with a loaded brush on tilted paper, working from top to bottom and picking up the bead of pigment at the bottom edge. Cold-pressed paper holds the wash better than hot-pressed.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   }
+  ],
+  "gold": "new"
+ },
+ {
+  "id": "s14",
+  "title": "How the Treaty of Westphalia reshaped European states",
+  "location": "https://www.britannica.com/event/Peace-of-Westphalia",
+  "excerpt": "The 1648 settlements ended the Thirty Years' War and recognized the sovereignty of the German princes, establishing the principle that each state governs its own territory and religion.",
+  "candidates": [
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   },
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   },
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   }
+  ],
+  "gold": "new"
+ },
+ {
+  "id": "s15",
+  "title": "Choosing a telescope for backyard astronomy",
+  "location": "https://skyandtelescope.org/astronomy-equipment/beginners-guide/",
+  "excerpt": "Aperture matters more than magnification. A six-inch Dobsonian shows Saturn's rings and the Orion Nebula for a fraction of the cost of a small refractor on a mount.",
+  "candidates": [
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   }
+  ],
+  "gold": "new"
+ },
+ {
+  "id": "s16",
+  "title": "Notes on the first-trimester prenatal visit",
+  "location": "~/Documents/prenatal-visit-notes.txt",
+  "excerpt": "Bloodwork covers blood type, iron levels and immunity. The midwife recommended folate, no more than 200 mg of caffeine a day, and scheduled the dating ultrasound for week eleven.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   },
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   }
+  ],
+  "gold": "new"
+ },
+ {
+  "id": "s17",
+  "title": "Beekeeping for beginners: your first hive",
+  "location": "https://www.beeculture.com/beginners-first-hive/",
+  "excerpt": "Order packages in winter for an April install. A Langstroth hive needs two deep boxes, a bottom board, a queen excluder is optional, and a smoker to keep the colony calm during inspections.",
+  "candidates": [
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   },
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   },
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   }
+  ],
+  "gold": "new"
+ },
+ {
+  "id": "s18",
+  "title": "Stretching routine for tight hip flexors",
+  "location": "https://www.healthline.com/health/hip-flexor-stretches",
+  "excerpt": "Kneeling lunge stretches, held for thirty seconds on each side, ease hip flexor tightness from sitting. Pair them with glute bridges to reduce the pull on your lower back and knees when you run.",
+  "candidates": [
+   {
+    "id": "garden",
+    "title": "Vegetable garden",
+    "about": "Raised beds, planting calendar and pest notes for the backyard garden",
+    "contains": [
+     "Planting calendar zone 7b",
+     "Tomato blight photos",
+     "Raised bed soil mix"
+    ]
+   },
+   {
+    "id": "marathon",
+    "title": "Marathon training",
+    "about": "Training plan, nutrition and injury notes for a spring marathon",
+    "contains": [
+     "16-week training plan",
+     "Fueling for long runs",
+     "IT band rehab exercises"
+    ]
+   },
+   {
+    "id": "guitar",
+    "title": "Guitar practice",
+    "about": "Songs, scales and technique exercises for learning fingerstyle guitar",
+    "contains": [
+     "Travis picking patterns",
+     "Pentatonic scale shapes",
+     "Song list: Blackbird, Dust in the Wind"
+    ]
+   },
+   {
+    "id": "japan",
+    "title": "Japan trip",
+    "about": "Itinerary planning for two weeks in Japan in April",
+    "contains": [
+     "Kyoto temple guide",
+     "JR Pass pricing 2026",
+     "Tokyo neighborhoods to stay in"
+    ]
+   }
+  ],
+  "gold": "marathon"
+ },
+ {
+  "id": "s19",
+  "title": "Tile adhesive: thinset versus mastic",
+  "location": "https://www.thisoldhouse.com/flooring/tile-adhesive",
+  "excerpt": "Thinset cures to a rigid, water-resistant bond and is the right choice for floors and wet areas like showers. Mastic stays flexible and is sold premixed, but softens with moisture and suits dry walls only.",
+  "candidates": [
+   {
+    "id": "tax",
+    "title": "Taxes 2025",
+    "about": "Federal and state tax filings, receipts and deductions for the 2025 tax year",
+    "contains": [
+     "1099-INT from Chase",
+     "Home office deduction worksheet",
+     "IRS Publication 535: business expenses"
+    ]
+   },
+   {
+    "id": "house",
+    "title": "House renovation",
+    "about": "Kitchen and bathroom remodel: contractor quotes, permits and material choices",
+    "contains": [
+     "Contractor quote from Alder Build",
+     "City permit application",
+     "Tile samples comparison"
+    ]
+   },
+   {
+    "id": "car",
+    "title": "Car ownership",
+    "about": "Maintenance records, insurance and recall notices for the Subaru Outback",
+    "contains": [
+     "Oil change receipts",
+     "Insurance renewal quote",
+     "NHTSA recall 24V-512"
+    ]
+   },
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   },
+   {
+    "id": "lease",
+    "title": "Apartment lease",
+    "about": "The lease, correspondence with the landlord and tenant rights",
+    "contains": [
+     "Signed lease 2025",
+     "Email thread about the broken heater",
+     "Tenant rights summary"
+    ]
+   }
+  ],
+  "gold": "house"
+ },
+ {
+  "id": "s20",
+  "title": "Passing the benchmark: is the judge model right?",
+  "location": "~/notes/judge-calibration.md",
+  "excerpt": "We measured agreement between the LLM judge and human labels on 400 answers. The judge agreed 88 percent of the time but was most wrong on answers that quote the source verbatim.",
+  "candidates": [
+   {
+    "id": "rust",
+    "title": "Rust async runtime",
+    "about": "Notes on tokio, executors and concurrency in Rust",
+    "contains": [
+     "Tokio internals walkthrough",
+     "Pin and Unpin explained",
+     "async-std versus smol"
+    ]
+   },
+   {
+    "id": "retire",
+    "title": "Retirement planning",
+    "about": "401(k), IRA limits and index fund comparisons",
+    "contains": [
+     "Vanguard fund fee comparison",
+     "Roth versus traditional IRA",
+     "Safe withdrawal rate research"
+    ]
+   },
+   {
+    "id": "llm",
+    "title": "LLM evaluation",
+    "about": "Papers and notes on evaluating language models and retrieval quality",
+    "contains": [
+     "RAGAS paper",
+     "BEIR benchmark results",
+     "Pitfalls of LLM-as-judge"
+    ]
+   },
+   {
+    "id": "bread",
+    "title": "Sourdough baking",
+    "about": "Starter care, hydration ratios and loaf troubleshooting",
+    "contains": [
+     "Feeding schedule for a rye starter",
+     "Why my crumb is gummy",
+     "Dutch oven versus baking stone"
+    ]
+   }
+  ],
+  "gold": "llm"
+ }
+]

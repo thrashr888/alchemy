@@ -266,11 +266,41 @@ struct SetNoteReq {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct SetImageReq {
-    /// Source id (from list_sources); must be a URL source.
+    /// Source id (from list_sources); any source but a PDF or image.
     source_id: String,
     /// Web URL of the image to show on the source's gallery card, "-" to
     /// show none, or "" to forget the pick and let the backfill auto-pick.
     image_url: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ScanCoversReq {
+    /// Notebook to scan (from list_notebooks).
+    notebook_id: String,
+    /// Narrow the scan to these source ids; omit to scan the first sources
+    /// that have no cover.
+    #[serde(default)]
+    source_ids: Option<Vec<String>>,
+    /// Sources to scan in this call (default 12, at most 25). Web pages are
+    /// fetched, so a call is bounded; call again for the rest.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct CoverPickReq {
+    /// Source id (from scan_cover_images).
+    source_id: String,
+    /// Web URL of the image to use as the source's cover.
+    image_url: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct ApplyCoversReq {
+    /// Notebook the sources belong to.
+    notebook_id: String,
+    /// One pick per source: the image to use as its cover.
+    picks: Vec<CoverPickReq>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -654,7 +684,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Set a URL source's gallery card image by hand — the ingest-time og:image pick misses some pages. image_url is a web image URL, \"-\" for none, or \"\" to forget the pick so the backfill can auto-pick again. Returns the updated source."
+        description = "Set a source's gallery card image by hand — the ingest-time og:image pick misses some pages. image_url is a web image URL, \"-\" for none, or \"\" to forget the pick so the backfill can auto-pick again. Returns the updated source."
     )]
     async fn set_source_image(
         &self,
@@ -669,6 +699,53 @@ impl AlchemyMcp {
             .map_err(internal)?;
         self.changed("sources", Some(&source.notebook_id));
         json_result(&source)
+    }
+
+    #[tool(
+        description = "Find cover images for sources that have none. Looks in what each source holds (image links in its text) and, for web pages, fetches the page once and reads its pictures: the page's own image, big pictures in the article body, the site icon. Returns candidate image URLs per source, best first, plus how many sources in the notebook lack a cover. Changes nothing; choose with apply_cover_images. Scans a bounded batch per call (default 12, max 25)."
+    )]
+    async fn scan_cover_images(
+        &self,
+        Parameters(ScanCoversReq {
+            notebook_id,
+            source_ids,
+            limit,
+        }): Parameters<ScanCoversReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let report = commands::scan_cover_images_impl(
+            &state,
+            &notebook_id,
+            source_ids.as_deref(),
+            limit.map(|n| n as usize),
+        )
+        .await
+        .map_err(internal)?;
+        json_result(&report)
+    }
+
+    #[tool(
+        description = "Set cover images chosen from scan_cover_images. picks is a list of {source_id, image_url}. Only sources that still have no cover are changed; anything else is skipped and reported with a reason. Returns how many were applied."
+    )]
+    async fn apply_cover_images(
+        &self,
+        Parameters(ApplyCoversReq { notebook_id, picks }): Parameters<ApplyCoversReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let picks: Vec<commands::CoverPick> = picks
+            .into_iter()
+            .map(|p| commands::CoverPick {
+                source_id: p.source_id,
+                image_url: p.image_url,
+            })
+            .collect();
+        let report = commands::apply_cover_images_impl(&state, &notebook_id, &picks)
+            .await
+            .map_err(internal)?;
+        if report.applied > 0 {
+            self.changed("sources", Some(&notebook_id));
+        }
+        json_result(&report)
     }
 
     #[tool(

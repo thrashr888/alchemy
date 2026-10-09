@@ -20,6 +20,9 @@ export interface Notebook {
   color: string;
   /** Lucide icon slug, "" → default book. See lib/notebookIcons.ts. */
   icon: string;
+  /** The chosen cover, "<mist|dither|ascii>:<seed>", or "" for automatic
+   *  (the style spread by id, the picture seeded by the id). */
+  cover?: string;
   /** "" (active) | "archived" | "system". Archived notebooks leave the main
    *  grid; system notebooks (Briefs) never appear on the shelf at all but
    *  work like any other notebook when opened. */
@@ -59,6 +62,53 @@ export interface NotebookSuggestion {
   notebookId: string;
   title: string;
   isNew: boolean;
+  /** Typed judge only: its margin confidence, the judge's name, and whether
+   *  it was confident and trusted enough to file without asking. */
+  confidence?: number | null;
+  judge?: string | null;
+  auto?: boolean;
+  /** Existing notebooks in the judge's order, best first. */
+  ranked?: { notebookId: string; title: string; probability: number }[];
+}
+
+/** One capture waiting in the Inbox: saved the moment it arrived, filed when
+ *  the user says. Nothing is imported until then. */
+export interface InboxItem {
+  id: string;
+  createdAt: number;
+  url: string;
+  text: string;
+  title: string;
+  files: string[];
+  /** Up to 600 characters of what the item says. */
+  excerpt: string;
+  suggestedNotebookId: string;
+  suggestedTitle: string;
+  /** The suggestion is a new notebook named `suggestedTitle`. */
+  isNew: boolean;
+  /** The judge's confidence (its top-two margin) in the suggestion; null
+   *  when no judge answered. */
+  probability: number | null;
+  /** The judge was confident and trusted, and chose an existing notebook:
+   *  the one case "Accept all confident" may file unattended. */
+  auto: boolean;
+  /** Other notebooks, best first, at most four. */
+  alternatives: InboxAlternative[];
+  judge: string;
+  /** False until the suggestion has been computed. */
+  suggested: boolean;
+}
+
+/** Where an accepted Inbox item landed. */
+export interface InboxAccepted {
+  notebookId: string;
+  title: string;
+}
+
+export interface InboxAlternative {
+  notebookId: string;
+  title: string;
+  probability: number;
 }
 
 /** Where a notebook keeps itself on disk as an OKF bundle (RFC-okf-live §5.1).
@@ -257,6 +307,33 @@ export interface MacFileHit {
   /** mtime in unix millis (0 when unknown). */
   mtime: number;
   ingestible: boolean;
+}
+
+/** One cover-less source and the images found for it (Cover images sheet). */
+export interface CoverScan {
+  sourceId: string;
+  title: string;
+  sourceType: string;
+  /** Absolute image URLs, best first. */
+  candidates: string[];
+  /** Why the scan came up short, or "" when it went as planned. */
+  note: string;
+}
+
+export interface CoverScanReport {
+  rows: CoverScan[];
+  /** Sources in the notebook with no cover, before this batch. */
+  missing: number;
+}
+
+export interface CoverPick {
+  sourceId: string;
+  imageUrl: string;
+}
+
+export interface CoverApplyReport {
+  applied: number;
+  skipped: { sourceId: string; reason: string }[];
 }
 
 /** Tally of what a folder rescan changed. */
@@ -570,6 +647,25 @@ export interface ActivityStats {
   backgroundCostMicros: number;
   /** Measured output tokens across every recorded generation, lifetime. */
   tokensGenerated: number;
+}
+
+/** The typed judge's recent work, from traces/judge.jsonl (Rust JudgeActivity).
+ *  All zeros and an empty `judge` when it has never run. */
+export interface JudgeActivity {
+  requestsToday: number;
+  requests7d: number;
+  tokensToday: number;
+  tokens7d: number;
+  /** Label of the latest call: "decision:clef-flash:latest", "jev:jev-1.13.0". */
+  judge: string;
+  /** The latest judge is TypeSafe's cloud API: decisions leave the Mac. */
+  cloud: boolean;
+  /** Median round trip over 7 days, ms. */
+  medianMs: number;
+  /** Calls per local day, oldest first, 7 entries. */
+  daily: number[];
+  /** Top call sites over 7 days. */
+  sites: ActivityCount[];
 }
 
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */

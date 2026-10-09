@@ -213,12 +213,13 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Ask where an unfiled source belongs before adding it. Returns {notebookId, title, isNew}: an existing notebook to file into, or isNew=true with a proposed title when nothing fits (create it, then add). Pass the text, or just a url and it will be fetched."
+        description = "Ask where an unfiled source belongs before adding it. Returns {notebookId, title, isNew}: an existing notebook to file into, or isNew=true with a proposed title when nothing fits (create it, then add). When a typed judge is configured it also carries {confidence, judge, auto, ranked}: auto=true means the judge was confident and trusted, so file without asking; otherwise treat the answer as a proposal and show ranked (best first, with probabilities). A new notebook is never auto: propose it. Pass the text, or just a url and it will be fetched."
     )]
     async fn suggest_notebook(
         &self,
         Parameters(SuggestNotebookReq { title, text, url }): Parameters<SuggestNotebookReq>,
     ) -> Result<CallToolResult, McpError> {
+        let location = url.clone();
         let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
             match crate::ingest::extract_url(&url).await {
                 Ok(ex) => (
@@ -236,9 +237,10 @@ impl AlchemyMcp {
         };
         // Snapshot the Ai under a momentary read guard, never across an await.
         let ai = self.state().ai.read().await.clone();
-        let suggestion = crate::router::suggest_notebook(&self.state().db, &ai, &title, &text)
-            .await
-            .map_err(internal)?;
+        let suggestion =
+            crate::router::suggest_notebook(&self.state().db, &ai, &title, &text, &location)
+                .await
+                .map_err(internal)?;
         json_result(&suggestion)
     }
 
@@ -261,6 +263,7 @@ impl AlchemyMcp {
             updated_at: ts,
             color: NOTEBOOK_PALETTE[0].to_string(),
             icon,
+            cover: String::new(),
             status: String::new(),
             growth_web: false,
             source_count: 0,

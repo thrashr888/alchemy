@@ -16,6 +16,10 @@ pub struct Notebook {
     /// at creation; user-set from the rename dialog thereafter.
     #[serde(default)]
     pub icon: String,
+    /// The cover the user chose: "<style>:<seed>" (`mist`, `dither` or
+    /// `ascii`; the seed names the picture), or "" for the automatic one.
+    #[serde(default)]
+    pub cover: String,
     /// "" (active) | "archived" | "system". Archived notebooks are hidden
     /// from the main grid but keep all their data and can be unarchived;
     /// system notebooks (Briefs) never appear on the shelf at all.
@@ -43,7 +47,7 @@ pub struct Notebook {
     pub built_in: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
     pub id: String,
@@ -787,6 +791,29 @@ pub struct ActivityStats {
     pub tokens_generated: i64,
 }
 
+/// The typed judge's recent work, read off `traces/judge.jsonl` for the
+/// Settings -> Activity tile and the `judge_activity` MCP tool. All zeros and
+/// an empty `judge` when the judge has never run or the file is unreadable.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeActivity {
+    pub requests_today: i64,
+    pub requests_7d: i64,
+    pub tokens_today: i64,
+    pub tokens_7d: i64,
+    /// Label of the most recent call ("decision:clef-flash:latest",
+    /// "jev:jev-1.13.0", "ollama:..."); "" when none is on record.
+    pub judge: String,
+    /// True when that judge is TypeSafe's cloud API: decisions leave the Mac.
+    pub cloud: bool,
+    /// Median round-trip over the last 7 days, in ms; 0 with no calls.
+    pub median_ms: i64,
+    /// Calls per local day over the last 7 days, oldest first (7 entries).
+    pub daily: Vec<i64>,
+    /// Top call sites over the last 7 days, most calls first.
+    pub sites: Vec<ActivityCount>,
+}
+
 /// One source as a Home card names it: enough to say what the notebook is
 /// made of, and nothing the card doesn't draw.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -852,4 +879,66 @@ pub struct CorpusTag {
     pub count: usize,
     /// The notebooks those sources sit in, sorted, deduped.
     pub notebook_ids: Vec<String>,
+}
+
+/// One capture waiting in the Inbox: saved the instant it arrived, filed when
+/// the user says. Nothing is imported until then, so there is no source to
+/// move and nothing for OKF to know about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxItem {
+    pub id: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Up to 600 characters of what the item says, for the row.
+    #[serde(default)]
+    pub excerpt: String,
+    /// Empty when the suggestion is a new notebook, or none was reached.
+    #[serde(default)]
+    pub suggested_notebook_id: String,
+    /// The notebook's title, or the proposed name when `is_new`.
+    #[serde(default)]
+    pub suggested_title: String,
+    #[serde(default)]
+    pub is_new: bool,
+    /// The judge's confidence (its top-two margin) in the suggestion. None
+    /// when no judge answered and the router's pick stands alone.
+    #[serde(default)]
+    pub probability: Option<f64>,
+    /// The judge was confident and trusted, and chose an existing notebook:
+    /// the one case "Accept all confident" may file unattended.
+    #[serde(default)]
+    pub auto: bool,
+    /// Other existing notebooks in the judge's order, at most four.
+    #[serde(default)]
+    pub alternatives: Vec<InboxAlternative>,
+    /// Which judge answered; empty when none did.
+    #[serde(default)]
+    pub judge: String,
+    /// False until the suggestion has been computed (or given up on).
+    #[serde(default)]
+    pub suggested: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxAlternative {
+    pub notebook_id: String,
+    pub title: String,
+    pub probability: f64,
+}
+
+/// Where an accepted Inbox item landed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxAccepted {
+    pub notebook_id: String,
+    pub title: String,
 }
