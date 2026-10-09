@@ -16,9 +16,7 @@ import {
   BookOpen,
   Clock,
   FileText,
-  MessagesSquare,
   Moon,
-  Newspaper,
   Package,
   PanelLeftClose,
   PanelRightClose,
@@ -588,58 +586,6 @@ export function useNightShiftTone() {
       .catch(() => {});
   }, []);
   return nightShiftTone(status);
-}
-
-/** The collapsed rails: one icon that reopens its sidebar.
- *
- *  Nothing mounts this since the Library: Home has one sidebar with one
- *  toggle in the toolbar, so there is no pair of stacked cards to fold down
- *  to an icon. Kept because the shape is the answer if a surface here ever
- *  becomes a card beside the sheet again. */
-export function SidebarRail({
-  icon,
-  title,
-  dot,
-  dotClass,
-  onClick,
-}: {
-  icon: "staff" | "brief" | "reports" | "chats";
-  title: string;
-  dot?: boolean;
-  /** Tone for the dot when it carries a state rather than "something new":
-   *  Staff's rail mirrors its card header's on/paused/off. */
-  dotClass?: string;
-  onClick: () => void;
-}) {
-  // Sun for the Brief: it is the morning read, and it answers Staff's Moon —
-  // the Night Shift wrote it while you were away.
-  const Icon =
-    icon === "staff"
-      ? Moon
-      : icon === "chats"
-        ? MessagesSquare
-        : icon === "brief"
-          ? Sun
-          : Newspaper;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      className="relative rounded-md p-2 text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-    >
-      <Icon className="h-4 w-4" />
-      {dot && (
-        <span
-          className={cn(
-            "absolute right-1 top-1 h-1.5 w-1.5 rounded-full",
-            dotClass ?? "bg-primary",
-          )}
-        />
-      )}
-    </button>
-  );
 }
 
 /** What the Registry filed on its own, lately.
