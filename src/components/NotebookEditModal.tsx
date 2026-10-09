@@ -12,6 +12,7 @@ import {
   COVER_STYLES,
   COVER_STYLE_LABEL,
   coverChoice,
+  NO_COVER,
   useNotebookCover,
   type CoverStyle,
 } from "@/lib/cover";
@@ -139,6 +140,20 @@ function CoverPicker({
           Cover
         </span>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-pressed={cover === NO_COVER}
+            onClick={() => onCover(NO_COVER)}
+            className={cn(
+              "rounded-md px-2 py-0.5 text-caption transition-colors",
+              cover === NO_COVER
+                ? "bg-primary/10 text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            title="No cover on the card or the notebook page"
+          >
+            None
+          </button>
           <button
             type="button"
             aria-pressed={cover === ""}
