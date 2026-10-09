@@ -12597,6 +12597,21 @@ pub async fn corpus_timeline(
     e(corpus_timeline_impl(&state, notebook_id.as_deref(), true).await)
 }
 
+/// The Judge tile on Settings → Activity: recent typed-judge calls read off
+/// `traces/judge.jsonl`. Infallible from the UI's side; an absent or
+/// unreadable file is zero counts.
+#[tauri::command]
+pub async fn judge_activity(
+    state: State<'_, AppState>,
+) -> Result<crate::models::JudgeActivity, String> {
+    let dir = state.trace_dir.clone();
+    Ok(tokio::task::spawn_blocking(move || {
+        crate::activity::judge_activity(&dir, chrono::Local::now())
+    })
+    .await
+    .unwrap_or_default())
+}
+
 /// Everything Settings → Activity renders — see activity.rs and
 /// docs/RFC-activity-view.md. Read-only; aggregated fresh per call.
 #[tauri::command]

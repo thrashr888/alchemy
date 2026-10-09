@@ -242,4 +242,22 @@ impl AlchemyMcp {
             chrono::Local::now().date_naive(),
         ))
     }
+
+    #[tool(
+        description = "The typed judge's recent work, read off traces/judge.jsonl (the same \
+                       numbers as the Judge tile in Settings → Activity): calls and tokens \
+                       today and over 7 days, the judge that served the latest call (a \
+                       `jev:` label means a cloud judge, so decisions left the Mac), median \
+                       latency, calls per day, and the top call sites. Zeros when the judge \
+                       has not run. Read-only."
+    )]
+    async fn judge_activity(&self) -> Result<CallToolResult, McpError> {
+        let dir = self.state().trace_dir.clone();
+        let stats = tokio::task::spawn_blocking(move || {
+            crate::activity::judge_activity(&dir, chrono::Local::now())
+        })
+        .await
+        .unwrap_or_default();
+        json_result(&stats)
+    }
 }

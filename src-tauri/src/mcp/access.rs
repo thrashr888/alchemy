@@ -81,6 +81,7 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ("get_source", Read, "read a source"),
     ("grep_sources", Read, "search source files"),
     ("grow", Read, "see what a notebook is missing"),
+    ("judge_activity", Read, "check what the judge has decided"),
     ("list_home_chats", Read, "list your chats"),
     ("list_notebooks", Read, "list your notebooks"),
     ("list_notes", Read, "list a notebook's notes"),

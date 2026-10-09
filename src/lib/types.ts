@@ -599,6 +599,25 @@ export interface ActivityStats {
   tokensGenerated: number;
 }
 
+/** The typed judge's recent work, from traces/judge.jsonl (Rust JudgeActivity).
+ *  All zeros and an empty `judge` when it has never run. */
+export interface JudgeActivity {
+  requestsToday: number;
+  requests7d: number;
+  tokensToday: number;
+  tokens7d: number;
+  /** Label of the latest call: "decision:clef-flash:latest", "jev:jev-1.13.0". */
+  judge: string;
+  /** The latest judge is TypeSafe's cloud API: decisions leave the Mac. */
+  cloud: boolean;
+  /** Median round trip over 7 days, ms. */
+  medianMs: number;
+  /** Calls per local day, oldest first, 7 entries. */
+  daily: number[];
+  /** Top call sites over 7 days. */
+  sites: ActivityCount[];
+}
+
 /** One exact-match window from the `/grep` chat command (Rust grep_sources). */
 export interface GrepHit {
   sourceId: string;
