@@ -2274,42 +2274,68 @@ pub async fn fetch_lead_image(url: &str) -> Option<String> {
 /// the same two refusals an import makes — a failing status, and a page
 /// whose own title says it is the error page. `Err` is the reason in words
 /// the sheet can show.
-pub async fn fetch_page_html(url: &str) -> Result<String, &'static str> {
+pub async fn fetch_page_html(raw_url: &str) -> Result<String, &'static str> {
     const CAP: usize = 2 * 1024 * 1024;
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
         return Err("Not a web page");
     }
-    let client = page_client(10).ok_or("Couldn't fetch the page")?;
-    let mut resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| "Couldn't fetch the page")?;
-    if !resp.status().is_success() {
-        return Err("The page returned an error");
-    }
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if !(content_type.is_empty() || content_type.contains("html") || content_type.contains("xml")) {
-        return Err("Not a web page");
-    }
-    let mut body: Vec<u8> = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        body.extend_from_slice(&chunk);
-        if body.len() >= CAP {
-            body.truncate(CAP);
-            break;
+    // Unattended, like Grow's probes (`extract_url_public`): every hop,
+    // redirects included, must land on the public internet, so a stored
+    // source URL on the user's own network is never refetched by a sweep.
+    let client =
+        browser_client(reqwest::redirect::Policy::none()).map_err(|_| "Couldn't fetch the page")?;
+    let mut url = raw_url.to_string();
+    for _hop in 0..6 {
+        ensure_public(&url)
+            .await
+            .map_err(|_| "Not on the public internet; not refetched")?;
+        let mut resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|_| "Couldn't fetch the page")?;
+        if resp.status().is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("Couldn't fetch the page")?;
+            url = reqwest::Url::parse(&url)
+                .and_then(|base| base.join(next))
+                .map(|u| u.to_string())
+                .map_err(|_| "Couldn't fetch the page")?;
+            continue;
         }
+        if !resp.status().is_success() {
+            return Err("The page returned an error");
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !(content_type.is_empty()
+            || content_type.contains("html")
+            || content_type.contains("xml"))
+        {
+            return Err("Not a web page");
+        }
+        let mut body: Vec<u8> = Vec::new();
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            body.extend_from_slice(&chunk);
+            if body.len() >= CAP {
+                body.truncate(CAP);
+                break;
+            }
+        }
+        let html = String::from_utf8_lossy(&body).into_owned();
+        if extract_title(&html).is_some_and(|t| title_looks_like_error(&t)) {
+            return Err("The page looks like an error page");
+        }
+        return Ok(html);
     }
-    let html = String::from_utf8_lossy(&body).into_owned();
-    if extract_title(&html).is_some_and(|t| title_looks_like_error(&t)) {
-        return Err("The page looks like an error page");
-    }
-    Ok(html)
+    Err("The page redirected too many times")
 }
 
 /// What a link is before it is added: the Grow pane's hover preview

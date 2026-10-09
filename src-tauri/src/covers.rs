@@ -95,29 +95,33 @@ pub fn content_images(text: &str, base_url: Option<&str>) -> Vec<String> {
     while let Some(off) = text[at..].find("![") {
         let start = at + off;
         at = start + 2;
-        let Some(close) = text[at..].find("](") else {
-            break;
-        };
-        // The alt text stays on one line; a stray "![" in prose must not
-        // swallow the next paragraph's link.
-        if text[at..at + close].contains('\n') {
+        // The alt text and the target stay on one line: a stray "![" in
+        // prose must not swallow the next paragraph's link, and every
+        // lookahead stops at the line end so a page of stray "![" lines
+        // is read once, not once per line.
+        let line_end = text[at..].find('\n').map(|e| at + e).unwrap_or(text.len());
+        let Some(close) = text[at..line_end].find("](") else {
+            at = line_end;
             continue;
-        }
+        };
         let target = at + close + 2;
         let mut i = target;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        while i < line_end && (bytes[i] == b' ' || bytes[i] == b'\t') {
             i += 1;
         }
-        let (raw, end) = if bytes.get(i) == Some(&b'<') {
-            match text[i + 1..].find('>') {
+        let (raw, end) = if bytes.get(i) == Some(&b'<') && i < line_end {
+            match text[i + 1..line_end].find('>') {
                 Some(e) => (&text[i + 1..i + 1 + e], i + 2 + e),
-                None => continue,
+                None => {
+                    at = line_end;
+                    continue;
+                }
             }
         } else {
-            let e = text[i..]
+            let e = text[i..line_end]
                 .find(|c: char| c.is_whitespace() || c == ')')
                 .map(|e| i + e)
-                .unwrap_or(text.len());
+                .unwrap_or(line_end);
             (&text[i..e], e)
         };
         at = end;
@@ -755,6 +759,19 @@ mod tests {
             content_images(md, None),
             vec!["https://x.example.com/p.png"]
         );
+    }
+
+    #[test]
+    fn a_page_of_stray_bang_brackets_is_read_once() {
+        // 20,000 lines that open an image and never close it, then one
+        // that does. Rescanning to the real link from every stray line
+        // took seconds; bounded to the line it is milliseconds.
+        let mut text = "![stray\n".repeat(20_000);
+        text.push_str("![ok](https://x.test/y.png)\n");
+        let t0 = std::time::Instant::now();
+        let found = content_images(&text, None);
+        assert_eq!(found, vec!["https://x.test/y.png".to_string()]);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
