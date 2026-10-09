@@ -54,6 +54,124 @@ pub fn trace_times(dir: &Path) -> Vec<i64> {
     out
 }
 
+/// Newest judge trace lines to look at. The file rotates at ~5 MB, so this
+/// bounds the scan well under that; Settings never waits on a large file.
+const JUDGE_SCAN_LINES: usize = 5_000;
+/// Tail window read from disk, sized for `JUDGE_SCAN_LINES` of ~600 bytes.
+const JUDGE_SCAN_BYTES: u64 = 4 * 1024 * 1024;
+const JUDGE_TOP_SITES: usize = 4;
+
+/// The last `max_lines` lines of `path`, oldest first. Reads at most
+/// `max_bytes` from the end; the first line of a clipped read is dropped as
+/// it may be cut mid-record. Absent or unreadable files yield nothing.
+fn tail_lines(path: &Path, max_lines: usize, max_bytes: u64) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(max_bytes);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if f.take(max_bytes).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
+    if start > 0 {
+        lines.next();
+    }
+    let all: Vec<&str> = lines.collect();
+    all[all.len().saturating_sub(max_lines)..]
+        .iter()
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Total tokens a backend reported for one call. `usage` varies: Jev writes
+/// `input_tokens` and `output_tokens`, the Ollama path only `input_tokens`,
+/// some gateways a `total_tokens`. Null or odd shapes count as zero.
+fn usage_tokens(usage: &serde_json::Value) -> i64 {
+    let num = |k: &str| usage.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
+    let total = num("total_tokens");
+    if total > 0 {
+        total
+    } else {
+        num("input_tokens") + num("output_tokens")
+    }
+}
+
+/// Aggregate `traces/judge.jsonl` for the Judge tile. Reads only the tail,
+/// skips malformed lines, and treats a missing file as zeros: the tile must
+/// never be the reason Settings fails. `now` is a parameter for tests.
+pub fn judge_activity(dir: &Path, now: chrono::DateTime<Local>) -> crate::models::JudgeActivity {
+    let lines = tail_lines(&dir.join("judge.jsonl"), JUDGE_SCAN_LINES, JUDGE_SCAN_BYTES);
+    judge_activity_from(lines.iter().map(String::as_str), now)
+}
+
+fn judge_activity_from<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    now: chrono::DateTime<Local>,
+) -> crate::models::JudgeActivity {
+    let today = now.date_naive();
+    let mut out = crate::models::JudgeActivity {
+        daily: vec![0; 7],
+        ..Default::default()
+    };
+    let mut latencies: Vec<i64> = Vec::new();
+    let mut sites: HashMap<String, i64> = HashMap::new();
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(ts) = v.get("ts").and_then(|t| t.as_i64()) else {
+            continue;
+        };
+        // The judge writes seconds; tolerate millis from any other writer.
+        let ms = if ts > 100_000_000_000 { ts } else { ts * 1000 };
+        if let Some(label) = v.get("judge").and_then(|j| j.as_str()) {
+            // File order is time order, so the last label seen is the newest.
+            out.judge = label.to_string();
+        }
+        let Some(date) = local_date(ms) else { continue };
+        let age = (today - date).num_days();
+        if !(0..7).contains(&age) {
+            continue;
+        }
+        let tokens = v.get("usage").map(usage_tokens).unwrap_or(0);
+        out.requests_7d += 1;
+        out.tokens_7d += tokens;
+        out.daily[(6 - age) as usize] += 1;
+        if age == 0 {
+            out.requests_today += 1;
+            out.tokens_today += tokens;
+        }
+        if let Some(m) = v.get("ms").and_then(|m| m.as_i64()) {
+            latencies.push(m);
+        }
+        if let Some(site) = v.get("site").and_then(|s| s.as_str()) {
+            *sites.entry(site.to_string()).or_default() += 1;
+        }
+    }
+    out.cloud = out.judge.starts_with("jev");
+    latencies.sort_unstable();
+    out.median_ms = match latencies.len() {
+        0 => 0,
+        n if n % 2 == 1 => latencies[n / 2],
+        n => (latencies[n / 2 - 1] + latencies[n / 2]) / 2,
+    };
+    let mut ranked: Vec<_> = sites.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out.sites = ranked
+        .into_iter()
+        .take(JUDGE_TOP_SITES)
+        .map(|(label, count)| ActivityCount { label, count })
+        .collect();
+    out
+}
+
 /// Aggregate row-level metadata into everything the Activity tab renders.
 ///
 /// - `messages`: (notebook_id, role, model caption, created_at, words) —
@@ -403,5 +521,73 @@ mod tests {
         assert_eq!(s.notebooks[0].label, "Research");
         assert_eq!(s.notebooks[1].label, "(deleted)");
         assert_eq!(s.notebooks[1].count, 2, "deleted sinks even with more");
+    }
+
+    fn judge_line(days_ago: i64, site: &str, judge: &str, ms: i64, usage: &str) -> String {
+        let when = Local::now() - chrono::Duration::days(days_ago);
+        format!(
+            r#"{{"ts":{},"site":"{site}","judge":"{judge}","questions":1,"usage":{usage},"ms":{ms}}}"#,
+            when.timestamp()
+        )
+    }
+
+    #[test]
+    fn judge_activity_windows_tokens_median_and_sites() {
+        let lines = [
+            judge_line(30, "triage", "jev:jev-1.13.0", 900, "{}"), // out of window
+            judge_line(
+                3,
+                "tool_gate",
+                "jev:jev-1.13.0",
+                100,
+                r#"{"input_tokens":10,"output_tokens":5}"#,
+            ),
+            "{ not json".to_string(),
+            judge_line(
+                0,
+                "second_look",
+                "decision:clef-flash:latest",
+                300,
+                r#"{"input_tokens":40}"#,
+            ),
+            judge_line(0, "second_look", "decision:clef-flash:latest", 200, "null"),
+            r#"{"site":"no_ts"}"#.to_string(),
+        ];
+        let a = judge_activity_from(lines.iter().map(String::as_str), Local::now());
+        assert_eq!(a.requests_today, 2);
+        assert_eq!(a.requests_7d, 3);
+        assert_eq!(a.tokens_today, 40);
+        assert_eq!(a.tokens_7d, 55);
+        assert_eq!(a.median_ms, 200);
+        assert_eq!(a.judge, "decision:clef-flash:latest");
+        assert!(!a.cloud);
+        assert_eq!(a.daily.len(), 7);
+        assert_eq!(a.daily[6], 2);
+        assert_eq!(a.daily[3], 1);
+        assert_eq!(a.sites[0].label, "second_look");
+        assert_eq!(a.sites[0].count, 2);
+    }
+
+    #[test]
+    fn judge_activity_flags_the_cloud_judge() {
+        let lines = [judge_line(0, "triage", "jev:jev-1.13.0", 80, "{}")];
+        let a = judge_activity_from(lines.iter().map(String::as_str), Local::now());
+        assert!(a.cloud);
+    }
+
+    #[test]
+    fn judge_activity_reads_the_tail_and_tolerates_absence() {
+        let dir = std::env::temp_dir().join(format!("alchemy-judge-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(judge_activity(&dir, Local::now()).requests_7d, 0);
+        let mut text = String::new();
+        for _ in 0..(JUDGE_SCAN_LINES + 50) {
+            text.push_str(&judge_line(0, "triage", "decision:m", 10, "{}"));
+            text.push('\n');
+        }
+        std::fs::write(dir.join("judge.jsonl"), text).unwrap();
+        let a = judge_activity(&dir, Local::now());
+        assert_eq!(a.requests_7d as usize, JUDGE_SCAN_LINES, "scan is capped");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -562,6 +562,7 @@ pub fn run() {
             commands::list_note_summaries,
             commands::read_note,
             commands::activity_stats,
+            commands::judge_activity,
             commands::corpus_timeline,
             okf::shared_bundle_offers_cmd,
             okf::open_shared_bundle_cmd,

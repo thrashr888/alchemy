@@ -12,6 +12,7 @@ import type {
   AgentChange,
   UndoReport,
   ActivityStats,
+  JudgeActivity,
   Citation,
   AiConfig,
   BuildInfo,
@@ -485,6 +486,7 @@ export const api = {
   listNotes: (notebookId: string) =>
     run(query<Note[]>("list_notes", { notebookId })),
   activityStats: () => run(query<ActivityStats>("activity_stats")),
+  judgeActivity: () => run(query<JudgeActivity>("judge_activity")),
   corpusTimeline: (notebookId?: string) =>
     run(query<CorpusTimeline>("corpus_timeline", { notebookId })),
   homeActivity: () => run(query<HomeActivity>("home_activity")),

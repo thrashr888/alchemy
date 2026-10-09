@@ -787,6 +787,29 @@ pub struct ActivityStats {
     pub tokens_generated: i64,
 }
 
+/// The typed judge's recent work, read off `traces/judge.jsonl` for the
+/// Settings -> Activity tile and the `judge_activity` MCP tool. All zeros and
+/// an empty `judge` when the judge has never run or the file is unreadable.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JudgeActivity {
+    pub requests_today: i64,
+    pub requests_7d: i64,
+    pub tokens_today: i64,
+    pub tokens_7d: i64,
+    /// Label of the most recent call ("decision:clef-flash:latest",
+    /// "jev:jev-1.13.0", "ollama:..."); "" when none is on record.
+    pub judge: String,
+    /// True when that judge is TypeSafe's cloud API: decisions leave the Mac.
+    pub cloud: bool,
+    /// Median round-trip over the last 7 days, in ms; 0 with no calls.
+    pub median_ms: i64,
+    /// Calls per local day over the last 7 days, oldest first (7 entries).
+    pub daily: Vec<i64>,
+    /// Top call sites over the last 7 days, most calls first.
+    pub sites: Vec<ActivityCount>,
+}
+
 /// One source as a Home card names it: enough to say what the notebook is
 /// made of, and nothing the card doesn't draw.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
