@@ -226,6 +226,32 @@ pub async fn apply_cover_images(
     e(apply_cover_images_impl(&state, &notebook_id, &picks).await)
 }
 
+/// A stock photo for a notebook cover, seeded so the same notebook always
+/// draws the same picture. picsum.photos serves Unsplash photos with no key;
+/// it is fetched here rather than in the webview because a cross-origin
+/// image cannot be read back off a canvas, and the front end stylizes the
+/// photo (dither, ASCII) before it is shown. A data URL never taints.
+#[tauri::command]
+pub async fn cover_photo(seed: String, width: u32, height: u32) -> Result<String, String> {
+    if !(16..=1024).contains(&width) || !(16..=1024).contains(&height) {
+        return Err("Cover size out of range".into());
+    }
+    let seed: String = seed
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(64)
+        .collect();
+    let url = format!("https://picsum.photos/seed/{seed}/{width}/{height}");
+    let bytes = crate::ingest::fetch_bytes(&url, 2 * 1024 * 1024)
+        .await
+        .ok_or("Couldn't fetch a cover photo")?;
+    use base64::Engine;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

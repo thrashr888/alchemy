@@ -546,6 +546,7 @@ pub fn run() {
             commands::set_source_image,
             commands::source_image_candidates,
             commands::scan_cover_images,
+            commands::cover_photo,
             commands::apply_cover_images,
             commands::peek_url,
             commands::refresh_source_url,

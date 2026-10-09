@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { buildProgram } from "@/components/DitherBackground";
+import { api } from "@/lib/api";
 
 /**
  * Procedural covers for Home's notebook cards: the backdrop shader's mist
@@ -25,7 +26,7 @@ export const COVER_H = 140;
  *  contrast in every theme, and the dither averages far lower than that. A
  *  bright tint lifts a dark surface more than a dark tint dents a light one,
  *  so dark gets the smaller number. */
-const PEAK_ALPHA = { dark: 0.17, light: 0.16 } as const;
+const PEAK_ALPHA = { dark: 0.3, light: 0.26 } as const;
 /** The wash thins toward the top, where the name and source titles sit. */
 const TOP_FADE = 0.35;
 const CACHE_LIMIT = 160;
@@ -33,12 +34,35 @@ const CACHE_LIMIT = 160;
 const FALLBACK_RGB: [number, number, number] = [138, 147, 166];
 
 type Scheme = "dark" | "light";
+
+/** How a cover is drawn. `mist` is the shader field. `dither` and `ascii`
+ *  start from a stock photo seeded by the notebook (fetched by Rust) and
+ *  reduce it to the notebook's color: an ordered 1-bit dither, or a grid of
+ *  characters by brightness. TRIAL: `localStorage.coverStyle` picks one for
+ *  the whole shelf, or `mix` (the default) spreads the three by id. */
+export type CoverStyle = "mist" | "dither" | "ascii";
+const STYLES: readonly CoverStyle[] = ["mist", "dither", "ascii"];
+export function coverStyleFor(id: string): CoverStyle {
+  let pick = "mix";
+  try {
+    pick = localStorage.getItem("coverStyle") || "mix";
+  } catch {
+    // Private mode: the default still works.
+  }
+  if ((STYLES as readonly string[]).includes(pick)) return pick as CoverStyle;
+  return STYLES[hash32(id + "|style") % STYLES.length];
+}
+
 interface Request {
   key: string;
   id: string;
   color: string;
   scheme: Scheme;
   dpr: number;
+  style: CoverStyle;
+  /** The box in CSS px: the card thumb, or the notebook page's band. */
+  w: number;
+  h: number;
 }
 
 const cache = new Map<string, string>();
@@ -169,8 +193,8 @@ function render(req: Request): string | null {
   const g = getGpu();
   if (!g) return null;
   const { canvas, gl } = g;
-  const w = Math.round(COVER_W * req.dpr);
-  const h = Math.round(COVER_H * req.dpr);
+  const w = Math.round(req.w * req.dpr);
+  const h = Math.round(req.h * req.dpr);
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
@@ -224,6 +248,174 @@ function render(req: Request): string | null {
   return out.toDataURL("image/png");
 }
 
+// ---- photo styles ----------------------------------------------------------
+
+/** Peak opacity of the drawn marks per style and scheme: a dot or a glyph
+ *  is a hard edge where the mist was a haze, so it can afford to be dimmer
+ *  per pixel and still read as a picture. The same top fade applies. */
+const DOT_ALPHA = { dark: 0.55, light: 0.45 } as const;
+const GLYPH_ALPHA = { dark: 0.75, light: 0.6 } as const;
+/** 8x8 Bayer threshold matrix, the classic ordered dither. */
+const BAYER8 = [
+  [0, 32, 8, 40, 2, 34, 10, 42],
+  [48, 16, 56, 24, 50, 18, 58, 26],
+  [12, 44, 4, 36, 14, 46, 6, 38],
+  [60, 28, 52, 20, 62, 30, 54, 22],
+  [3, 35, 11, 43, 1, 33, 9, 41],
+  [51, 19, 59, 27, 49, 17, 57, 25],
+  [15, 47, 7, 39, 13, 45, 5, 37],
+  [63, 31, 55, 23, 61, 29, 53, 21],
+];
+const ASCII_RAMP = " .:-=+*#%@";
+
+const photos = new Map<string, Promise<HTMLImageElement | null>>();
+
+/** The seeded photo for a notebook, decoded, or null when it cannot be
+ *  fetched (offline) — the caller then falls back to the mist. */
+function photoFor(id: string, w: number, h: number): Promise<HTMLImageElement | null> {
+  const key = `${id}|${w}|${h}`;
+  let p = photos.get(key);
+  if (!p) {
+    p = api
+      .coverPhoto(id, w, h)
+      .then(
+        (url) =>
+          new Promise<HTMLImageElement | null>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => resolve(null);
+            img.src = url;
+          }),
+      )
+      .catch(() => null);
+    photos.set(key, p);
+  }
+  return p;
+}
+
+/** Luminance of the photo at cover size, one byte per pixel, plus the
+ *  canvas it was drawn on (reused for the output). */
+function luminance(img: HTMLImageElement, w: number, h: number) {
+  out ??= document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, w, h);
+  const src = ctx.getImageData(0, 0, w, h).data;
+  const lum = new Uint8ClampedArray(w * h);
+  for (let i = 0, j = 0; i < src.length; i += 4, j++) {
+    lum[j] = 0.2126 * src[i] + 0.7152 * src[i + 1] + 0.0722 * src[i + 2];
+  }
+  return { ctx, lum };
+}
+
+function renderDither(img: HTMLImageElement, req: Request): string | null {
+  const w = Math.round(req.w * req.dpr);
+  const h = Math.round(req.h * req.dpr);
+  const l = luminance(img, w, h);
+  if (!l) return null;
+  const { ctx, lum } = l;
+  const [r, g, b] = parseHex(req.color);
+  const peak = DOT_ALPHA[req.scheme] * 255;
+  // Dark surface: the light parts of the picture become dots of color.
+  // Light surface: the dark parts do, so the picture still reads positive.
+  const flip = req.scheme === "light";
+  // Dots of 1.5 CSS px, not device pixels: at 2x a one-pixel dither reads
+  // as a soft photo, and the point of the style is that it reads as dots.
+  const c = Math.max(1, Math.round(1.5 * req.dpr));
+  const outImg = ctx.createImageData(w, h);
+  for (let cy = 0; cy * c < h; cy++) {
+    const y0 = cy * c;
+    const sy = Math.min(h - 1, y0 + (c >> 1));
+    const fade = TOP_FADE + (1 - TOP_FADE) * (y0 / (h - 1));
+    const row = BAYER8[cy & 7];
+    for (let cx = 0; cx * c < w; cx++) {
+      const x0 = cx * c;
+      const sx = Math.min(w - 1, x0 + (c >> 1));
+      let v = lum[sy * w + sx] / 255;
+      if (flip) v = 1 - v;
+      if (!(v > (row[cx & 7] + 0.5) / 64)) continue;
+      const a = peak * fade;
+      for (let y = y0; y < Math.min(h, y0 + c); y++) {
+        for (let x = x0; x < Math.min(w, x0 + c); x++) {
+          const o = (y * w + x) * 4;
+          outImg.data[o] = r;
+          outImg.data[o + 1] = g;
+          outImg.data[o + 2] = b;
+          outImg.data[o + 3] = a;
+        }
+      }
+    }
+  }
+  ctx.putImageData(outImg, 0, 0);
+  return out!.toDataURL("image/png");
+}
+
+function renderAscii(img: HTMLImageElement, req: Request): string | null {
+  const w = Math.round(req.w * req.dpr);
+  const h = Math.round(req.h * req.dpr);
+  const cw = Math.round(6 * req.dpr);
+  const ch = Math.round(10 * req.dpr);
+  const cols = Math.floor(w / cw);
+  const rows = Math.floor(h / ch);
+  const l = luminance(img, cols, rows);
+  if (!l) return null;
+  const { lum } = l;
+  // The luminance canvas was cols x rows; redraw the output at full size.
+  out!.width = w;
+  out!.height = h;
+  const ctx = out!.getContext("2d");
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = `${Math.round(9 * req.dpr)}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = "top";
+  const [r, g, b] = parseHex(req.color);
+  const flip = req.scheme === "light";
+  const peak = GLYPH_ALPHA[req.scheme];
+  for (let y = 0; y < rows; y++) {
+    const fade = TOP_FADE + (1 - TOP_FADE) * (y / Math.max(1, rows - 1));
+    ctx.fillStyle = `rgba(${r},${g},${b},${(peak * fade).toFixed(3)})`;
+    let line = "";
+    for (let x = 0; x < cols; x++) {
+      let v = lum[y * cols + x] / 255;
+      if (flip) v = 1 - v;
+      const i = Math.min(ASCII_RAMP.length - 1, Math.floor(v * ASCII_RAMP.length));
+      line += ASCII_RAMP[i];
+    }
+    // Monospace: one fillText per row keeps the glyph grid exact.
+    for (let x = 0; x < cols; x++) {
+      if (line[x] !== " ") ctx.fillText(line[x], x * cw, y * ch);
+    }
+  }
+  return out!.toDataURL("image/png");
+}
+
+/** The photo styles wait on a fetch, so they leave the idle slice and land
+ *  on their own; a failed fetch draws the mist instead so no card stays
+ *  bare for want of a network. */
+async function renderPhotoStyle(req: Request) {
+  let url: string | null = null;
+  try {
+    const img = await photoFor(
+      req.id,
+      Math.round(req.w * req.dpr),
+      Math.round(req.h * req.dpr),
+    );
+    if (cache.has(req.key)) return;
+    url = img
+      ? req.style === "dither"
+        ? renderDither(img, req)
+        : renderAscii(img, req)
+      : null;
+    if (!url) url = render(req);
+  } catch {
+    // Fall through to the plain card.
+  }
+  if (url) store(req.key, url);
+  waiting.get(req.key)?.forEach((l) => l());
+}
+
 // ---- queue ----------------------------------------------------------------
 
 function store(key: string, url: string) {
@@ -243,6 +435,10 @@ function slice() {
     const req = requests.get(key);
     requests.delete(key);
     if (!req || cache.has(key)) continue;
+    if (req.style !== "mist") {
+      void renderPhotoStyle(req);
+      continue;
+    }
     let url: string | null = null;
     try {
       url = render(req);
@@ -293,10 +489,16 @@ function request(req: Request, onReady: () => void): () => void {
 /** The cover for a notebook as a data URL, or null while it is still being
  *  drawn (or if WebGL is unavailable). Re-renders only when the id, color or
  *  light/dark scheme changes. */
-export function useNotebookCover(id: string, color: string): string | null {
+export function useNotebookCover(
+  id: string,
+  color: string,
+  w = COVER_W,
+  h = COVER_H,
+): string | null {
   const scheme = useSyncExternalStore(subscribeScheme, getScheme);
   const dpr = Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
-  const key = `${id}|${color}|${scheme}|${dpr}`;
+  const style = coverStyleFor(id);
+  const key = `${id}|${color}|${scheme}|${dpr}|${style}|${w}x${h}`;
   const subscribe = useCallback(
     (cb: () => void) => {
       const hit = cache.get(key);
@@ -305,9 +507,9 @@ export function useNotebookCover(id: string, color: string): string | null {
         cache.delete(key);
         cache.set(key, hit);
       }
-      return request({ key, id, color, scheme, dpr }, cb);
+      return request({ key, id, color, scheme, dpr, style, w, h }, cb);
     },
-    [key, id, color, scheme, dpr],
+    [key, id, color, scheme, dpr, style, w, h],
   );
   return useSyncExternalStore(subscribe, () => cache.get(key) ?? null);
 }

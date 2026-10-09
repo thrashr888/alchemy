@@ -10,6 +10,7 @@ import { StudioPanel } from "./StudioPanel";
 import { AddSourceModal } from "./AddSourceModal";
 import { CHROME_BUTTON, SourcesRail, StudioRail } from "./SidebarRails";
 import { HealthBanner } from "./HealthBanner";
+import { NotebookCoverBand } from "./NotebookCoverBand";
 import { RowMenu, useConfirm, type RowMenuItem } from "./ui";
 import { NavButtons } from "./NavButtons";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -426,16 +427,24 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="sheet flex min-w-0 flex-1 overflow-hidden">
-          {growOpen ? (
-            <GrowPane />
-          ) : galleryOpen ? (
-            <GalleryPane />
-          ) : readerOpen ? (
-            <ReaderPane />
-          ) : (
-            <ChatPanel />
-          )}
+        <div className="sheet flex min-w-0 flex-1 flex-col overflow-hidden">
+          {/* The cover band, except over the blank chat, whose backdrop is
+              already the notebook's wash at full size. */}
+          {notebook &&
+            !(chatBlank && !readerOpen && !galleryOpen && !growOpen && !glassOn) && (
+              <NotebookCoverBand id={notebook.id} color={notebook.color} />
+            )}
+          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            {growOpen ? (
+              <GrowPane />
+            ) : galleryOpen ? (
+              <GalleryPane />
+            ) : readerOpen ? (
+              <ReaderPane />
+            ) : (
+              <ChatPanel />
+            )}
+          </div>
         </div>
         {studioOpen ? <StudioPanel /> : <StudioRail />}
       </div>

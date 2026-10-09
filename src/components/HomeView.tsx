@@ -798,20 +798,12 @@ function NotebookCard({
             : undefined
         }
       >
-        <div className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: color }}
-          />
-          <span className="truncate text-badge font-semibold uppercase tracking-[0.04em] text-muted-foreground">
-            {nb.title}
-          </span>
-        </div>
+        {/* No eyebrow: the name sits under the card and the colour is the
+            cover, so the thumb opens straight on what is inside. */}
         {!preview ? (
           // Still loading. Widths come from the notebook id, so the skeleton
           // is steady instead of shimmering as React re-runs.
-          <div className="mt-3 flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5">
             {thumbLines(nb.id).map((w, i) => (
               <span
                 key={i}
@@ -822,11 +814,11 @@ function NotebookCard({
             ))}
           </div>
         ) : contentRows.length === 0 ? (
-          <div className="mt-2.5 truncate text-micro text-subtle-foreground">
+          <div className="truncate text-micro text-subtle-foreground">
             Add a source…
           </div>
         ) : (
-          <div className="mt-2.5 flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             {contentRows.map(({ key, Glyph, text }) => (
               <div
                 key={key}

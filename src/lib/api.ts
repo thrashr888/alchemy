@@ -541,6 +541,11 @@ export const api = {
   corpusTimeline: (notebookId?: string) =>
     run(query<CorpusTimeline>("corpus_timeline", { notebookId })),
   homeActivity: () => run(query<HomeActivity>("home_activity")),
+  /** A stock photo for a notebook cover, seeded by the notebook, as a data
+   *  URL. Fetched by Rust: the webview cannot read a cross-origin image back
+   *  off a canvas, and a data URL never taints one. */
+  coverPhoto: (seed: string, width: number, height: number) =>
+    invoke<string>("cover_photo", { seed, width, height }),
   /** Fire-and-forget: a trace line in traces/ui.jsonl. Never awaited by UI. */
   uiEvent: (name: string, detail: unknown) =>
     invoke("ui_event", { name, detail }).catch(() => {}),
