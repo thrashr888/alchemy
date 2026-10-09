@@ -489,10 +489,15 @@ badge; the selected row is washed in `--selection`. Choosing a row changes
 what the sheet shows, so every surface Home holds — the shelf, the corpus
 conversation, the Registry, the timeline, the night shift's Staff, the Brief,
 the nightly reports — is a section of one center column rather than a card
-stacked around it. Shared and Archived are the same shelf, narrowed. The
-shelf groups notebooks by recency (Today, Last 7 days, Earlier) under
-section-title headings with a hairline to the edge — sentence case, never
-the caps the cards' own eyebrows use — 32px apart, and draws
+stacked around it. Shared, Built in and Archived are the same shelf,
+narrowed; a notebook's kind rides on its row as a monochrome 12px mark
+(two people for shared, a box for built in), never as a shelf of its own.
+The shelf has one order and groups by it: Recently updated under Today,
+Last 7 days, Earlier; Type under Yours, Shared, Built in; name and the
+counts as one run with no headings — a heading that is not the sort key
+is a second order fighting the first. Headings are section-title with a
+hairline to the edge — sentence case, never the caps the cards' own
+eyebrows use — 32px apart, and the shelf draws
 each as a 212px card whose thumb stands in for the notebook: its color, its
 name in caps, and then what is actually inside — two or three of its newest
 source titles behind their type glyphs, the newest note among them, and its

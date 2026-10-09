@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { navAtomic, useStore } from "@/lib/store";
 import { usePickList } from "@/lib/pick";
 import { homeDraftKey } from "@/lib/homeChatRun";
@@ -47,6 +47,8 @@ import type {
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   MessagesSquare,
   Moon,
@@ -121,16 +123,33 @@ const NOTEBOOK_SORT_KEYS = NOTEBOOK_COLUMNS.filter((c) => "sort" in c).map(
   (c) => c.key,
 );
 
-/** The sort pop-up's orders, named the way the pop-up's label reads them.
+/** The sort pop-up's orders and the direction each one starts in. Named
+ *  as nouns, not readings ("Updated", not "Recently updated"), because the
+ *  direction is its own choice now and the trigger's arrow says which way.
  *  Same state the table's column headers write, so switching shapes keeps
  *  the order you chose (`homeTableSort`). */
 const NOTEBOOK_SORTS: { key: string; dir: SortDir; label: string }[] = [
-  { key: "updated", dir: "desc", label: "Recently updated" },
+  { key: "updated", dir: "desc", label: "Updated" },
   { key: "title", dir: "asc", label: "Name" },
   { key: "sources", dir: "desc", label: "Sources" },
   { key: "notes", dir: "desc", label: "Notes" },
   { key: "reports", dir: "desc", label: "Reports" },
+  // Not a column: the table has nowhere to put "Yours / Shared / Built in"
+  // as a header, so this order lives only in the pop-up.
+  { key: "kind", dir: "asc", label: "Type" },
 ];
+
+/** A notebook's standing on the shelf: yours, one another Mac writes to,
+ *  or one that came with Alchemy. The mark beside a name says which; the
+ *  "Type" order sorts and groups by it. Nothing is shelved apart for it. */
+type NotebookKind = "own" | "shared" | "builtin";
+const KIND_ORDER: readonly NotebookKind[] = ["own", "shared", "builtin"];
+const KIND_LABEL: Record<NotebookKind, string> = {
+  own: "Yours",
+  shared: "Shared",
+  builtin: "Built in",
+};
+const BUILT_IN_LABEL = "Built in — came with Alchemy";
 
 /** What a shared notebook says about who it is shared with.
  *
@@ -144,7 +163,15 @@ const NOTEBOOK_SORTS: { key: string; dir: SortDir; label: string }[] = [
  *  two Macs called "MacBook Pro" apart in a record; it is not what anybody
  *  calls the machine, so it comes off before the name reaches a card. */
 function peerName(device: string): string {
-  return device.replace(/\s*\([^()]*\)\s*$/, "").trim() || device;
+  return (
+    device
+      .replace(/\s*\([^()]*\)\s*$/, "")
+      // The form before names: "<user>-<serial>", written by builds that
+      // identified a Mac by its serial alone. The serial is still not what
+      // anyone calls the machine.
+      .replace(/-[A-Z0-9]{10,12}$/, "")
+      .trim() || device
+  );
 }
 
 function sharedLabel(peers: string[] | undefined, shared: boolean): string {
@@ -157,13 +184,16 @@ function sharedLabel(peers: string[] | undefined, shared: boolean): string {
   return shared ? "Shared" : "Synced";
 }
 
-/** The two-person mark on a shared notebook, wherever the shelf names one.
+/** The mark beside a notebook's name for what kind of notebook it is: the
+ *  two-person glyph on a shared one, the box on one that came with Alchemy.
+ *  Marks, not shelves — the kind rides on the row and the shelf keeps one
+ *  order, so a built-in sorted by name sits at its letter like any other.
  *
- *  Monochrome and 12px on purpose: "shared" is a fact about where the
+ *  Monochrome and 12px on purpose: the kind is a fact about where the
  *  notebook lives, not a state asking to be acted on, and DESIGN.md spends
  *  color only where it means something. `shrink-0` so a long title truncates
  *  before the mark does — the name can survive being cut, the mark cannot. */
-function SharedMark({ label }: { label: string }) {
+function KindMark({ Icon, label }: { Icon: typeof Users; label: string }) {
   // The span carries the tooltip and the name: a lucide icon takes neither
   // a `title` child nor a `title` prop, so hanging them on the glyph itself
   // gives a mark nothing can read and nothing can hover.
@@ -174,21 +204,40 @@ function SharedMark({ label }: { label: string }) {
       title={label}
       className="flex shrink-0 items-center text-muted-foreground"
     >
-      <Users className="h-3 w-3" aria-hidden />
+      <Icon className="h-3 w-3" aria-hidden />
     </span>
+  );
+}
+
+/** Both marks a row or card may carry, in one order everywhere. */
+function KindMarks({ shared, builtIn }: { shared: string | null; builtIn: boolean }) {
+  return (
+    <>
+      {shared && <KindMark Icon={Users} label={shared} />}
+      {builtIn && <KindMark Icon={Package} label={BUILT_IN_LABEL} />}
+    </>
   );
 }
 
 /** Order the shelf's rows. Every column breaks its ties on the title, so a
  *  column of equal counts still reads down alphabetically instead of
  *  reshuffling on each render. */
-function sortNotebooks(rows: Notebook[], sort: TableSort): Notebook[] {
+function sortNotebooks(
+  rows: Notebook[],
+  sort: TableSort,
+  kindOf: (nb: Notebook) => NotebookKind,
+): Notebook[] {
   const dir = sort.dir === "asc" ? 1 : -1;
   const byTitle = (a: Notebook, b: Notebook) => a.title.localeCompare(b.title);
   return [...rows].sort((a, b) => {
     switch (sort.key) {
       case "title":
         return dir * byTitle(a, b);
+      case "kind":
+        return (
+          dir * (KIND_ORDER.indexOf(kindOf(a)) - KIND_ORDER.indexOf(kindOf(b))) ||
+          byTitle(a, b)
+        );
       case "sources":
         return dir * (a.sourceCount - b.sourceCount) || byTitle(a, b);
       case "notes":
@@ -203,28 +252,55 @@ function sortNotebooks(rows: Notebook[], sort: TableSort): Notebook[] {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** Today, Last 7 days, Earlier — the shelf's three shelves, by when the
- *  notebook was last written. Empty groups are absent rather than titled,
- *  and the rows keep the order they arrive in, so the sort pop-up still
- *  decides what reads first inside each one. */
-function recencyGroups(
+/** One group of the shelf, in either shape. An empty label is the whole
+ *  shelf as one run: no heading in the grid, no caps row in the table. */
+interface ShelfGroup {
+  label: string;
+  rows: Notebook[];
+}
+
+/** How the shelf is grouped — which follows how it is sorted, one axis for
+ *  the whole page. Recently updated reads under Today, Last 7 days,
+ *  Earlier; Type reads under Yours, Shared, Built in; name and the counts
+ *  are one run with no headings, because a heading that is not the sort
+ *  key is a second order fighting the first (the old shelf grouped by
+ *  recency whatever the pop-up said, and parked built-ins at the foot,
+ *  so a shelf sorted by name read as alphabet runs inside date buckets).
+ *  Rows keep the order they arrive in, so the sort still decides what
+ *  reads first inside each group; empty groups are absent, not titled. */
+function shelfGroups(
   rows: Notebook[],
+  sort: TableSort,
+  kindOf: (nb: Notebook) => NotebookKind,
   now = Date.now(),
-): { label: string; rows: Notebook[] }[] {
-  const midnight = new Date(now);
-  midnight.setHours(0, 0, 0, 0);
-  const today = midnight.getTime();
-  const week = today - 6 * DAY;
-  const groups = [
-    { label: "Today", rows: [] as Notebook[] },
-    { label: "Last 7 days", rows: [] as Notebook[] },
-    { label: "Earlier", rows: [] as Notebook[] },
-  ];
-  for (const nb of rows) {
-    if (nb.updatedAt >= today) groups[0].rows.push(nb);
-    else if (nb.updatedAt >= week) groups[1].rows.push(nb);
-    else groups[2].rows.push(nb);
+): ShelfGroup[] {
+  let groups: ShelfGroup[];
+  if (sort.key === "updated") {
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    const today = midnight.getTime();
+    const week = today - 6 * DAY;
+    groups = [
+      { label: "Today", rows: [] },
+      { label: "Last 7 days", rows: [] },
+      { label: "Earlier", rows: [] },
+    ];
+    for (const nb of rows) {
+      if (nb.updatedAt >= today) groups[0].rows.push(nb);
+      else if (nb.updatedAt >= week) groups[1].rows.push(nb);
+      else groups[2].rows.push(nb);
+    }
+  } else if (sort.key === "kind") {
+    groups = KIND_ORDER.map((k) => ({ label: KIND_LABEL[k], rows: [] }));
+    for (const nb of rows) groups[KIND_ORDER.indexOf(kindOf(nb))].rows.push(nb);
+  } else {
+    return rows.length > 0 ? [{ label: "", rows }] : [];
   }
+  // The groups run the way the rows do: oldest-first puts Earlier on top,
+  // and Type descending puts Built in first. Each list above is written in
+  // its key's natural direction (newest first, Yours first).
+  const natural = sort.key === "updated" ? "desc" : "asc";
+  if (sort.dir !== natural) groups.reverse();
   return groups.filter((g) => g.rows.length > 0);
 }
 
@@ -248,8 +324,7 @@ function thumbLines(id: string): number[] {
 /** The scannable form of the notebook shelf. Same rows the grid shows, read
  *  down columns instead of across cards. */
 function NotebookTable({
-  notebooks,
-  builtIns,
+  groups,
   unreadByNb,
   sharedLabelOf,
   rowMenu,
@@ -257,11 +332,10 @@ function NotebookTable({
   onRowClick,
   onRowOpen,
 }: {
-  notebooks: Notebook[];
-  /** The notebooks Alchemy ships, gathered under their own caps row at the
-   *  foot of the same table. A second `<table>` would be a second set of
-   *  column widths beside the first; a group row keeps one grid. */
-  builtIns: Notebook[];
+  /** The same groups the grid draws, each under a caps row when it has a
+   *  label. A second `<table>` per group would be a second set of column
+   *  widths beside the first; a group row keeps one grid. */
+  groups: ShelfGroup[];
   unreadByNb: Map<string, number>;
   /** "Shared with Anne's MacBook", or null when the notebook is not shared
    *  — the same string the card's meta line and its mark carry. */
@@ -307,7 +381,7 @@ function NotebookTable({
               );
             })()}
             <span className="truncate font-medium">{nb.title}</span>
-            {shared && <SharedMark label={shared} />}
+            <KindMarks shared={shared} builtIn={!!nb.builtIn} />
             {(unreadByNb.get(nb.id) ?? 0) > 0 && (
               <span
                 className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
@@ -345,23 +419,24 @@ function NotebookTable({
 
   return (
     <HomeTable columns={[...NOTEBOOK_COLUMNS]}>
-      {notebooks.map(row)}
-      {builtIns.length > 0 && (
-        <>
-          {/* The same caps label the grid draws over its Built in shelf,
-              carried across the table's full width so the group reads as a
-              section rather than as more rows. */}
-          <tr>
-            <td
-              colSpan={NOTEBOOK_COLUMNS.length}
-              className={cn(CAPS, "px-3 pb-1.5 pt-5")}
-            >
-              Built in
-            </td>
-          </tr>
-          {builtIns.map(row)}
-        </>
-      )}
+      {groups.map((group, i) => (
+        <Fragment key={group.label || "shelf"}>
+          {/* The grid's heading, as a caps row carried across the table's
+              full width so the group reads as a section rather than as
+              more rows. The first sits close under the column heads. */}
+          {group.label && (
+            <tr>
+              <td
+                colSpan={NOTEBOOK_COLUMNS.length}
+                className={cn(CAPS, "px-3 pb-1.5", i === 0 ? "pt-2" : "pt-5")}
+              >
+                {group.label}
+              </td>
+            </tr>
+          )}
+          {group.rows.map(row)}
+        </Fragment>
+      ))}
     </HomeTable>
   );
 }
@@ -674,13 +749,13 @@ function NotebookCard({
             text: preview.sources[0].title,
           }
         : null;
-  const metaTail = [
-    // The mark beside the name already says "shared", so the meta line only
-    // spends a word on it when it has something the mark cannot carry —
-    // who. "Shared" alone would be the icon said twice.
-    shared && shared !== "Shared" && shared,
-    relativeTime(nb.updatedAt),
-  ].filter(Boolean) as string[];
+  // The mark beside the name already says "shared", so the meta line only
+  // spends words on it when it has something the mark cannot carry — who.
+  // "Shared" or "Synced" alone would be the icon said twice. It truncates
+  // like the lead does: a device name can run long, and the time at the end
+  // is the one part that must survive whole.
+  const sharedNote =
+    shared && shared !== "Shared" && shared !== "Synced" ? shared : null;
   const counts = [
     `${nb.sourceCount} ${nb.sourceCount === 1 ? "source" : "sources"}`,
     nb.noteCount > 0 &&
@@ -764,7 +839,7 @@ function NotebookCard({
           <span className="truncate text-body font-semibold text-foreground">
             {nb.title}
           </span>
-          {shared && <SharedMark label={shared} />}
+          <KindMarks shared={shared} builtIn={!!nb.builtIn} />
           {unread > 0 && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
@@ -781,8 +856,14 @@ function NotebookCard({
               <span aria-hidden>·</span>
             </>
           )}
+          {sharedNote && (
+            <>
+              <span className="truncate">{sharedNote}</span>
+              <span aria-hidden>·</span>
+            </>
+          )}
           <span className="shrink-0 whitespace-nowrap">
-            {metaTail.join(" · ")}
+            {relativeTime(nb.updatedAt)}
           </span>
         </div>
       </div>
@@ -890,12 +971,21 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       ? [...corpusTags, activeTag]
       : corpusTags;
 
+  // The notebooks Alchemy ships: real notebooks — same card, same verbs —
+  // that arrived with the app rather than from your work. They sit in the
+  // shelf with a mark, and this row narrows to them.
+  const builtInNotebooks = activeNotebooks.filter((n) => !!n.builtIn);
+  const kindOf = (nb: Notebook): NotebookKind =>
+    nb.builtIn ? "builtin" : isShared(nb.id) ? "shared" : "own";
+
   const scoped =
     scope === "archived"
       ? archivedNotebooks
       : scope === "shared"
         ? sharedNotebooks
-        : activeNotebooks;
+        : scope === "builtin"
+          ? builtInNotebooks
+          : activeNotebooks;
   // The toolbar's filter narrows whichever scope is on screen; the tag row
   // narrows it further, because both are the same question asked two ways.
   const filteredNotebooks = scoped.filter(
@@ -906,22 +996,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { sort: nbSort, toggle: toggleNbSort } = useTableSort(
     "homeTableSort",
     { key: "updated", dir: "desc" },
-    NOTEBOOK_SORT_KEYS,
+    [...NOTEBOOK_SORT_KEYS, "kind"],
   );
-  // One order for both shapes: the grid's recency groups decide which shelf
-  // a notebook sits on, the sort decides the order within it.
-  const shownNotebooks = sortNotebooks(filteredNotebooks, nbSort);
-  // The notebooks Alchemy ships leave the recency groups and gather at the
-  // foot of the shelf. They are real notebooks — same card, same verbs — but
-  // they arrived with the app rather than from your work, and mixing them
-  // into "Today" makes the shelf answer the wrong question. Archived keeps
-  // its own rows, so the split is for the shelf proper.
-  const isBuiltIn = (nb: Notebook) => !!nb.builtIn && scope !== "archived";
-  const ownNotebooks = shownNotebooks.filter((nb) => !isBuiltIn(nb));
-  const builtInNotebooks = shownNotebooks.filter(isBuiltIn);
+  // One order and one grouping for both shapes, both from the sort: the
+  // sort decides what reads first, and `shelfGroups` decides what the
+  // headings are — none, unless the order has natural bands. Archived
+  // keeps its own rows and draws no groups.
+  const shownNotebooks = sortNotebooks(filteredNotebooks, nbSort, kindOf);
+  const groups =
+    scope === "archived" ? [] : shelfGroups(shownNotebooks, nbSort, kindOf);
   const sortLabel =
-    NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ??
-    "Recently updated";
+    NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ?? "Updated";
 
   const staffTone = useNightShiftTone();
   const homeThreads = useStore((s) => s.homeThreads);
@@ -970,7 +1055,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // and the built-ins sit at the foot of the shelf whatever the sort says.
   const pick = usePickList(
     "notebooks",
-    [...ownNotebooks, ...builtInNotebooks].map((n) => n.id),
+    shownNotebooks.map((n) => n.id),
   );
   const titleOf = (id: string) =>
     notebooks.find((n) => n.id === id)?.title ?? "Untitled";
@@ -1290,7 +1375,13 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
    *  §9 "Home is a library"). Notebooks keeps one more line, the "Since you
    *  were away" digest, because that is about the visit rather than a count. */
   const shelfTitle =
-    scope === "shared" ? "Shared" : scope === "archived" ? "Archived" : "Notebooks";
+    scope === "shared"
+      ? "Shared"
+      : scope === "builtin"
+        ? "Built in"
+        : scope === "archived"
+          ? "Archived"
+          : "Notebooks";
 
   /** The status bar's one line: what the section on screen holds, the way
    *  Finder counts a window's contents. Registry Cards and Suggested count
@@ -1335,13 +1426,23 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       const n = filteredNotebooks.length;
       return `${n} ${n === 1 ? "notebook" : "notebooks"} · #${activeTag.tag}`;
     }
-    // Built-ins are not counted as yours — they are the shelf's own section
-    // with its own count, and "22 notebooks" meaning "16 of them mine" was
-    // the number quietly disagreeing with the shelf.
-    const own = activeNotebooks.filter((n) => !n.builtIn).length;
-    const n = scope === "shared" ? sharedNotebooks.length : own;
+    // The count is what the shelf shows: built-ins sit in it now, so they
+    // are in the number, and named, so "22 notebooks" and "16 of them
+    // yours" stop disagreeing.
+    const n =
+      scope === "shared"
+        ? sharedNotebooks.length
+        : scope === "builtin"
+          ? builtInNotebooks.length
+          : activeNotebooks.length;
     const head =
-      scope === "shared" ? `${n} shared` : `${n} ${n === 1 ? "notebook" : "notebooks"}`;
+      scope === "shared"
+        ? `${n} shared`
+        : scope === "builtin"
+          ? `${n} built in`
+          : builtInNotebooks.length > 0
+            ? `${n} ${n === 1 ? "notebook" : "notebooks"} · ${builtInNotebooks.length} built in`
+            : `${n} ${n === 1 ? "notebook" : "notebooks"}`;
     if (!stats) return head;
     return [
       head,
@@ -1526,8 +1627,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         archivedRows
       ) : homeView === "table" ? (
         <NotebookTable
-          notebooks={ownNotebooks}
-          builtIns={builtInNotebooks}
+          groups={groups}
           unreadByNb={unreadByNb}
           sharedLabelOf={sharedOf}
           pickedIds={pick.pickedIds}
@@ -1540,22 +1640,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
         />
       ) : (
         <div className="flex flex-col gap-8">
-          {[
-            ...recencyGroups(ownNotebooks),
-            // After Earlier, and last whatever the sort says: the shipped
-            // notebooks are a shelf of their own, with their own count.
-            ...(builtInNotebooks.length > 0
-              ? [{ label: "Built in", rows: builtInNotebooks }]
-              : []),
-          ].map((group) => (
-            <section key={group.label}>
+          {groups.map((group) => (
+            <section key={group.label || "shelf"}>
               {/* A heading, not a caps label: the cards' own eyebrows are
                   caps, and a shelf header in the same voice read as one
                   more card. The hairline carries the band to the edge. */}
-              <h2 className="flex items-center gap-3 pb-3 text-section font-semibold text-foreground">
-                {group.label}
-                <span aria-hidden className="h-px flex-1 bg-border" />
-              </h2>
+              {group.label && (
+                <h2 className="flex items-center gap-3 pb-3 text-section font-semibold text-foreground">
+                  {group.label}
+                  <span aria-hidden className="h-px flex-1 bg-border" />
+                </h2>
+              )}
               <div className="flex flex-wrap gap-5">
                 {group.rows.map((nb) => (
                   <NotebookCard
@@ -1585,6 +1680,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               ? `Nothing is tagged #${activeTag.tag} any more.`
               : scope === "shared"
               ? "No notebook is shared yet. Share one from its own menu."
+              : scope === "builtin"
+                ? "No built-in notebooks."
               : scope === "archived"
                 ? "Nothing archived."
                 : "No notebooks."}
@@ -1700,7 +1797,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
             sheet: nothing scrolls under them, so they need no background
             and no sticky. The right padding matches the scroller's
             reserved scrollbar gutter so both grids share one width. */}
-        {scope !== "archived" && homeView === "table" && ownNotebooks.length > 0 && (
+        {scope !== "archived" && homeView === "table" && shownNotebooks.length > 0 && (
           <div className="relative z-10 shrink-0 pl-7 pr-[calc(1.75rem+10px)]">
             <HomeTableHead
               columns={[...NOTEBOOK_COLUMNS]}
@@ -1842,17 +1939,40 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   trigger={
                     <>
                       {sortLabel}
+                      {/* The direction, where the table's header shows it
+                          with its own arrow; the grid has no header. */}
+                      {nbSort.dir === "asc" ? (
+                        <ArrowUp className="h-2.5 w-2.5 shrink-0 text-muted-foreground" aria-label="ascending" />
+                      ) : (
+                        <ArrowDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" aria-label="descending" />
+                      )}
                       <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
                     </>
                   }
                   triggerClassName={POPUP}
-                  items={NOTEBOOK_SORTS.map((o) => ({
-                    label: o.label,
-                    checked: nbSort.key === o.key,
-                    onClick: () => {
-                      if (nbSort.key !== o.key) toggleNbSort(o.key, o.dir);
-                    },
-                  }))}
+                  // Mail's sort menu: the orders, then the direction as its
+                  // own pair, so flipping one never means re-choosing the
+                  // other. Picking an order starts it in its natural
+                  // direction; the table's header click still flips it too.
+                  items={[
+                    ...NOTEBOOK_SORTS.map((o) => ({
+                      label: o.label,
+                      checked: nbSort.key === o.key,
+                      onClick: () => {
+                        if (nbSort.key !== o.key) toggleNbSort(o.key, o.dir);
+                      },
+                    })),
+                    { label: "", separator: true, onClick: () => {} },
+                    ...(["asc", "desc"] as const).map((dir) => ({
+                      label: dir === "asc" ? "Ascending" : "Descending",
+                      checked: nbSort.dir === dir,
+                      onClick: () => {
+                        // `toggle` on the current key flips it, whichever
+                        // natural direction it is handed.
+                        if (nbSort.dir !== dir) toggleNbSort(nbSort.key, dir);
+                      },
+                    })),
+                  ]}
                 />
               )}
               <SearchField
@@ -2026,6 +2146,14 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   selected={homeSection === "notebooks" && scope === "shared"}
                   title="Notebooks kept in a folder you share"
                   onClick={() => goShelf("shared")}
+                />
+                <LibraryRow
+                  icon={<Package className="h-3.5 w-3.5" />}
+                  label="Built in"
+                  count={builtInNotebooks.length}
+                  selected={homeSection === "notebooks" && scope === "builtin"}
+                  title="The notebooks that came with Alchemy"
+                  onClick={() => goShelf("builtin")}
                 />
                 <LibraryRow
                   icon={<Newspaper className="h-3.5 w-3.5" />}

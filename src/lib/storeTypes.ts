@@ -110,10 +110,10 @@ export type HomeSection =
   | "brief"
   | "reports";
 
-/** Which notebooks the Notebooks shelf is showing. Shared and Archived are
- *  the same shelf narrowed, not sections of their own — so they are a scope
- *  the shelf carries rather than a `HomeSection`. */
-export type HomeScope = "all" | "shared" | "archived";
+/** Which notebooks the Notebooks shelf is showing. Shared, Built in and
+ *  Archived are the same shelf narrowed, not sections of their own — so
+ *  they are a scope the shelf carries rather than a `HomeSection`. */
+export type HomeScope = "all" | "shared" | "builtin" | "archived";
 
 /** Home's conversation, as the store holds it: which thread is open and the
  *  turns already settled into it. Both come from the backend — the thread

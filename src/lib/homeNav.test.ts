@@ -17,9 +17,10 @@ const shelf = (over: Partial<NavEntry> = {}): NavEntry => ({
 });
 
 describe("Home's places", () => {
-  it("gives ⌘1–⌘9 to nine of the ten, in sidebar order", () => {
+  it("gives ⌘1–⌘9 to nine of the eleven, in sidebar order", () => {
+    // Built in and the Timeline go without: the digits ran out.
     expect(HOME_PLACES.map((p) => p.key)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, undefined,
+      1, 2, 3, undefined, 4, 5, 6, 7, 8, 9, undefined,
     ]);
   });
 
@@ -28,6 +29,7 @@ describe("Home's places", () => {
       "menu-home-notebooks",
       "menu-home-chats",
       "menu-home-shared",
+      "menu-home-builtin",
       "menu-home-reports",
       "menu-home-archived",
       "menu-home-staff",
@@ -38,9 +40,14 @@ describe("Home's places", () => {
     ]);
   });
 
-  it("scopes the three shelf rows and nothing else", () => {
+  it("scopes the four shelf rows and nothing else", () => {
     const shelves = HOME_PLACES.filter((p) => p.section === "notebooks");
-    expect(shelves.map((p) => p.scope)).toEqual(["all", "shared", "archived"]);
+    expect(shelves.map((p) => p.scope)).toEqual([
+      "all",
+      "shared",
+      "builtin",
+      "archived",
+    ]);
     expect(
       HOME_PLACES.filter((p) => p.section !== "notebooks" && p.scope),
     ).toEqual([]);
