@@ -583,8 +583,9 @@ Three ways to try it before it replaces anything:
 - The `triage_preview` MCP tool (and `preview_registry_triage` command):
   the live queue, scored by the configured judge, each row beside the
   verdict the card carries today. Reads only.
-- `ALCHEMY_JUDGE_TRIAGE=1` switches the live sweep to the typed pass.
-  The default stays the Small pass until the preview has been read.
+- The live sweep runs the typed pass whenever a trusted judge is
+  configured (default on since 2026-10-08, after the preview was read);
+  `ALCHEMY_JUDGE_TRIAGE=0` hands it back to the Small pass.
 
 ### Measured
 
@@ -636,9 +637,9 @@ What it says:
 - **Trust is per site, and now admits the three that pass.**
   `Judge::trusted_for_scores` is Jev and any decision model the skip rule
   trusts; a chat model through logprobs is not, because its level
-  distributions were never measured here. The live pass
-  (`ALCHEMY_JUDGE_TRIAGE=1`) runs typed only on such a judge, else the
-  Small pass; every judge may preview.
+  distributions were never measured here. The live pass runs typed only
+  on such a judge, else the Small pass (and `ALCHEMY_JUDGE_TRIAGE=0`
+  forces the Small pass); every judge may preview.
 - **On the real queue** (40 pending cards) through Jev: 36 agreed with
   the stored verdicts, 4 differed, 4 flagged. The four it demoted, all
   confidently, were tech topics from newsletters ("Frontier
