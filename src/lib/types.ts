@@ -59,6 +59,13 @@ export interface NotebookSuggestion {
   notebookId: string;
   title: string;
   isNew: boolean;
+  /** Typed judge only: its margin confidence, the judge's name, and whether
+   *  it was confident and trusted enough to file without asking. */
+  confidence?: number | null;
+  judge?: string | null;
+  auto?: boolean;
+  /** Existing notebooks in the judge's order, best first. */
+  ranked?: { notebookId: string; title: string; probability: number }[];
 }
 
 /** Where a notebook keeps itself on disk as an OKF bundle (RFC-okf-live §5.1).
