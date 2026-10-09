@@ -260,6 +260,33 @@ pub async fn accept(
     notebook_id: Option<&str>,
     new_title: Option<&str>,
 ) -> Result<InboxAccepted> {
+    // One filing per row at a time. The row is deleted only after the add
+    // lands, so two accepts that overlap (a doubled Enter, an agent and the
+    // keyboard at once) would both import it; the second now waits out as
+    // an error instead.
+    static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+    let claimed = IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.to_string());
+    if !claimed {
+        bail!("That capture is already being filed");
+    }
+    let result = accept_claimed(app, id, notebook_id, new_title).await;
+    IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
+    result
+}
+
+async fn accept_claimed(
+    app: &AppHandle,
+    id: &str,
+    notebook_id: Option<&str>,
+    new_title: Option<&str>,
+) -> Result<InboxAccepted> {
     let state = app.state::<AppState>();
     let item = state
         .db

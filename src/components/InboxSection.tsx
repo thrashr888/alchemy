@@ -7,7 +7,7 @@
    trace and filing one is the same add path the notebook's own Add source
    uses. Filing is reversible through the notebook's Remove source, which is
    why "Accept all confident" needs no undo of its own. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardPaste,
   FileText,
@@ -54,6 +54,10 @@ export function InboxSection() {
   );
   const [choosing, setChoosing] = useState<string | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  // The same set, readable synchronously: `busy` is state, so two Enters
+  // in one tick both saw it empty and filed the row twice. The ref is
+  // checked before anything is sent.
+  const inFlight = useRef<Set<string>>(new Set());
 
   // Fresh on arrival at the section; after that mcp://changed keeps it so.
   useEffect(() => {
@@ -77,6 +81,8 @@ export function InboxSection() {
       opts: { notebookId?: string; newTitle?: string } = {},
       quiet = false,
     ): Promise<boolean> => {
+      if (inFlight.current.has(item.id)) return false;
+      inFlight.current.add(item.id);
       const st = useStore.getState();
       setBusy((b) => new Set(b).add(item.id));
       try {
@@ -92,6 +98,7 @@ export function InboxSection() {
         st.pushToast("error", e instanceof Error ? e.message : String(e));
         return false;
       } finally {
+        inFlight.current.delete(item.id);
         setBusy((b) => {
           const next = new Set(b);
           next.delete(item.id);
@@ -152,7 +159,10 @@ export function InboxSection() {
       const verb = verbForKey(e.key, selected);
       if (!verb) return;
       e.preventDefault();
+      // Both: the type-to-ask listener sits on the same window, so a plain
+      // stopPropagation would still let it see a key dispatched there.
       e.stopPropagation();
+      e.stopImmediatePropagation();
       switch (verb.type) {
         case "move": {
           const next = items[selIndex + verb.delta];
