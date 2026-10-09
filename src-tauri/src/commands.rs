@@ -1333,9 +1333,21 @@ pub async fn set_notebook_icon(
     e(state.db.set_notebook_icon(&id, icon).await)
 }
 
-/// The cover choice: "<style>:<seed>" or "" for automatic. The seed is the
-/// picture's name (the notebook id, or the id with a suffix from the
-/// picker), kept to the characters a URL path and a cache key both like.
+/// The cover choice: "<style>:<seed>", "" for automatic, or "none" for no
+/// cover at all. The seed is the picture's name (the notebook id, or the id
+/// with a suffix from the picker), kept to the characters a URL path and a
+/// cache key both like.
+fn is_valid_cover(cover: &str) -> bool {
+    cover.is_empty()
+        || cover == "none"
+        || cover.split_once(':').is_some_and(|(style, seed)| {
+            matches!(style, "mist" | "dither" | "ascii")
+                && !seed.is_empty()
+                && seed.len() <= 64
+                && seed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+}
+
 #[tauri::command]
 pub async fn set_notebook_cover(
     state: State<'_, AppState>,
@@ -1343,17 +1355,35 @@ pub async fn set_notebook_cover(
     cover: String,
 ) -> Result<(), String> {
     let cover = cover.trim();
-    let ok = cover.is_empty()
-        || cover.split_once(':').is_some_and(|(style, seed)| {
-            matches!(style, "mist" | "dither" | "ascii")
-                && !seed.is_empty()
-                && seed.len() <= 64
-                && seed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        });
-    if !ok {
-        return Err("cover must be <mist|dither|ascii>:<seed>, or empty for automatic".into());
+    if !is_valid_cover(cover) {
+        return Err(
+            "cover must be <mist|dither|ascii>:<seed>, none, or empty for automatic".into(),
+        );
     }
     e(state.db.set_notebook_cover(&id, cover).await)
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::is_valid_cover;
+
+    #[test]
+    fn cover_choices_validate() {
+        assert!(is_valid_cover(""), "empty is automatic");
+        assert!(is_valid_cover("none"), "none hides the cover");
+        assert!(is_valid_cover("mist:abc-123"));
+        assert!(is_valid_cover("dither:abc-123"));
+        assert!(is_valid_cover("ascii:abc-123"));
+        assert!(!is_valid_cover("photo:abc"), "unknown style");
+        assert!(!is_valid_cover("mist:"), "empty seed");
+        assert!(!is_valid_cover("mist:a b"), "seed outside the URL-safe set");
+        assert!(
+            !is_valid_cover(&format!("mist:{}", "a".repeat(65))),
+            "seed too long"
+        );
+        assert!(!is_valid_cover("None"), "the keyword is lowercase");
+        assert!(!is_valid_cover("none:abc"), "none takes no seed");
+    }
 }
 
 #[tauri::command]

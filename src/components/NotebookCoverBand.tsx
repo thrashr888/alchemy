@@ -1,9 +1,15 @@
-import { useNotebookCover } from "@/lib/cover";
+import { BAND_H, BAND_W, useNotebookCover } from "@/lib/cover";
 
-/** The notebook's cover across the top of its page: the same picture the
- *  Home card wears, drawn wide and thin under the toolbar and fading into
- *  the pane, so the notebook is recognisable before a word is read. No
- *  text on it — the title is the toolbar's. */
+/** The notebook's cover as a backdrop behind the top of its page: the same
+ *  picture the Home card wears, drawn wide, pinned to the sheet's top and
+ *  fading to nothing, so the pane's own header and content paint over it
+ *  from the very top instead of being pushed down. No text on it — the
+ *  title is the toolbar's. Nothing at all when the cover is `none`.
+ *
+ *  The fade is a mask, not a gradient to the background colour, so the
+ *  translucent sheet under glass shows through the same way it does
+ *  everywhere else. Render it before the pane: the panes' roots are
+ *  positioned, so tree order puts them above it. */
 export function NotebookCoverBand({
   id,
   color,
@@ -11,31 +17,24 @@ export function NotebookCoverBand({
 }: {
   id: string;
   color?: string;
-  /** `Notebook.cover`: the stored choice, or "" for automatic. */
+  /** `Notebook.cover`: the stored choice, "" for automatic, "none". */
   choice?: string;
 }) {
-  const cover = useNotebookCover(id, color || "", 1200, 56, choice);
+  const cover = useNotebookCover(id, color || "", BAND_W, BAND_H, choice);
+  if (!cover) return null;
+  const fade = "linear-gradient(to bottom, black 40%, transparent)";
   return (
     <div
       aria-hidden
-      className="pointer-events-none relative h-14 w-full shrink-0 overflow-hidden"
-      style={
-        cover
-          ? {
-              backgroundImage: `url(${cover})`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-            }
-          : undefined
-      }
-    >
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            "linear-gradient(to bottom, transparent 35%, var(--background))",
-        }}
-      />
-    </div>
+      className="pointer-events-none absolute inset-x-0 top-0 z-0"
+      style={{
+        height: BAND_H,
+        backgroundImage: `url(${cover})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        WebkitMaskImage: fade,
+        maskImage: fade,
+      }}
+    />
   );
 }
