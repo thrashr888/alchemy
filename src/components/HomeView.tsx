@@ -47,6 +47,8 @@ import type {
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   MessagesSquare,
   Moon,
@@ -121,11 +123,13 @@ const NOTEBOOK_SORT_KEYS = NOTEBOOK_COLUMNS.filter((c) => "sort" in c).map(
   (c) => c.key,
 );
 
-/** The sort pop-up's orders, named the way the pop-up's label reads them.
+/** The sort pop-up's orders and the direction each one starts in. Named
+ *  as nouns, not readings ("Updated", not "Recently updated"), because the
+ *  direction is its own choice now and the trigger's arrow says which way.
  *  Same state the table's column headers write, so switching shapes keeps
  *  the order you chose (`homeTableSort`). */
 const NOTEBOOK_SORTS: { key: string; dir: SortDir; label: string }[] = [
-  { key: "updated", dir: "desc", label: "Recently updated" },
+  { key: "updated", dir: "desc", label: "Updated" },
   { key: "title", dir: "asc", label: "Name" },
   { key: "sources", dir: "desc", label: "Sources" },
   { key: "notes", dir: "desc", label: "Notes" },
@@ -1002,8 +1006,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const groups =
     scope === "archived" ? [] : shelfGroups(shownNotebooks, nbSort, kindOf);
   const sortLabel =
-    NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ??
-    "Recently updated";
+    NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ?? "Updated";
 
   const staffTone = useNightShiftTone();
   const homeThreads = useStore((s) => s.homeThreads);
@@ -1936,17 +1939,40 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   trigger={
                     <>
                       {sortLabel}
+                      {/* The direction, where the table's header shows it
+                          with its own arrow; the grid has no header. */}
+                      {nbSort.dir === "asc" ? (
+                        <ArrowUp className="h-2.5 w-2.5 shrink-0 text-muted-foreground" aria-label="ascending" />
+                      ) : (
+                        <ArrowDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" aria-label="descending" />
+                      )}
                       <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
                     </>
                   }
                   triggerClassName={POPUP}
-                  items={NOTEBOOK_SORTS.map((o) => ({
-                    label: o.label,
-                    checked: nbSort.key === o.key,
-                    onClick: () => {
-                      if (nbSort.key !== o.key) toggleNbSort(o.key, o.dir);
-                    },
-                  }))}
+                  // Mail's sort menu: the orders, then the direction as its
+                  // own pair, so flipping one never means re-choosing the
+                  // other. Picking an order starts it in its natural
+                  // direction; the table's header click still flips it too.
+                  items={[
+                    ...NOTEBOOK_SORTS.map((o) => ({
+                      label: o.label,
+                      checked: nbSort.key === o.key,
+                      onClick: () => {
+                        if (nbSort.key !== o.key) toggleNbSort(o.key, o.dir);
+                      },
+                    })),
+                    { label: "", separator: true, onClick: () => {} },
+                    ...(["asc", "desc"] as const).map((dir) => ({
+                      label: dir === "asc" ? "Ascending" : "Descending",
+                      checked: nbSort.dir === dir,
+                      onClick: () => {
+                        // `toggle` on the current key flips it, whichever
+                        // natural direction it is handed.
+                        if (nbSort.dir !== dir) toggleNbSort(nbSort.key, dir);
+                      },
+                    })),
+                  ]}
                 />
               )}
               <SearchField
