@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 mod brief;
 pub(crate) mod chatloop;
+mod covers;
 mod diagnostics;
 mod handoff;
 mod registry;
@@ -18,6 +19,7 @@ pub(crate) mod reports;
 mod second_look;
 pub(crate) mod undo;
 pub(crate) use brief::ensure_default_brief;
+pub use covers::*;
 pub use diagnostics::*;
 pub use handoff::*;
 pub use registry::*;
@@ -3261,8 +3263,8 @@ pub(crate) async fn set_source_image_impl(
         .get_source(source_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Source not found"))?;
-    if existing.source_type != "url" {
-        anyhow::bail!("Only URL sources carry a gallery image");
+    if matches!(existing.source_type.as_str(), "pdf" | "image") {
+        anyhow::bail!("PDFs and images render their own thumbnail");
     }
     let image_url = image_url.trim();
     if !image_url.is_empty() && image_url != "-" && !is_web_url(image_url) {
@@ -3830,9 +3832,10 @@ pub async fn source_thumbnail(
             let _ = std::fs::write(&cache, &png);
             Ok(format!("data:image/png;base64,{}", b64(&png)))
         }
-        // URL sources: download the og:image once and serve it from disk —
-        // reopening the gallery must not re-fetch a page's hero image.
-        "url" => {
+        // Every other source (a URL page, or a note or file given a cover in
+        // the Cover images sheet): download the cover once and serve it from
+        // disk — reopening the gallery must not re-fetch a hero image.
+        _ if src.source_type != "image" => {
             let img = &src.image_url;
             if img.is_empty() || img == "-" || !is_web_url(img) {
                 return Ok(String::new());

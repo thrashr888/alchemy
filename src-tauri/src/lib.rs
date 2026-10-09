@@ -7,6 +7,7 @@ mod capture;
 mod clip;
 mod commands;
 mod connectors;
+mod covers;
 mod crashwatch;
 mod db;
 mod device;
@@ -532,6 +533,8 @@ pub fn run() {
             commands::set_source_note,
             commands::set_source_image,
             commands::source_image_candidates,
+            commands::scan_cover_images,
+            commands::apply_cover_images,
             commands::peek_url,
             commands::refresh_source_url,
             commands::refresh_sources,

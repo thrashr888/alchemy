@@ -85,7 +85,9 @@ adding what comes to mind. Habits that keep the notebook clean:
   not import and why. That note is how the user judges coverage.
 - **Covers are yours to set**: `set_source_image` puts a picked image on
   the source's gallery card and reader header; `set_source_tags` and
-  `set_source_note` carry the user's own labels into retrieval.
+  `set_source_note` carry the user's own labels into retrieval. For a
+  notebook of cover-less sources, `scan_cover_images` proposes candidates
+  and `apply_cover_images` sets the ones you choose.
 - **Keep the user's own lists in step.** If they track the same things in
   an Apple Reminders list, update it as well — through `add_reminder` when
   the list is a connected source, or the `cider` CLI otherwise — and say
