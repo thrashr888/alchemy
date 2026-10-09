@@ -439,37 +439,8 @@ pub fn build_chat_messages(
     messages
 }
 
-/// System prompt for the auto-evidence post-pass: after a chat answer that
-/// synthesized across sources, one model call decides whether the exchange
-/// produced a durable conclusion and drafts the evidence record if so
-/// (docs/RFC-note-curator.md phase 3). The model must opt IN — the default
-/// is SKIP, and malformed output is treated as SKIP.
-const AUTO_EVIDENCE_SYSTEM: &str =
-    "You review ONE exchange from a research-notebook chat and decide \
-whether it produced a conclusion worth preserving as an evidence record — a durable note a future \
-reader (human or agent) can audit and build on.\n\
-\n\
-Reply with exactly SKIP when the exchange is not worth a record: simple lookups, casual or \
-exploratory turns, answers that restate a single source, questions about the notebook itself, \
-or anything without a real cross-source conclusion. Most exchanges are SKIP.\n\
-\n\
-Otherwise reply in exactly this form:\n\
-TITLE: <the claim itself in one line — a specific statement, not a topic label>\n\
-\n\
-**Claim:** one sentence.\n\
-**Evidence:** the 1-3 load-bearing passages, quoted from the excerpts below, each naming its \
-source title. Use ONLY the provided excerpts.\n\
-**Confidence:** high / medium / low, with a phrase on why (corroborated across sources, single \
-source, dated…).\n\
-**Counter-evidence:** anything in the excerpts that cuts against the claim, or \"none found\".\n\
-**Open questions:** what would firm this up, if anything.\n\
-\n\
-When a PRIOR RECORD is provided, the claim was recorded before: reply with the MERGED record in \
-the same form — keep its still-valid evidence, fold in the new, and update the confidence.";
-
-/// System prompt for the "Save as Evidence" verb: the same record, but the
-/// reader asked for it, so SKIP is not an answer. The shape and the rules
-/// about excerpts are AUTO_EVIDENCE_SYSTEM's; only the decision is gone.
+/// System prompt for the "Save as Evidence" verb: the reader asked for a
+/// record, so SKIP is not an answer. Ground it in the cited excerpts.
 const EVIDENCE_VERB_SYSTEM: &str =
     "You turn ONE exchange from a research-notebook chat into an evidence record — a durable \
 note a future reader (human or agent) can audit and build on. The reader asked for this record: \
@@ -493,9 +464,19 @@ pub fn build_evidence_messages(
     answer: &str,
     citations: &[Citation],
 ) -> Vec<ChatTurn> {
-    let mut turns = build_auto_evidence_messages(question, answer, citations, None);
-    turns[0] = ChatTurn::system(EVIDENCE_VERB_SYSTEM);
-    turns
+    let mut excerpts = String::new();
+    for (i, c) in citations.iter().enumerate() {
+        excerpts.push_str(&format!(
+            "[{}] (from \"{}\")\n{}\n\n",
+            i + 1,
+            c.source_title,
+            c.snippet.trim()
+        ));
+    }
+    let user = format!(
+        "Question: {question}\n\nAnswer given:\n{answer}\n\nSource excerpts behind the answer:\n\n{excerpts}"
+    );
+    vec![ChatTurn::system(EVIDENCE_VERB_SYSTEM), ChatTurn::user(user)]
 }
 
 /// The record written when no model could draft one: the answer as given,
@@ -536,37 +517,6 @@ pub fn plain_evidence_record(
         },
         body,
     )
-}
-
-/// Build the evidence-record messages. `citations` should be source
-/// passages only (note passages are prior conclusions — evidence derived
-/// from them would be circular). `prior` is an existing record to merge.
-pub fn build_auto_evidence_messages(
-    question: &str,
-    answer: &str,
-    citations: &[Citation],
-    prior: Option<(&str, &str)>,
-) -> Vec<ChatTurn> {
-    let mut excerpts = String::new();
-    for (i, c) in citations.iter().enumerate() {
-        excerpts.push_str(&format!(
-            "[{}] (from \"{}\")\n{}\n\n",
-            i + 1,
-            c.source_title,
-            c.snippet.trim()
-        ));
-    }
-    let mut user = format!(
-        "Question: {question}\n\nAnswer given:\n{answer}\n\nSource excerpts behind the answer:\n\n{excerpts}"
-    );
-    if let Some((title, content)) = prior {
-        user.push_str(&format!(
-            "\nPRIOR RECORD \"{}\":\n{}\n",
-            title,
-            content.trim()
-        ));
-    }
-    vec![ChatTurn::system(AUTO_EVIDENCE_SYSTEM), ChatTurn::user(user)]
 }
 
 /// System prompt for curator consolidation (docs/RFC-note-curator.md phase
