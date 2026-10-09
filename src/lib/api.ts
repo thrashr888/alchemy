@@ -58,6 +58,8 @@ import type {
   Notebook,
   NotebookGraph,
   NotebookSuggestion,
+  InboxItem,
+  InboxAccepted,
   IcloudMoveOffer,
   OkfBinding,
   OkfLifecycle,
@@ -468,6 +470,38 @@ export const api = {
         url: input.url ?? "",
       }),
     ),
+  /** The Inbox, newest first. */
+  inboxList: () => run(cmd<InboxItem[]>("inbox_list")),
+  /** Save a capture to the Inbox; its suggestion is computed behind it. */
+  inboxAdd: (input: {
+    url?: string | null;
+    text?: string | null;
+    title?: string | null;
+    files?: string[];
+  }) =>
+    run(
+      cmd<InboxItem>("inbox_add", {
+        url: input.url ?? "",
+        text: input.text ?? "",
+        title: input.title ?? "",
+        files: input.files ?? [],
+      }),
+    ),
+  /** File an Inbox item: into `notebookId`, or into the suggestion (creating
+   *  the notebook first when the suggestion is a new one). `newTitle` names
+   *  the notebook when the item has no suggested title. */
+  inboxAccept: (
+    id: string,
+    opts: { notebookId?: string | null; newTitle?: string | null } = {},
+  ) =>
+    run(
+      cmd<InboxAccepted>("inbox_accept", {
+        id,
+        notebookId: opts.notebookId ?? null,
+        newTitle: opts.newTitle ?? null,
+      }),
+    ),
+  inboxDismiss: (id: string) => run(cmd<void>("inbox_dismiss", { id })),
   /** Page count of a PDF on disk; 0 when it can't be read. */
   pdfPageCount: (path: string) => run(cmd<number>("pdf_page_count", { path })),
   /** One rendered PDF page (1-indexed) as a `data:` PNG URL. */

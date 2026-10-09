@@ -24,6 +24,7 @@ pub(crate) mod access;
 mod diagnostics;
 mod growth;
 mod homechat;
+mod inbox;
 mod mac;
 mod notebooks;
 mod notes;
@@ -454,6 +455,7 @@ fn all_tools() -> rmcp::handler::server::router::tool::ToolRouter<AlchemyMcp> {
         + AlchemyMcp::homechat_router()
         + AlchemyMcp::growth_router()
         + AlchemyMcp::diagnostics_router()
+        + AlchemyMcp::inbox_router()
 }
 
 /// Every tool this build serves, as (name, description), sorted by name.

@@ -23,9 +23,9 @@ use lancedb::Connection;
 
 use crate::growth::SuggestedSource;
 use crate::models::{
-    Citation, CorpusTag, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage, Notebook,
-    NotebookPreview, PreviewNote, PreviewSource, RegistryCard, ReportSchedule, RunReceipt, Source,
-    SourceEvent,
+    Citation, CorpusTag, InboxItem, Message, MetaThread, MetaTurn, Note, NoteSummary, NoteUsage,
+    Notebook, NotebookPreview, PreviewNote, PreviewSource, RegistryCard, ReportSchedule,
+    RunReceipt, Source, SourceEvent,
 };
 
 const T_NOTEBOOKS: &str = "notebooks";
@@ -65,6 +65,9 @@ struct SuggestedRow {
 /// The Registry's cast (docs/RFC-registry.md). Corpus-scoped: no
 /// notebook_id column, unlike every other entity table here.
 const T_REGISTRY: &str = "registry";
+/// Captures that arrived without a home, waiting to be filed. Corpus-scoped
+/// like the registry: an arrival belongs to no notebook until it is accepted.
+const T_INBOX: &str = "inbox";
 /// Home's corpus-wide conversations (docs/RFC-meta-chat.md). Also
 /// corpus-scoped: a turn belongs to a thread, and the thread is about
 /// everything. Threads are derived from these rows, not stored.
@@ -531,6 +534,7 @@ impl Db {
         db.migrate_receipts().await?;
         db.ensure_table(T_REGISTRY, registry_schema()).await?;
         db.migrate_registry().await?;
+        db.ensure_table(T_INBOX, inbox_schema()).await?;
         db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
         db.migrate_meta_turns().await?;
         Ok(db)
@@ -5123,6 +5127,73 @@ impl Db {
             .collect())
     }
 
+    // ---- Inbox ----
+
+    pub async fn add_inbox_item(&self, item: &InboxItem) -> Result<()> {
+        let schema = inbox_schema();
+        let batch = inbox_batch(&schema, item)?;
+        self.add_batch(T_INBOX, schema, batch).await
+    }
+
+    /// Newest first.
+    pub async fn list_inbox(&self) -> Result<Vec<InboxItem>> {
+        let batches = self.collect(T_INBOX, None).await?;
+        let mut out = Vec::new();
+        for b in &batches {
+            out.extend(inbox_rows(b)?);
+        }
+        out.sort_by_key(|i| std::cmp::Reverse(i.created_at));
+        Ok(out)
+    }
+
+    pub async fn get_inbox_item(&self, id: &str) -> Result<Option<InboxItem>> {
+        let batches = self
+            .collect(T_INBOX, Some(&format!("id = '{}'", esc(id))))
+            .await?;
+        for b in &batches {
+            if let Some(item) = inbox_rows(b)?.into_iter().next() {
+                return Ok(Some(item));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Everything a suggestion pass may change: the fields it filled in, and
+    /// the title and excerpt it learned from fetching the page.
+    pub async fn update_inbox_item(&self, item: &InboxItem) -> Result<()> {
+        let tbl = self.conn.open_table(T_INBOX).execute().await?;
+        let alternatives = serde_json::to_string(&item.alternatives).unwrap_or_default();
+        tbl.update()
+            .only_if(format!("id = '{}'", esc(&item.id)))
+            .column("title", format!("'{}'", esc(&item.title)))
+            .column("excerpt", format!("'{}'", esc(&item.excerpt)))
+            .column(
+                "suggested_notebook_id",
+                format!("'{}'", esc(&item.suggested_notebook_id)),
+            )
+            .column(
+                "suggested_title",
+                format!("'{}'", esc(&item.suggested_title)),
+            )
+            .column("is_new", i64::from(item.is_new).to_string())
+            .column(
+                "probability_milli",
+                probability_to_milli(item.probability).to_string(),
+            )
+            .column("auto_file", i64::from(item.auto).to_string())
+            .column("alternatives", format!("'{}'", esc(&alternatives)))
+            .column("judge", format!("'{}'", esc(&item.judge)))
+            .column("suggested", i64::from(item.suggested).to_string())
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_inbox_item(&self, id: &str) -> Result<()> {
+        self.delete_where(T_INBOX, &format!("id = '{}'", esc(id)))
+            .await
+    }
+
     // ---- Registry (docs/RFC-registry.md) ----
 
     pub async fn add_registry_card(&self, card: &RegistryCard) -> Result<()> {
@@ -5997,6 +6068,99 @@ fn source_event_batch(schema: &SchemaRef, e: &SourceEvent) -> Result<RecordBatch
             Arc::new(Int64Array::from(vec![e.at])),
         ],
     )?)
+}
+
+fn inbox_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("created_at", DataType::Int64, false),
+        Field::new("url", DataType::Utf8, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("files", DataType::Utf8, false),
+        Field::new("excerpt", DataType::Utf8, false),
+        Field::new("suggested_notebook_id", DataType::Utf8, false),
+        Field::new("suggested_title", DataType::Utf8, false),
+        Field::new("is_new", DataType::Int64, false),
+        // Thousandths, -1 for "no judge": Lance has no nullable float here
+        // worth the column plumbing, and three digits is more than a
+        // percentage on a row needs.
+        Field::new("probability_milli", DataType::Int64, false),
+        Field::new("auto_file", DataType::Int64, false),
+        Field::new("alternatives", DataType::Utf8, false),
+        Field::new("judge", DataType::Utf8, false),
+        Field::new("suggested", DataType::Int64, false),
+    ]))
+}
+
+fn probability_to_milli(p: Option<f64>) -> i64 {
+    p.map_or(-1, |p| (p.clamp(0.0, 1.0) * 1000.0).round() as i64)
+}
+
+fn milli_to_probability(m: i64) -> Option<f64> {
+    (m >= 0).then(|| m as f64 / 1000.0)
+}
+
+fn inbox_batch(schema: &SchemaRef, i: &InboxItem) -> Result<RecordBatch> {
+    let s = |v: &str| Arc::new(StringArray::from(vec![v.to_string()])) as ArrayRef;
+    let n = |v: i64| Arc::new(Int64Array::from(vec![v])) as ArrayRef;
+    Ok(RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            s(&i.id),
+            n(i.created_at),
+            s(&i.url),
+            s(&i.text),
+            s(&i.title),
+            s(&serde_json::to_string(&i.files).unwrap_or_default()),
+            s(&i.excerpt),
+            s(&i.suggested_notebook_id),
+            s(&i.suggested_title),
+            n(i64::from(i.is_new)),
+            n(probability_to_milli(i.probability)),
+            n(i64::from(i.auto)),
+            s(&serde_json::to_string(&i.alternatives).unwrap_or_default()),
+            s(&i.judge),
+            n(i64::from(i.suggested)),
+        ],
+    )?)
+}
+
+fn inbox_rows(b: &RecordBatch) -> Result<Vec<InboxItem>> {
+    let id = str_col(b, "id")?;
+    let created = i64_col(b, "created_at")?;
+    let url = str_col(b, "url")?;
+    let text = str_col(b, "text")?;
+    let title = str_col(b, "title")?;
+    let files = str_col(b, "files")?;
+    let excerpt = str_col(b, "excerpt")?;
+    let nb_id = str_col(b, "suggested_notebook_id")?;
+    let nb_title = str_col(b, "suggested_title")?;
+    let is_new = i64_col(b, "is_new")?;
+    let milli = i64_col(b, "probability_milli")?;
+    let auto = i64_col(b, "auto_file")?;
+    let alternatives = str_col(b, "alternatives")?;
+    let judge = str_col(b, "judge")?;
+    let suggested = i64_col(b, "suggested")?;
+    Ok((0..b.num_rows())
+        .map(|r| InboxItem {
+            id: id.value(r).to_string(),
+            created_at: created.value(r),
+            url: url.value(r).to_string(),
+            text: text.value(r).to_string(),
+            title: title.value(r).to_string(),
+            files: serde_json::from_str(files.value(r)).unwrap_or_default(),
+            excerpt: excerpt.value(r).to_string(),
+            suggested_notebook_id: nb_id.value(r).to_string(),
+            suggested_title: nb_title.value(r).to_string(),
+            is_new: is_new.value(r) != 0,
+            probability: milli_to_probability(milli.value(r)),
+            auto: auto.value(r) != 0,
+            alternatives: serde_json::from_str(alternatives.value(r)).unwrap_or_default(),
+            judge: judge.value(r).to_string(),
+            suggested: suggested.value(r) != 0,
+        })
+        .collect())
 }
 
 fn registry_schema() -> SchemaRef {

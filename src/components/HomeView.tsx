@@ -51,6 +51,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Inbox,
   MessagesSquare,
   Moon,
   PanelLeft,
@@ -80,6 +81,7 @@ import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
 import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
 import { RegistrySection } from "./RegistrySection";
 import { TimelineSection } from "./TimelineSection";
+import { InboxSection } from "./InboxSection";
 import {
   HOME_VIEWS,
   HomeTable,
@@ -933,6 +935,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const scope = useStore((s) => s.homeScope);
   const goShelf = useStore((s) => s.goHomeShelf);
   const goSection = useStore((s) => s.goHomeSection);
+  const inboxCount = useStore((s) => s.inbox.length);
 
   // "system" notebooks (Briefs) are working infrastructure, not shelf items.
   const activeNotebooks = notebooks.filter((n) => !n.status);
@@ -1423,6 +1426,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
       const n = registrySignal?.shown ?? 0;
       return n > 0 ? `${n} waiting` : "Nothing waiting";
     }
+    if (homeSection === "inbox")
+      return inboxCount > 0 ? `${inboxCount} waiting` : "Nothing waiting";
     if (homeSection === "timeline")
       return "Every source and note, by the day it arrived.";
     // Notebooks — Shared and Archived are the same shelf, narrowed.
@@ -1500,6 +1505,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         ),
       };
+    if (homeSection === "inbox") return { title: "Inbox", actions: null };
     if (homeSection === "suggested")
       return { title: "Suggested", actions: null };
     if (homeSection === "timeline")
@@ -1725,6 +1731,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (homeSection === "suggested")
       return <RegistrySection view="suggested" />;
     if (homeSection === "timeline") return <TimelineSection />;
+    if (homeSection === "inbox") return <InboxSection />;
     if (homeSection === "staff")
       return (
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -2123,6 +2130,16 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               />
 
               <SidebarBlock title="Library">
+                <LibraryRow
+                  icon={<Inbox className="h-3.5 w-3.5" />}
+                  label="Inbox"
+                  // A badge, like Suggested: captures waiting on a decision.
+                  badge={inboxCount || undefined}
+                  count={inboxCount || undefined}
+                  selected={homeSection === "inbox"}
+                  title="Captures waiting to be filed"
+                  onClick={() => goSection("inbox")}
+                />
                 <LibraryRow
                   icon={<Library className="h-3.5 w-3.5" />}
                   label="Notebooks"

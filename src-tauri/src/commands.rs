@@ -581,16 +581,11 @@ pub async fn suggest_notebook(
     suggest_notebook_for(&state, title, text, url).await
 }
 
-/// The routing itself, callable from inside the process — the chat tools that
-/// file something "wherever it belongs" ask the same question the picker
-/// does, and must get the same answer.
-pub(crate) async fn suggest_notebook_for(
-    state: &AppState,
-    title: String,
-    text: String,
-    url: String,
-) -> Result<crate::router::NotebookSuggestion, String> {
-    let (title, text) = if text.trim().is_empty() && !url.trim().is_empty() {
+/// What an incoming source says, for routing it: a bare URL is fetched and
+/// extracted (a failed fetch routes on the URL string itself); anything with
+/// text already is taken as given.
+pub(crate) async fn resolve_incoming(title: String, text: String, url: String) -> (String, String) {
+    if text.trim().is_empty() && !url.trim().is_empty() {
         match ingest::extract_url(&url).await {
             Ok(ex) => (
                 if title.trim().is_empty() {
@@ -604,11 +599,24 @@ pub(crate) async fn suggest_notebook_for(
         }
     } else {
         (title, text)
-    };
+    }
+}
+
+/// The routing itself, callable from inside the process — the chat tools that
+/// file something "wherever it belongs" ask the same question the picker
+/// does, and must get the same answer.
+pub(crate) async fn suggest_notebook_for(
+    state: &AppState,
+    title: String,
+    text: String,
+    url: String,
+) -> Result<crate::router::NotebookSuggestion, String> {
+    let location = url.clone();
+    let (title, text) = resolve_incoming(title, text, url).await;
     // Snapshot the Ai under a momentary read guard — never held across the
     // awaits below.
     let ai = state.ai.read().await.clone();
-    e(crate::router::suggest_notebook(&state.db, &ai, &title, &text).await)
+    e(crate::router::suggest_notebook(&state.db, &ai, &title, &text, &location).await)
 }
 
 /// How many pages a PDF has, for the reader's page view. Zero when the file

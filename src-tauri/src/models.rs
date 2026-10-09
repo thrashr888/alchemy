@@ -876,3 +876,65 @@ pub struct CorpusTag {
     /// The notebooks those sources sit in, sorted, deduped.
     pub notebook_ids: Vec<String>,
 }
+
+/// One capture waiting in the Inbox: saved the instant it arrived, filed when
+/// the user says. Nothing is imported until then, so there is no source to
+/// move and nothing for OKF to know about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxItem {
+    pub id: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Up to 600 characters of what the item says, for the row.
+    #[serde(default)]
+    pub excerpt: String,
+    /// Empty when the suggestion is a new notebook, or none was reached.
+    #[serde(default)]
+    pub suggested_notebook_id: String,
+    /// The notebook's title, or the proposed name when `is_new`.
+    #[serde(default)]
+    pub suggested_title: String,
+    #[serde(default)]
+    pub is_new: bool,
+    /// The judge's confidence (its top-two margin) in the suggestion. None
+    /// when no judge answered and the router's pick stands alone.
+    #[serde(default)]
+    pub probability: Option<f64>,
+    /// The judge was confident and trusted, and chose an existing notebook:
+    /// the one case "Accept all confident" may file unattended.
+    #[serde(default)]
+    pub auto: bool,
+    /// Other existing notebooks in the judge's order, at most four.
+    #[serde(default)]
+    pub alternatives: Vec<InboxAlternative>,
+    /// Which judge answered; empty when none did.
+    #[serde(default)]
+    pub judge: String,
+    /// False until the suggestion has been computed (or given up on).
+    #[serde(default)]
+    pub suggested: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxAlternative {
+    pub notebook_id: String,
+    pub title: String,
+    pub probability: f64,
+}
+
+/// Where an accepted Inbox item landed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxAccepted {
+    pub notebook_id: String,
+    pub title: String,
+}

@@ -108,6 +108,9 @@ const TOOLS: &[(&str, Access, &str)] = &[
         Write,
         "accept or dismiss suggested registry entries",
     ),
+    ("inbox_accept", Write, "file a capture from the Inbox"),
+    ("inbox_dismiss", Write, "dismiss a capture from the Inbox"),
+    ("inbox_list", Read, "list the Inbox"),
     ("save_template", Write, "save a template"),
     (
         "scan_cover_images",

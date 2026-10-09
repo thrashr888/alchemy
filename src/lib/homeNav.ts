@@ -18,18 +18,21 @@ export interface HomePlace {
   /** Which notebooks the shelf shows, for `section: "notebooks"`. Shared
    *  and Archived are the same shelf narrowed, not shelves of their own. */
   scope?: HomeScope;
-  /** ⌘-digit, 1–9. Built in and the Timeline have none: the digits ran
-   *  out, and a filter over the shelf earns one less than a place does. */
+  /** ⌘-digit, 1–9. The Inbox, Built in and the Timeline have none: the
+   *  digits ran out, and a filter over the shelf earns one less than a
+   *  place does. */
   key?: number;
   /** Going here means the whole shelf — a tag left running would narrow a
    *  place the user just asked for in full. */
   clearTag?: boolean;
 }
 
-/** Home's places in sidebar order: the Library block, the Registry block,
- *  then the Brief and the Timeline. menu.rs's View menu is built from the
+/** Home's places in sidebar order: the Library block (the Inbox above the
+ *  shelf), the Registry block, then the Brief and the Timeline. menu.rs's View menu is built from the
  *  same order and carries the same digits — keep the two tables together. */
 export const HOME_PLACES: HomePlace[] = [
+  // First in the list, with no digit: all nine were taken before it came.
+  { id: "menu-home-inbox", section: "inbox" },
   {
     id: "menu-home-notebooks",
     section: "notebooks",

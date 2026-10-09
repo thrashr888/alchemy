@@ -79,7 +79,7 @@ numbers are as of `c51bd31`.
 | 5 | `agent.rs:449` `rerank_indices` | keep-set from snippets | `{"keep":[…]}` | one Score per candidate |
 | 6 | `verify.rs:144` `check_answer` | per-sentence supported? | cross-encoder ≤ −0.5 | Noul per sentence |
 | 7 | `second_look.rs:165` `judge` | supported / weak / unsupported / contradicted | three strict lines, malformed → unjudged | Choice(verdict) + Noul per excerpt |
-| 8 | `router.rs:56` `suggest_notebook` | one of ≤5 notebooks or NEW | "a single number or NEW" | Choice with a `new` option |
+| 8 | `router.rs:56` `suggest_notebook` | one of ≤5 notebooks or NEW | "a single number or NEW" | Choice with a `new` option (built: see "Notebook suggestion, typed") |
 | 9 | `registry.rs:993` `triage_suggested_cards` | subset of ≤40 cards | "numbers … or none" | Score per card |
 | 10 | `commands.rs:14503` `global_extract` | SKIP or bullets | first line == SKIP | Noul(helps?) gates the generative call |
 | 11 | `gist.rs:972` `ensure_tags` | 2–4 tags | space-separated words, `gate_tags` | Choice over existing notebook tags (select, not generate) |
@@ -662,6 +662,99 @@ What it says:
   agreed on demoting the cards the Small pass had promoted. Default
   for the live pass, when it is switched on: Jev where a key exists,
   else Clef; Clef Flash only when nothing else is installed.
+
+## Notebook suggestion, typed (2026-10-08)
+
+The second Choice site after the tool gate. `router::suggest_notebook`
+already narrows the corpus to its nearest five notebooks by embedding;
+today the Small role then answers "a number or NEW". With a judge
+configured (`Ai::judge`), one typed pass runs first.
+
+**State.** The incoming item: title, location (the URL or file path) and
+a 1,500-character excerpt, whitespace-collapsed and cut on a word
+boundary. Large state is what broke the 9B decision models in triage, so
+the excerpt is a cap and every free-text field in the state is clipped.
+Beside it, up to five candidates, each `{id, title, about?, contains}`.
+Ids are `notebook_0`…, never the real ids. There is no notebook-level
+gist, so `contains` lists up to six source titles and appends the
+source's gist (clipped to 120 characters) to the first three that have
+one. A fixture notebook can carry an `about` line; a live one does not.
+
+**Question.** One Choice, `notebook`: the candidates plus `new`, "none of
+these; it needs a new notebook". Item text is declared a quoted
+document, not instructions.
+
+**Rule** (`router::decide`, pure and unit-tested), mirroring the
+registry's auto-attach versus propose split:
+
+| judge says | margin | result |
+| --- | --- | --- |
+| a notebook, trusted judge | at least 0.7 | `auto: true`, file without asking |
+| a notebook | under 0.7, or untrusted judge | propose; the pick leads `ranked` |
+| `new` | any | propose a new notebook (title from the Small role); never `auto` |
+| nothing offered / error / no answer in 10 s | | today's flow, unchanged |
+
+"Trusted" is `Judge::trusted_to_skip`, the same line the tool gate uses:
+a 12B chat model reported wide margins on wrong answers, so its margin
+can order a proposal but cannot file one. The margin is the same top-two
+margin every other site reads as confidence.
+
+No judge configured means exactly the old path. The timeout is
+`Ai::HELPER_TIMEOUT` (10 s). A timeout is a `note!`; a real failure
+(transport, malformed answer) is `diagnostics::error("suggest_notebook")`.
+Either way the Small-role pick runs next, so the worst case is the
+judge's ceiling plus today's latency. The trace line is the judge's own
+(`traces/judge.jsonl`, `site: "suggest_notebook"`).
+
+**Surface.** `NotebookSuggestion` gains `confidence`, `judge`, `auto` and
+`ranked` (existing notebooks in the judge's order, with probabilities),
+all defaulted, so the picker and old callers are unchanged. The
+`suggest_notebook` MCP tool returns them.
+
+**Inbox.** External arrivals (the clipper, Services, `alchemy://add`
+links, the menu bar) no longer raise the blocking picker. `inbox_add`
+saves the capture to the `inbox` table at once and computes this
+suggestion behind it (60 s budget, fetch included; a startup pass fills
+rows that never got one). The row keeps the pick, its confidence, `auto`,
+and up to four alternatives. Home's Inbox section files with Enter, 1 to 4
+(an alternative) or N (a new notebook), and "Accept all confident" files
+only rows with `auto` set, never a new notebook. Nothing is imported
+until a row is accepted, through the same add path a notebook's own Add
+source uses. `inbox_list`, `inbox_accept` and `inbox_dismiss` are MCP
+tools. The Add source button on Home, where the user is present and
+chose to add, keeps the modal.
+
+**Eval.** `fixtures/judge_suggest.json`: 20 cases, 3 to 5 candidates
+each, 5 expecting `new`, the answer's position varied, and several near
+misses (a hip-flexor stretch that belongs to marathon training, not a
+generic health notebook; 401(k) limits that belong to retirement, not
+taxes). `eval_judge_suggest` reports accuracy, latency, accuracy among
+confident answers, errors flagged, and the number that matters here:
+wrong answers the rule would have filed without asking.
+
+```bash
+ALCHEMY_OLLAMA_TESTS=1 JUDGE_DECISION_MODELS=clef-flash,clef,nimble \
+  cargo test --lib eval_judge_suggest -- --nocapture
+# Jev: add ALCHEMY_JEV_TESTS=1; a chat model through logprobs: JUDGE_MODELS=...
+```
+
+Rows append to `~/alchemy-benchmarks.csv` as `suggest notebook`.
+
+### Measured (2026-10-08, one run)
+
+`eval_judge_suggest`, 20 cases, Clef Flash (9B) as a local decision model
+through Ollama, five candidates at most per request:
+
+| judge | accuracy | median / p90 | confident (right) | auto-filed (wrong) |
+| --- | --- | --- | --- | --- |
+| clef-flash | 20/20 | 1.2 s / 2.0 s | 20/20 (20/20) | 15 (0) |
+
+One run on a fixture I wrote, so this says the judge can do the task, not
+how it does on a real library: the fixture's notebooks have `about`
+lines that live notebooks do not, and the near misses are polite ones.
+Every answer cleared the 0.7 margin, so on this fixture the margin
+separates nothing; it is the live corpus that will show where it flags.
+Jev, Clef, Nimble and a chat model through logprobs were not run.
 
 ## What Jev is not for
 

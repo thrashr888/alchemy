@@ -145,6 +145,17 @@ const CMD: &[Command] = &[
     // dispatches to the group that belongs to it, and `set_menu_context`
     // greys out the other; the `keys` column documents both meanings for
     // Settings → Shortcuts.
+    // The Inbox is the first place in the sidebar and has no digit: all nine
+    // were spoken for before it existed. No Shortcuts-tab row either (an empty
+    // label), the way Built in and the Timeline stay menu-only.
+    Command {
+        id: "menu-home-inbox",
+        menu_label: "Inbox",
+        accelerator: None,
+        keys: "",
+        label: "",
+        context: "Home",
+    },
     Command {
         id: "menu-home-notebooks",
         menu_label: "Notebooks",
@@ -611,6 +622,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // order and the notebook's in rail order, which is ⌘-digit order for
     // both (see the registry above).
     let home_places = [
+        cmd_item(app, "menu-home-inbox")?,
         cmd_item(app, "menu-home-notebooks")?,
         cmd_item(app, "menu-home-chats")?,
         cmd_item(app, "menu-home-shared")?,
@@ -844,6 +856,7 @@ mod tests {
     /// ⌘1–⌘9 from it; a rename on one side that is not made on the other
     /// leaves a menu item that goes nowhere.
     const HOME: &[(&str, &str)] = &[
+        ("menu-home-inbox", ""),
         ("menu-home-notebooks", "⌘ 1"),
         ("menu-home-chats", "⌘ 2"),
         ("menu-home-shared", "⌘ 3"),
@@ -928,6 +941,7 @@ mod tests {
         );
         assert!(cmd("menu-home-timeline").label.is_empty());
         assert!(cmd("menu-home-builtin").label.is_empty());
+        assert!(cmd("menu-home-inbox").label.is_empty());
     }
 
     /// The fold-able Home cards and the three unkeyed "Go to" items they
