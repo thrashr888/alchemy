@@ -710,6 +710,19 @@ judge's ceiling plus today's latency. The trace line is the judge's own
 all defaulted, so the picker and old callers are unchanged. The
 `suggest_notebook` MCP tool returns them.
 
+**Inbox.** External arrivals (the clipper, Services, `alchemy://add`
+links, the menu bar) no longer raise the blocking picker. `inbox_add`
+saves the capture to the `inbox` table at once and computes this
+suggestion behind it (60 s budget, fetch included; a startup pass fills
+rows that never got one). The row keeps the pick, its confidence, `auto`,
+and up to four alternatives. Home's Inbox section files with Enter, 1 to 4
+(an alternative) or N (a new notebook), and "Accept all confident" files
+only rows with `auto` set, never a new notebook. Nothing is imported
+until a row is accepted, through the same add path a notebook's own Add
+source uses. `inbox_list`, `inbox_accept` and `inbox_dismiss` are MCP
+tools. The Add source button on Home, where the user is present and
+chose to add, keeps the modal.
+
 **Eval.** `fixtures/judge_suggest.json`: 20 cases, 3 to 5 candidates
 each, 5 expecting `new`, the answer's position varied, and several near
 misses (a hip-flexor stretch that belongs to marathon training, not a
@@ -725,6 +738,22 @@ ALCHEMY_OLLAMA_TESTS=1 JUDGE_DECISION_MODELS=clef-flash,clef,nimble \
 ```
 
 Rows append to `~/alchemy-benchmarks.csv` as `suggest notebook`.
+
+### Measured (2026-10-08, one run)
+
+`eval_judge_suggest`, 20 cases, Clef Flash (9B) as a local decision model
+through Ollama, five candidates at most per request:
+
+| judge | accuracy | median / p90 | confident (right) | auto-filed (wrong) |
+| --- | --- | --- | --- | --- |
+| clef-flash | 20/20 | 1.2 s / 2.0 s | 20/20 (20/20) | 15 (0) |
+
+One run on a fixture I wrote, so this says the judge can do the task, not
+how it does on a real library: the fixture's notebooks have `about`
+lines that live notebooks do not, and the near misses are polite ones.
+Every answer cleared the 0.7 margin, so on this fixture the margin
+separates nothing; it is the live corpus that will show where it flags.
+Jev, Clef, Nimble and a chat model through logprobs were not run.
 
 ## What Jev is not for
 

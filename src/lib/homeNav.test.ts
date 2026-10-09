@@ -17,15 +17,16 @@ const shelf = (over: Partial<NavEntry> = {}): NavEntry => ({
 });
 
 describe("Home's places", () => {
-  it("gives ⌘1–⌘9 to nine of the eleven, in sidebar order", () => {
-    // Built in and the Timeline go without: the digits ran out.
+  it("gives ⌘1–⌘9 to nine of the twelve, in sidebar order", () => {
+    // The Inbox, Built in and the Timeline go without: the digits ran out.
     expect(HOME_PLACES.map((p) => p.key)).toEqual([
-      1, 2, 3, undefined, 4, 5, 6, 7, 8, 9, undefined,
+      undefined, 1, 2, 3, undefined, 4, 5, 6, 7, 8, 9, undefined,
     ]);
   });
 
   it("names every id menu.rs registers", () => {
     expect(HOME_PLACES.map((p) => p.id)).toEqual([
+      "menu-home-inbox",
       "menu-home-notebooks",
       "menu-home-chats",
       "menu-home-shared",
@@ -64,6 +65,10 @@ describe("Home's places", () => {
     expect(homePlaceByKey(6)?.section).toBe("staff");
     expect(homePlaceById("menu-toggle-sources")).toBeUndefined();
     expect(homePlaceByKey(0)).toBeUndefined();
+    expect(homePlaceById("menu-home-inbox")?.section).toBe("inbox");
+    // No digit reaches the Inbox, and the existing ones stay where they were.
+    expect(homePlaceByKey(1)?.id).toBe("menu-home-notebooks");
+    expect(HOME_PLACES.find((p) => p.section === "inbox")?.key).toBeUndefined();
   });
 });
 

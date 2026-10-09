@@ -68,6 +68,46 @@ export interface NotebookSuggestion {
   ranked?: { notebookId: string; title: string; probability: number }[];
 }
 
+/** One capture waiting in the Inbox: saved the moment it arrived, filed when
+ *  the user says. Nothing is imported until then. */
+export interface InboxItem {
+  id: string;
+  createdAt: number;
+  url: string;
+  text: string;
+  title: string;
+  files: string[];
+  /** Up to 600 characters of what the item says. */
+  excerpt: string;
+  suggestedNotebookId: string;
+  suggestedTitle: string;
+  /** The suggestion is a new notebook named `suggestedTitle`. */
+  isNew: boolean;
+  /** The judge's confidence (its top-two margin) in the suggestion; null
+   *  when no judge answered. */
+  probability: number | null;
+  /** The judge was confident and trusted, and chose an existing notebook:
+   *  the one case "Accept all confident" may file unattended. */
+  auto: boolean;
+  /** Other notebooks, best first, at most four. */
+  alternatives: InboxAlternative[];
+  judge: string;
+  /** False until the suggestion has been computed. */
+  suggested: boolean;
+}
+
+/** Where an accepted Inbox item landed. */
+export interface InboxAccepted {
+  notebookId: string;
+  title: string;
+}
+
+export interface InboxAlternative {
+  notebookId: string;
+  title: string;
+  probability: number;
+}
+
 /** Where a notebook keeps itself on disk as an OKF bundle (RFC-okf-live §5.1).
  *  Machine-local: the path lives in a sidecar, not on the notebook row. */
 export interface OkfBinding {
