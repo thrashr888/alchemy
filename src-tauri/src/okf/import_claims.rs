@@ -151,6 +151,7 @@ mod tests {
             title: "Notebook".into(),
             color: String::new(),
             icon: String::new(),
+            cover: String::new(),
             generated_at: 1,
         };
         write_bundle(&notebook, &[], &notes, dir.path(), Some(&manifest_at)).unwrap();

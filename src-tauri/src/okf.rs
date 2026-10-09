@@ -322,6 +322,9 @@ pub struct OkfNotebook {
     pub title: String,
     pub color: String,
     pub icon: String,
+    /// The chosen cover ("<style>:<seed>"), "" for automatic; part of the
+    /// look, so it rides in the manifest like the colour and the icon.
+    pub cover: String,
     pub generated_at: i64,
 }
 
@@ -1157,6 +1160,7 @@ fn write_bundle_with(
             ("id".into(), notebook.id.clone()),
             ("color".into(), notebook.color.clone()),
             ("icon".into(), notebook.icon.clone()),
+            ("cover".into(), notebook.cover.clone()),
             // The Mac that wrote this pass (§5.8). Per source it decides what
             // a missing file means; here it just says who the bundle's last
             // writer was, which is the question anyone reading a shared
@@ -1466,6 +1470,7 @@ pub(crate) async fn gather_bundle_for(
         title: notebook.title.clone(),
         color: notebook.color.clone(),
         icon: notebook.icon.clone(),
+        cover: notebook.cover.clone(),
         generated_at: notebook.updated_at,
     };
     Ok((meta, source_concepts, note_concepts))
@@ -2114,6 +2119,7 @@ const OKF_OWN_NESTED_KEYS: &[&str] = &[
     "kind",
     "color",
     "icon",
+    "cover",
 ];
 
 /// One leading frontmatter block: its head and the text after it. `None`

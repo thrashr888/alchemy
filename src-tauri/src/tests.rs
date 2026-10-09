@@ -1317,6 +1317,7 @@ fn okf_notebook(title: &str) -> crate::okf::OkfNotebook {
         title: title.into(),
         color: "#5e6ad2".into(),
         icon: "beaker".into(),
+        cover: String::new(),
         generated_at: 1_756_000_400_000,
     }
 }
