@@ -177,6 +177,9 @@ uniform vec3 u_bg;
 uniform float u_gain;
 uniform float u_mode;
 uniform float u_density;
+// Shifts the sampled window; 0 for the backdrop. The notebook covers push it
+// far enough that the central glow and ring fall off the card.
+uniform vec2 u_seed;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float vnoise(vec2 p){
@@ -661,7 +664,7 @@ float camoField(vec2 uv, float glow){
 }
 
 void main(){
-  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y + u_seed;
   float r = length(uv);
   // Floored so the field reaches the edges instead of dying at the corners
   // of a wide surface — the centre stays brighter, but never alone.
@@ -695,7 +698,7 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-function buildProgram(gl: WebGLRenderingContext): WebGLProgram | null {
+export function buildProgram(gl: WebGLRenderingContext): WebGLProgram | null {
   const compile = (type: number, src: string) => {
     const s = gl.createShader(type);
     if (!s) return null;

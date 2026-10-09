@@ -27,6 +27,7 @@ import { notebookVerbs } from "@/lib/notebookMenu";
 import { currentEpigraph } from "@/lib/epigraph";
 import { THEMES, resolveThemeId } from "@/lib/themes";
 import { DitherBackground } from "./DitherBackground";
+import { useNotebookCover } from "@/lib/cover";
 import { useHomeActivity } from "./useHomeActivity";
 import { AwayDigest, ReportsFeed, lastNightLine } from "./HomeReportsFeed";
 import {
@@ -706,6 +707,7 @@ function NotebookCard({
   menu: React.ReactNode;
 }) {
   const color = nb.color || NOTEBOOK_PALETTE[0];
+  const cover = useNotebookCover(nb.id, color);
   const images = preview?.images ?? [];
   // An image strip and three lines don't both fit in 140px; the pictures win,
   // because they say more per pixel than a third title does.
@@ -785,6 +787,14 @@ function NotebookCard({
           picked &&
             "bg-primary/10 shadow-[inset_0_0_0_1.5px_var(--primary)] group-hover:bg-primary/15",
         )}
+        // The procedural cover is a translucent wash on the background layer:
+        // the hairline (an inset shadow) paints over it, the surface and hover
+        // tint show through it, and the text above stays on theme tokens.
+        style={
+          cover
+            ? { backgroundImage: `url(${cover})`, backgroundSize: "100% 100%" }
+            : undefined
+        }
       >
         <div className="flex items-center gap-1.5">
           <span
