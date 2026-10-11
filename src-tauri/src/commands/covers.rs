@@ -233,7 +233,7 @@ pub async fn apply_cover_images(
 /// photo (dither, ASCII) before it is shown. A data URL never taints.
 #[tauri::command]
 pub async fn cover_photo(seed: String, width: u32, height: u32) -> Result<String, String> {
-    // The notebook page's band is 1200 CSS px wide at up to 2x.
+    // The notebook page's band is 1280 x 112 CSS px at up to 2x.
     if !(16..=2560).contains(&width) || !(16..=1024).contains(&height) {
         return Err("Cover size out of range".into());
     }

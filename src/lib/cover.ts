@@ -19,6 +19,10 @@ import { api } from "@/lib/api";
 /** The thumb's box in CSS px (HomeView's `w-[212px]` x `h-[140px]`). */
 export const COVER_W = 212;
 export const COVER_H = 140;
+/** The notebook page's backdrop band in CSS px. Wider sheets stretch it;
+ *  at 2x it stays inside `cover_photo`'s 2560 x 1024 cap. */
+export const BAND_W = 1280;
+export const BAND_H = 112;
 
 /** Peak wash opacity per scheme, at the bottom edge. Chosen against the text
  *  tokens: even the strongest pixel in the zone where the name and titles sit
@@ -48,15 +52,23 @@ export const COVER_STYLE_LABEL: Record<CoverStyle, string> = {
   ascii: "ASCII",
 };
 
-/** The style and picture for a notebook. A stored choice
- *  ("<style>:<seed>", `Notebook.cover`) wins; otherwise the style is spread
- *  across the shelf by id (or fixed by `localStorage.coverStyle`) and the
- *  picture is the id's own. */
-export function coverChoice(
-  id: string,
-  cover?: string,
-): { style: CoverStyle; seed: string } {
+export interface CoverPick {
+  style: CoverStyle;
+  seed: string;
+}
+
+/** `Notebook.cover` for "no cover": no thumb picture, no band. */
+export const NO_COVER = "none";
+
+/** The style and picture for a notebook, or null when its stored choice is
+ *  `none`. A stored choice ("<style>:<seed>", `Notebook.cover`) wins;
+ *  otherwise the style is spread across the shelf by id (or fixed by
+ *  `localStorage.coverStyle`) and the picture is the id's own. */
+export function coverChoice(id: string): CoverPick;
+export function coverChoice(id: string, cover: string | undefined): CoverPick | null;
+export function coverChoice(id: string, cover?: string): CoverPick | null {
   const stored = parseCover(cover);
+  if (stored === NO_COVER) return null;
   if (stored) return stored;
   let pick = "mix";
   try {
@@ -70,10 +82,13 @@ export function coverChoice(
   return { style, seed: id };
 }
 
+/** A stored choice: a style and picture, `"none"`, or null for automatic
+ *  (empty, or anything unrecognised). */
 export function parseCover(
   cover: string | undefined,
-): { style: CoverStyle; seed: string } | null {
+): CoverPick | typeof NO_COVER | null {
   if (!cover) return null;
+  if (cover === NO_COVER) return NO_COVER;
   const at = cover.indexOf(":");
   if (at <= 0) return null;
   const style = cover.slice(0, at);
@@ -517,7 +532,8 @@ function request(req: Request, onReady: () => void): () => void {
 }
 
 /** The cover for a notebook as a data URL, or null while it is still being
- *  drawn (or if WebGL is unavailable). Re-renders only when the id, color or
+ *  drawn, if WebGL is unavailable, or when the notebook's cover is `none`
+ *  (which queues no work at all). Re-renders only when the id, color or
  *  light/dark scheme changes. */
 export function useNotebookCover(
   notebookId: string,
@@ -528,10 +544,14 @@ export function useNotebookCover(
 ): string | null {
   const scheme = useSyncExternalStore(subscribeScheme, getScheme);
   const dpr = Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
-  const { style, seed: id } = coverChoice(notebookId, cover);
-  const key = `${id}|${color}|${scheme}|${dpr}|${style}|${w}x${h}`;
+  const pick = coverChoice(notebookId, cover);
+  const style = pick?.style ?? "mist";
+  const id = pick?.seed ?? notebookId;
+  // No cover: an empty key that is never queued and never cached.
+  const key = pick ? `${id}|${color}|${scheme}|${dpr}|${style}|${w}x${h}` : "";
   const subscribe = useCallback(
     (cb: () => void) => {
+      if (!key) return () => {};
       const hit = cache.get(key);
       if (hit !== undefined) {
         // Recency for the LRU: a card on screen keeps its raster.
@@ -542,5 +562,7 @@ export function useNotebookCover(
     },
     [key, id, color, scheme, dpr, style, w, h],
   );
-  return useSyncExternalStore(subscribe, () => cache.get(key) ?? null);
+  return useSyncExternalStore(subscribe, () =>
+    key ? (cache.get(key) ?? null) : null,
+  );
 }

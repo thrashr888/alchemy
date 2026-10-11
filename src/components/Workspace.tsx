@@ -427,9 +427,11 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
           </>
         )}
         {sourcesOpen ? <SourcesPanel /> : <SourcesRail />}
-        <div className="sheet flex min-w-0 flex-1 flex-col overflow-hidden">
-          {/* The cover band, except over the blank chat, whose backdrop is
-              already the notebook's wash at full size. */}
+        <div className="sheet relative flex min-w-0 flex-1 overflow-hidden">
+          {/* The cover as a backdrop under the pane's top, except over the
+              blank chat, whose backdrop is already the notebook's wash at
+              full size. First in tree order: the panes' roots are
+              positioned, so they paint over it. */}
           {notebook &&
             !(chatBlank && !readerOpen && !galleryOpen && !growOpen && !glassOn) && (
               <NotebookCoverBand
@@ -438,17 +440,15 @@ export function Workspace({ onOpenSettings }: { onOpenSettings: () => void }) {
                 choice={notebook.cover}
               />
             )}
-          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-            {growOpen ? (
-              <GrowPane />
-            ) : galleryOpen ? (
-              <GalleryPane />
-            ) : readerOpen ? (
-              <ReaderPane />
-            ) : (
-              <ChatPanel />
-            )}
-          </div>
+          {growOpen ? (
+            <GrowPane />
+          ) : galleryOpen ? (
+            <GalleryPane />
+          ) : readerOpen ? (
+            <ReaderPane />
+          ) : (
+            <ChatPanel />
+          )}
         </div>
         {studioOpen ? <StudioPanel /> : <StudioRail />}
       </div>

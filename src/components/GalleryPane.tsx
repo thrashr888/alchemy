@@ -464,7 +464,8 @@ export function GalleryPane() {
   const cardMenuItems = (s: Source) => actions.items(s);
 
   return (
-    <div className="flex h-full flex-1 flex-col min-w-0">
+    // `relative`: positioned, so it paints over the cover band behind it.
+    <div className="relative flex h-full flex-1 flex-col min-w-0">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
         {folder ? (
           <>
