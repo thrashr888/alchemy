@@ -1,6 +1,7 @@
 # RFC: Ablation — what Alchemy can lose
 
-Status: reviewed 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
+Status: latest direction clarified 2026-10-11 below; implementation pending.
+Historical review: 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
 a verb) and 6 built the same day. Decisions: the PM/engineering
 generators and templates stay — newer users are product and engineering
 people, and the app is for more than one person; the tile wall is shelved
@@ -14,6 +15,107 @@ Origin: Reminders item "Reduce visual, data, and feature bloat. Conduct
 an ablation experiment, removing unnecessary abstractions and designs."
 The Ledger and the Arrivals strip went on 2026-09-15 (main e2f089b) as
 the first two cuts; this is the rest of the list, with the evidence.
+
+## Clarifications and decisions: 2026-10-11
+
+Paul supports removing Registry and consolidating background-work surfaces
+into Work, keeping useful Registry content inside notebooks. Global chat
+stays. Retrieval consolidation should be tested with better ablations.
+Notion removal is now approved, superseding September's decision to keep it.
+The following describes the intended behavior; these feature changes have
+not been implemented in the initial cleanup PR.
+
+### Library means the existing Notebooks shelf
+
+No new content type, database, or indexing layer. It is the notebook list,
+with search and ordinary filters such as Shared and Archived. Prefer the
+visible label **Notebooks**: it says what the user will find there. Inbox
+captures still need a place to wait before filing; they should be a clearly
+named filter or subsection, not mixed indistinguishably into saved notebooks.
+The three main destinations become Notebooks, Chat, and Work.
+
+### What Registry currently contributes, and what retirement loses
+
+Registry is a corpus-wide entity record with no owning notebook. Its
+attachments point into multiple notebooks. That gives it:
+
+- A durable named thing joining related documents across notebooks.
+- Exact identifiers and editable facts available to global answers without
+  rediscovering them from the original source text.
+- A document list attached by identifiers or strong canonical-name matches.
+- Automatic entity suggestion, fact enrichment, and attachment upkeep.
+- Entity lookup from the palette and card context in generated documents.
+
+Removing Registry loses this structured entity/filing machinery. Ordinary
+cross-notebook retrieval remains, but it does not reproduce a durable entity's
+curated document list or guarantee exact fact lookup. Do not describe the
+change as lossless merely because global search still works.
+
+Preserve useful kept records as ordinary notebook notes: a descriptive title,
+identifiers, editable facts, the user's text, and a Related documents section
+with source links and notebook names. One authoritative note belongs in an
+appropriate existing notebook, rather than copying its facts into each linked
+notebook. Cross-notebook links preserve explicit connections; global retrieval
+can find the note and its source material. Cite original sources for extracted
+facts where recorded; preserve uncertain attribution honestly. Automatic
+suggestions and dismissed records stay in the backup, not promoted into notes.
+Keep an old-card-to-note mapping so existing chat citations and saved links can
+still resolve. Back up original records and attachment/refusal provenance.
+
+Placement, reliable note-to-source navigation, and cross-notebook evidence
+retrieval are migration requirements. Link preservation alone does not imply
+that retrieval will follow every link: the consolidated retrieval evals must
+exercise related-document questions and source diversity explicitly.
+
+### Global chat stays; scope becomes a conversation control
+
+All notebooks is the default. The same chat can narrow to a named notebook;
+selected notebooks or sources can be added if they earn the control. Opening
+chat inside a notebook uses that notebook as the initial scope, with the same
+composer, citations, transcript, and stop/retry behavior as global chat.
+
+For example: ask across all notebooks which documents concern a policy, then
+switch to the Insurance notebook and ask what that policy excludes. Changing
+scope affects subsequent turns. It must not erase, silently move, or reinterpret
+previous turns. Record scope per turn and keep it visible, so an answer's
+provenance remains understandable. Existing global and notebook conversations
+must remain accessible; unifying the UI does not authorize deleting or merging
+their history.
+
+Separate conversation identity from retrieval scope. A scope filter belongs
+in the shared search request and is applied before ranking. Wider prior chat
+history is conversational context, not permission to import outside-scope facts
+as fresh evidence. Tool access must honor the same scope; changing where we
+search does not grant permission to write to unrelated notebooks.
+
+### Work is an overview of existing work, not another content store
+
+One view shows requested schedules, active runs, source changes, failures, and
+links to outputs. Generated content remains a normal note in its notebook.
+Keep pause/cancel, receipts, attribution, and failure visibility. Replace Staff,
+Brief, report feeds, and the timeline visualization as separate destinations;
+keep useful source-change history and user-requested jobs. Decide the exact
+schedule compatibility/migration before disabling existing Brief schedules.
+
+### One retrieval backbone, with measured stages
+
+Use one scope-aware hybrid search path for sources and notebook notes. Treat
+router, gist, section-summary, and re-embedding stages as separate candidates
+for ablation rather than declaring them all unnecessary from one fixture.
+Compare the same exact-identifier, cross-notebook, entity-note, long-document,
+and multi-source queries on baseline and candidate paths. Measure recall and
+source coverage, latency at realistic corpus sizes, indexing/reindexing cost,
+and background model calls. Keep a stage only when its measured benefit is
+worth the maintained state and processing cost.
+
+### Notion removal
+
+Remove new Notion connection/import controls and Notion-specific fetching,
+refresh, and export-tree processing. Existing imported text, notes, source
+provenance, and cached originals must remain recoverable; retained sources can
+become ordinary static imported documents. Removing an integration does not
+mean deleting the user's already-imported content. There is no proposed
+replacement Notion connector.
 
 ## Product simplification: revised scope, 2026-10-09
 
