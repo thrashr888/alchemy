@@ -171,6 +171,43 @@ pub(crate) async fn migrate(db: &Db, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Repair folder projection on installations that already completed migration
+/// before startup writers waited for AppState. Mark each successful notebook
+/// separately so an interrupted or failed export is retried at next launch.
+pub(crate) async fn sync_preserved_notes(state: &crate::commands::AppState) -> Result<()> {
+    const SYNCED: &str = "registry-folder-sync-v1";
+    if state.db.kv_get(DONE).await?.is_none() || state.db.kv_get(SYNCED).await?.is_some() {
+        return Ok(());
+    }
+    let data_dir = crate::commands::app_data_dir(state);
+    for notebook in state.db.list_notebooks().await? {
+        let key = format!("registry-folder-sync-v1:{}", notebook.id);
+        if state.db.kv_get(&key).await?.is_some() {
+            continue;
+        }
+        if !state
+            .db
+            .list_notes(&notebook.id)
+            .await?
+            .iter()
+            .any(|n| n.id.starts_with("registry-"))
+        {
+            continue;
+        }
+        if crate::okf::binding_for_checked(&data_dir, &notebook.id)
+            .map_err(anyhow::Error::msg)?
+            .is_some()
+        {
+            crate::okf::write_bound(state, &notebook.id)
+                .await
+                .map_err(anyhow::Error::msg)?;
+        }
+        state.db.kv_set(&key, "complete").await?;
+    }
+    state.db.kv_set(SYNCED, "complete").await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

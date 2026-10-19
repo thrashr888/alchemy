@@ -818,3 +818,57 @@ fn device_stamp_names_only_a_mac_that_has_the_file() {
     s.origin_device = String::new();
     assert_eq!(origin_device_stamp(&s), crate::device::this_device());
 }
+
+#[tokio::test]
+async fn preserved_registry_folder_repair_retries_failure_and_finishes_once() {
+    let lab = Lab::new();
+    let bundle = lab.0.join("shared");
+    let state = lab.replica("registry-repair", &bundle).await;
+    state
+        .db
+        .add_note(&Note {
+            id: "registry-kept".into(),
+            notebook_id: "shared-notebook".into(),
+            title: "Preserved knowledge".into(),
+            content: "Kept facts and document links".into(),
+            kind: "audio_overview".into(),
+            prompt: String::new(),
+            origin: String::new(),
+            status: String::new(),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .await
+        .unwrap();
+    state
+        .db
+        .kv_set("registry-notes-v1", "complete")
+        .await
+        .unwrap();
+    let bindings = app_data_dir(&state).join("okf-bindings.json");
+    let valid = std::fs::read(&bindings).unwrap();
+    std::fs::write(&bindings, "invalid JSON").unwrap();
+    assert!(crate::retired::sync_preserved_notes(&state).await.is_err());
+    assert!(state
+        .db
+        .kv_get("registry-folder-sync-v1")
+        .await
+        .unwrap()
+        .is_none());
+    std::fs::write(&bindings, valid).unwrap();
+    crate::retired::sync_preserved_notes(&state).await.unwrap();
+    let note = bundle.join("notes/preserved-knowledge.md");
+    assert!(std::fs::read_to_string(&note)
+        .unwrap()
+        .contains("Kept facts"));
+    assert!(state
+        .db
+        .kv_get("registry-folder-sync-v1")
+        .await
+        .unwrap()
+        .is_some());
+    // A finished repair does not re-export or overwrite a later disk edit.
+    std::fs::write(&note, "Later user edit").unwrap();
+    crate::retired::sync_preserved_notes(&state).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "Later user edit");
+}

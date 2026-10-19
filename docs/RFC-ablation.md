@@ -535,3 +535,17 @@ policy, not code changes.
 - The Evidence pass: stop it, or keep it and make it visible (a "Save as
   evidence" verb on a chat turn) instead of automatic?
 - Notion: gone, or is a token-bearing fetch something you plan to use?
+
+### Real-library startup correction (2026-10-19)
+
+A full Registry migration can outlast the folder writer debounce. Writers now
+retain pending work until AppState is registered, then drain it. A worker guard
+releases its slot even on cancellation or unwinding. Startup also retries the
+folder projection of preserved notes for libraries migrated by the earlier
+build, recording completion per notebook only after a successful write. This
+uses the existing writer, including incoming-edit reconciliation.
+
+Validation for the correction: frontend production build, Rust formatting,
+strict all-target Clippy, and all 905 correctness tests pass (51 opt-in tests
+ignored). Regression coverage checks pre-state write retention, worker cleanup
+on unwind, failed folder-export retry, and preservation of later disk edits.

@@ -351,6 +351,16 @@ pub fn run() {
                 open_notebooks: std::sync::Mutex::new(std::collections::HashMap::new()),
                 gen_queue: genqueue::GenQueue::load(&data_dir),
             });
+            okf::resume_startup_writes();
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    if let Err(err) = retired::sync_preserved_notes(&state).await {
+                        diagnostics::error("registry-migration", format!("Could not sync preserved notes to notebook folders: {err:#}"));
+                    }
+                });
+            }
             // FSEvents for open notebooks' folders (docs/RFC-events.md §4);
             // the watcher itself arms once a window reports a notebook.
             fswatch::start(app.handle().clone());
