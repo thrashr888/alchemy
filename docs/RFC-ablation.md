@@ -98,6 +98,23 @@ from the development session completed the checks above. This separate
 startup issue is tracked as [PAUL-210](https://linear.app/paul-thrasher/issue/PAUL-210);
 no templates or primary-library data were changed to work around it.
 
+### Actual-library manual testing: 2026-10-19
+
+At the user's request, the signed local preview now uses the normal Alchemy
+application identity and actual library. Before launch, an APFS snapshot of
+the store plus configuration/binding metadata was saved under
+`backups/paul26-manual-*`; 2,830 store files matched by path and size.
+The migration retained all 737 original Registry records in its JSON backup
+and preserved the 237 kept records as notes. Native queries confirmed 60
+notebooks, 5,844 sources, 881 notes, all 237 preserved note IDs, and no QA
+fixture notebooks. First startup completed the migration in about 42 seconds.
+The normal model configuration remains in use. This is a local manual-test
+build, not a release or a merge.
+
+CI passed all 903 correctness tests, but its small-store chat-overhead budget
+failed (best 137 ms against 120 ms). That benchmark exercises the unchanged
+per-notebook path. A rerun was requested; the budget was not weakened.
+
 ## Clarifications and decisions: 2026-10-11
 
 Paul supports removing Registry and consolidating background-work surfaces
