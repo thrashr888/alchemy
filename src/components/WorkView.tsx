@@ -75,7 +75,7 @@ export function WorkView({
   }
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-8">
-      <div className="flex items-center gap-3 border-b border-border py-4 text-caption text-muted-foreground">
+      <div className="flex items-center gap-3 border-b border-border py-4 text-card text-muted-foreground">
         <span>
           {!enabled
             ? "Background work is off"
@@ -85,7 +85,8 @@ export function WorkView({
         </span>
         <Button
           variant="secondary"
-          size="sm"
+          size="md"
+          className="text-card"
           disabled={!enabled}
           onClick={async () => {
             try {
@@ -99,7 +100,8 @@ export function WorkView({
         </Button>
         <Button
           variant="ghost"
-          size="sm"
+          size="md"
+          className="text-card"
           onClick={() => {
             onRefresh();
             void load();
@@ -114,13 +116,13 @@ export function WorkView({
         </div>
       )}
       {error && (
-        <p role="alert" className="py-4 text-caption text-destructive">
+        <p role="alert" className="py-4 text-card text-destructive">
           Couldn’t load work: {error}
         </p>
       )}
-      <h2 className="pt-5 pb-2 text-caption font-medium">Scheduled</h2>
+      <h2 className="pt-5 pb-2 text-section font-semibold">Scheduled</h2>
       {schedules.length === 0 && (
-        <p className="py-2 text-caption text-muted-foreground">
+        <p className="py-2 text-card text-muted-foreground">
           No jobs scheduled. Schedule a report from a notebook.
         </p>
       )}
@@ -130,8 +132,8 @@ export function WorkView({
           className="flex items-center gap-3 border-b border-border py-3"
         >
           <div className="min-w-0 flex-1">
-            <div className="truncate text-body">{s.name}</div>
-            <div className="text-caption text-muted-foreground">
+            <div className="truncate text-card">{s.name}</div>
+            <div className="text-card leading-relaxed text-muted-foreground">
               {notebooks.find((n) => n.id === s.notebookId)?.title ??
                 "All notebooks"}{" "}
               ·{" "}
@@ -149,7 +151,8 @@ export function WorkView({
               <Spinner />
               <Button
                 variant="ghost"
-                size="sm"
+                size="md"
+                className="text-card"
                 onClick={async () => {
                   try {
                     await api.cancelWork(s.id);
@@ -165,7 +168,8 @@ export function WorkView({
           ) : (
             <Button
               variant="secondary"
-              size="sm"
+              size="md"
+              className="text-card"
               disabled={running !== null}
               onClick={() => void run(s.id)}
             >
@@ -174,7 +178,8 @@ export function WorkView({
           )}
           <Button
             variant="ghost"
-            size="sm"
+            size="md"
+            className="text-card"
             onClick={async () => {
               try {
                 await api.updateReportSchedule(
@@ -198,24 +203,29 @@ export function WorkView({
           </Button>
         </div>
       ))}
-      <h2 className="pt-5 pb-2 text-caption font-medium">Recent runs</h2>
+      <h2 className="pt-5 pb-2 text-section font-semibold">Recent runs</h2>
       {!loading && !error && receipts.length === 0 && (
-        <p className="py-2 text-caption text-muted-foreground">
+        <p className="py-2 text-card text-muted-foreground">
           No runs recorded in the past week.
         </p>
       )}
       {receipts.map((r) => (
         <div key={r.id} className="border-b border-border py-3">
           <div className="flex items-center gap-3">
-            <span className="min-w-0 flex-1 truncate text-body">{r.name}</span>
-            <span className="text-caption text-muted-foreground">
-              {r.error === "Report stopped" ? "Stopped" : r.status === "failed" ? "Failed" : "Completed"} ·{" "}
-              {relativeTime(r.endedAt)}
+            <span className="min-w-0 flex-1 truncate text-card">{r.name}</span>
+            <span className="text-card leading-relaxed text-muted-foreground">
+              {r.error === "Report stopped"
+                ? "Stopped"
+                : r.status === "failed"
+                  ? "Failed"
+                  : "Completed"}{" "}
+              · {relativeTime(r.endedAt)}
             </span>
             {r.noteId && (
               <Button
                 variant="ghost"
-                size="sm"
+                size="md"
+                className="text-card"
                 onClick={() => openNote(r.noteId)}
               >
                 Open result
@@ -225,8 +235,8 @@ export function WorkView({
           <p
             className={
               r.error
-                ? "text-caption text-destructive"
-                : "text-caption text-muted-foreground"
+                ? "text-card leading-relaxed text-destructive"
+                : "text-card leading-relaxed text-muted-foreground"
             }
           >
             {r.error ? describe(r.error) : r.detail}
@@ -234,7 +244,7 @@ export function WorkView({
           </p>
         </div>
       ))}
-      <h2 className="pt-5 pb-2 text-caption font-medium">Saved results</h2>
+      <h2 className="pt-5 pb-2 text-section font-semibold">Saved results</h2>
       {reports.slice(0, 30).map((n) => (
         <button
           type="button"
@@ -242,13 +252,13 @@ export function WorkView({
           onClick={() => openNote(n.id)}
           className="flex w-full items-center gap-3 border-b border-border py-3 text-left hover:text-primary focus-visible:outline focus-visible:outline-ring"
         >
-          <span className="min-w-0 flex-1 truncate text-body">{n.title}</span>
-          <span className="text-caption text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-card">{n.title}</span>
+          <span className="text-card leading-relaxed text-muted-foreground">
             {relativeTime(n.updatedAt)}
           </span>
         </button>
       ))}
-      <h2 className="pt-5 pb-2 text-caption font-medium">
+      <h2 className="pt-5 pb-2 text-section font-semibold">
         Source changes · past week
       </h2>
       {events.slice(0, 100).map((e) => (
@@ -268,10 +278,10 @@ export function WorkView({
           }}
           className="flex w-full items-center gap-3 border-b border-border py-3 text-left hover:text-primary focus-visible:outline focus-visible:outline-ring"
         >
-          <span className="min-w-0 flex-1 truncate text-body">
+          <span className="min-w-0 flex-1 truncate text-card">
             {e.sourceTitle}
           </span>
-          <span className="text-caption text-muted-foreground">
+          <span className="text-card leading-relaxed text-muted-foreground">
             {e.kind} · {relativeTime(e.at)}
           </span>
         </button>

@@ -506,7 +506,9 @@ the way a Photos caption sits under its tile.
 
 Every section's **heading row** carries its h1 title and relevant trailing
 controls. Notebooks keeps Add source/Import, sort, filter and grid/table;
-Work keeps status, pause/resume and refresh. Work's rows expose Run now,
+Work keeps status, pause/resume and refresh. Work uses 15px section headings
+and 14px row titles, details and controls; result and failure text is primary
+reading content, rather than caption-size metadata. Work's rows expose Run now,
 Stop and enable/disable without creating a second job or output model.
 The notebook shelf's footer summarizes the visible collection.
 

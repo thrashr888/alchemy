@@ -923,15 +923,24 @@ pub(crate) fn classify_model_error(raw: &str) -> Option<String> {
         });
     }
 
-    // Nothing listening on the Ollama port: the daemon isn't running.
+    // A refused endpoint does not prove the daemon is stopped: the configured
+    // host or port can be wrong while another Ollama server is healthy.
     if lower.contains("connection refused") && (lower.contains("ollama") || lower.contains("11434"))
     {
-        return Some(
-            "Ollama isn't running — nothing answered at its address. Fix: open \
-             Terminal, run `ollama serve` (or launch the Ollama app), then retry \
-             here. Or switch to another provider in Settings → Models."
-                .into(),
-        );
+        let address = raw
+            .split_whitespace()
+            .find_map(|word| {
+                reqwest::Url::parse(word.trim_matches(['(', ')', ',', ':']))
+                    .ok()
+                    .filter(|url| matches!(url.scheme(), "http" | "https"))
+            })
+            // Origin excludes credentials, paths and query parameters.
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_else(|| "the configured address".into());
+        return Some(format!(
+            "Couldn't reach Ollama at {address}. Check the server address in \
+             Settings → Models, or start Ollama if it is stopped."
+        ));
     }
 
     // Ollama accepted the request and then went quiet past the deadline a

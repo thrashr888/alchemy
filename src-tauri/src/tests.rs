@@ -708,13 +708,16 @@ fn transient_lance_errors_are_the_retryable_ones() {
 fn model_errors_classify_to_fixes() {
     use crate::commands::friendly_error;
 
-    // Ollama daemon down: connection refused on its port, chat path.
+    // Refused endpoint: report the attempted address without assuming the daemon is stopped.
     let down = "ollama chat request failed: error sending request for url \
                 (http://localhost:11434/api/chat): error trying to connect: \
                 tcp connect error: Connection refused (os error 61)";
     let msg = friendly_error(down);
-    assert!(msg.contains("Ollama isn't running"), "{msg}");
-    assert!(msg.contains("run `ollama serve`"), "{msg}");
+    assert!(
+        msg.contains("Couldn't reach Ollama at http://localhost:11434"),
+        "{msg}"
+    );
+    assert!(!msg.contains("isn't running"), "{msg}");
     assert!(msg.contains("Settings → Models"), "{msg}");
 
     // Same daemon-down shape through the embedding path (pre-stream failure,
@@ -723,7 +726,18 @@ fn model_errors_classify_to_fixes() {
                  running and is the model `nomic-embed-text` available? (a large chat \
                  model loading can also stall this): error sending request for url \
                  (http://127.0.0.1:11434/api/embed): Connection refused";
-    assert!(friendly_error(embed).contains("run `ollama serve`"));
+    assert!(friendly_error(embed).contains("http://127.0.0.1:11434"));
+    // A custom offline endpoint must not imply that the normal server is down.
+    let custom = friendly_error(
+        "ollama chat request failed: url (http://127.0.0.1:9/api/chat): Connection refused",
+    );
+    assert!(custom.contains("http://127.0.0.1:9"), "{custom}");
+    assert!(!custom.contains("isn't running"), "{custom}");
+    let private = friendly_error("ollama chat request failed: url (http://user:secret@example.test:11434/api/chat?token=private): Connection refused");
+    assert!(private.contains("http://example.test:11434"), "{private}");
+    for secret in ["user", "secret", "token=", "private"] {
+        assert!(!private.contains(secret), "{private}");
+    }
 
     // Model not pulled: the exact pull command, with the name extracted from
     // the Ollama 404 body.

@@ -384,12 +384,16 @@ export function HealthBanner({
       rows.push({
         key: "ollama",
         tone: "error",
-        title: "Ollama isn't running.",
-        detail: "Alchemy needs it to answer questions and to index sources.",
+        title: "Can’t reach Ollama.",
+        detail: "Check the server address in Settings → Models. If Ollama is stopped, start it and try again.",
         fixes: [
           {
-            label: "Start Ollama",
+            label: "Check server address",
             primary: true,
+            run: () => useStore.getState().openSettings("models"),
+          },
+          {
+            label: "Start Ollama",
             run: async () => {
               const store = useStore.getState();
               try {
