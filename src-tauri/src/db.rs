@@ -182,6 +182,7 @@ pub struct SearchTrace {
 /// most likely notebooks before chunk search. `kind` is "notebook" today;
 /// the schema leaves room for per-source routes later.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg(test)]
 pub struct Route {
     pub id: String,
     pub kind: String,
@@ -537,6 +538,7 @@ impl Db {
         db.ensure_table(T_INBOX, inbox_schema()).await?;
         db.ensure_table(T_META_TURNS, meta_turns_schema()).await?;
         db.migrate_meta_turns().await?;
+        crate::retired::migrate(&db, dir).await?;
         Ok(db)
     }
 
@@ -988,6 +990,7 @@ impl Db {
     /// emitted, so this is the only honest answer to "what will Lance accept
     /// as a query vector here" — a query of any other width fails the search
     /// with "No vector column found to match with the query vector dimension".
+    #[cfg(test)]
     pub async fn vector_dim(&self, table: &str) -> Result<Option<usize>> {
         if !self.table_exists(table).await? {
             return Ok(None);
@@ -3055,7 +3058,8 @@ impl Db {
     /// — the rows it already holds simply carry an empty model, which the UI
     /// renders as nothing.
     async fn migrate_meta_turns(&self) -> Result<()> {
-        self.add_string_column(T_META_TURNS, "model", "").await
+        self.add_string_column(T_META_TURNS, "model", "").await?;
+        self.add_string_column(T_META_TURNS, "scope", "").await
     }
 
     pub async fn add_meta_turn(&self, turn: &MetaTurn) -> Result<()> {
@@ -3072,6 +3076,7 @@ impl Db {
                 Arc::new(StringArray::from(vec![turn.kind.clone()])),
                 Arc::new(StringArray::from(vec![turn.model.clone()])),
                 Arc::new(Int64Array::from(vec![turn.created_at])),
+                Arc::new(StringArray::from(vec![turn.scope.clone()])),
             ],
         )?;
         self.add_batch(T_META_TURNS, schema, batch).await
@@ -3258,6 +3263,7 @@ impl Db {
         )
         .await?;
         self.add_meta_turn(&MetaTurn {
+            scope: String::new(),
             id: uuid::Uuid::new_v4().to_string(),
             thread_id: thread_id.to_string(),
             role: "assistant".into(),
@@ -3792,10 +3798,9 @@ impl Db {
     /// baseline. Returns (notebook_id, citation), rank-fused across the
     /// vector and BM25 sides exactly like the per-notebook path.
     ///
-    /// `route_notebooks` is a relevance hint, not a boundary: it narrows the
-    /// VECTOR side to the routed notebooks while BM25 stays corpus-wide, so
-    /// an exact identifier the router couldn't see (titles carry no error
-    /// codes) still escapes a routing mistake. Diversity caps stop one
+    /// `notebook_ids` is an explicit boundary: vector and BM25 search both
+    /// filter before ranking. The old router's global keyword escape is
+    /// retained only in the test-only soft-route control. Diversity caps stop one
     /// chatty source or notebook from filling the whole top-k with
     /// near-duplicates; skipped candidates backfill in score order, so this
     /// never returns fewer hits than the uncapped search would.
@@ -3804,8 +3809,37 @@ impl Db {
         query_vec: Vec<f32>,
         query_text: &str,
         k: usize,
-        route_notebooks: Option<&[String]>,
+        notebook_ids: Option<&[String]>,
         opts: SearchOptions,
+    ) -> Result<Vec<(String, Citation)>> {
+        self.search_chunks_all_impl(query_vec, query_text, k, notebook_ids, opts, true)
+            .await
+    }
+
+    /// Historical soft routing, retained only as an ablation control. Explicit
+    /// user scopes always use search_chunks_all_opts and constrain both legs.
+    #[cfg(test)]
+    pub async fn search_chunks_all_soft_route(
+        &self,
+        query_vec: Vec<f32>,
+        query_text: &str,
+        k: usize,
+        notebook_ids: Option<&[String]>,
+        opts: SearchOptions,
+    ) -> Result<Vec<(String, Citation)>> {
+        self.search_chunks_all_impl(query_vec, query_text, k, notebook_ids, opts, false)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn search_chunks_all_impl(
+        &self,
+        query_vec: Vec<f32>,
+        query_text: &str,
+        k: usize,
+        notebook_ids: Option<&[String]>,
+        opts: SearchOptions,
+        strict_scope: bool,
     ) -> Result<Vec<(String, Citation)>> {
         if !self.table_exists(T_CHUNKS).await? {
             return Ok(vec![]);
@@ -3819,7 +3853,7 @@ impl Db {
             "text"
         };
 
-        let nb_filter = route_notebooks.map(|ids| {
+        let nb_filter = notebook_ids.map(|ids| {
             // Some(&[]) matches nothing — '' is never a real notebook id.
             let list = if ids.is_empty() {
                 "''".to_string()
@@ -3858,8 +3892,13 @@ impl Db {
             let text_query = FullTextSearchQuery::new(query_text.to_string())
                 .with_column(fts_col.to_string())
                 .map_err(|e| anyhow!("fts query: {e}"))?;
-            match tbl
-                .query()
+            let mut lexical = tbl.query();
+            if strict_scope {
+                if let Some(filter) = &nb_filter {
+                    lexical = lexical.only_if(filter.clone());
+                }
+            }
+            match lexical
                 .full_text_search(text_query)
                 .limit(pool)
                 .execute()
@@ -4000,6 +4039,7 @@ impl Db {
 
     /// All stored router entries (without vectors) — the staleness baseline
     /// for `router::ensure_router`'s diff.
+    #[cfg(test)]
     pub async fn list_routes(&self) -> Result<Vec<Route>> {
         let batches = self.collect(T_ROUTES, None).await?;
         let mut out = Vec::new();
@@ -4022,6 +4062,7 @@ impl Db {
 
     /// Insert-or-replace router entries (embeddings parallel to `routes`).
     /// Creates the routes table on first use with the embedding dimension.
+    #[cfg(test)]
     pub async fn upsert_routes(&self, routes: &[Route], embeddings: &[Vec<f32>]) -> Result<()> {
         if routes.is_empty() {
             return Ok(());
@@ -4078,10 +4119,12 @@ impl Db {
     }
 
     /// The router index's vector width, or None when it hasn't been built.
+    #[cfg(test)]
     pub async fn routes_vector_dim(&self) -> Result<Option<usize>> {
         self.vector_dim(T_ROUTES).await
     }
 
+    #[cfg(test)]
     pub async fn delete_routes(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -4097,6 +4140,7 @@ impl Db {
 
     /// Nearest router entries to the query, best first, with the vector
     /// distance (lower = closer). `kind` filters to one entry kind.
+    #[cfg(test)]
     pub async fn route_search(
         &self,
         query_vec: Vec<f32>,
@@ -5213,6 +5257,7 @@ impl Db {
 
     // ---- Registry (docs/RFC-registry.md) ----
 
+    #[cfg(test)]
     pub async fn add_registry_card(&self, card: &RegistryCard) -> Result<()> {
         let schema = registry_schema();
         let batch = registry_batch(&schema, card)?;
@@ -5267,6 +5312,7 @@ impl Db {
         Ok(out)
     }
 
+    #[cfg(test)]
     pub async fn get_registry_card(&self, id: &str) -> Result<Option<RegistryCard>> {
         let batches = self
             .collect(T_REGISTRY, Some(&format!("id = '{}'", esc(id))))
@@ -5301,44 +5347,6 @@ impl Db {
             }
         }
         Ok(None)
-    }
-
-    /// Update everything mutable in place; facts and attachments travel
-    /// whole as JSON. `kind` is immutable by construction — a card that
-    /// changes kind is a different thing.
-    pub async fn update_registry_card(&self, card: &RegistryCard) -> Result<()> {
-        let tbl = self.conn.open_table(T_REGISTRY).execute().await?;
-        tbl.update()
-            .only_if(format!("id = '{}'", esc(&card.id)))
-            .column("name", format!("'{}'", esc(&card.name)))
-            .column("origin", format!("'{}'", esc(&card.origin)))
-            .column("triage", format!("'{}'", esc(&card.triage)))
-            .column("mentions", card.mentions.to_string())
-            .column("identifiers", format!("'{}'", esc(&card.identifiers)))
-            .column("note", format!("'{}'", esc(&card.note)))
-            .column(
-                "facts",
-                format!(
-                    "'{}'",
-                    esc(&serde_json::to_string(&card.facts).unwrap_or_default())
-                ),
-            )
-            .column(
-                "attachments",
-                format!(
-                    "'{}'",
-                    esc(&serde_json::to_string(&card.attachments).unwrap_or_default())
-                ),
-            )
-            .column("updated_at", card.updated_at.to_string())
-            .execute()
-            .await?;
-        Ok(())
-    }
-
-    pub async fn delete_registry_card(&self, id: &str) -> Result<()> {
-        self.delete_where(T_REGISTRY, &format!("id = '{}'", esc(id)))
-            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5869,6 +5877,7 @@ fn bm25_doc(context: &str, text: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn routes_schema(dim: i32) -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -5931,6 +5940,7 @@ fn meta_turns_schema() -> SchemaRef {
         Field::new("kind", DataType::Utf8, false),
         Field::new("model", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
+        Field::new("scope", DataType::Utf8, false),
     ]))
 }
 
@@ -5950,6 +5960,9 @@ fn meta_turns_from_batches(batches: &[RecordBatch]) -> Result<Vec<MetaTurn>> {
         let created = i64_col(b, "created_at")?;
         for i in 0..b.num_rows() {
             turns.push(MetaTurn {
+                scope: opt_str_col(b, "scope")
+                    .map(|s| s.value(i).to_string())
+                    .unwrap_or_default(),
                 id: id.value(i).to_string(),
                 thread_id: thread.value(i).to_string(),
                 role: role.value(i).to_string(),
@@ -6199,6 +6212,7 @@ fn registry_schema() -> SchemaRef {
     ]))
 }
 
+#[cfg(test)]
 fn registry_batch(schema: &SchemaRef, c: &RegistryCard) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(
         schema.clone(),
@@ -6732,8 +6746,24 @@ mod tests {
         assert_eq!(db.scan_slots.available_permits(), 4);
     }
 
+    #[tokio::test]
+    async fn meta_turn_scope_round_trips_without_rewriting_prior_turns() {
+        let dir = std::env::temp_dir().join(format!("alchemy-scopes-{}", uuid::Uuid::new_v4()));
+        let db = Db::open(&dir).await.unwrap();
+        let global = meta_turn("thread", "global", "user", "Across everything", 1);
+        let mut scoped = meta_turn("thread", "scoped", "user", "Only insurance", 2);
+        scoped.scope = "insurance".into();
+        db.add_meta_turn(&global).await.unwrap();
+        db.add_meta_turn(&scoped).await.unwrap();
+        let turns = db.list_meta_turns("thread").await.unwrap();
+        assert_eq!(turns[0].scope, "");
+        assert_eq!(turns[1].scope, "insurance");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn meta_turn(thread: &str, id: &str, role: &str, content: &str, at: i64) -> MetaTurn {
         MetaTurn {
+            scope: String::new(),
             id: id.into(),
             thread_id: thread.into(),
             role: role.into(),

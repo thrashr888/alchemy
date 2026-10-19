@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::models::{Note, RegistryCard, Source, SourceEvent};
+use crate::models::{Note, Source, SourceEvent};
 
 /// One proposed addition: a URL the notebook's own sources keep pointing
 /// at, or a local file Spotlight matched against a standing query.
@@ -1216,71 +1216,12 @@ pub fn tag_merge_proposals(sources: &[Source]) -> Vec<TagMergeProposal> {
 /// agent can edit it; no model call, so it always works and costs nothing.
 pub const WIKI_INDEX_TITLE: &str = "Notebook index";
 
-/// Confirmed registry cards with confirmed attachments in this notebook —
-/// the entities whose pages the wiki carries.
-pub fn notebook_entities<'c>(
-    cards: &'c [RegistryCard],
-    sources: &[Source],
-    notebook_id: &str,
-) -> Vec<(&'c RegistryCard, Vec<String>)> {
-    let ids: HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
-    cards
-        .iter()
-        .filter(|c| c.origin.is_empty())
-        .filter_map(|c| {
-            let attached: Vec<String> = c
-                .attachments
-                .iter()
-                .filter(|a| {
-                    a.status == "confirmed"
-                        && a.notebook_id == notebook_id
-                        && ids.contains(a.source_id.as_str())
-                })
-                .map(|a| a.source_id.clone())
-                .collect();
-            (!attached.is_empty()).then_some((c, attached))
-        })
-        .collect()
-}
-
-pub fn entity_page_title(card: &RegistryCard) -> String {
-    format!("Entity: {}", card.name)
-}
-
 /// Whether a note title is one of the wiki's own pages — the index or an
 /// entity page. Entity pages were minted as kind `note` before `wiki`
 /// existed, so callers that need "is this the notebook's ledger rather
 /// than something someone wrote" ask by title, not kind.
 pub fn is_wiki_page_title(title: &str) -> bool {
     title == WIKI_INDEX_TITLE || title.starts_with("Entity: ")
-}
-
-/// One entity page: the card's registry facts plus the documents filed
-/// under it in this notebook, linked by title. Deterministic, like the
-/// index — the registry is the source of truth, this is its wiki face.
-pub fn build_entity_page(card: &RegistryCard, attached: &[&Source]) -> String {
-    let mut md = format!("{} · from the registry\n", card.kind);
-    if !card.identifiers.trim().is_empty() {
-        md.push_str(&format!("\nIdentifiers: `{}`\n", card.identifiers.trim()));
-    }
-    if !card.note.trim().is_empty() {
-        md.push_str(&format!("\n{}\n", card.note.trim()));
-    }
-    if !card.facts.is_empty() {
-        md.push_str("\n## Facts\n\n");
-        for f in &card.facts {
-            if f.value.is_empty() {
-                md.push_str(&format!("- {}\n", f.label));
-            } else {
-                md.push_str(&format!("- {}: {}\n", f.label, f.value));
-            }
-        }
-    }
-    md.push_str("\n## Documents\n\n");
-    for s in attached {
-        md.push_str(&title_link_line(s, &chars_label(s.char_count)));
-    }
-    md
 }
 
 /// A source's size for the wiki, rounded so the pages stay still. The
@@ -1307,23 +1248,7 @@ pub fn chars_label(n: i64) -> String {
     format!("{label} chars")
 }
 
-/// `- [Title](<Title>) — extra`, falling back to plain text when the title
-/// can't be a link destination (see build_wiki_index).
-fn title_link_line(s: &Source, extra: &str) -> String {
-    let text = s.title.replace('[', "(").replace(']', ")");
-    if s.title.contains(['<', '>']) {
-        format!("- {text} — {extra}\n")
-    } else {
-        format!("- [{text}](<{}>) — {extra}\n", s.title)
-    }
-}
-
-pub fn build_wiki_index(
-    sources: &[Source],
-    cited: &HashSet<String>,
-    entities: &[(&RegistryCard, Vec<String>)],
-    now_ms: i64,
-) -> String {
+pub fn build_wiki_index(sources: &[Source], cited: &HashSet<String>, now_ms: i64) -> String {
     let content: Vec<&Source> = sources
         .iter()
         .filter(|s| !FOLDER_TYPES.contains(&s.source_type.as_str()) && s.char_count > 0)
@@ -1376,18 +1301,7 @@ pub fn build_wiki_index(
             md.push_str(&line(s));
         }
     }
-    if !entities.is_empty() {
-        md.push_str("\n## Entities\n\n");
-        for (card, attached) in entities {
-            let title = entity_page_title(card);
-            md.push_str(&format!(
-                "- [{title}](<{title}>) — {} · {} document{}\n",
-                card.kind,
-                attached.len(),
-                if attached.len() == 1 { "" } else { "s" },
-            ));
-        }
-    }
+
     if !untagged.is_empty() {
         md.push_str("\n## Untagged\n\n");
         untagged.sort_by_key(|s| std::cmp::Reverse(s.char_count));
@@ -1405,15 +1319,13 @@ pub fn wiki_page_id(notebook_id: &str, title: &str) -> String {
     crate::okf::deterministic_id(&format!("alchemy-wiki-v1\0{notebook_id}\0{title}"))
 }
 
-/// Create-or-refresh a notebook's wiki: the index note plus one page per
-/// entity the registry files here. Upserts by title, write-skipping
+/// Create-or-refresh a notebook's source index. Upserts by title, write-skipping
 /// unchanged bodies; returns the index note (None when the notebook has
 /// no index and `create` is false — having one IS the opt-in) and how
 /// many notes actually changed.
 pub async fn upsert_wiki(
     db: &crate::db::Db,
     notebook_id: &str,
-    cards: &[RegistryCard],
     cited: &HashSet<String>,
     now_ms: i64,
     create: bool,
@@ -1424,30 +1336,16 @@ pub async fn upsert_wiki(
         return Ok((None, 0));
     }
     let sources = db.list_sources(notebook_id).await?;
-    let entities = notebook_entities(cards, &sources, notebook_id);
     let mut changed = 0usize;
 
     let upsert = |title: String, body: String| {
         let found = notes.iter().find(|n| n.title == title).cloned();
         (title, body, found)
     };
-    let mut writes: Vec<(String, String, Option<Note>)> = Vec::new();
-    writes.push(upsert(
+    let writes = vec![upsert(
         WIKI_INDEX_TITLE.to_string(),
-        build_wiki_index(&sources, cited, &entities, now_ms),
-    ));
-    let by_id: HashMap<&str, &Source> = sources.iter().map(|s| (s.id.as_str(), s)).collect();
-    for (card, attached_ids) in &entities {
-        let attached: Vec<&Source> = attached_ids
-            .iter()
-            .filter_map(|id| by_id.get(id.as_str()).copied())
-            .collect();
-        writes.push(upsert(
-            entity_page_title(card),
-            build_entity_page(card, &attached),
-        ));
-    }
-
+        build_wiki_index(&sources, cited, now_ms),
+    )];
     let mut index_note: Option<Note> = None;
     for (title, body, found) in writes {
         let is_index = title == WIKI_INDEX_TITLE;
@@ -1462,9 +1360,7 @@ pub async fn upsert_wiki(
                 note
             }
             None => {
-                // The page's id is a function of the notebook and the title,
-                // so two Macs that each generate "Entity: MSFT" mint one
-                // note, not two that then collide in the shared folder.
+                // Stable IDs let two Macs share one generated notebook index.
                 let note = Note {
                     id: wiki_page_id(notebook_id, &title),
                     notebook_id: notebook_id.to_string(),
@@ -1553,10 +1449,9 @@ pub async fn refresh_wiki_indexes(db: &crate::db::Db) -> anyhow::Result<usize> {
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
     let cited = cited_ids(trace_dir);
-    let cards = db.list_registry().await?;
     let mut refreshed = 0usize;
     for nb in db.list_notebooks().await? {
-        let (index, changed) = upsert_wiki(db, &nb.id, &cards, &cited, now_ms, false).await?;
+        let (index, changed) = upsert_wiki(db, &nb.id, &cited, now_ms, false).await?;
         refreshed += changed;
         // Autonomous work announces itself: one Staff-feed event per
         // notebook whose wiki actually moved (the Brief reads these too).

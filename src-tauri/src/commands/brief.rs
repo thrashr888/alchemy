@@ -9,86 +9,6 @@
 use super::*;
 
 pub(crate) const BRIEF_KIND: &str = "brief";
-const BRIEFS_NOTEBOOK: &str = "Briefs";
-const DEFAULT_BRIEF_NAME: &str = "Morning Brief";
-
-/// Find or create the Briefs notebook.
-async fn ensure_briefs_notebook(state: &AppState) -> Result<Notebook, String> {
-    let notebooks = e(state.db.list_notebooks().await)?;
-    if let Some(nb) = notebooks.iter().find(|n| n.title == BRIEFS_NOTEBOOK) {
-        return Ok(nb.clone());
-    }
-    let ts = now();
-    let color = NOTEBOOK_PALETTE[notebooks.len() % NOTEBOOK_PALETTE.len()];
-    let nb = Notebook {
-        cover: String::new(),
-        id: new_id(),
-        title: BRIEFS_NOTEBOOK.into(),
-        created_at: ts,
-        updated_at: ts,
-        color: color.to_string(),
-        icon: String::new(),
-        // "system": briefs land here behind the scenes — the notebook works
-        // like any other (Reader, search, OKF, MCP) but stays off the shelf,
-        // because a permanently source-less notebook in the grid reads as
-        // clutter, not a feature.
-        status: "system".into(),
-        growth_web: false,
-        source_count: 0,
-        note_count: 0,
-        report_count: 0,
-        built_in: false,
-    };
-    e(state.db.create_notebook(&nb).await)?;
-    Ok(nb)
-}
-
-/// Create the default daily brief once, ever — smart defaults on; deleting
-/// the schedule is respected (the marker file means "offered already", so a
-/// deleted brief never resurrects).
-pub(crate) async fn ensure_default_brief(state: &AppState) {
-    // Self-healing upgrade, every pass (one cheap list): a Briefs notebook
-    // that is visible ("") or archived moves to "system". Visible was the
-    // old default and read as shelf clutter; archived is worse — the user
-    // hiding the clutter by archiving silently killed their brief, because
-    // the scheduler's background gate skips archived notebooks.
-    if let Ok(notebooks) = state.db.list_notebooks().await {
-        if let Some(nb) = notebooks
-            .iter()
-            .find(|n| n.title == BRIEFS_NOTEBOOK && n.status != "system")
-        {
-            let _ = state.db.set_notebook_status(&nb.id, "system").await;
-        }
-    }
-    let marker = app_data_dir(state).join("brief-default-created");
-    if marker.exists() {
-        return;
-    }
-    let Ok(nb) = ensure_briefs_notebook(state).await else {
-        return; // transient — retry next pass, marker unwritten
-    };
-    let schedule = ReportSchedule {
-        watch_sources: String::new(),
-        watch_kinds: String::new(),
-        id: new_id(),
-        notebook_id: nb.id,
-        name: DEFAULT_BRIEF_NAME.into(),
-        kind: BRIEF_KIND.into(),
-        prompt: String::new(),
-        trigger: "interval".into(),
-        not_before: 0,
-        interval_secs: 86_400,
-        enabled: true,
-        note_id: String::new(),
-        // Aligned so the first run lands at the next 7 AM local rather than
-        // 24h from whenever the app happened to first launch this build.
-        last_run_at: crate::scheduler::next_local_hour_ms(7) - 86_400_000,
-        created_at: now(),
-    };
-    if state.db.add_report_schedule(&schedule).await.is_ok() {
-        let _ = std::fs::write(&marker, b"1");
-    }
-}
 
 /// One "Needs you" item's title, as a link to the place in Alchemy where it
 /// is answered.
@@ -243,27 +163,6 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
     // The Registry is corpus-scoped, so it is collected once rather than per
     // notebook. A pending proposal is the one thing here that is actually
     // waiting on a human — it ranks with the errors.
-    let cards = state.db.list_registry().await.unwrap_or_default();
-    for card in &cards {
-        let n = card
-            .attachments
-            .iter()
-            .filter(|a| a.status == "proposed")
-            .count();
-        if n > 0 {
-            attention.push_str(&format!(
-                "- registry card {} ({}) has {n} document{} waiting to be confirmed or turned down\n",
-                link(
-                    &card.name,
-                    &format!("alchemy://home/registry?card={}", card.id)
-                ),
-                card.kind,
-                if n == 1 { "" } else { "s" }
-            ));
-            items += 1;
-        }
-    }
-
     // A notebook another person shared into iCloud Drive that this Mac has
     // not opened. The banner on Home offers it; the brief is where somebody
     // who was not looking at Home finds out it is waiting.
@@ -274,30 +173,7 @@ async fn collect(state: &AppState, briefs_notebook_id: &str, since: i64) -> Coll
         ));
         items += 1;
     }
-    let filed: Vec<&crate::models::RegistryCard> = cards
-        .iter()
-        .filter(|c| {
-            c.attachments
-                .iter()
-                .any(|a| a.status == "confirmed" && a.at > since)
-        })
-        .collect();
-    if !filed.is_empty() {
-        changed.push_str("- [Registry]\n");
-        for card in filed {
-            let n = card
-                .attachments
-                .iter()
-                .filter(|a| a.status == "confirmed" && a.at > since)
-                .count();
-            changed.push_str(&format!(
-                "  - {n} new document{} filed under \u{201c}{}\u{201d}\n",
-                if n == 1 { "" } else { "s" },
-                card.name
-            ));
-            items += 1;
-        }
-    }
+
     let mut context = String::new();
     // What the freshness queue produced, denominated in findings with the
     // token count as a footnote (freshness.rs). A quiet night contributes
@@ -358,6 +234,7 @@ pub(crate) async fn run_brief(
     app: &AppHandle,
     state: &AppState,
     schedule: ReportSchedule,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<Note, String> {
     let existing = e(living_report_note(&state.db, &schedule).await)?;
     let since = existing
@@ -395,9 +272,10 @@ pub(crate) async fn run_brief(
     };
     let _ = app.emit("report://step", "Writing the brief".to_string());
     let messages = rag::build_artifact_messages(&instruction, &corpus, &persona);
-    let content = run_generation_chat(state, None, &messages, None, None, None, None)
-        .await
-        .map_err(|e| format!("{e:#}"))?;
+    let content = tokio::select! {
+        result = run_generation_chat(state, None, &messages, None, None, None, None) => result.map_err(|e| format!("{e:#}"))?,
+        _ = cancel.cancelled() => return Err("Report stopped".into()),
+    };
 
     let note = persist_report_run(app, state, &schedule, existing, content).await?;
 

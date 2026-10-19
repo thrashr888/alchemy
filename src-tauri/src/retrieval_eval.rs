@@ -1296,7 +1296,13 @@ async fn eval_router() {
             flat_recall_sum += judge(flat);
             let top2: Vec<String> = routes.into_iter().take(2).collect();
             let routed = db
-                .search_chunks_all_opts(qvec, &q.query, K, Some(&top2), SearchOptions::default())
+                .search_chunks_all_soft_route(
+                    qvec,
+                    &q.query,
+                    K,
+                    Some(&top2),
+                    SearchOptions::default(),
+                )
                 .await
                 .expect("routed search");
             routed_recall_sum += judge(routed);
@@ -1313,6 +1319,10 @@ async fn eval_router() {
     assert!(
         acc2 >= 0.9,
         "routing accuracy@2 {acc2:.2} below 0.9 — router summaries too weak"
+    );
+    assert!(
+        flat_recall >= routed_recall - 0.05,
+        "flat recall {flat_recall:.2} fell more than 0.05 below routed {routed_recall:.2} — keep the router until the shared index recovers"
     );
     assert!(
         routed_recall >= flat_recall - 0.05,
@@ -3368,4 +3378,118 @@ async fn eval_section_gists_model() {
         none.mrr_at_10
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Retired entity knowledge must remain exact-match evidence as ordinary
+/// notes, and scoping must happen before ranking rather than after top-k.
+#[tokio::test]
+async fn eval_retired_registry_scope() {
+    let Some(ai) = eval_ai().await else { return };
+    let dir = std::env::temp_dir().join(format!("alchemy-retired-eval-{}", uuid::Uuid::new_v4()));
+    let db = Db::open(&dir).await.unwrap();
+    for (id, title) in [("household", "Household"), ("finance", "Finance")] {
+        db.create_notebook(&crate::models::Notebook {
+            id: id.into(),
+            title: title.into(),
+            created_at: 1,
+            updated_at: 1,
+            color: String::new(),
+            icon: String::new(),
+            cover: String::new(),
+            status: String::new(),
+            growth_web: false,
+            source_count: 0,
+            note_count: 0,
+            report_count: 0,
+            built_in: false,
+        })
+        .await
+        .unwrap();
+    }
+    seed_docs(&ai, &db, "household", &[("House insurance coverage", "The house insurance covers flood damage up to fifteen thousand dollars. Read the exclusions before making a claim.")], "house-").await;
+    seed_docs(&ai, &db, "finance", &[("House insurance renewal", "The house insurance renewal date is November 15. The insurer sends the renewal invoice to the finance notebook.")], "finance-").await;
+    let house = db.list_sources("household").await.unwrap().remove(0);
+    let finance = db.list_sources("finance").await.unwrap().remove(0);
+    let card = crate::models::RegistryCard {
+        id: "house-policy".into(),
+        kind: "policy".into(),
+        name: "House insurance policy".into(),
+        identifiers: "POL-884422".into(),
+        note: "Kept by the user".into(),
+        facts: vec![crate::models::CardFact {
+            label: "Policy number".into(),
+            value: "POL-884422".into(),
+        }],
+        attachments: [&house, &finance]
+            .into_iter()
+            .map(|s| crate::models::CardAttachment {
+                source_id: s.id.clone(),
+                notebook_id: s.notebook_id.clone(),
+                status: "confirmed".into(),
+                matched: "manual".into(),
+                at: 1,
+            })
+            .collect(),
+        origin: String::new(),
+        triage: String::new(),
+        surfaced: false,
+        mentions: 0,
+        created_at: 1,
+        updated_at: 1,
+    };
+    db.add_registry_card(&card).await.unwrap();
+    crate::retired::migrate(&db, &dir).await.unwrap();
+    let note = db
+        .get_note(&crate::retired::note_id(&card.id))
+        .await
+        .unwrap()
+        .unwrap();
+    crate::note_index::index(&db, &ai, &note).await.unwrap();
+    db.flush_fts().await.unwrap();
+    assert!(note.content.contains(&house.id) && note.content.contains(&finance.id));
+    let query = "POL-884422 policy number";
+    let vector = ai.embed_one(query).await.unwrap();
+    let hits = db
+        .search_chunks_all_opts(vector.clone(), query, 8, None, SearchOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        hits.iter()
+            .any(|(_, c)| c.note_id == note.id && c.snippet.contains("POL-884422")),
+        "A kept identifier must remain searchable after migration"
+    );
+    let other = if note.notebook_id == "household" {
+        "finance"
+    } else {
+        "household"
+    };
+    let scope = vec![other.to_string()];
+    let scoped = db
+        .search_chunks_all_opts(vector, query, 8, Some(&scope), SearchOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        scoped
+            .iter()
+            .all(|(nb, c)| nb == other && c.note_id != note.id),
+        "Ranking must not leak the entity note from outside scope"
+    );
+    let question = "What does the house insurance cover and when does it renew?";
+    let all = db
+        .search_chunks_all_opts(
+            ai.embed_one(question).await.unwrap(),
+            question,
+            12,
+            None,
+            SearchOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        all.iter().any(|(_, c)| c.source_id == house.id)
+            && all.iter().any(|(_, c)| c.source_id == finance.id),
+        "Global search should retain evidence from both linked notebooks"
+    );
+    eprintln!("retired Registry eval: exact identifier recovered as note; scope isolated; linked evidence from both notebooks recovered");
+    let _ = std::fs::remove_dir_all(dir);
 }

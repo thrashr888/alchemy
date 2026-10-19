@@ -577,6 +577,8 @@ pub struct MetaTurn {
     /// on questions, and on answers stored before the column existed.
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub scope: String,
     pub created_at: i64,
 }
 

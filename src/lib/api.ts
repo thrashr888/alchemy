@@ -49,8 +49,6 @@ import type {
   MetaTurn,
   ModelHealth,
   ModelStat,
-  CardFact,
-  RegistryCard,
   NightShiftStatus,
   Note,
   NoteSummary,
@@ -68,7 +66,6 @@ import type {
   Source,
   SnapshotStatus,
   SourceEvent,
-  SuggestOutcome,
   Template,
   NotebookStatusOutcome,
   MacProviderStatus,
@@ -514,7 +511,6 @@ export const api = {
   pdfLocalPath: (sourceId: string) =>
     run(cmd<string>("pdf_local_path", { sourceId })),
   /** Validate a Notion integration token; resolves to the workspace label. */
-  notionCheck: (token: string) => run(cmd<string>("notion_check", { token })),
   deleteMessage: (messageId: string) =>
     run(cmd<void>("delete_message", { messageId })),
   cancelGeneration: (scope?: "chat" | "artifact" | "tts" | "meta") =>
@@ -678,6 +674,7 @@ export const api = {
     /** The conversation this was asked in. Only Home's housekeeping tools
      *  need it — rename/delete this chat, and "save that answer". */
     threadId?: string | null,
+    notebookId?: string | null,
   ) =>
     run(
       ai<MetaAnswer>("ask_everything", {
@@ -686,6 +683,7 @@ export const api = {
         deep: deep ?? null,
         config: config ?? null,
         threadId: threadId ?? null,
+        notebookId: notebookId || null,
       }),
     ),
   // Home chat threads — the persisted side of ask_everything.
@@ -701,6 +699,7 @@ export const api = {
     /** Who wrote it, when that isn't the local chat model — a hosted agent's
      *  label. Omitted, the backend captions it with the chat model. */
     model?: string,
+    scope?: string,
   ) =>
     run(
       cmd<MetaTurn>("add_meta_turn", {
@@ -710,6 +709,7 @@ export const api = {
         citations,
         kind,
         model: model ?? null,
+        scope: scope ?? "",
       }),
     ),
   /** Which brain answers the next Home turn. Asked fresh on every ask: the
@@ -847,69 +847,13 @@ export const api = {
     run(cmd<Template>("save_template", { id, name, description, prompt })),
   deleteTemplate: (id: string) => run(cmd<void>("delete_template", { id })),
 
-  // The Registry — corpus-scoped, so no notebookId anywhere here.
-  listRegistry: () => run(query<RegistryCard[]>("list_registry", {})),
-  addRegistryCard: (
-    kind: string,
-    name: string,
-    identifiers?: string,
-    note?: string,
-    facts?: CardFact[],
-  ) =>
-    run(
-      cmd<RegistryCard>("add_registry_card", {
-        kind,
-        name,
-        identifiers,
-        note,
-        facts,
-      }),
-    ),
-  updateRegistryCard: (
-    id: string,
-    patch: {
-      name?: string;
-      identifiers?: string;
-      note?: string;
-      facts?: CardFact[];
-    },
-  ) => run(cmd<RegistryCard>("update_registry_card", { id, ...patch })),
-  deleteRegistryCard: (id: string) =>
-    run(cmd<void>("delete_registry_card", { id })),
-  attachSourceToCard: (cardId: string, sourceId: string, status?: string) =>
-    run(
-      cmd<RegistryCard>("attach_source_to_card", { cardId, sourceId, status }),
-    ),
-  /** status: "confirmed" | "rejected" | "remove". */
-  setAttachmentStatus: (cardId: string, sourceId: string, status: string) =>
-    run(
-      cmd<RegistryCard>("set_attachment_status", { cardId, sourceId, status }),
-    ),
-  /** origin: "" confirms a suggestion, "dismissed" turns it down. */
-  setCardOrigin: (id: string, origin: string) =>
-    run(cmd<RegistryCard>("set_card_origin", { id, origin })),
-  /** Rule suggestions in bulk; same origin contract as setCardOrigin.
-   *  `onlyRecommended` limits the verdict to the triage pass's picks. */
-  ruleAllSuggested: (origin: string, onlyRecommended?: boolean) =>
-    run(cmd<number>("rule_all_suggested", { origin, onlyRecommended })),
-  /** Run the card suggester now. Omit notebookId to read every notebook —
-   *  the Registry's own button is corpus-scoped. Triage follows in the
-   *  background and lands on a registry bump. */
-  suggestCardsNow: (notebookId?: string) =>
-    // A whole-corpus ask reads every notebook, one model call each — minutes
-    // on a big library, well past the mutation timeout, which reported
-    // "timed out" while the pass carried on and landed anyway.
-    run(ai<SuggestOutcome>("suggest_cards_now", { notebookId })),
-  cardsForSource: (sourceId: string) =>
-    run(query<RegistryCard[]>("cards_for_source", { sourceId })),
-  rematchRegistry: (notebookId: string) =>
-    run(cmd<number>("rematch_registry", { notebookId })),
-
   // Night Shift (the Home Staff section)
   /** Source-change events, newest first. `notebookId` narrows to one
    *  notebook (the Arrivals strip); omit it for Home and Staff. */
   listSourceEvents: (hours = 24, notebookId?: string) =>
     run(query<SourceEvent[]>("list_source_events", { hours, notebookId })),
+  cancelWork: (scheduleId: string) => run(cmd<void>("cancel_work", { scheduleId })),
+  workReceipts: () => run(query<import("./types").RunReceipt[]>("work_receipts")),
   nightShiftStatus: () => run(query<NightShiftStatus>("night_shift_status")),
   snapshotStatus: () => run(query<SnapshotStatus>("snapshot_status")),
   snapshotNow: () => run(cmd<SnapshotStatus>("snapshot_now")),

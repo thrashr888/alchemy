@@ -198,10 +198,6 @@ pub struct AiConfig {
     /// themselves have no off switch — the smarter thing is the only thing.
     #[serde(default = "default_git_sync_minutes")]
     pub git_sync_minutes: u32,
-    /// Notion internal-integration token (`ntn_…`) — sent only to
-    /// api.notion.com; empty means Notion URLs fall through to page capture.
-    #[serde(default)]
-    pub notion_token: String,
     /// Diagnose-and-suggest on unclassified provider errors
     /// (docs/RFC-self-resolve.md phase 2): one Small-role call turns the raw
     /// error into a plain-language diagnosis plus clickable fixes. On by
@@ -410,9 +406,7 @@ impl AiConfig {
         if !c.openai_api_key.is_empty() {
             c.openai_api_key = REDACTED_KEY.into();
         }
-        if !c.notion_token.is_empty() {
-            c.notion_token = REDACTED_KEY.into();
-        }
+
         c
     }
 
@@ -433,9 +427,6 @@ impl AiConfig {
         }
         if self.openai_api_key == REDACTED_KEY {
             self.openai_api_key = stored.openai_api_key.clone();
-        }
-        if self.notion_token == REDACTED_KEY {
-            self.notion_token = stored.notion_token.clone();
         }
     }
 
@@ -587,7 +578,6 @@ impl Default for AiConfig {
             providers: Vec::new(),
             chat_provider: String::new(),
             studio_provider: String::new(),
-            notion_token: String::new(),
             provider: default_provider(),
             embedder: default_provider(),
             base_url: "http://localhost:11434".to_string(),
@@ -1435,7 +1425,6 @@ mod tests {
             }],
             openai_api_key: "sk-legacy-key".into(),
             openai_base_url: "https://legacy.example/v1".into(),
-            notion_token: "ntn_secret".into(),
             ..AiConfig::default()
         }
     }
@@ -1476,7 +1465,6 @@ mod tests {
         let r = c.redacted();
         assert_eq!(r.providers[0].api_key, REDACTED_KEY);
         assert_eq!(r.openai_api_key, REDACTED_KEY);
-        assert_eq!(r.notion_token, REDACTED_KEY);
         // A keyless provider stays visibly keyless.
         assert_eq!(r.providers[1].api_key, "");
         // Nothing key-shaped survives serialization to the webview.
@@ -1493,7 +1481,6 @@ mod tests {
         round_trip.absorb_secrets(&stored);
         assert_eq!(round_trip.providers[0].api_key, "sk-real-key");
         assert_eq!(round_trip.openai_api_key, "sk-legacy-key");
-        assert_eq!(round_trip.notion_token, "ntn_secret");
     }
 
     #[test]
@@ -1501,10 +1488,8 @@ mod tests {
         let stored = config_with_secrets();
         let mut edited = stored.redacted();
         edited.providers[0].api_key = "sk-new-key".into();
-        edited.notion_token = String::new();
         edited.absorb_secrets(&stored);
         assert_eq!(edited.providers[0].api_key, "sk-new-key");
-        assert_eq!(edited.notion_token, "");
     }
 
     #[test]

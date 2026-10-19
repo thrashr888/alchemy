@@ -1,6 +1,6 @@
 # RFC: Ablation — what Alchemy can lose
 
-Status: latest direction clarified 2026-10-11 below; implementation pending.
+Status: implementation in review; current behavior and validation below.
 Historical review: 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
 a verb) and 6 built the same day. Decisions: the PM/engineering
 generators and templates stay — newer users are product and engineering
@@ -15,6 +15,69 @@ Origin: Reminders item "Reduce visual, data, and feature bloat. Conduct
 an ablation experiment, removing unnecessary abstractions and designs."
 The Ledger and the Arrivals strip went on 2026-09-15 (main e2f089b) as
 the first two cuts; this is the rest of the list, with the evidence.
+
+## Implementation: 2026-10-18
+
+The implementation branch removes the Notion connector (import/refresh,
+credentials, and controls), Registry suggestion/enrichment/matching and CRUD,
+and the separate Registry, Staff, Brief, Reports-feed, and Timeline screens.
+Notion snapshots and their children remain readable; their caches are retained
+until the user deliberately deletes the source. New installs no longer receive
+an automatic Brief schedule; existing requested schedules continue to run.
+
+Work reads the existing schedules, run receipts, saved notes, and source events.
+Manual runs record results and failures. Active runs are owned by the backend,
+with duplicate-run protection and Stop across navigation; agents can inspect
+and stop them too. Output content remains in notebook notes.
+
+Before retirement, the store version advances and the existing pre-migration
+snapshot mechanism protects downgrade. An atomic registry-backup.json in the
+database directory contains every original card, including suggestions and
+refusals. Kept cards become deterministic registry-<card-id> notes in an active
+linked notebook (most attachments; deterministic tie-break), or Saved knowledge
+when no active owner exists. Notes retain identifiers, facts, annotations,
+related-document links, original resource provenance, and timestamps. A durable
+completion marker prevents later note deletion from resurrecting a card; retry
+skips existing notes to preserve edits. Old card citations/deep links resolve
+to the preserved note. Derived entity wiki pages are no longer regenerated.
+
+Global chat keeps All notebooks as default and can narrow to one notebook.
+Scope is stored on every turn; history outside that scope does not become model
+evidence, and the scoped tool dispatcher uses the existing notebook boundary.
+The shared hybrid search applies its notebook filter before ranking, including
+title fallbacks. Capture suggestions also use this index. The old notebook
+router is retained only for comparative tests; gists, section summaries, and
+chunk enrichment remain pending separate quality/cost evidence.
+
+Validation includes a new entity-note retrieval and scope-isolation eval,
+upgrade backup/retry/edit/deletion tests, persisted transcript scope tests,
+and navigation/history tests. The router ablation now fails if flat recall
+falls more than 0.05 below the old routed control. Native QA uses a distinct application identifier
+and fixture corpus so upgrade validation cannot rewrite the user's library
+or global agent connector configuration.
+
+### Verification
+
+- Frontend: 472 tests across 27 files and `pnpm build` pass.
+- Rust: format, strict Clippy, and full `cargo test` pass: 903 passed,
+  51 ignored; corpus evals enabled, live-model tests off. Doctests pass.
+- Router ablation: 70 queries / three notebooks, recall@10 0.43 flat and
+  0.43 routed (rounded); routing accuracy@2 0.97. This supports removing
+  route-index upkeep on this fixture; it makes no large-corpus latency claim.
+- New migration retrieval eval recovers an exact identifier as an ordinary
+  note, excludes that note outside its chosen scope, and recovers related
+  source evidence from both notebooks. It exposed a real BM25 scope leak;
+  both search legs now filter before ranking. The old soft route remains
+  the comparison control.
+- Native isolated fixture QA: migration placement and original-record
+  backup, old citation to note, note link to a source in another notebook,
+  static Notion refresh/child preservation, exact-identifier search,
+  scoped-turn persistence and restoration, failed manual-run receipts,
+  active-run cleanup, and schedule enable/disable. No live generation or
+  migration of the primary library was used for these checks.
+- Screenshots: [Work](screenshots/paul-26/work.png),
+  [preserved note](screenshots/paul-26/preserved-note.png),
+  [chat scope](screenshots/paul-26/chat-scope.png).
 
 ## Clarifications and decisions: 2026-10-11
 

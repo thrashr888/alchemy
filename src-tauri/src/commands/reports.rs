@@ -204,7 +204,59 @@ pub async fn run_report(
     state: State<'_, AppState>,
     schedule_id: String,
 ) -> Result<Note, String> {
-    run_report_inner(&app, &state, &schedule_id).await
+    let schedule =
+        e(state.db.get_report_schedule(&schedule_id).await)?.ok_or("Report schedule not found")?;
+    let started = now();
+    let (result, cost) =
+        crate::freshness::metered_run(run_report_inner(&app, &state, &schedule_id)).await;
+    let mut receipt = crate::scheduler::schedule_receipt(
+        &state,
+        &schedule,
+        started,
+        started,
+        result.as_ref().ok(),
+        result.as_ref().err().map(String::as_str),
+        cost,
+    )
+    .await;
+    receipt.trigger = "manual".into();
+    crate::scheduler::write_receipt(&state, receipt).await;
+    result
+}
+
+/// Registration belongs to the backend run, so leaving Work does not lose
+/// its Stop control and a manual run cannot race the same scheduled job.
+struct ActiveReport<'a> {
+    cancel: &'a std::sync::Mutex<
+        std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
+    >,
+    key: String,
+    token: tokio_util::sync::CancellationToken,
+}
+impl Drop for ActiveReport<'_> {
+    fn drop(&mut self) {
+        self.cancel
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.key);
+    }
+}
+impl<'a> ActiveReport<'a> {
+    fn begin(
+        cancel: &'a std::sync::Mutex<
+            std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
+        >,
+        id: &str,
+    ) -> Result<Self, String> {
+        let key = format!("report:{id}");
+        let token = tokio_util::sync::CancellationToken::new();
+        let mut map = cancel.lock().map_err(|_| "Could not inspect active work")?;
+        if map.contains_key(&key) {
+            return Err("This report is already running".into());
+        }
+        map.insert(key.clone(), token.clone());
+        Ok(Self { cancel, key, token })
+    }
 }
 
 /// The command's body, callable from the resident scheduler (scheduler.rs).
@@ -213,6 +265,7 @@ pub(crate) async fn run_report_inner(
     state: &AppState,
     schedule_id: &str,
 ) -> Result<Note, String> {
+    let active = ActiveReport::begin(&state.cancel, schedule_id)?;
     let app = app.clone();
     let schedule_id = schedule_id.to_string();
     let schedule = e(state.db.get_report_schedule(&schedule_id).await)?
@@ -221,7 +274,7 @@ pub(crate) async fn run_report_inner(
     // Briefs are schedules too (kind "brief"), but they read across every
     // notebook instead of generating from one — see commands/brief.rs.
     if schedule.kind == super::brief::BRIEF_KIND {
-        return super::brief::run_brief(&app, state, schedule).await;
+        return super::brief::run_brief(&app, state, schedule, &active.token).await;
     }
 
     refresh_notebook_urls(&app, state, &schedule.notebook_id).await;
@@ -235,7 +288,9 @@ pub(crate) async fn run_report_inner(
     let _ = app.emit("report://step", "Generating report".to_string());
     // The indicator names the report, so an unattended run at 6am is legible
     // in the morning as well as while it happens.
-    let (_title, content) = e(crate::inference::labeled(
+    let cancel = &active.token;
+    let (_title, content) = tokio::select! {
+        result = async { crate::inference::labeled(
         format!("Report: {}", schedule.name),
         generate_content(
             state,
@@ -250,7 +305,9 @@ pub(crate) async fn run_report_inner(
             None,
         ),
     )
-    .await)?;
+    .await } => e(result)?,
+        _ = cancel.cancelled() => return Err("Report stopped".into()),
+    };
 
     persist_report_run(&app, state, &schedule, existing, content).await
 }
@@ -597,5 +654,29 @@ mod tests {
         let stored = reopened.get_report_schedule(&s.id).await.unwrap().unwrap();
         assert_eq!(stored.note_id, "living-note");
         assert_eq!(stored.name, s.name);
+    }
+}
+
+#[cfg(test)]
+mod active_work_tests {
+    use super::ActiveReport;
+
+    #[test]
+    fn duplicate_runs_are_blocked_and_stop_survives_navigation_until_run_drops() {
+        let map = std::sync::Mutex::new(std::collections::HashMap::new());
+        let run = ActiveReport::begin(&map, "scheduled").unwrap();
+        assert!(ActiveReport::begin(&map, "scheduled").is_err());
+        // The same backend token is available to a newly opened Work view.
+        map.lock()
+            .unwrap()
+            .get("report:scheduled")
+            .unwrap()
+            .cancel();
+        assert!(run.token.is_cancelled());
+        assert!(ActiveReport::begin(&map, "scheduled").is_err());
+        drop(run);
+        assert!(map.lock().unwrap().is_empty());
+        let next = ActiveReport::begin(&map, "scheduled").unwrap();
+        assert!(!next.token.is_cancelled());
     }
 }

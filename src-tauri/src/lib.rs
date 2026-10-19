@@ -44,13 +44,13 @@ mod menu;
 mod menuicons;
 mod models;
 mod note_index;
-mod notion;
 mod okf;
 mod outline;
 mod outline_index;
 mod pdf;
 mod pptx;
 mod rag;
+mod retired;
 mod robots;
 mod router;
 mod scheduler;
@@ -400,8 +400,12 @@ pub fn run() {
             // file comparisons that must not sit on the setup thread.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                connectors::refresh_installed_connectors(&handle, mcp_port);
-                connectors::refresh_installed_skills(&handle);
+                // Alternate app identities (such as isolated QA builds) do
+                // not own the installed app's global agent connections.
+                if handle.config().identifier == "com.thrashr888.alchemy" {
+                    connectors::refresh_installed_connectors(&handle, mcp_port);
+                    connectors::refresh_installed_skills(&handle);
+                }
             });
 
             // Browser-extension clip receiver (docs/RFC-page-capture.md §8).
@@ -409,6 +413,20 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 clip::apply_config(&handle, clip_enabled, clip_port).await;
+            });
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                match state.db.pending_note_index_ids().await {
+                    Ok(ids) => {
+                        let ai = state.ai.read().await.clone();
+                        for id in ids.into_iter().filter(|id| id.starts_with("registry-")) {
+                            crate::note_index::enqueue(state.db.clone(), ai.clone(), &id);
+                        }
+                    }
+                    Err(err) => crate::diagnostics::error("registry-migration", format!("Could not queue preserved notes: {err:#}")),
+                }
             });
 
             // The Night Shift's resident scheduler (docs/RFC-night-shift.md):
@@ -577,7 +595,6 @@ pub fn run() {
             commands::pdf_page_count,
             commands::pdf_page_image,
             commands::pdf_local_path,
-            commands::notion_check,
             commands::delete_message,
             commands::list_notes,
             commands::list_note_summaries,
@@ -592,6 +609,8 @@ pub fn run() {
             okf::deletion_proposals_cmd,
             okf::resolve_deletion_proposal_cmd,
             commands::home_activity,
+            commands::work_receipts,
+            commands::cancel_work,
             commands::ui_event,
             commands::notebook_previews,
             commands::corpus_tags,
@@ -701,22 +720,10 @@ pub fn run() {
             commands::snapshot_now,
             commands::restore_snapshot,
             commands::toggle_night_shift_pause,
-            commands::list_registry,
-            commands::preview_registry_triage,
             commands::desktop_apps,
             examples::seed_examples_now,
             commands::handoff_prompt,
             commands::open_desktop_app,
-            commands::add_registry_card,
-            commands::update_registry_card,
-            commands::delete_registry_card,
-            commands::attach_source_to_card,
-            commands::set_attachment_status,
-            commands::cards_for_source,
-            commands::suggest_cards_now,
-            commands::set_card_origin,
-            commands::rule_all_suggested,
-            commands::rematch_registry,
             commands::run_second_look,
             commands::save_evidence,
             commands::create_report_schedule,

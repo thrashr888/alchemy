@@ -945,6 +945,7 @@ export interface SnapshotStatus {
 export interface NightShiftStatus {
   backgroundEnabled: boolean;
   paused: boolean;
+  activeScheduleIds?: string[];
 }
 
 /** What a provider offers the model picker. `supportsDefault` is false for a
@@ -1042,7 +1043,6 @@ export interface AiConfig {
    *  rather than in Alchemy; empty when Alchemy answers itself. */
   answersIn: string;
   gitSyncMinutes: number;
-  notionToken: string;
   /** Diagnose-and-suggest on unclassified provider errors (RFC-self-resolve
    *  phase 2): one small-model call per unknown failure. On by default; the
    *  toggle is cost control. */
@@ -1109,6 +1109,7 @@ export interface MetaTurn {
    *  stored before the backend recorded it — rendered as nothing. */
   model?: string;
   createdAt: number;
+  scope?: string;
 }
 
 /** A Home conversation as the thread list sees it. Derived from its turns —
@@ -1327,3 +1328,17 @@ export const DEFAULT_READING_PREFS: ReadingPrefs = {
   backdropMotion: true,
   accent: "theme",
 };
+
+/** One recorded background run; output content stays in its notebook note. */
+export interface RunReceipt {
+  id: string;
+  name: string;
+  status: string;
+  error: string;
+  detail: string;
+  noteId: string;
+  notebookId: string;
+  provider: string;
+  model: string;
+  endedAt: number;
+}

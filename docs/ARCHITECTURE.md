@@ -31,7 +31,7 @@ instead of joining (LanceDB is not relational).
 | `notes` | id, notebook_id, title, content, kind, created_at, updated_at |
 | `note_usage` | note_id, reads, retrieval_hits, cited, last_used_at |
 | `report_schedules` | id, notebook_id, cadence fields |
-| `routes` | id, kind, notebook_id, summary, **vector** — the semantic router index |
+| `routes` | id, kind, notebook_id, summary, **vector** — legacy router table, comparative evals only |
 
 The `chunks` and `routes` tables are created **lazily** on first write, once
 the embedding dimensionality is known from the model — so swapping embedding
@@ -54,21 +54,27 @@ each decision):
   `SearchOptions` diversity caps (max per source / notebook / notes / gists)
   applied post-fusion in score order with backfill (skipped gists rejoin
   last — they're redundant with their source's verbatim chunks, so the gist
-  cap stays real), and an optional routing hint that
-  narrows the **vector side only** — BM25 stays corpus-wide so an exact
-  identifier always escapes a routing mistake.
-- `route_search` / `upsert_routes` — the semantic-router index used by
-  `router.rs`.
+  cap stays real). An explicit notebook scope filters both vector and
+  BM25 candidates before ranking; an omitted scope searches all notebooks.
+### `router.rs` — retired production router
+Global chat and capture suggestions use the shared hybrid chunk index.
+The old per-source route index is retained only under `cfg(test)` for the
+router ablation. The eval compares flat and routed recall on the same corpus
+and gates retirement on flat recall staying within 0.05 of routed recall.
+No production route-index refresh remains; existing tables are left intact.
 
-### `router.rs` — semantic router
-One embedded route per source/note — the title, or `title — gist` once a
-source has a gist. `ensure_router` diffs desired
-summaries against stored ones and re-embeds only what changed (a no-op string
-compare on the common path), so the index self-heals without hooks in every
-write path. `route_notebooks` ranks notebooks by their closest item —
-per-item routes measurably beat one-summary-per-notebook for topically
-diverse notebooks. Meta-chat routes when the corpus has >5 notebooks and
-falls back to flat search on any failure.
+### Registry retirement and Work
+Kept Registry records migrate to ordinary notebook notes before the store
+opens, after an atomic original-record backup. Deterministic note IDs preserve
+old citations; a completion marker prevents deleted notes from reappearing.
+Suggestions and refusals remain in the backup and original table. See
+`retired.rs` and `RFC-ablation.md` for placement and recovery rules.
+
+Work summarizes existing schedules, receipts, saved notes and source changes;
+it adds no output store. The backend owns active-run cancellation across
+navigation. Global chat persists scope per turn and limits model history and
+tools to that scope. Legacy Notion imports remain static sources; the
+connector, token and refresh workflow are retired.
 
 ### `gist.rs` — source gists
 One distilled overview row per source (docs/RFC-infinite-context.md Phase 1),
@@ -78,8 +84,7 @@ budgeted, fire-and-forget after imports, refreshes, and meta-asks) generates
 gists on the Small role and gates output before storing: length bounds, a
 degeneracy check, and every identifier must appear verbatim in the source —
 a hallucinated code is dropped, never stored. Gists join corpus-wide fusion
-as a capped class (`max_gists`), upgrade router summaries to `title — gist`,
-and stay out of per-notebook chat until the citation reader renders them.
+as a capped class (`max_gists`) and stay out of per-notebook chat until the citation reader renders them.
 Toggle: `AiConfig.source_gists` (default ON).
 
 ### `trace.rs` — local retrieval traces

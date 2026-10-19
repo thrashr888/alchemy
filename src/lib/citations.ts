@@ -19,8 +19,7 @@ export async function openMetaCitation(c: MetaCitation): Promise<void> {
   await navAtomic(async () => {
     const s = useStore.getState();
     if (c.kind === "card") {
-      s.closeNotebook();
-      useStore.setState({ homeSection: "registry", openCardId: c.id });
+      await s.handleIntegrationUrl(`alchemy://note/registry-${encodeURIComponent(c.id)}`);
     } else if (c.kind === "note") {
       // StudioPanel auto-opens this id once the notebook's notes load.
       useStore.setState({ justCreatedNoteId: c.id });

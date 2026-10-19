@@ -461,15 +461,20 @@ fn cap(mut text: String) -> String {
 /// job is the actions.
 #[derive(Clone, Copy)]
 pub(crate) enum Surface<'a> {
-    Home { thread_id: &'a str },
-    Notebook { notebook_id: &'a str },
+    Home {
+        thread_id: &'a str,
+        notebook_id: Option<&'a str>,
+    },
+    Notebook {
+        notebook_id: &'a str,
+    },
 }
 
 impl Surface<'_> {
     /// The thread or notebook a prompt belongs to, as the front end matches it.
     fn scope_id(&self) -> &str {
         match self {
-            Surface::Home { thread_id } => thread_id,
+            Surface::Home { thread_id, .. } => thread_id,
             Surface::Notebook { notebook_id } => notebook_id,
         }
     }
@@ -485,7 +490,7 @@ impl Surface<'_> {
     /// (`home-<threadId>`); a notebook shares its Agent pane's (its id).
     fn undo_key(&self) -> String {
         match self {
-            Surface::Home { thread_id } => format!("home-{thread_id}"),
+            Surface::Home { thread_id, .. } => format!("home-{thread_id}"),
             Surface::Notebook { notebook_id } => notebook_id.to_string(),
         }
     }
@@ -655,8 +660,15 @@ async fn dispatch(
         ..
     } = asker;
     let thread_id = match surface {
-        Surface::Home { thread_id } => thread_id,
-        Surface::Notebook { notebook_id } => {
+        Surface::Home {
+            thread_id,
+            notebook_id: None,
+        } => thread_id,
+        Surface::Home {
+            notebook_id: Some(notebook_id),
+            ..
+        }
+        | Surface::Notebook { notebook_id } => {
             return dispatch_notebook(asker, state, notebook_id, question, name, args).await;
         }
     };
@@ -1847,11 +1859,19 @@ pub(crate) async fn run(
     };
 
     let system = match surface {
+        Surface::Home {
+            notebook_id: Some(_),
+            ..
+        } => notebook_loop_system(),
         Surface::Home { .. } => loop_system(),
         Surface::Notebook { .. } => notebook_loop_system(),
     };
     let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": system })];
     let catalog = || match surface {
+        Surface::Home {
+            notebook_id: Some(_),
+            ..
+        } => notebook_catalog(),
         Surface::Home { .. } => catalog(),
         Surface::Notebook { .. } => notebook_catalog(),
     };

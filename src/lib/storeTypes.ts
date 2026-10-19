@@ -97,6 +97,7 @@ export interface NavEntry {
  *  `notebooks` is the shelf itself; the rest are the surfaces that used to
  *  be rails or cards around it (docs/RFC-mac-chrome.md, "Home"). */
 export type HomeSection =
+  | "work"
   /** Captures waiting to be filed: save now, organize later. */
   | "inbox"
   | "notebooks"
@@ -366,9 +367,6 @@ export interface AppState {
   /** Source id the Reader should open straight into edit mode (gallery's
    *  "Edit text" action); the Reader consumes and clears it. */
   readerEditIntent: string | null;
-  /** Bumped when the registry changes (agents, or the arrival sweep filing
-   *  a document). Corpus-scoped, so it fires with no notebook open. */
-  registryBump: number;
   /** The Inbox, newest first. Captures land here instead of raising a
    *  blocking "which notebook?" modal; Home's Inbox section files them. */
   inbox: InboxItem[];
@@ -379,14 +377,10 @@ export interface AppState {
   homeChatUnread: boolean;
   /** When the Registry tab was last on screen (epoch ms, persisted) — the
    *  baseline its unread dot compares suggestions against. */
-  registrySeenAt: number;
   /** What the Registry tab would show: how many suggestions are surfaced
    *  and the newest one's arrival, refreshed on the registry bump so the dot
    *  works from any tab. Null until first read. */
-  registrySignal: { shown: number; newest: number } | null;
-  refreshRegistrySignal: () => Promise<void>;
   /** The Registry tab is on screen: everything surfaced now counts as seen. */
-  markRegistrySeen: () => void;
   /** Desktop AI apps on this Mac (Claude, ChatGPT, GitHub Copilot) a
    *  notebook can be handed to. Read once per launch. */
   desktopApps: DesktopApp[];
@@ -396,7 +390,6 @@ export interface AppState {
   handoffNotebook: (notebookId: string, app: string) => Promise<void>;
   /** The cast by kind, set by the Registry index after each load; the Home
    *  header's subtitle reads it. Null until the index has loaded once. */
-  registryCounts: { total: number; kinds: { label: string; count: number }[] } | null;
   /** Home's center column: the notebook grid, the Registry's cast, or the
    *  Chat tab's conversation. */
   homeSection: HomeSection;
@@ -424,6 +417,8 @@ export interface AppState {
    *  across everything is a different job from asking inside one notebook,
    *  and it shouldn't inherit — or overwrite — whatever a notebook is set to. */
   homeChatConfig: ChatConfig;
+  homeChatScope: string;
+  setHomeChatScope: (id: string) => void;
   /** How that column lays out. Cards are recognisable, rows are scannable
    *  and sortable — which one is "easier to find things in" depends on the
    *  collection, so it's a per-user choice, remembered. */
@@ -432,9 +427,7 @@ export interface AppState {
    *  a filter you forgot you set is a collection that looks half-empty. */
   homeQuery: string;
   /** Card the Registry section has open; null shows the grid. */
-  openCardId: string | null;
   /** The Registry's New-card modal, openable from the Home hero too. */
-  registryCreating: boolean;
   pendingNewNote: boolean;
   artifactStreamText: string;
   audioProgress: { done: number; total: number } | null;
@@ -511,6 +504,7 @@ export interface AppState {
     /** Caption the turn with this instead of the local chat model — a hosted
      *  agent's label. */
     model?: string,
+    scope?: string,
   ) => Promise<void>;
   /** Ask across every notebook, into the open conversation. Resolves when the
    *  answer has settled. A question asked while another is still being written
@@ -533,7 +527,7 @@ export interface AppState {
   /** Land a Home tool reply: the quiet transcript row, plus whatever the
    *  backend could only ask this window to do — open a notebook, or let go
    *  of the conversation it just deleted. */
-  settleHomeTool: (threadId: string, answer: MetaAnswer) => Promise<void>;
+  settleHomeTool: (threadId: string, answer: MetaAnswer, scope?: string) => Promise<void>;
   /** Stop the run in flight, keeping whatever it had written. */
   stopHome: () => void;
   /** meta://token and meta://step, folded into the live run. */

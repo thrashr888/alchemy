@@ -479,19 +479,13 @@ The rules that are easy to lose:
   reads as one strip; `Button size="icon"` is a 28px square and is not it.
 
 **Home is a library.** One toolbar, one 220px sidebar (`.side-pane`), one
-sheet — Photos and Music, not a dashboard. The Brief sits alone at the
-sidebar's top, no caps label of its own, the way Mail's Inbox sits above its
-account blocks: an icon, "Brief", and a 6px dot when last night's run is
-unread. The sidebar is resizable from its trailing edge (180–360px,
-remembered across launches, double-click resets to 220). Below the Brief
-it is three blocks of 30px, 14px rows (Library, Registry, Tags), each row a place with its count, its 6px dot, or its `--primary` count
-badge; the selected row is washed in `--selection`. Choosing a row changes
-what the sheet shows, so every surface Home holds — the shelf, the corpus
-conversation, the Registry, the timeline, the night shift's Staff, the Brief,
-the nightly reports — is a section of one center column rather than a card
-stacked around it. Shared, Built in and Archived are the same shelf,
-narrowed; a notebook's kind rides on its row as a monochrome 12px mark
-(two people for shared, a box for built in), never as a shelf of its own.
+sheet. The main destinations are Notebooks, Chat and Work. Inbox, Shared,
+Built in, Archived and Tags narrow the notebook shelf. The sidebar is
+resizable from its trailing edge (180–360px, remembered across launches,
+double-click resets to 220). Its 30px, 14px rows use `--selection` for the
+selected place. Work shows schedules, recent run results and failures,
+saved output links, and source changes. Outputs remain notebook notes;
+Registry has retired into ordinary notes, with old links preserved.
 The shelf has one order and groups by it: Recently updated under Today,
 Last 7 days, Earlier; Type under Yours, Shared, Built in; name and the
 counts as one run with no headings — a heading that is not the sort key
@@ -510,27 +504,11 @@ caption below the thumb sits 6px under it, inset 4px so the name lines up
 with the thumb's rounded edge rather than reading as flush against nothing,
 the way a Photos caption sits under its tile.
 
-Every section's **heading row** carries only its h1 title (26px/700,
-tracking -.01em) and, when the section has one, its trailing controls —
-Notebooks' Add source/Import, Registry's sort and suggest verbs (reported
-into the same slot by `RegistrySection` rather than drawn as a second
-toolbar), Nightly Reports' Mark all read. Notebooks alone keeps a second
-line, "Since you were away", because that line is about the visit rather
-than a count. What a section holds moved out of the heading and into a
-Finder-style **status bar**: one centered line in the sheet's footer,
-present on every section — `18 notebooks · 4,067 sources · 620 notes`,
-narrowed to `12 notebooks · #finance` under a tag; `4 conversations`;
-`13 reports · 2 unread`; `224 entries`; `10 waiting`. The Brief carries
-nothing there — what last night's run did is now the Brief's own line,
-read from the sidebar row's tooltip and repeated as a quiet second line
-inside the Brief section itself, since that is the surface it is actually
-about. The toolbar carries the collection's controls for every section —
-the grid/table switch, the sort pop-up, the filter field — so no section
-draws a second search box (`HomeViewControls`' `chrome="own"`). The
-Registry's entries (registry cards in the model) flow like the shelf now
-too: full-width at the shelf's own padding (`px-7`, 18px between blocks),
-no suggestion remnants (Keep all/Dismiss all and the waiting banner
-belong to the Suggested queue alone).
+Every section's **heading row** carries its h1 title and relevant trailing
+controls. Notebooks keeps Add source/Import, sort, filter and grid/table;
+Work keeps status, pause/resume and refresh. Work's rows expose Run now,
+Stop and enable/disable without creating a second job or output model.
+The notebook shelf's footer summarizes the visible collection.
 
 **Chats' sessions live in the sidebar**, Finder-folder/Mail-mailbox style,
 not in a second column: the Library's Chats row is a disclosure
@@ -548,7 +526,7 @@ The selected session washes `bg-[var(--selection)]`; the parent Chats row
 washes only when the open conversation is the blank one nothing has been
 asked into yet, the way Mail's Inbox row stays selected until a message
 underneath it is. The list caps at 12 sessions with a final `Show N more…`
-row, so a long history can't push Registry and Tags off the sidebar's
+row, so a long history can't push Work and Tags off the sidebar's
 bottom. With the list gone from the sheet, Chats draws no heading row at
 all — no title, no New chat button, nothing above the transcript — and no
 footer either, so the composer sits 18px above the sheet's bottom edge,
@@ -561,7 +539,10 @@ whole corpus) all read identically wherever they're asked. Home's own
 style and length choices fold into sections of that one pop-up,
 `ModelPill`'s `extraRows`, exactly as the notebook composer hangs Chat
 settings and Clear conversation off it — three pills and an Ask button
-became one pop-up and the circle send.
+became one pop-up and the circle send. A labeled notebook scope selector
+above the composer defaults to All notebooks; narrowing applies to subsequent
+turns. Scope stays visible on historical user turns and does not rewrite
+conversation history.
 
 **Settings is System Settings.** The dialog is a sidebar and a pane, not a
 tab bar. The sidebar leads with an identity block — the app sigil,
@@ -797,9 +778,7 @@ not rendered — recorded as found, not as it ought to be.
 | Pane | Empty | Loading | Error | Degraded |
 |---|---|---|---|---|
 | Notebook shelf (`HomeView`) | `AlchemyHero` branch; filter-empty line | none | `activityError` row + Retry (activity feed only) | `HealthBanner` |
-| Home Staff + Brief (`HomeSections`) | `StaffQuiet` per group; "No brief yet" | `StaffQuiet` "Loading…" (watchers only) | none — toasts, and `FiledGroup` catches into an empty list | "Night Shift is off" button |
-| Latest reports (`HomeReportsFeed`) | "You're all caught up"; `EmptyState` in `HomeView` | "Loading reports…" in `HomeView` | `EmptyState` "Reports unavailable" + Retry | none |
-| Registry (`RegistrySection`) | `EmptyState` "No entries yet"; filter-empty | none | none — `load()` has no catch | orphan `Badge` + cleanup action; unconfirmed proposals |
+| Work (`WorkView`) | quiet section messages | spinner | load error and Retry via Refresh; failed receipts | background off/paused status; Stop for active jobs |
 | Sources (`SourcesPanel`) | `EmptyState` "No sources yet" / "No notebook selected" | one "Indexing n of m documents" card with a `ProgressBar`; single imports keep their own row | queue error row + Retry/Dismiss; "Import failed" per row | "n sources need attention" banner; hygiene badges; online-only line |
 | Chat (`ChatPanel`) | `ChatHero`; disabled composer | `ThinkingDots`, `StepTrail`, streaming markdown | `ChatMessage` error branch + Retry + `FallbackOffers` | `ModelPill` "unavailable" rows; `HealthBanner` via `Workspace` |
 | Agent pane (`AgentPane`) | `AgentBlankSlate` | `AgentBlankSlate` "Looking for agents…" | `FailureNotice` + Terminal + Retry | "Running without notebook access" notice |
@@ -808,7 +787,7 @@ not rendered — recorded as found, not as it ought to be.
 | Gallery (`GalleryPane`) | `EmptyState`, four variants | none | none — thumbnail failures swallowed | per-card "Import failed" strip |
 | Ledger (`LedgerPane`) | `EmptyState` "Nothing on the record yet" | "Loading…" | none — catch renders as empty | none |
 | Graph (`GraphView`) | `EmptyState` "Nothing to graph yet" | two-stage progress with bar | none — catch renders as empty | none |
-| Settings (`SettingsDialog`) | per-row "Not installed" | dialog spinner; per-section "Loading…" | Notion token error; hosted-agent failure + Sign in | dimmed "not installed" rows |
+| Settings (`SettingsDialog`) | per-row "Not installed" | dialog spinner; per-section "Loading…" | hosted-agent failure + Sign in | dimmed "not installed" rows |
 | Models (`ModelsTab`) | `FirstRunDoor` "None found" | per-provider "checking…" | probe error pill + message | "unavailable" pill per provider |
 | Activity (`ActivityTab`) | "Your activity will appear here" | `Spinner` | "Couldn't load activity" | none |
 | Command palette (`CommandPalette`) | "No matching commands" | live stage line + `Spinner` | weak — the failure is written into the answer slot as plain prose | none |

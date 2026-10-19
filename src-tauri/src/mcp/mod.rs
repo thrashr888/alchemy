@@ -28,7 +28,6 @@ mod inbox;
 mod mac;
 mod notebooks;
 mod notes;
-mod registry;
 mod search;
 mod settings;
 mod sources;
@@ -450,7 +449,6 @@ fn all_tools() -> rmcp::handler::server::router::tool::ToolRouter<AlchemyMcp> {
         + AlchemyMcp::search_router()
         + AlchemyMcp::notes_router()
         + AlchemyMcp::studio_router()
-        + AlchemyMcp::registry_router()
         + AlchemyMcp::settings_router()
         + AlchemyMcp::homechat_router()
         + AlchemyMcp::growth_router()

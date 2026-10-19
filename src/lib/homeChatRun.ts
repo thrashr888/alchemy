@@ -18,12 +18,14 @@ import type { HomeRun } from "./storeTypes";
  *  reason, and the question that triggered one goes with it. */
 export function historyOf(
   turns: MetaTurn[],
+  scope?: string,
 ): { role: string; content: string }[] {
   const out: { role: string; content: string }[] = [];
   for (let i = 0; i + 1 < turns.length; i++) {
     const q = turns[i];
     const a = turns[i + 1];
     if (
+      (scope === undefined || ((q.scope ?? "") === scope && (a.scope ?? "") === scope)) &&
       q.role === "user" &&
       a.role === "assistant" &&
       a.kind !== "error" &&

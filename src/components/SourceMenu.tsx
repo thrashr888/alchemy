@@ -21,12 +21,10 @@ import {
 } from "./SourceMetaModals";
 import { SourceImagePicker } from "./SourceImagePicker";
 import { FollowFeedModal } from "./FollowFeedModal";
-import { AttachToCardModal } from "./RegistrySection";
 import {
   Image as ImageIcon,
   Laptop,
   MessageSquare,
-  Package,
   Pencil,
   Plus,
   RefreshCw,
@@ -63,7 +61,6 @@ interface Host {
   followUpdates: (s: Source) => void;
   addReminder: (s: Source) => void;
   chooseImage: (s: Source) => void;
-  attach: (s: Source) => void;
   remove: (s: Source) => void;
 }
 
@@ -114,7 +111,7 @@ export function sourceMenuItems(
     // app — and any of them can be refreshed. Except a remote one: that path
     // is a drive on another Mac, and a Refresh here can only ever fail
     // (RFC-okf-live §5.8). The hint below stands in its place.
-    ...(s.url && !s.remote && !omit.has("refresh")
+    ...(s.url && s.sourceType !== "notion" && !s.remote && !omit.has("refresh")
       ? [
           {
             label: refreshLabel,
@@ -190,11 +187,6 @@ export function sourceMenuItems(
       : []),
     ...(omit.has("origin") ? [] : sourceOriginItems(s)),
     ...sourceMetaItems(s, host.setTagEdit, host.setNoteEdit),
-    {
-      label: "File Under a Card…",
-      icon: <Package className="h-3.5 w-3.5" />,
-      onClick: () => host.attach(s),
-    },
     ...(omit.has("remove")
       ? []
       : [
@@ -215,7 +207,6 @@ export function sourceMenuItems(
 export function useSourceActions() {
   const [tagEdit, setTagEdit] = useState<TagEditState>(null);
   const [noteEdit, setNoteEdit] = useState<NoteEditState>(null);
-  const [attaching, setAttaching] = useState<Source | null>(null);
   const [imageFor, setImageFor] = useState<Source | null>(null);
   const [addingReminder, setAddingReminder] = useState<{
     sourceId: string;
@@ -255,7 +246,6 @@ export function useSourceActions() {
     addReminder: (s) => setAddingReminder({ sourceId: s.id, list: s.title }),
     followUpdates: setFollowing,
     chooseImage: setImageFor,
-    attach: setAttaching,
     remove: (s) => void removeSourcesGuarded([s.id], confirm),
   };
 
@@ -267,11 +257,7 @@ export function useSourceActions() {
         noteEdit={noteEdit}
         setNoteEdit={setNoteEdit}
       />
-      <AttachToCardModal
-        sourceId={attaching?.id ?? null}
-        sourceTitle={attaching?.title ?? ""}
-        onClose={() => setAttaching(null)}
-      />
+
       {imageFor && (
         <SourceImagePicker
           source={imageFor}
