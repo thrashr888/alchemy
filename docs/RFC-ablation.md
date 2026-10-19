@@ -58,6 +58,18 @@ or global agent connector configuration.
 
 ### Verification
 
+After native readability feedback, Work uses 15px section headings and 14px
+row details, errors and controls (verified with computed styles in WKWebView).
+A refused Ollama connection now names the attempted server origin and asks
+the user to check its address; it does not claim the daemon is stopped. The
+banner likewise leads with checking the address. Regression checks cover
+normal/custom ports and removal of credentials and query parameters.
+
+The Work screenshot deliberately records a failure against closed QA port 9.
+The actual Ollama server at 127.0.0.1:11434 responded, and the QA app was then
+reconfigured to that address. Native health reported it reachable with the
+selected model installed; no live text generation was needed.
+
 - Frontend: 472 tests across 27 files and `pnpm build` pass.
 - Rust: format, strict Clippy, and full `cargo test` pass: 903 passed,
   51 ignored; corpus evals enabled, live-model tests off. Doctests pass.
