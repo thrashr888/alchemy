@@ -355,3 +355,15 @@ describe("agentFailureMessage", () => {
     );
   });
 });
+
+describe("chat evidence scope", () => {
+  it("keeps the transcript but excludes wider-scope answers from narrowed model context", () => {
+    const global = [turn("user", "global q"), turn("assistant", "global evidence")];
+    const narrow = [turn("user", "policy q"), turn("assistant", "policy evidence")].map(t => ({ ...t, scope: "insurance" }));
+    const turns = [...global, ...narrow];
+    expect(historyOf(turns, "insurance")).toEqual([{ role: "user", content: "policy q" }, { role: "assistant", content: "policy evidence" }]);
+    expect(historyOf(turns, "")).toEqual([{ role: "user", content: "global q" }, { role: "assistant", content: "global evidence" }]);
+    expect(historyOf(turns, "other")).toEqual([]);
+    expect(turns).toHaveLength(4);
+  });
+});

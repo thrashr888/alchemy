@@ -295,7 +295,7 @@ impl AlchemyMcp {
     }
 
     #[tool(
-        description = "Archive a notebook (archived: true) or restore it (archived: false). Archiving hides the notebook from the main grid but keeps all data — prefer this over delete_notebook unless the user explicitly wants data gone. Registry cards whose documents are then all in archived notebooks are removed (returned as retiredCards, by name); restoring re-matches the notebook and lets the suggester propose its cast again."
+        description = "Archive a notebook (archived: true) or restore it (archived: false). Archiving hides the notebook from the main grid but keeps all data — prefer this over delete_notebook unless the user explicitly wants data gone. Preserved Registry knowledge is ordinary notebook content and follows its notebook."
     )]
     async fn archive_notebook(
         &self,

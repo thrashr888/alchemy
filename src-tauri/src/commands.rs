@@ -14,15 +14,12 @@ pub(crate) mod chatloop;
 mod covers;
 mod diagnostics;
 mod handoff;
-mod registry;
 pub(crate) mod reports;
 mod second_look;
 pub(crate) mod undo;
-pub(crate) use brief::ensure_default_brief;
 pub use covers::*;
 pub use diagnostics::*;
 pub use handoff::*;
-pub use registry::*;
 pub use reports::*;
 pub use second_look::*;
 
@@ -788,27 +785,6 @@ fn ollama_binary() -> Option<std::path::PathBuf> {
     bundled.exists().then_some(bundled)
 }
 
-/// Validate a Notion integration token against the API (Settings field's live
-/// check). Returns the workspace/bot label on success; a human error string
-/// on failure. The webview only sees the redacted placeholder for a saved
-/// token (`get_ai_config`), so that arrives here and is swapped for the
-/// stored value before the probe.
-#[tauri::command]
-pub async fn notion_check(state: State<'_, AppState>, token: String) -> Result<String, String> {
-    if token.trim().is_empty() {
-        return Err("Paste a token first".into());
-    }
-    let token = if token == crate::ai::REDACTED_KEY {
-        state.ai.read().await.config().notion_token.clone()
-    } else {
-        token
-    };
-    crate::notion::NotionClient::new(&token)
-        .check_token()
-        .await
-        .map_err(|e| format!("{e:#}"))
-}
-
 /// Message-footer attribution: which provider answered, with metered cost
 /// when the engine reported one ("Claude Code · $0.04").
 fn model_caption(model: &str, cost_usd: Option<f64>) -> String {
@@ -947,15 +923,24 @@ pub(crate) fn classify_model_error(raw: &str) -> Option<String> {
         });
     }
 
-    // Nothing listening on the Ollama port: the daemon isn't running.
+    // A refused endpoint does not prove the daemon is stopped: the configured
+    // host or port can be wrong while another Ollama server is healthy.
     if lower.contains("connection refused") && (lower.contains("ollama") || lower.contains("11434"))
     {
-        return Some(
-            "Ollama isn't running — nothing answered at its address. Fix: open \
-             Terminal, run `ollama serve` (or launch the Ollama app), then retry \
-             here. Or switch to another provider in Settings → Models."
-                .into(),
-        );
+        let address = raw
+            .split_whitespace()
+            .find_map(|word| {
+                reqwest::Url::parse(word.trim_matches(['(', ')', ',', ':']))
+                    .ok()
+                    .filter(|url| matches!(url.scheme(), "http" | "https"))
+            })
+            // Origin excludes credentials, paths and query parameters.
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_else(|| "the configured address".into());
+        return Some(format!(
+            "Couldn't reach Ollama at {address}. Check the server address in \
+             Settings → Models, or start Ollama if it is stopped."
+        ));
     }
 
     // Ollama accepted the request and then went quiet past the deadline a
@@ -1437,17 +1422,9 @@ pub(crate) async fn set_notebook_status_impl(
         return Err("status must be \"archived\" or empty".into());
     }
     e(state.db.set_notebook_status(id, status).await)?;
-    let mut out = NotebookStatusOutcome {
+    let out = NotebookStatusOutcome {
         retired_cards: Vec::new(),
     };
-    if status == "archived" {
-        out.retired_cards = registry::retire_archived_cards(&state.db, id)
-            .await
-            .map_err(|err| err.to_string())?;
-    } else {
-        let data_dir = state.ai.read().await.data_dir().to_path_buf();
-        registry::spawn_unarchive_rematch(state.db.clone(), data_dir, id.to_string());
-    }
     Ok(out)
 }
 
@@ -1741,12 +1718,6 @@ async fn store_new_source_with_id(
         // card that claims them, as they always did — literal string work,
         // no model call to budget. Embedded arrivals file after their
         // chunks land, inside the stage.
-        registry::spawn_registry_match(
-            state.db.clone(),
-            notebook_id.to_string(),
-            source.id.clone(),
-            source.content.clone(),
-        );
     }
 
     // Don't ship the full content back in the list payload.
@@ -1895,12 +1866,6 @@ pub(crate) async fn spawn_embed_stage(
         // File the arrival under any card that claims it — folder children
         // included: a folder of scanned documents is exactly where
         // auto-filing earns its keep.
-        registry::spawn_registry_match(
-            db,
-            source.notebook_id.clone(),
-            source.id.clone(),
-            extracted.text,
-        );
     });
 }
 
@@ -2329,23 +2294,10 @@ pub(crate) async fn ingest_url(
             Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
         };
     }
-    // Notion pages (docs/RFC-obsidian-notion.md §4): with a token configured,
-    // the page tree exports to a cache dir and ingests via the folder
-    // machinery. Without one, public pages fall through to page capture.
-    if let Some(page_id) = crate::notion::detect_page(url) {
-        let token = { state.ai.read().await.config().notion_token.clone() };
-        if !token.is_empty() {
-            return match ingest_notion(state, notebook_id, url, &page_id, &token).await {
-                Ok(src) => Ok(src),
-                Err(err) => store_failed_url(state, notebook_id, url.trim(), err.to_string()).await,
-            };
-        }
-    }
     // A browser-extension clip (docs/RFC-page-capture.md §8) supersedes the
     // generic page-capture fallback: the clipper saw the page as the
     // logged-in user, which the cookieless capture webview never can. It
-    // sits *after* the git/notion detectors above — a clipped GitHub or
-    // Notion URL still ingests with its specialized identity — and *before*
+    // sits after the git detector above and before
     // the fetch, so private pages never take the doomed round trip. A clip
     // that extracts to nothing falls through to the normal path below.
     if let Some(clip) = crate::clip::take(url) {
@@ -2474,51 +2426,6 @@ pub(crate) async fn ingest_git(
             })
         }
     }
-}
-
-/// Notion page tree -> parent source + markdown cache dir + folder rescan
-/// (docs/RFC-obsidian-notion.md §4). The exporter writes only changed pages,
-/// so the rescan re-embeds only what moved.
-pub(crate) async fn ingest_notion(
-    state: &AppState,
-    notebook_id: &str,
-    url: &str,
-    page_id: &str,
-    token: &str,
-) -> anyhow::Result<Source> {
-    let data_dir = app_data_dir(state);
-    let parent_id = new_id();
-    let dir = crate::notion::cache_dir(&data_dir, &parent_id);
-    let client = crate::notion::NotionClient::new(token);
-    let stats = client.export_tree(page_id, &dir).await?;
-    let parent = Source {
-        origin_device: String::new(),
-        remote: false,
-        image_url: String::new(),
-        author: String::new(),
-        id: parent_id,
-        notebook_id: notebook_id.to_string(),
-        title: stats.title.clone(),
-        source_type: "notion".to_string(),
-        url: url.trim().trim_end_matches('/').to_string(),
-        content: String::new(),
-        char_count: 0,
-        chunk_count: 0,
-        created_at: now(),
-        status: "ready".to_string(),
-        error: String::new(),
-        parent_id: String::new(),
-        mtime: stats.max_edited_ms,
-        tags: String::new(),
-        note: String::new(),
-        fetched_at: now(),
-        fetch_failures: 0,
-    };
-    state.db.insert_source(&parent, &[], &[]).await?;
-    let _guard = state.folder_scan_lock.lock().await;
-    rescan_one_folder(None, state, &parent, true).await?;
-    state.db.touch_notebook(notebook_id, now()).await?;
-    Ok(parent)
 }
 
 /// Re-read a git-backed single source (README/blob) from its cache checkout
@@ -3162,14 +3069,6 @@ async fn reingest_inner(
     // Re-file on change against the WHOLE updated document, not the diff: a
     // card minted after this source landed should still pick it up, and
     // already-attached pairs skip, so re-running costs nothing.
-    if !updated.content.is_empty() {
-        registry::spawn_registry_match(
-            state.db.clone(),
-            existing.notebook_id.clone(),
-            existing.id.clone(),
-            updated.content.clone(),
-        );
-    }
     // A folder-like parent's content is its map, which the scan rewrites
     // whenever files come or go — and the scan already writes the `added` /
     // `removed` events for exactly that (note_scan_events), so a parent
@@ -3520,30 +3419,15 @@ pub(crate) async fn refresh_source_impl(
     if existing.source_type == "feed" {
         return crate::feeds::refresh(state, &existing).await;
     }
+    if existing.source_type == "notion" {
+        return Ok(existing); // Retired connector: retain its imported text and children.
+    }
     if matches!(
         existing.source_type.as_str(),
         "folder" | "obsidian" | "okf" | "git" | "notion"
     ) {
         // Notion parents re-export changed pages before the rescan.
-        if existing.source_type == "notion" {
-            let token = { state.ai.read().await.config().notion_token.clone() };
-            let page = crate::notion::detect_page(&existing.url);
-            if let (Some(page_id), false) = (page, token.is_empty()) {
-                let dir = crate::notion::cache_dir(&app_data_dir(state), &existing.id);
-                match crate::notion::NotionClient::new(&token)
-                    .export_tree(&page_id, &dir)
-                    .await
-                {
-                    Ok(stats) => {
-                        let _ = state
-                            .db
-                            .set_source_mtime(&existing.id, stats.max_edited_ms)
-                            .await;
-                    }
-                    Err(err) => anyhow::bail!("Notion refresh failed: {err:#}"),
-                }
-            }
-        }
+
         // Git parents force a remote sync first so the rescan sees fresh
         // files. A local folder inside a working tree gets the same
         // treatment on the safe path only: fetch, then fast-forward if the
@@ -3722,7 +3606,7 @@ pub async fn get_source_content(
 fn cleanup_source_files(state: &AppState, source_id: &str) {
     let data_dir = app_data_dir(state);
     crate::git::remove_cache(&data_dir, source_id);
-    let notion_cache = crate::notion::cache_dir(&data_dir, source_id);
+    let notion_cache = data_dir.join("notion").join(source_id);
     if notion_cache.exists() {
         let _ = std::fs::remove_dir_all(&notion_cache);
     }
@@ -5281,7 +5165,7 @@ pub async fn set_child_embedded(
     let data_dir = app_data_dir(&state);
     let root_buf = match parent.source_type.as_str() {
         "git" => crate::git::checkout_root(&data_dir, &parent.id),
-        "notion" => crate::notion::cache_dir(&data_dir, &parent.id),
+        "notion" => data_dir.join("notion").join(&parent.id),
         _ => std::path::PathBuf::from(&parent.url),
     };
     let rel = std::path::Path::new(&child.url)
@@ -5362,7 +5246,7 @@ async fn rescan_one_folder_inner(
     // parents their export dir; local folders scan the path in `url`.
     let root_buf = match folder.source_type.as_str() {
         "git" => crate::git::checkout_root(&app_data_dir(state), &folder.id),
-        "notion" => crate::notion::cache_dir(&app_data_dir(state), &folder.id),
+        "notion" => app_data_dir(state).join("notion").join(&folder.id),
         _ => std::path::PathBuf::from(&folder.url),
     };
     let root = root_buf.as_path();
@@ -6462,32 +6346,8 @@ pub(crate) async fn resync_sources_filtered(
             let dir = std::path::PathBuf::from(&folder.url);
             let _ = crate::git::sync_local(&dir, crate::git::SyncTrigger::Sweep).await;
         }
-        // Notion parents: re-export changed pages per cadence tick; the
-        // rescan below re-embeds only rewritten files. remote_probe_due is
-        // a generic per-source-id throttle, shared with git.
-        if folder.source_type == "notion"
-            && sync_minutes > 0
-            && crate::git::remote_probe_due(&folder.id, sync_minutes)
-        {
-            let token = { state.ai.read().await.config().notion_token.clone() };
-            if let (Some(page_id), false) =
-                (crate::notion::detect_page(&folder.url), token.is_empty())
-            {
-                let dir = crate::notion::cache_dir(&app_data_dir(state), &folder.id);
-                match crate::notion::NotionClient::new(&token)
-                    .export_tree(&page_id, &dir)
-                    .await
-                {
-                    Ok(stats) if stats.pages > 0 => {
-                        let _ = state
-                            .db
-                            .set_source_mtime(&folder.id, stats.max_edited_ms)
-                            .await;
-                    }
-                    Ok(_) => {}
-                    Err(err) => crate::note!("notion resync: {} failed: {err:#}", folder.url),
-                }
-            }
+        if folder.source_type == "notion" {
+            continue; // Imported snapshots stay readable without the connector.
         }
         match rescan_one_folder(Some(&app), state, &folder, false).await {
             Ok(scan) => {
@@ -10474,17 +10334,6 @@ async fn generate_content(
             "## Previous report run (for change tracking — not a source)\n\n{clipped}\n\n"
         ));
     }
-    // A relationship map draws the cast; the Registry already knows part of
-    // it (docs/RFC-registry.md). Its cards for this notebook ride along as
-    // a context block — name, kind, one line — so the entities line up with
-    // cards the person can inspect, never as a source of new facts.
-    if kind == "relationship" {
-        let source_ids: Vec<&str> = sources.iter().map(|s| s.id.as_str()).collect();
-        let block = registry_context_block(state, notebook_id, &source_ids).await;
-        if !block.is_empty() {
-            corpus.push_str(&block);
-        }
-    }
     let persona = {
         let ai = state.ai.read().await.clone();
         rag::persona_block(&ai.config().profile)
@@ -11128,9 +10977,8 @@ pub async fn generate_wiki_index(
     notebook_id: String,
 ) -> Result<Note, String> {
     let cited = crate::growth::cited_ids(&state.trace_dir);
-    let cards = e(state.db.list_registry().await)?;
     let (note, _) =
-        e(crate::growth::upsert_wiki(&state.db, &notebook_id, &cards, &cited, now(), true).await)?;
+        e(crate::growth::upsert_wiki(&state.db, &notebook_id, &cited, now(), true).await)?;
     note.ok_or_else(|| "index note not created".to_string())
 }
 
@@ -12517,6 +12365,7 @@ pub async fn restore_snapshot(app: AppHandle) -> Result<String, String> {
 pub struct NightShiftStatus {
     pub background_enabled: bool,
     pub paused: bool,
+    pub active_schedule_ids: Vec<String>,
 }
 
 #[tauri::command]
@@ -12525,6 +12374,7 @@ pub async fn night_shift_status(state: State<'_, AppState>) -> Result<NightShift
     Ok(NightShiftStatus {
         background_enabled,
         paused: crate::scheduler::is_paused(),
+        active_schedule_ids: active_work_ids(&state),
     })
 }
 
@@ -13280,150 +13130,6 @@ pub(crate) async fn import_bundle(
 /// Defined in `models` because persisted Home-chat turns carry it.
 pub use crate::models::MetaCitation;
 
-/// Does a registry card answer this query? Two shapes share one matcher:
-/// palette typing (the whole query is a fragment of the name/identifiers)
-/// and ask-mode questions ("what's my policy number for the Bayside boat"),
-/// where a card-name word, an identifier token, or a fact label/value
-/// appearing IN the question is the signal. Word-level checks require some
-/// length so "the"/"a" never match a card into every answer.
-pub(crate) fn card_matches(card: &crate::models::RegistryCard, q_lower: &str) -> bool {
-    let name = card.name.to_lowercase();
-    if name.contains(q_lower) || card.identifiers.contains(q_lower) {
-        return true;
-    }
-    let name_hit = name
-        .split_whitespace()
-        .any(|w| w.chars().count() >= 4 && q_lower.contains(w));
-    // Identifiers are already normalized lowercase tokens (the auto-attach
-    // key), so containment in the question is exact-token evidence.
-    let id_hit = card
-        .identifiers
-        .split_whitespace()
-        .any(|t| t.chars().count() >= 3 && q_lower.contains(t));
-    let fact_hit = card.facts.iter().any(|f| {
-        let label = f.label.to_lowercase();
-        let value = f.value.to_lowercase();
-        (label.chars().count() >= 4 && q_lower.contains(&label))
-            || (value.chars().count() >= 3 && q_lower.contains(&value))
-    });
-    name_hit || id_hit || fact_hit
-}
-
-/// A registry card rendered as answer context: kind, identifiers, facts,
-/// and the user's note — the whole point is that "what's my policy number"
-/// can answer from the card's facts.
-pub(crate) fn card_passage_text(card: &crate::models::RegistryCard) -> String {
-    let mut out = format!("Registry card ({}).", card.kind);
-    if !card.identifiers.trim().is_empty() {
-        out.push_str(&format!(" Identifiers: {}.", card.identifiers.trim()));
-    }
-    if !card.facts.is_empty() {
-        let facts = card
-            .facts
-            .iter()
-            .map(|f| {
-                if f.value.trim().is_empty() {
-                    f.label.trim().to_string()
-                } else {
-                    format!("{}: {}", f.label.trim(), f.value.trim())
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        out.push_str(&format!(" Facts: {facts}."));
-    }
-    if !card.note.trim().is_empty() {
-        out.push_str(&format!(" Note: {}.", card.note.trim()));
-    }
-    out
-}
-
-/// The Registry cards filed against this notebook's selected sources, as a
-/// context block for a generator — one line per card: name, kind, and the
-/// card's own note or first fact. Dismissed cards and rejected filings stay
-/// out; a proposed filing counts, since the suggester saw the name in these
-/// documents. Empty when the notebook has no cards. Capped so a corpus-wide
-/// Registry cannot crowd the sources out of the window.
-pub(crate) async fn registry_context_block(
-    state: &AppState,
-    notebook_id: &str,
-    source_ids: &[&str],
-) -> String {
-    const CAP: usize = 40;
-    let cards = state.db.list_registry().await.unwrap_or_default();
-    let mut lines: Vec<String> = cards
-        .iter()
-        .filter(|c| c.origin != "dismissed")
-        .filter(|c| {
-            c.attachments.iter().any(|a| {
-                a.status != "rejected"
-                    && a.notebook_id == notebook_id
-                    && source_ids.contains(&a.source_id.as_str())
-            })
-        })
-        .take(CAP)
-        .map(|c| {
-            let about = c
-                .note
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .map(str::to_string)
-                .or_else(|| {
-                    c.facts
-                        .iter()
-                        .find(|f| !f.value.trim().is_empty())
-                        .map(|f| format!("{}: {}", f.label.trim(), f.value.trim()))
-                })
-                .unwrap_or_default();
-            let about: String = about.chars().take(160).collect();
-            if about.is_empty() {
-                format!("- {} ({})", c.name.trim(), c.kind)
-            } else {
-                format!("- {} ({}) — {about}", c.name.trim(), c.kind)
-            }
-        })
-        .collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-    lines.sort();
-    format!(
-        "## Registry cards for this notebook (names the Registry already holds — use these \
-         spellings; not a source of facts)\n\n{}\n\n",
-        lines.join("\n")
-    )
-}
-
-/// Registry cards matching a question, as meta citations (RFC-registry ×
-/// meta-chat): matched cards ride into the ask-everything context so the
-/// answer can come straight off a card's facts. Shared by the command and
-/// the MCP ask_everything tool.
-pub(crate) async fn registry_card_citations(
-    state: &AppState,
-    question: &str,
-    cap: usize,
-) -> Vec<MetaCitation> {
-    let q = question.trim().to_lowercase();
-    if q.len() < 2 {
-        return Vec::new();
-    }
-    let cards = state.db.list_registry().await.unwrap_or_default();
-    cards
-        .iter()
-        .filter(|c| c.origin != "dismissed" && card_matches(c, &q))
-        .take(cap)
-        .map(|c| MetaCitation {
-            kind: "card".into(),
-            notebook_id: String::new(),
-            notebook_title: "Registry".into(),
-            id: c.id.clone(),
-            title: c.name.clone(),
-            snippet: card_passage_text(c),
-        })
-        .collect()
-}
-
 /// Progress line for the palette's ask flow — the same StepEvent grammar the
 /// chat step trail uses, on its own channel so a palette ask never writes
 /// into a notebook's step trail (or vice versa). `None` (the MCP path) emits
@@ -13525,6 +13231,7 @@ pub async fn list_meta_turns(
 /// Persist one settled turn. The front end appends as each turn settles —
 /// including a cancelled partial answer, which is still worth keeping.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Keep the existing IPC shape compatible with older clients.
 pub async fn add_meta_turn(
     state: State<'_, AppState>,
     thread_id: String,
@@ -13534,6 +13241,7 @@ pub async fn add_meta_turn(
     kind: Option<String>,
     // Who wrote an agent-hosted answer (docs/RFC-unified-chat.md §6).
     model: Option<String>,
+    scope: Option<String>,
 ) -> Result<MetaTurn, String> {
     let thread_id = thread_id.trim().to_string();
     if thread_id.is_empty() {
@@ -13557,6 +13265,7 @@ pub async fn add_meta_turn(
         _ => String::new(),
     };
     let turn = MetaTurn {
+        scope: scope.unwrap_or_default(),
         id: new_id(),
         thread_id,
         role,
@@ -13714,8 +13423,20 @@ pub(crate) async fn retrieve_everything(
     k: usize,
     deep: bool,
 ) -> Result<Vec<MetaCitation>, String> {
+    retrieve_everything_in(state, target, question, k, deep, None).await
+}
+
+pub(crate) async fn retrieve_everything_in(
+    state: &AppState,
+    target: Option<(&AppHandle, &str)>,
+    question: &str,
+    k: usize,
+    deep: bool,
+    notebook_id: Option<&str>,
+) -> Result<Vec<MetaCitation>, String> {
     let nb_titles: std::collections::HashMap<String, String> = e(state.db.list_notebooks().await)?
         .into_iter()
+        .filter(|n| notebook_id.is_none_or(|id| n.id == id))
         .map(|n| (n.id, n.title))
         .collect();
 
@@ -13726,50 +13447,15 @@ pub(crate) async fn retrieve_everything(
             ai.profile(crate::inference::Role::Chat),
         )
     };
-    // Semantic routing: with enough notebooks, search the most likely ones
-    // instead of the whole corpus. The index is self-healing and any
-    // failure (or a small corpus) falls back to the flat search; routing
-    // keeps ROUTE_TOP_K notebooks, so corpora at or below that size are
-    // searched in full either way.
-    let routed: Option<Vec<String>> = if nb_titles.len() > crate::router::MIN_NOTEBOOKS_TO_ROUTE {
-        meta_step_to(
-            target,
-            format!("Choosing from {} notebooks", nb_titles.len()),
-            false,
-        );
-        let ai = state.ai.read().await.clone();
-        // Piggyback the gist sweep on the same self-heal moment the router
-        // uses — catches sources imported before gisting existed (or while
-        // the app was quitting mid-backfill).
-        crate::gist::spawn_sweep(state.db.clone(), ai.clone());
-        if let Err(err) = crate::router::ensure_router(&state.db, &ai).await {
-            crate::note!("router refresh failed (falling back to flat): {err:#}");
-        }
-        match crate::router::route_notebooks(
-            &state.db,
-            query_vec.clone(),
-            crate::router::ROUTE_TOP_K,
-        )
-        .await
-        {
-            Ok(ids) if !ids.is_empty() => Some(ids),
-            Ok(_) => None,
-            Err(err) => {
-                crate::note!("notebook routing failed (falling back to flat): {err:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
+    // Explicit scope is a filter before ranking, never a model-selected notebook gate.
+    let routed = notebook_id.map(|id| vec![id.to_string()]);
     // Diversity caps keep one chatty notebook or source from filling the
     // whole answer with near-duplicates; skipped candidates backfill, so a
     // single-notebook corpus behaves exactly like the flat search.
     let opts = crate::db::SearchOptions {
         pool_multiplier: 4,
         max_per_source: 2,
-        max_per_notebook: 3,
+        max_per_notebook: if notebook_id.is_some() { usize::MAX } else { 3 },
         max_notes: 4,
         // Gists are overview evidence: useful on synthesis questions, but a
         // small budget is plenty — verbatim passages carry the specifics. The
@@ -13780,7 +13466,7 @@ pub(crate) async fn retrieve_everything(
     meta_step_to(
         target,
         match &routed {
-            Some(ids) => format!("Searching the {} most likely notebooks", ids.len()),
+            Some(ids) => format!("Searching {} selected notebooks", ids.len()),
             None => match nb_titles.len() {
                 1 => "Searching your notebook".to_string(),
                 n => format!("Searching all {n} notebooks"),
@@ -13865,6 +13551,9 @@ pub(crate) async fn retrieve_everything(
     // contained in the title.
     let mut source_hits = 0;
     for (id, nb, title, _) in source_meta {
+        if notebook_id.is_some_and(|scope| nb != scope) {
+            continue;
+        }
         if source_hits >= 3 {
             break;
         }
@@ -13891,6 +13580,9 @@ pub(crate) async fn retrieve_everything(
 
     let mut note_hits = 0;
     for n in all_notes {
+        if notebook_id.is_some_and(|scope| n.notebook_id != scope) {
+            continue;
+        }
         if note_hits >= 4 {
             break;
         }
@@ -14130,7 +13822,16 @@ pub async fn ask_everything(
     // it (rename/delete this chat, and "save that answer", which reads the
     // thread back); absent means those simply have nothing to act on.
     thread_id: Option<String>,
+    notebook_id: Option<String>,
 ) -> Result<MetaAnswer, String> {
+    if let Some(id) = &notebook_id {
+        if !e(state.db.list_notebooks().await)?
+            .iter()
+            .any(|n| &n.id == id)
+        {
+            return Err("The selected notebook no longer exists".into());
+        }
+    }
     // A person is waiting: background Small-role calls stand aside
     // until this returns (`crate::foreground`).
     let _foreground = crate::foreground::begin();
@@ -14148,16 +13849,18 @@ pub async fn ask_everything(
     // Exact-shape fast paths before the loop: "switch chat to ollama" and a
     // bare pasted URL don't need a model round. Everything else is the
     // loop's (RFC-unified-chat 6e).
-    match try_global_tool_route(&app, &state, &question).await {
-        ToolRoute::Answered(outcome) => {
-            return Ok(MetaAnswer {
-                answer: outcome.reply,
-                citations: vec![],
-                kind: "tool".into(),
-                effect: outcome.effect,
-            });
+    if notebook_id.is_none() {
+        match try_global_tool_route(&app, &state, &question).await {
+            ToolRoute::Answered(outcome) => {
+                return Ok(MetaAnswer {
+                    answer: outcome.reply,
+                    citations: vec![],
+                    kind: "tool".into(),
+                    effect: outcome.effect,
+                });
+            }
+            ToolRoute::Fallthrough => {}
         }
-        ToolRoute::Fallthrough => {}
     }
 
     // The tool loop (docs/RFC-unified-chat.md §1). It runs where retrieval
@@ -14180,6 +13883,7 @@ pub async fn ask_everything(
         window.label(),
         chatloop::Surface::Home {
             thread_id: thread_id.as_deref().unwrap_or_default(),
+            notebook_id: notebook_id.as_deref(),
         },
         &question,
         history.as_deref().unwrap_or(&[]),
@@ -14241,7 +13945,7 @@ pub async fn ask_everything(
             // deduped — otherwise a source that contributed five chunks shows
             // up five times.
             let passages_raw =
-                retrieve_everything(&state, Some((&app, window.label())), &question, 16, deep)
+                retrieve_everything_in(&state, Some((&app, window.label())), &question, 16, deep, notebook_id.as_deref())
                     .await?;
             let mut citations: Vec<MetaCitation> = Vec::new();
             let mut passages: Vec<rag::MetaPassage> = Vec::new();
@@ -14269,37 +13973,10 @@ pub async fn ask_everything(
         _ = cancel.cancelled() => None,
         }
     };
-    let (mut citations, mut passages) = match retrieved {
+    let (citations, passages) = match retrieved {
         Some(v) => v,
         None => return Ok(MetaAnswer::chat(String::new(), vec![])),
     };
-
-    // Registry cards join the context (RFC-registry × meta-chat): a question
-    // that names a card, an identifier, or a fact answers straight off the
-    // card — "what's my policy number" from the Bayside card's facts. Cards
-    // append after the retrieved passages so citation numbers stay stable.
-    let card_citations = registry_card_citations(&state, &question, 3).await;
-    if !card_citations.is_empty() {
-        meta_step_to(
-            Some((&app, window.label())),
-            format!(
-                "Reading {} registry card{}",
-                card_citations.len(),
-                if card_citations.len() == 1 { "" } else { "s" }
-            ),
-            false,
-        );
-        for c in card_citations {
-            passages.push(rag::MetaPassage {
-                number: citations.len() + 1,
-                kind: c.kind.clone(),
-                notebook_title: c.notebook_title.clone(),
-                title: c.title.clone(),
-                snippet: c.snippet.clone(),
-            });
-            citations.push(c);
-        }
-    }
 
     let (persona, ctx_profile) = {
         let ai = state.ai.read().await.clone();
@@ -14439,43 +14116,6 @@ pub async fn search_everything(
         if hits.len() >= 4 {
             break;
         }
-    }
-
-    // Registry cards: corpus-scoped, so they carry no notebook — the palette
-    // opens them on Home rather than switching notebooks. Dismissed
-    // suggestions are refusal memory, not results. The shared matcher also
-    // covers fact labels/values, so "policy number" finds the Bayside card.
-    for c in e(state.db.list_registry().await)?
-        .iter()
-        .filter(|c| c.origin != "dismissed" && card_matches(c, &q))
-    {
-        if hits.iter().filter(|h| h.kind == "card").count() >= 4 {
-            break;
-        }
-        hits.push(SearchHit {
-            kind: "card".into(),
-            notebook_id: String::new(),
-            id: c.id.clone(),
-            title: c.name.clone(),
-            snippet: format!(
-                "{} \u{00b7} {} document{}",
-                c.kind,
-                c.attachments
-                    .iter()
-                    .filter(|a| a.status == "confirmed")
-                    .count(),
-                if c.attachments
-                    .iter()
-                    .filter(|a| a.status == "confirmed")
-                    .count()
-                    == 1
-                {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-        });
     }
 
     let notes = e(state.db.recent_notes(usize::MAX).await)?;
@@ -15740,52 +15380,27 @@ mod tool_tests {
         assert!(settings_gate("the paper says to switch chat to ollama").is_none());
         assert!(settings_gate("").is_none());
     }
+}
 
-    /// Registry cards as a search/ask leg: one matcher serves palette typing
-    /// and question-shaped asks, and the passage text carries the facts.
-    #[test]
-    fn registry_cards_match_palette_and_question_shapes() {
-        use crate::models::{CardFact, RegistryCard};
-        let card = RegistryCard {
-            id: "c1".into(),
-            kind: "policy".into(),
-            name: "Bayside Marina Policy".into(),
-            origin: String::new(),
-            triage: String::new(),
-            mentions: 0,
-            surfaced: false,
-            identifiers: "bay-4471 hull-9921".into(),
-            note: "Renews in September".into(),
-            facts: vec![CardFact {
-                label: "Policy number".into(),
-                value: "BAY-4471".into(),
-            }],
-            attachments: vec![],
-            created_at: 0,
-            updated_at: 0,
-        };
-        // Palette typing: the query is a fragment of the name/identifiers.
-        assert!(card_matches(&card, "bayside"));
-        assert!(card_matches(&card, "bay-4471"));
-        // Question shapes: a name word, an identifier token, or a fact
-        // label appearing IN the question is the signal.
-        assert!(card_matches(
-            &card,
-            "what's my policy number for the bayside boat"
-        ));
-        assert!(card_matches(
-            &card,
-            "when does hull-9921 come up for renewal?"
-        ));
-        assert!(card_matches(&card, "which marina am I insured with?"));
-        // Unrelated questions never pull a card in; short words don't bridge.
-        assert!(!card_matches(&card, "compare the q3 revenue projections"));
-        assert!(!card_matches(&card, "the a of"));
-        // The passage text is answer-grade: kind, identifiers, facts, note.
-        let text = card_passage_text(&card);
-        assert!(text.contains("Registry card (policy)"), "{text}");
-        assert!(text.contains("Policy number: BAY-4471"), "{text}");
-        assert!(text.contains("bay-4471 hull-9921"), "{text}");
-        assert!(text.contains("Note: Renews in September"), "{text}");
-    }
+/// The same run receipts exposed to agents, for Work's overview.
+#[tauri::command]
+pub async fn work_receipts(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::RunReceipt>, String> {
+    e(state.db.list_receipts(now() - 7 * 86_400_000, 100).await)
+}
+
+#[tauri::command]
+pub fn cancel_work(state: State<'_, AppState>, schedule_id: String) {
+    state.cancel_current(Some(&format!("report:{schedule_id}")));
+}
+
+pub(crate) fn active_work_ids(state: &AppState) -> Vec<String> {
+    state
+        .cancel
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .keys()
+        .filter_map(|k| k.strip_prefix("report:").map(str::to_string))
+        .collect()
 }

@@ -8,7 +8,6 @@ import {
   Button,
   FormGroup,
   FormRow,
-  Input,
   Modal,
   SearchField,
   Select,
@@ -904,7 +903,6 @@ function SourcesTab() {
         </div>
       </FormGroup>
 
-      <NotionTokenField />
 
       <WebClipperLink />
     </div>
@@ -959,138 +957,7 @@ function WebClipperLink() {
   );
 }
 
-/** Notion internal-integration token — pasting one makes notion.so URLs
- *  import as living page trees instead of one-shot page captures. The token
- *  is validated against the API on entry so the user sees it work. */
-function NotionTokenField() {
-  const aiConfig = useStore((s) => s.aiConfig);
-  const saveAiConfig = useStore((s) => s.saveAiConfig);
-  const [draft, setDraft] = useState<string | null>(null);
-  const [check, setCheck] = useState<
-    | { state: "idle" | "checking" }
-    | { state: "ok"; workspace: string }
-    | { state: "error"; message: string }
-  >({ state: "idle" });
 
-  // Validate whatever token is currently saved when the field mounts, so a
-  // returning user sees the green check without re-typing.
-  useEffect(() => {
-    const saved = useStore.getState().aiConfig?.notionToken ?? "";
-    if (saved) void verify(saved);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Clicking Check blurs the field first, and blur on an edited token
-  // verifies it too: without this the same token would go to Notion twice
-  // on one click.
-  const inFlight = useRef("");
-
-  async function verify(token: string) {
-    const t = token.trim();
-    if (!t) {
-      setCheck({ state: "idle" });
-      return;
-    }
-    if (inFlight.current === t) return;
-    inFlight.current = t;
-    setCheck({ state: "checking" });
-    try {
-      const workspace = await api.notionCheck(t);
-      setCheck({ state: "ok", workspace });
-    } catch (e) {
-      setCheck({
-        state: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      inFlight.current = "";
-    }
-  }
-
-  if (!aiConfig) return null;
-  const value = draft ?? aiConfig.notionToken;
-  // Save first, then check: the blur handler is what persists an edit, and
-  // clicking the button takes focus out of the field, so by the time this
-  // runs the draft is already stored.
-  const checkNow = () => void verify(value);
-  return (
-    <FormGroup
-      caption="Notion"
-      footer={
-        <>
-          Create an internal integration at{" "}
-          <button
-            type="button"
-            onClick={() => void openUrl("https://www.notion.so/my-integrations")}
-            className="text-citation hover:underline"
-          >
-            notion.so/my-integrations
-          </button>
-          , share pages with it (••• → Connections), then paste a page URL into
-          any notebook. The token stays on this Mac.
-        </>
-      }
-    >
-      <div className="flex flex-col gap-1.5 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <Input
-            type="password"
-            aria-label="Notion integration token"
-            placeholder="ntn_… integration token"
-            value={value}
-            className="min-w-0 flex-1"
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setCheck({ state: "idle" });
-            }}
-            onFocus={(e) => e.currentTarget.select()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                e.currentTarget.blur();
-              }
-            }}
-            onBlur={() => {
-              if (draft !== null && draft.trim() !== aiConfig.notionToken) {
-                void saveAiConfig({ ...aiConfig, notionToken: draft.trim() });
-                void verify(draft);
-              }
-              setDraft(null);
-            }}
-          />
-          {/* The field checks itself on entry, but a check you cannot ask for
-              is a check the user has no reason to believe. */}
-          <Button
-            variant="secondary"
-            className="shrink-0"
-            loading={check.state === "checking"}
-            disabled={!value.trim()}
-            onClick={checkNow}
-            title="Ask Notion whether this token works"
-          >
-            Check
-          </Button>
-        </div>
-        {check.state === "checking" && (
-          <span className="flex items-center gap-1.5 text-caption text-subtle-foreground">
-            <Spinner className="h-3 w-3" /> Checking the token…
-          </span>
-        )}
-        {check.state === "ok" && (
-          <span className="flex items-center gap-1.5 text-caption text-success">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Connected to{" "}
-            {check.workspace}
-          </span>
-        )}
-        {check.state === "error" && (
-          <span className="text-caption leading-relaxed text-destructive/90">
-            {check.message}
-          </span>
-        )}
-      </div>
-    </FormGroup>
-  );
-}
 
 /** Everything about generation: templates, the note curator. */
 function StudioTab() {

@@ -20,7 +20,8 @@ use chrono::Datelike;
 /// Bumped whenever a migration makes the store unreadable by older binaries.
 /// A stamp higher than this means the library was opened by a newer Alchemy;
 /// see `check_store_version`.
-pub const STORE_VERSION: u32 = 1;
+// Registry retirement and per-turn scope: retain the pre-migration store for downgrade.
+pub const STORE_VERSION: u32 = 2;
 
 const STAMP_FILE: &str = "store_version";
 

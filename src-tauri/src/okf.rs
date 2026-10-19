@@ -5196,6 +5196,58 @@ pub(crate) async fn wait_for_own_write(notebook_id: &str, ceiling_ms: u64) -> bo
     }
 }
 
+/// Database migrations can mutate bound notebooks before AppState exists.
+/// Keep those deadlines, then start their writers after state registration.
+pub(crate) fn resume_startup_writes() {
+    let ids: Vec<String> = pending()
+        .lock()
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    for id in ids {
+        schedule_write(&id);
+    }
+}
+
+fn claim_flusher(id: &str, state_ready: bool) -> bool {
+    state_ready
+        && flushing()
+            .lock()
+            .map(|mut running| running.insert(id.to_string()))
+            .unwrap_or(false)
+}
+
+struct FlushGuard(String);
+impl Drop for FlushGuard {
+    fn drop(&mut self) {
+        if let Ok(mut running) = flushing().lock() {
+            running.remove(&self.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod startup_write_tests {
+    use super::*;
+
+    #[test]
+    fn migration_write_waits_for_state_and_releases_worker_on_unwind() {
+        let id = format!("startup-write-{}", new_id());
+        note_pending_write(&id, 0);
+        assert!(!claim_flusher(&id, false));
+        assert!(pending().lock().unwrap().contains_key(&id));
+        assert!(claim_flusher(&id, true));
+        assert!(!claim_flusher(&id, true));
+        let result = std::panic::catch_unwind(|| {
+            let _guard = FlushGuard(id.clone());
+            panic!("worker interrupted");
+        });
+        assert!(result.is_err());
+        assert!(claim_flusher(&id, true));
+        drop(FlushGuard(id.clone()));
+        pending().lock().unwrap().remove(&id);
+    }
+}
+
 /// Note that a bound notebook changed, and write its bundle once the changes
 /// stop arriving. Safe to call from any mutation: an unbound notebook costs
 /// one file read and returns.
@@ -5221,14 +5273,10 @@ pub fn schedule_write(notebook_id: &str) {
     note_pending_write(&id, now_ms() + DEBOUNCE_MS);
     // One flusher per notebook: later changes move its deadline rather than
     // stacking a second writer behind it.
-    match flushing().lock() {
-        Ok(mut running) => {
-            if !running.insert(id.clone()) {
-                return;
-            }
-        }
-        Err(_) => return,
+    if !claim_flusher(&id, app.try_state::<AppState>().is_some()) {
+        return;
     }
+    let guard = FlushGuard(id.clone());
     tauri::async_runtime::spawn(async move {
         loop {
             let deadline = pending()
@@ -5269,9 +5317,7 @@ pub fn schedule_write(notebook_id: &str) {
                 }
             }
         }
-        if let Ok(mut running) = flushing().lock() {
-            running.remove(&id);
-        }
+        drop(guard);
         // Mutations (including a remote note imported during this write)
         // can arrive while the flusher owns the notebook. Their deadline
         // was recorded but no second worker was spawned; hand it off now.

@@ -43,13 +43,8 @@ export const HOME_PLACES: HomePlace[] = [
   { id: "menu-home-chats", section: "chat", key: 2 },
   { id: "menu-home-shared", section: "notebooks", scope: "shared", key: 3 },
   { id: "menu-home-builtin", section: "notebooks", scope: "builtin" },
-  { id: "menu-home-reports", section: "reports", key: 4 },
+  { id: "menu-home-work", section: "work", key: 4 },
   { id: "menu-home-archived", section: "notebooks", scope: "archived", key: 5 },
-  { id: "menu-home-staff", section: "staff", key: 6 },
-  { id: "menu-home-cards", section: "registry", key: 7 },
-  { id: "menu-home-suggested", section: "suggested", key: 8 },
-  { id: "menu-home-brief", section: "brief", key: 9 },
-  { id: "menu-home-timeline", section: "timeline" },
 ];
 
 /** The place a native menu id names, or undefined for an id that isn't
@@ -88,4 +83,11 @@ export function sameNavEntry(
     a.scope === b.scope &&
     a.tag === b.tag
   );
+}
+
+/** Old bookmarks still lead somewhere useful after the Home consolidation. */
+export function canonicalHomeSection(section: HomeSection): HomeSection {
+  if (["staff", "brief", "reports", "timeline"].includes(section)) return "work";
+  if (["registry", "suggested"].includes(section)) return "notebooks";
+  return section;
 }

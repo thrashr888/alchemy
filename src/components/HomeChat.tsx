@@ -388,6 +388,7 @@ export function HomeChatThread({ chat }: { chat: HomeChat }) {
               <div className="max-w-[85%] min-w-0 wrap-anywhere rounded-lg rounded-br-sm border border-border bg-surface-2 px-3.5 py-2 text-body selectable">
                 {turn.content}
               </div>
+              <span className="text-micro text-muted-foreground">{turn.scope ? (useStore.getState().notebooks.find((n) => n.id === turn.scope)?.title ?? "Selected notebook") : "All notebooks"}</span>
               <TurnActions
                 createdAt={turn.createdAt}
                 actions={[

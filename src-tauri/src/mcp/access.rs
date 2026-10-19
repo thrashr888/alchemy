@@ -43,24 +43,15 @@ use Access::{Read, Write};
 /// it asks, because the cautious reading wins.
 const TOOLS: &[(&str, Access, &str)] = &[
     ("activity_stats", Read, "check usage stats"),
-    ("add_registry_card", Write, "add a registry entry"),
+    ("active_work", Read, "inspect background work"),
+    ("stop_work", Write, "stop background work"),
     ("add_reminder", Write, "add an Apple reminder"),
     ("add_source", Write, "add a source"),
     ("apply_cover_images", Write, "set cover images on sources"),
     ("archive_notebook", Write, "archive a notebook"),
     ("ask_everything", Read, "search all your notebooks"),
     ("ast_search", Read, "search code by structure"),
-    (
-        "attach_source",
-        Write,
-        "attach a source to a registry entry",
-    ),
     ("bind_notebook_okf", Write, "connect a notebook to a folder"),
-    (
-        "cards_for_source",
-        Read,
-        "look up a source's registry entries",
-    ),
     ("commission_run", Write, "start a report run"),
     ("complete_reminder", Write, "complete an Apple reminder"),
     ("corpus_timeline", Read, "read your library's timeline"),
@@ -68,7 +59,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ("create_notebook", Write, "create a notebook"),
     ("delete_note", Write, "delete a note"),
     ("delete_notebook", Write, "delete a notebook"),
-    ("delete_registry_card", Write, "delete a registry entry"),
     ("delete_schedule", Write, "delete a scheduled report"),
     ("delete_source", Write, "delete a source"),
     ("delete_template", Write, "delete a template"),
@@ -86,8 +76,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ("list_notebooks", Read, "list your notebooks"),
     ("list_notes", Read, "list a notebook's notes"),
     ("list_receipts", Read, "check recent background runs"),
-    ("list_registry", Read, "list registry entries"),
-    ("triage_preview", Read, "preview the typed registry triage"),
     ("list_schedules", Read, "list scheduled reports"),
     ("list_shared_notebooks", Read, "list shared notebooks"),
     ("list_source_events", Read, "check recent source changes"),
@@ -102,11 +90,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
         "resolve_deletion_proposal",
         Write,
         "resolve a proposed deletion",
-    ),
-    (
-        "rule_all_suggested",
-        Write,
-        "accept or dismiss suggested registry entries",
     ),
     ("inbox_accept", Write, "file a capture from the Inbox"),
     ("inbox_dismiss", Write, "dismiss a capture from the Inbox"),
@@ -125,11 +108,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
         Write,
         "fact-check a draft and file the report",
     ),
-    (
-        "set_attachment_status",
-        Write,
-        "change a registry attachment",
-    ),
     ("set_source_image", Write, "change a source's image"),
     ("set_source_note", Write, "edit a source's note"),
     ("set_source_tags", Write, "change a source's tags"),
@@ -137,7 +115,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ("settings", Write, "read or change Alchemy's settings"),
     ("share_notebook", Write, "share a notebook"),
     ("source_hygiene", Read, "check sources for problems"),
-    ("suggest_cards", Write, "suggest registry entries"),
     ("suggest_notebook", Read, "suggest where a source belongs"),
     (
         "unbind_notebook_okf",
@@ -146,7 +123,6 @@ const TOOLS: &[(&str, Access, &str)] = &[
     ),
     ("update_mac_note", Write, "edit an Apple Note"),
     ("update_note", Write, "edit a note"),
-    ("update_registry_card", Write, "edit a registry entry"),
     ("update_source", Write, "edit a source"),
 ];
 

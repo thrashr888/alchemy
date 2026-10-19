@@ -29,7 +29,7 @@ import { THEMES, resolveThemeId } from "@/lib/themes";
 import { DitherBackground } from "./DitherBackground";
 import { useNotebookCover } from "@/lib/cover";
 import { useHomeActivity } from "./useHomeActivity";
-import { AwayDigest, ReportsFeed, lastNightLine } from "./HomeReportsFeed";
+import { AwayDigest } from "./HomeReportsFeed";
 import {
   cn,
   noteUnread,
@@ -40,10 +40,8 @@ import {
 import { sourceGlyph } from "@/lib/sourceIcon";
 import { tagHue } from "@/lib/sourceGroups";
 import type {
-  Note,
   Notebook,
   NotebookPreview,
-  SourceEvent,
 } from "@/lib/types";
 import {
   Archive,
@@ -57,7 +55,6 @@ import {
   PanelLeft,
   Plus,
   Settings,
-  Sparkles,
   Trash2,
   FileText,
   Newspaper,
@@ -66,10 +63,8 @@ import {
   Library,
   Share2,
   StickyNote,
-  Sun,
   Users,
 } from "lucide-react";
-import { BriefSidebar, StaffSidebar, useNightShiftTone } from "./HomeSections";
 import {
   HomeChatMenu,
   HomeChatSidebarThreads,
@@ -79,8 +74,8 @@ import {
 import { Composer } from "./Composer";
 import { NOTEBOOK_PALETTE, notebookIcon } from "@/lib/notebookIcons";
 import { NotebookEditModal, NotebookLookFields } from "./NotebookEditModal";
-import { RegistrySection } from "./RegistrySection";
-import { TimelineSection } from "./TimelineSection";
+import { WorkView } from "./WorkView";
+
 import { InboxSection } from "./InboxSection";
 import {
   HOME_VIEWS,
@@ -886,7 +881,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const create = useStore((s) => s.createNotebook);
   const remove = useStore((s) => s.deleteNotebook);
   const setStatus = useStore((s) => s.setNotebookStatus);
-  const registryCounts = useStore((s) => s.registryCounts);
   const corpusTags = useStore((s) => s.corpusTags);
   const homeTagFilter = useStore((s) => s.homeTagFilter);
   const setHomeTagFilter = useStore((s) => s.setHomeTagFilter);
@@ -1013,28 +1007,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   const sortLabel =
     NOTEBOOK_SORTS.find((s) => s.key === nbSort.key)?.label ?? "Updated";
 
-  const staffTone = useNightShiftTone();
   const homeThreads = useStore((s) => s.homeThreads);
   const chatUnread = useStore((s) => s.homeChatUnread);
-  const registryBump = useStore((s) => s.registryBump);
-  const registrySignal = useStore((s) => s.registrySignal);
-  const registrySeenAt = useStore((s) => s.registrySeenAt);
-  // The Registry's badge works from any section, so the signal is read here
-  // — at mount and on every registry bump — not by the section that shows it.
   useEffect(() => {
-    void useStore.getState().refreshRegistrySignal();
-  }, [registryBump]);
-  // On screen means seen. Chat's flag drops the moment its section shows; the
-  // Registry's baseline moves to now while it shows, so what arrives while
-  // you're reading it never badges after you leave.
-  useEffect(() => {
-    if (homeSection === "chat" && chatUnread)
-      useStore.setState({ homeChatUnread: false });
-    // The badge counts proposals waiting on an answer, so only the queue
-    // clears it: looking at who is already cast is not a ruling on who was
-    // proposed, and visiting Cards used to silence the badge anyway.
-    if (homeSection === "suggested") useStore.getState().markRegistrySeen();
-  }, [homeSection, chatUnread, registrySignal]);
+    if (homeSection === "chat" && chatUnread) useStore.setState({ homeChatUnread: false });
+  }, [homeSection, chatUnread]);
   // What the cards draw, asked for when the shelf comes on screen. Four
   // corpus scans is not something to run from a notebook or from the Brief,
   // so it is the section that asks; after that `refreshNotebooks` keeps it
@@ -1043,11 +1020,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (homeSection !== "notebooks") return;
     void useStore.getState().refreshNotebookPreviews();
   }, [homeSection]);
-  const suggestedCount =
-    registrySignal && registrySignal.newest > registrySeenAt
-      ? registrySignal.shown
-      : 0;
-
   // The View menu's Home group and ⌘1–⌘9 select these same rows, from the
   // store rather than from here: every place is a section (and, for the
   // shelf, a scope) the store holds, so nothing has to be registered while
@@ -1210,7 +1182,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const {
     schedules: allSchedules,
-    recentNotes,
     stats,
     reports,
     events: sourceEvents,
@@ -1222,8 +1193,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // as "scheduled" in Staff would be a lie.
   const archivedIds = new Set(archivedNotebooks.map((n) => n.id));
   const allReports = allSchedules.filter((s) => !archivedIds.has(s.notebookId));
-  const notebookTitle = new Map(notebooks.map((n) => [n.id, n.title]));
-  const notebookColor = new Map(notebooks.map((n) => [n.id, n.color]));
 
   // Unread-report counts per notebook, for the activity dot on each card.
   const noteReads = useStore((s) => s.noteReads);
@@ -1233,30 +1202,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (noteUnread(r, noteReads, noteReadsBaseline)) {
       unreadByNb.set(r.notebookId, (unreadByNb.get(r.notebookId) ?? 0) + 1);
     }
-  }
-  const totalUnread = [...unreadByNb.values()].reduce((a, b) => a + b, 0);
-
-  function openNote(note: Note) {
-    // StudioPanel auto-opens this id once the notebook's notes load.
-    useStore.setState({ justCreatedNoteId: note.id });
-    void open(note.notebookId);
-  }
-
-  // A watcher event reads in its source's own notebook: switch, then open
-  // the reader on the source (same shape as the alchemy:// deep links).
-  function openEventSource(event: SourceEvent) {
-    void open(event.notebookId).then(() => {
-      // Growth events are places, not documents: the wiki event opens its
-      // index note, a growth event opens the Grow pane itself.
-      if (event.kind === "wiki")
-        useStore.getState().openInReader({ type: "note", id: event.sourceId });
-      else if (event.kind === "growth")
-        useStore.setState({ growOpen: true, galleryOpen: false });
-      else
-        useStore
-          .getState()
-          .openInReader({ type: "source", id: event.sourceId });
-    });
   }
 
   const startCreate = () => {
@@ -1310,24 +1255,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // Briefs live in their own section, not the reports feed — the feed would
   // double-show them.
-  const briefNotes = reports.filter(
-    (r) => notebookTitle.get(r.notebookId) === "Briefs",
-  );
-  const feedReports = reports.filter(
-    (r) => notebookTitle.get(r.notebookId) !== "Briefs",
-  );
-  const briefUnread = briefNotes.some((r) =>
-    noteUnread(r, noteReads, noteReadsBaseline),
-  );
-  const feedUnreadCount = feedReports.filter((r) =>
-    noteUnread(r, noteReads, noteReadsBaseline),
-  ).length;
   // What the night shift did, in one line — the sidebar's Brief row wears it
   // as a tooltip, and the Brief section itself repeats it as a quiet second
   // line (DESIGN.md §9 "Home is a library"). It used to be the footer's only
   // job; the footer is now every section's status bar, so this line moved to
   // the one place it is actually about.
-  const lastNight = lastNightLine({ reports, events: sourceEvents });
 
   const searchRef = useRef<HTMLInputElement>(null);
   useFindFocus(searchRef);
@@ -1338,8 +1270,17 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
    *  made. No slash commands or @-mentions here (nothing to attach to, and
    *  a corpus question doesn't name one source), so Home wires only Enter
    *  to send. */
+  const chatScope = useStore((s) => s.homeChatScope);
+  const setChatScope = useStore((s) => s.setHomeChatScope);
   const askComposer = (
     <>
+      <label className="mx-auto mb-2 flex max-w-[680px] items-center gap-2 text-caption text-muted-foreground">
+        Search in
+        <select aria-label="Chat notebook scope" value={chatScope} disabled={chat.loading} onChange={(e) => setChatScope(e.target.value)} className="rounded-md border border-border bg-background px-2 py-1 text-foreground focus-visible:outline focus-visible:outline-ring">
+          <option value="">All notebooks</option>
+          {notebooks.filter((n) => !n.status).map((n) => <option key={n.id} value={n.id}>{n.title}</option>)}
+        </select>
+      </label>
       <Composer
         value={ask}
         onChange={setAsk}
@@ -1350,7 +1291,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           }
         }}
         textareaRef={askRef}
-        placeholder="Ask across everything…"
+        placeholder={chatScope ? "Ask this notebook…" : "Ask across everything…"}
         sending={chat.loading}
         onSubmit={submitAsk}
         onStop={chat.stop}
@@ -1388,40 +1329,12 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           ? "Archived"
           : "Notebooks";
 
-  /** The status bar's one line: what the section on screen holds, the way
-   *  Finder counts a window's contents. Registry Cards and Suggested count
-   *  themselves; the shelf counts notebooks and, unfiltered, the whole
-   *  corpus; the Brief carries nothing here because its line lives in the
-   *  section itself (the tooltip and the quiet line below, both fed by
-   *  `lastNight`). Chats has no footer at all (see `footer`) — its count
-   *  lives on the sidebar's Chats row instead. */
+  /** The footer counts the visible shelf or Work collection. Chat keeps
+   *  its conversation list in the sidebar and leaves room for the composer. */
   const footerLine = (): string => {
-    if (homeSection === "staff") {
-      const n = allReports.length;
-      return n > 0
-        ? `${n} ${n === 1 ? "schedule" : "schedules"}`
-        : "Nothing scheduled";
-    }
-    if (homeSection === "brief") return "";
-    if (homeSection === "reports") {
-      const n = feedReports.length;
-      if (n === 0) return "No reports yet";
-      return feedUnreadCount > 0
-        ? `${n} ${n === 1 ? "report" : "reports"} · ${feedUnreadCount} unread`
-        : `${n} ${n === 1 ? "report" : "reports"}`;
-    }
-    if (homeSection === "registry") {
-      const n = registryCounts?.total ?? 0;
-      return `${n} ${n === 1 ? "entry" : "entries"}`;
-    }
-    if (homeSection === "suggested") {
-      const n = registrySignal?.shown ?? 0;
-      return n > 0 ? `${n} waiting` : "Nothing waiting";
-    }
+    if (homeSection === "work") return `${allReports.length} ${allReports.length === 1 ? "schedule" : "schedules"} · ${reports.length} saved ${reports.length === 1 ? "result" : "results"}`;
     if (homeSection === "inbox")
       return inboxCount > 0 ? `${inboxCount} waiting` : "Nothing waiting";
-    if (homeSection === "timeline")
-      return "Every source and note, by the day it arrived.";
     // Notebooks — Shared and Archived are the same shelf, narrowed.
     if (scope === "archived")
       return `${archivedNotebooks.length} archived · data intact`;
@@ -1467,65 +1380,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   // own store slices and are unaffected by that failure.
   const footerActivityDependent =
     homeSection === "notebooks" ||
-    homeSection === "reports" ||
-    homeSection === "staff";
-
-  // Where the Registry's own sort/suggest/orphan-cleanup controls land: the
-  // heading row's trailing slot, beside "New card" — the same slot
-  // Notebooks' Add source/Import occupy — rather than a second toolbar row
-  // inside the Registry's own content column. `RegistrySection` portals its
-  // controls into this node instead of drawing them itself.
-  const [registryActionsEl, setRegistryActionsEl] =
-    useState<HTMLDivElement | null>(null);
+    homeSection === "work";
 
   const heading = (() => {
-    if (homeSection === "registry")
-      return {
-        title: "Entries",
-        actions: (
-          <>
-            <div ref={setRegistryActionsEl} className="flex items-center gap-2" />
-            <Button
-              variant="primary"
-              size="sm"
-              className="h-[26px] rounded-lg"
-              onClick={() => useStore.setState({ registryCreating: true })}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New entry
-            </Button>
-          </>
-        ),
-      };
+    if (homeSection === "work") return { title: "Work", actions: null };
     if (homeSection === "inbox") return { title: "Inbox", actions: null };
-    if (homeSection === "suggested")
-      return { title: "Suggested", actions: null };
-    if (homeSection === "timeline")
-      return { title: "Timeline", actions: null };
-    if (homeSection === "staff") return { title: "Staff", actions: null };
-    if (homeSection === "brief") return { title: "Brief", actions: null };
-    if (homeSection === "reports")
-      return {
-        title: "Nightly Reports",
-        actions:
-          feedUnreadCount > 0 ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() =>
-                useStore
-                  .getState()
-                  .markNotesRead(
-                    feedReports
-                      .filter((r) => noteUnread(r, noteReads, noteReadsBaseline))
-                      .map((r) => r.id),
-                  )
-              }
-            >
-              Mark all read
-            </Button>
-          ) : null,
-      };
     // Chats draws no heading row at all: the sheet is transcript + composer
     // only. New chat moved to the Library sidebar's Chats row (a small `+`
     // beside it), and the count that used to sit in this row's trailing
@@ -1716,88 +1575,8 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         </div>
       );
-    if (homeSection === "registry")
-      return (
-        <RegistrySection view="cards" actionsPortal={registryActionsEl} />
-      );
-    if (homeSection === "suggested")
-      return <RegistrySection view="suggested" />;
-    if (homeSection === "timeline") return <TimelineSection />;
+    if (homeSection === "work") return <WorkView schedules={allReports} reports={reports} onRefresh={() => void refreshActivity()} />;
     if (homeSection === "inbox") return <InboxSection />;
-    if (homeSection === "staff")
-      return (
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-          <StaffSidebar
-            bare
-            schedules={allReports}
-            reports={reports}
-            recentNotes={recentNotes}
-            notebookTitle={notebookTitle}
-            notebookColor={notebookColor}
-            onOpenNote={openNote}
-            onOpenNotebook={(id) => void open(id)}
-            onOpenEvent={openEventSource}
-            onRan={refreshActivity}
-          />
-        </div>
-      );
-    if (homeSection === "brief")
-      return (
-        <BriefSidebar
-          bare
-          className="relative z-10 min-h-0 flex-1"
-          briefs={briefNotes}
-          schedules={allReports}
-          unread={briefUnread}
-          lastNight={lastNight}
-          onRan={refreshActivity}
-        />
-      );
-    if (homeSection === "reports")
-      return (
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-          {feedReports.length > 0 ? (
-            <ReportsFeed
-              reports={feedReports}
-              notebookTitle={notebookTitle}
-              notebookColor={notebookColor}
-              fallbackColor={NOTEBOOK_PALETTE[0]}
-              onOpen={openNote}
-            />
-          ) : activityLoading ? (
-            <div
-              role="status"
-              className="flex flex-1 items-center justify-center p-8 text-caption text-muted-foreground"
-            >
-              Loading reports…
-            </div>
-          ) : (
-            <div className="flex flex-1 items-center justify-center p-8">
-              <EmptyState
-                icon={<Newspaper className="h-7 w-7" />}
-                title={
-                  activityError ? "Reports unavailable" : "Reports appear here"
-                }
-                hint={
-                  activityError
-                    ? "Alchemy couldn’t load recent reports."
-                    : "Schedule a recurring report from a notebook’s Studio panel."
-                }
-              >
-                {activityError && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => void refreshActivity()}
-                  >
-                    Retry
-                  </Button>
-                )}
-              </EmptyState>
-            </div>
-          )}
-        </div>
-      );
     // The Library. The heading is pinned above (as it is for the Registry
     // and the Timeline); only the shelves scroll.
     return (
@@ -1888,7 +1667,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 
   const showCollectionControls =
-    homeSection === "notebooks" || homeSection === "registry";
+    homeSection === "notebooks";
 
   return (
     <div className="app-root flex h-dvh w-screen flex-col overflow-hidden text-foreground">
@@ -1997,7 +1776,7 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   }
                 }}
                 placeholder={
-                  homeSection === "registry" ? "Filter entries…" : "Filter notebooks…"
+                  "Filter notebooks…"
                 }
                 className="w-[200px] shrink-0"
                 inputClassName="h-[26px] rounded-lg"
@@ -2112,15 +1891,6 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
               {/* No caps label of its own — the arrival point sits above the
                   Library rather than inside it, the way Mail's Inbox sits
                   above its own sidebar's account blocks. */}
-              <LibraryRow
-                icon={<Sun className="h-3.5 w-3.5" />}
-                label="Brief"
-                dot={briefUnread}
-                selected={homeSection === "brief"}
-                title={lastNight}
-                onClick={() => goSection("brief")}
-              />
-
               <SidebarBlock title="Library">
                 <LibraryRow
                   icon={<Inbox className="h-3.5 w-3.5" />}
@@ -2174,59 +1944,11 @@ export function HomeView({ onOpenSettings }: { onOpenSettings: () => void }) {
                   title="The notebooks that came with Alchemy"
                   onClick={() => goShelf("builtin")}
                 />
-                <LibraryRow
-                  icon={<Newspaper className="h-3.5 w-3.5" />}
-                  label="Nightly Reports"
-                  count={feedReports.length}
-                  dot={totalUnread > 0}
-                  selected={homeSection === "reports"}
-                  title="What the scheduled runs wrote"
-                  onClick={() => goSection("reports")}
-                />
-                <LibraryRow
-                  icon={<Archive className="h-3.5 w-3.5" />}
-                  label="Archived"
-                  count={archivedNotebooks.length}
-                  selected={homeSection === "notebooks" && scope === "archived"}
-                  onClick={() => goShelf("archived")}
-                />
-                <LibraryRow
-                  icon={<Moon className="h-3.5 w-3.5" />}
-                  label="Staff"
-                  dot={!!staffTone.label}
-                  dotClass={staffTone.dot}
-                  selected={homeSection === "staff"}
-                  title={
-                    staffTone.label
-                      ? `The night shift · ${staffTone.label}`
-                      : "The night shift"
-                  }
-                  onClick={() => goSection("staff")}
-                />
+                <LibraryRow icon={<Moon className="h-3.5 w-3.5" />} label="Work" selected={homeSection === "work"} title="Schedules, runs, and source changes" onClick={() => goSection("work")} />
+                <LibraryRow icon={<Archive className="h-3.5 w-3.5" />} label="Archived" selected={homeSection === "notebooks" && scope === "archived"} onClick={() => goShelf("archived")} />
               </SidebarBlock>
 
-              <SidebarBlock title="Registry">
-                <LibraryRow
-                  icon={<Package className="h-3.5 w-3.5" />}
-                  label="Entries"
-                  count={registryCounts?.total ?? 0}
-                  selected={homeSection === "registry"}
-                  title="The things your documents are about"
-                  onClick={() => goSection("registry")}
-                />
-                <LibraryRow
-                  icon={<Sparkles className="h-3.5 w-3.5" />}
-                  label="Suggested"
-                  // A badge while they are unanswered, a plain count once
-                  // they have been looked at: the number is the same, only
-                  // the volume changes.
-                  count={registrySignal?.shown ?? 0}
-                  badge={suggestedCount || undefined}
-                  selected={homeSection === "suggested"}
-                  title="Entries waiting for a yes or no"
-                  onClick={() => goSection("suggested")}
-                />
-              </SidebarBlock>
+
 
               {/* The third block (RFC-mac-chrome "Home"). Tags are a
                   per-source field, so a corpus-wide list is a rollup — one

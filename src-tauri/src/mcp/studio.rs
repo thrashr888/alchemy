@@ -116,6 +116,34 @@ struct TemplateIdReq {
 #[tool_router(router = studio_router, vis = "pub(super)")]
 impl AlchemyMcp {
     #[tool(
+        description = "List active scheduled report ids and recent run receipts, including failures. Output content remains in notebook notes."
+    )]
+    async fn active_work(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let receipts = state
+            .db
+            .list_receipts(commands::now() - 7 * 86_400_000, 100)
+            .await
+            .map_err(internal)?;
+        json_result(
+            &serde_json::json!({ "activeScheduleIds": commands::active_work_ids(&state), "receipts": receipts }),
+        )
+    }
+
+    #[tool(
+        description = "Stop the active run of a scheduled report. The schedule and previous results stay intact."
+    )]
+    async fn stop_work(
+        &self,
+        Parameters(ScheduleIdReq { schedule_id }): Parameters<ScheduleIdReq>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self.state();
+        let active = commands::active_work_ids(&state).contains(&schedule_id);
+        state.cancel_current(Some(&format!("report:{schedule_id}")));
+        json_result(&serde_json::json!({ "stopped": active }))
+    }
+
+    #[tool(
         description = "List a notebook's scheduled reports (id, name, kind, interval, enabled, last run). Every create deserves a way to inspect and undo — clean up schedules you created that the user didn't ask to keep."
     )]
     async fn list_schedules(

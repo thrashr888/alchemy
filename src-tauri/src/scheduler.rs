@@ -310,7 +310,7 @@ pub fn start(app: AppHandle) {
         // deleted it (docs/RFC-brief.md) — offered exactly once, ever.
         {
             let state = app.state::<AppState>();
-            commands::ensure_default_brief(&state).await;
+
             // First-run example notebooks, same once-ever marker contract.
             // A first-ever launch may embed ~56 sources here; delaying the
             // opening tick by that much is harmless (it's all background

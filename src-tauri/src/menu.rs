@@ -191,11 +191,11 @@ const CMD: &[Command] = &[
         context: "Home",
     },
     Command {
-        id: "menu-home-reports",
-        menu_label: "Nightly Reports",
+        id: "menu-home-work",
+        menu_label: "Work",
         accelerator: None,
         keys: "⌘ 4",
-        label: "Go to Nightly Reports",
+        label: "Go to Work",
         context: "Home",
     },
     Command {
@@ -206,49 +206,10 @@ const CMD: &[Command] = &[
         label: "Go to Archived",
         context: "Home",
     },
-    Command {
-        id: "menu-home-staff",
-        menu_label: "Staff",
-        accelerator: None,
-        keys: "⌘ 6",
-        label: "Go to Staff",
-        context: "Home",
-    },
-    Command {
-        id: "menu-home-cards",
-        menu_label: "Registry Entries",
-        accelerator: None,
-        keys: "⌘ 7",
-        label: "Go to Registry Entries",
-        context: "Home",
-    },
-    Command {
-        id: "menu-home-suggested",
-        menu_label: "Suggested",
-        accelerator: None,
-        keys: "⌘ 8",
-        label: "Go to Suggested",
-        context: "Home",
-    },
-    Command {
-        id: "menu-home-brief",
-        menu_label: "Brief",
-        accelerator: None,
-        keys: "⌘ 9",
-        label: "Go to Brief",
-        context: "Home",
-    },
     // The tenth place, with no digit left to give it. The Shortcuts tab
     // lists the rows that have a key, so an empty label keeps this one a
     // menu item and nothing more.
-    Command {
-        id: "menu-home-timeline",
-        menu_label: "Timeline",
-        accelerator: None,
-        keys: "",
-        label: "",
-        context: "Home",
-    },
+
     // A notebook's panels, in rail order — ⌘1–⌘4 down the rail, the same
     // four keys Home spends on the first four of its places.
     Command {
@@ -627,17 +588,8 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         cmd_item(app, "menu-home-chats")?,
         cmd_item(app, "menu-home-shared")?,
         cmd_item(app, "menu-home-builtin")?,
-        cmd_item(app, "menu-home-reports")?,
+        cmd_item(app, "menu-home-work")?,
         cmd_item(app, "menu-home-archived")?,
-        cmd_item(app, "menu-home-staff")?,
-    ];
-    let home_registry = [
-        cmd_item(app, "menu-home-cards")?,
-        cmd_item(app, "menu-home-suggested")?,
-    ];
-    let home_rest = [
-        cmd_item(app, "menu-home-brief")?,
-        cmd_item(app, "menu-home-timeline")?,
     ];
     let notebook_toggles = [
         cmd_item(app, "menu-toggle-sources")?,
@@ -654,14 +606,6 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
     // Home's sidebar blocks, kept as the menu's groups: Library, Registry,
     // then the two that hang below them.
     for it in &home_places {
-        view = view.item(it);
-    }
-    view = view.separator();
-    for it in &home_registry {
-        view = view.item(it);
-    }
-    view = view.separator();
-    for it in &home_rest {
         view = view.item(it);
     }
     view = view.separator();
@@ -715,11 +659,7 @@ pub fn build(app: &AppHandle, recents: &[(String, String)]) -> tauri::Result<App
         ],
     )?;
     let context = ViewContextMenu {
-        home: home_places
-            .into_iter()
-            .chain(home_registry)
-            .chain(home_rest)
-            .collect(),
+        home: home_places.into_iter().collect(),
         notebook: notebook_toggles.into(),
     };
     // The app opens on Home, so start there rather than with both groups
@@ -861,13 +801,8 @@ mod tests {
         ("menu-home-chats", "⌘ 2"),
         ("menu-home-shared", "⌘ 3"),
         ("menu-home-builtin", ""),
-        ("menu-home-reports", "⌘ 4"),
+        ("menu-home-work", "⌘ 4"),
         ("menu-home-archived", "⌘ 5"),
-        ("menu-home-staff", "⌘ 6"),
-        ("menu-home-cards", "⌘ 7"),
-        ("menu-home-suggested", "⌘ 8"),
-        ("menu-home-brief", "⌘ 9"),
-        ("menu-home-timeline", ""),
     ];
 
     fn cmd(id: &str) -> &'static Command {
@@ -929,7 +864,7 @@ mod tests {
     /// listed row with no keys draws an empty cap. Timeline and the Built in
     /// shelf have no digit left, and both stay menu-only for that reason.
     #[test]
-    fn nine_home_rows_reach_the_shortcuts_tab() {
+    fn current_home_rows_reach_the_shortcuts_tab() {
         let rows: Vec<_> = shortcut_rows()
             .into_iter()
             .filter(|r| r.context == "Home")
@@ -937,9 +872,8 @@ mod tests {
         assert!(rows.iter().all(|r| !r.keys.is_empty()));
         assert_eq!(
             rows.iter().filter(|r| r.label.starts_with("Go to")).count(),
-            9
+            5
         );
-        assert!(cmd("menu-home-timeline").label.is_empty());
         assert!(cmd("menu-home-builtin").label.is_empty());
         assert!(cmd("menu-home-inbox").label.is_empty());
     }

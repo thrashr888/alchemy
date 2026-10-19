@@ -16,7 +16,9 @@
 use anyhow::Result;
 
 use crate::ai::Ai;
-use crate::db::{Db, Route};
+use crate::db::Db;
+#[cfg(test)]
+use crate::db::Route;
 use crate::inference::{ChatTurn, Role};
 
 /// How many notebooks the picker sees. Small-role models lose the thread on
@@ -125,18 +127,34 @@ pub async fn suggest_notebook(
     let excerpt: String = body.chars().take(SUGGEST_EXCERPT_CHARS).collect();
     let query = format!("{title}\n{excerpt}");
 
-    // Route to candidates. An empty or unbuilt index just means "consider
-    // everything" — with a handful of notebooks that is the same answer.
-    let mut candidates: Vec<_> = match ai.embed(std::slice::from_ref(&query)).await {
-        Ok(vecs) if !vecs.is_empty() => {
-            let ranked = route_notebooks(db, vecs[0].clone(), SUGGEST_CANDIDATES).await?;
-            ranked
-                .iter()
-                .filter_map(|id| active.iter().find(|n| &n.id == id).cloned())
-                .collect()
+    // Capture and chat share the hybrid index; no separately maintained notebook index.
+    let mut candidates = Vec::new();
+    if let Ok(vector) = ai.embed_one(&query).await {
+        if let Ok(hits) = db
+            .search_chunks_all_opts(
+                vector,
+                &query,
+                20,
+                None,
+                crate::db::SearchOptions::default(),
+            )
+            .await
+        {
+            for (id, _) in hits {
+                if let Some(nb) = active.iter().find(|n| n.id == id) {
+                    if !candidates
+                        .iter()
+                        .any(|n: &crate::models::Notebook| n.id == id)
+                    {
+                        candidates.push(nb.clone());
+                    }
+                    if candidates.len() == SUGGEST_CANDIDATES {
+                        break;
+                    }
+                }
+            }
         }
-        _ => vec![],
-    };
+    }
     if candidates.is_empty() {
         candidates = active.iter().take(SUGGEST_CANDIDATES).cloned().collect();
     }
@@ -542,13 +560,13 @@ async fn proposed_title(ai: &Ai, title: &str, body: &str) -> String {
 
 /// Notebooks at or below this count skip routing entirely: filtering to the
 /// top-N of N notebooks is the flat search with extra steps.
-pub const MIN_NOTEBOOKS_TO_ROUTE: usize = 5;
 /// How many notebooks a routed meta-chat search keeps.
-pub const ROUTE_TOP_K: usize = 4;
 /// Route entries consulted per query before aggregating to notebooks.
+#[cfg(test)]
 const ROUTE_POOL: usize = 24;
 /// Cap on a route summary ("title — gist"): enough for the full gist body,
 /// bounded so one verbose distillate can't dominate embedding time.
+#[cfg(test)]
 const ROUTE_SUMMARY_CHARS: usize = 480;
 
 /// One route summary string: `"{title} [{tags}] — {gist}"`, brackets omitted
@@ -556,6 +574,7 @@ const ROUTE_SUMMARY_CHARS: usize = 480;
 /// capped to `ROUTE_SUMMARY_CHARS`. Tags are user ground truth
 /// (docs/RFC-source-tags.md) — a few tag tokens meaningfully shift a short
 /// summary's embedding, and the self-healing diff re-embeds on any change.
+#[cfg(test)]
 fn route_summary(title: &str, tags: &str, gist: Option<&str>) -> String {
     let mut summary = if tags.is_empty() {
         title.to_string()
@@ -577,6 +596,7 @@ fn route_summary(title: &str, tags: &str, gist: Option<&str>) -> String {
 /// notebook-level summaries misrouted 17% of dataset queries at top-2). With
 /// per-item routes a notebook is as close as its closest item. Titles are
 /// the summary — strong signal, and cheap enough to diff on every call.
+#[cfg(test)]
 async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
     // Sources with a gist route on "title — gist" instead of the bare
     // title (RFC-infinite-context §1): the distillate names what the source
@@ -624,6 +644,7 @@ async fn desired_routes(db: &Db) -> Result<Vec<Route>> {
 /// scans every notebook's sources and notes, so the probe is noise beside
 /// that. Unknowable (no index yet, or the embedder is down) means no drift to
 /// act on — `route_search` still catches it for free at query time.
+#[cfg(test)]
 async fn dim_drift(db: &Db, ai: &Ai) -> Option<(usize, usize)> {
     let stored = db.routes_vector_dim().await.ok().flatten()?;
     let live = ai.test_embed().await.ok()?;
@@ -632,6 +653,7 @@ async fn dim_drift(db: &Db, ai: &Ai) -> Option<(usize, usize)> {
 
 /// Bring the router index in line with the corpus. Returns
 /// (embedded, deleted) counts — (0, 0) when nothing changed.
+#[cfg(test)]
 pub async fn ensure_router(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
     let desired = desired_routes(db).await?;
 
@@ -685,6 +707,7 @@ pub async fn ensure_router(db: &Db, ai: &Ai) -> Result<(usize, usize)> {
 /// aggregated to notebooks in first-appearance order (a notebook ranks as
 /// high as its closest item). Empty when the router has no index yet —
 /// callers fall back to flat search.
+#[cfg(test)]
 pub async fn route_notebooks(db: &Db, query_vec: Vec<f32>, k: usize) -> Result<Vec<String>> {
     let hits = db.route_search(query_vec, None, ROUTE_POOL).await?;
     let mut out: Vec<String> = Vec::new();

@@ -430,14 +430,7 @@ export function CommandPalette() {
         // never been one — what Home's own Chat tab does.
         run: () => goPlace("menu-home-chats"),
       },
-      {
-        id: "home-registry",
-        group: "Navigate",
-        label: "Go to registry",
-        keywords: "entries cards people places things entities identifiers",
-        icon: <Package className="h-3.5 w-3.5" />,
-        run: () => goPlace("menu-home-cards"),
-      },
+
       // Only from Home: inside a notebook, "Back to all notebooks" above is
       // already this row, and two ways to say it in one list is one too many.
       ...(currentId
@@ -559,13 +552,7 @@ export function CommandPalette() {
         void (async () => {
           const s = state();
           if (h.kind === "card") {
-            // Cards are corpus-scoped: leave the notebook and open the card
-            // on Home rather than switching notebooks.
-            s.closeNotebook();
-            useStore.setState({
-              homeSection: "registry",
-              openCardId: h.id,
-            });
+            await s.handleIntegrationUrl(`alchemy://note/registry-${encodeURIComponent(h.id)}`);
           } else if (h.kind === "note") {
             // StudioPanel auto-opens this id once the notebook's notes load.
             useStore.setState({ justCreatedNoteId: h.id });

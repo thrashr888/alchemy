@@ -1,6 +1,7 @@
 # RFC: Ablation — what Alchemy can lose
 
-Status: reviewed 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
+Status: implementation in review; current behavior and validation below.
+Historical review: 2026-09-21; items 1 (as a regroup, no tiles cut), 3 (as
 a verb) and 6 built the same day. Decisions: the PM/engineering
 generators and templates stay — newer users are product and engineering
 people, and the app is for more than one person; the tile wall is shelved
@@ -15,7 +16,372 @@ an ablation experiment, removing unnecessary abstractions and designs."
 The Ledger and the Arrivals strip went on 2026-09-15 (main e2f089b) as
 the first two cuts; this is the rest of the list, with the evidence.
 
-## Method
+## Implementation: 2026-10-18
+
+The implementation branch removes the Notion connector (import/refresh,
+credentials, and controls), Registry suggestion/enrichment/matching and CRUD,
+and the separate Registry, Staff, Brief, Reports-feed, and Timeline screens.
+Notion snapshots and their children remain readable; their caches are retained
+until the user deliberately deletes the source. New installs no longer receive
+an automatic Brief schedule; existing requested schedules continue to run.
+
+Work reads the existing schedules, run receipts, saved notes, and source events.
+Manual runs record results and failures. Active runs are owned by the backend,
+with duplicate-run protection and Stop across navigation; agents can inspect
+and stop them too. Output content remains in notebook notes.
+
+Before retirement, the store version advances and the existing pre-migration
+snapshot mechanism protects downgrade. An atomic registry-backup.json in the
+database directory contains every original card, including suggestions and
+refusals. Kept cards become deterministic registry-<card-id> notes in an active
+linked notebook (most attachments; deterministic tie-break), or Saved knowledge
+when no active owner exists. Notes retain identifiers, facts, annotations,
+related-document links, original resource provenance, and timestamps. A durable
+completion marker prevents later note deletion from resurrecting a card; retry
+skips existing notes to preserve edits. Old card citations/deep links resolve
+to the preserved note. Derived entity wiki pages are no longer regenerated.
+
+Global chat keeps All notebooks as default and can narrow to one notebook.
+Scope is stored on every turn; history outside that scope does not become model
+evidence, and the scoped tool dispatcher uses the existing notebook boundary.
+The shared hybrid search applies its notebook filter before ranking, including
+title fallbacks. Capture suggestions also use this index. The old notebook
+router is retained only for comparative tests; gists, section summaries, and
+chunk enrichment remain pending separate quality/cost evidence.
+
+Validation includes a new entity-note retrieval and scope-isolation eval,
+upgrade backup/retry/edit/deletion tests, persisted transcript scope tests,
+and navigation/history tests. The router ablation now fails if flat recall
+falls more than 0.05 below the old routed control. Native QA uses a distinct application identifier
+and fixture corpus so upgrade validation cannot rewrite the user's library
+or global agent connector configuration.
+
+### Verification
+
+After native readability feedback, Work uses 15px section headings and 14px
+row details, errors and controls (verified with computed styles in WKWebView).
+A refused Ollama connection now names the attempted server origin and asks
+the user to check its address; it does not claim the daemon is stopped. The
+banner likewise leads with checking the address. Regression checks cover
+normal/custom ports and removal of credentials and query parameters.
+
+The Work screenshot deliberately records a failure against closed QA port 9.
+The actual Ollama server at 127.0.0.1:11434 responded, and the QA app was then
+reconfigured to that address. Native health reported it reachable with the
+selected model installed; no live text generation was needed.
+
+- Frontend: 472 tests across 27 files and `pnpm build` pass.
+- Rust: format, strict Clippy, and full `cargo test` pass: 903 passed,
+  51 ignored; corpus evals enabled, live-model tests off. Doctests pass.
+- Router ablation: 70 queries / three notebooks, recall@10 0.43 flat and
+  0.43 routed (rounded); routing accuracy@2 0.97. This supports removing
+  route-index upkeep on this fixture; it makes no large-corpus latency claim.
+- New migration retrieval eval recovers an exact identifier as an ordinary
+  note, excludes that note outside its chosen scope, and recovers related
+  source evidence from both notebooks. It exposed a real BM25 scope leak;
+  both search legs now filter before ranking. The old soft route remains
+  the comparison control.
+- Native isolated fixture QA: migration placement and original-record
+  backup, old citation to note, note link to a source in another notebook,
+  static Notion refresh/child preservation, exact-identifier search,
+  scoped-turn persistence and restoration, failed manual-run receipts,
+  active-run cleanup, schedule enable/disable, new-chat reset to All notebooks,
+  and restart without duplicate notes or backup changes. No live generation or
+  migration of the primary library was used for these checks.
+- Screenshots: [Work](screenshots/paul-26/work.png),
+  [preserved note](screenshots/paul-26/preserved-note.png),
+  [chat scope](screenshots/paul-26/chat-scope.png).
+
+The final ad-hoc QA bundle stalled during a synchronous read of the global
+templates folder after a Launch Services launch. The same bundle launched
+from the development session completed the checks above. This separate
+startup issue is tracked as [PAUL-210](https://linear.app/paul-thrasher/issue/PAUL-210);
+no templates or primary-library data were changed to work around it.
+
+### Actual-library manual testing: 2026-10-19
+
+At the user's request, the signed local preview now uses the normal Alchemy
+application identity and actual library. Before launch, an APFS snapshot of
+the store plus configuration/binding metadata was saved under
+`backups/paul26-manual-*`; 2,830 store files matched by path and size.
+The migration retained all 737 original Registry records in its JSON backup
+and preserved the 237 kept records as notes. Native queries confirmed 60
+notebooks, 5,844 sources, 881 notes, all 237 preserved note IDs, and no QA
+fixture notebooks. First startup completed the migration in about 42 seconds.
+The normal model configuration remains in use. This is a local manual-test
+build, not a release or a merge.
+
+CI passed all 903 correctness tests, but its small-store chat-overhead budget
+failed (best 137 ms against 120 ms). That benchmark exercises the unchanged
+per-notebook path. A rerun was requested; the budget was not weakened.
+
+## Clarifications and decisions: 2026-10-11
+
+Paul supports removing Registry and consolidating background-work surfaces
+into Work, keeping useful Registry content inside notebooks. Global chat
+stays. Retrieval consolidation should be tested with better ablations.
+Notion removal is now approved, superseding September's decision to keep it.
+The following describes the intended behavior; these feature changes have
+not been implemented in the initial cleanup PR.
+
+### Library means the existing Notebooks shelf
+
+No new content type, database, or indexing layer. It is the notebook list,
+with search and ordinary filters such as Shared and Archived. Prefer the
+visible label **Notebooks**: it says what the user will find there. Inbox
+captures still need a place to wait before filing; they should be a clearly
+named filter or subsection, not mixed indistinguishably into saved notebooks.
+The three main destinations become Notebooks, Chat, and Work.
+
+### What Registry currently contributes, and what retirement loses
+
+Registry is a corpus-wide entity record with no owning notebook. Its
+attachments point into multiple notebooks. That gives it:
+
+- A durable named thing joining related documents across notebooks.
+- Exact identifiers and editable facts available to global answers without
+  rediscovering them from the original source text.
+- A document list attached by identifiers or strong canonical-name matches.
+- Automatic entity suggestion, fact enrichment, and attachment upkeep.
+- Entity lookup from the palette and card context in generated documents.
+
+Removing Registry loses this structured entity/filing machinery. Ordinary
+cross-notebook retrieval remains, but it does not reproduce a durable entity's
+curated document list or guarantee exact fact lookup. Do not describe the
+change as lossless merely because global search still works.
+
+Preserve useful kept records as ordinary notebook notes: a descriptive title,
+identifiers, editable facts, the user's text, and a Related documents section
+with source links and notebook names. One authoritative note belongs in an
+appropriate existing notebook, rather than copying its facts into each linked
+notebook. Cross-notebook links preserve explicit connections; global retrieval
+can find the note and its source material. Cite original sources for extracted
+facts where recorded; preserve uncertain attribution honestly. Automatic
+suggestions and dismissed records stay in the backup, not promoted into notes.
+Keep an old-card-to-note mapping so existing chat citations and saved links can
+still resolve. Back up original records and attachment/refusal provenance.
+
+Placement, reliable note-to-source navigation, and cross-notebook evidence
+retrieval are migration requirements. Link preservation alone does not imply
+that retrieval will follow every link: the consolidated retrieval evals must
+exercise related-document questions and source diversity explicitly.
+
+### Global chat stays; scope becomes a conversation control
+
+All notebooks is the default. The same chat can narrow to a named notebook;
+selected notebooks or sources can be added if they earn the control. Opening
+chat inside a notebook uses that notebook as the initial scope, with the same
+composer, citations, transcript, and stop/retry behavior as global chat.
+
+For example: ask across all notebooks which documents concern a policy, then
+switch to the Insurance notebook and ask what that policy excludes. Changing
+scope affects subsequent turns. It must not erase, silently move, or reinterpret
+previous turns. Record scope per turn and keep it visible, so an answer's
+provenance remains understandable. Existing global and notebook conversations
+must remain accessible; unifying the UI does not authorize deleting or merging
+their history.
+
+Separate conversation identity from retrieval scope. A scope filter belongs
+in the shared search request and is applied before ranking. Wider prior chat
+history is conversational context, not permission to import outside-scope facts
+as fresh evidence. Tool access must honor the same scope; changing where we
+search does not grant permission to write to unrelated notebooks.
+
+### Work is an overview of existing work, not another content store
+
+One view shows requested schedules, active runs, source changes, failures, and
+links to outputs. Generated content remains a normal note in its notebook.
+Keep pause/cancel, receipts, attribution, and failure visibility. Replace Staff,
+Brief, report feeds, and the timeline visualization as separate destinations;
+keep useful source-change history and user-requested jobs. Decide the exact
+schedule compatibility/migration before disabling existing Brief schedules.
+
+### One retrieval backbone, with measured stages
+
+Use one scope-aware hybrid search path for sources and notebook notes. Treat
+router, gist, section-summary, and re-embedding stages as separate candidates
+for ablation rather than declaring them all unnecessary from one fixture.
+Compare the same exact-identifier, cross-notebook, entity-note, long-document,
+and multi-source queries on baseline and candidate paths. Measure recall and
+source coverage, latency at realistic corpus sizes, indexing/reindexing cost,
+and background model calls. Keep a stage only when its measured benefit is
+worth the maintained state and processing cost.
+
+### Notion removal
+
+Remove new Notion connection/import controls and Notion-specific fetching,
+refresh, and export-tree processing. Existing imported text, notes, source
+provenance, and cached originals must remain recoverable; retained sources can
+become ordinary static imported documents. Removing an integration does not
+mean deleting the user's already-imported content. There is no proposed
+replacement Notion connector.
+
+## Product simplification: revised scope, 2026-10-09
+
+Paul's correction: 104 lines of dead-code cleanup is too small. The goal is
+an app that is easier to use and a codebase with fewer mechanisms to maintain.
+This supersedes the narrow definition of success used by the first October
+pass. The existing keep decisions still hold; the larger cuts below are
+proposals for review, not implemented removals.
+
+### The core job
+
+Bring sources into notebooks, ask grounded questions, and keep useful answers
+as editable, portable notes and documents. A person should need to understand
+notebooks, sources, conversations, and saved work. Each additional durable
+entity, automatic writing process, navigation destination, and alternate chat
+path must justify the extra concept it introduces.
+
+Usage is useful evidence but is not the only test. Overlapping workflows can
+be simplified even when both are used. Conversely, low personal usage alone
+cannot justify cutting a second user's integration. Hiding a feature in a menu
+simplifies the screen; retiring its state and processing path simplifies code.
+Measure both, and do not treat moving functions between files as an ablation.
+
+### Larger candidates
+
+Footprints below are the inspected files at `7ccddb1`, including tests and
+comments. They describe the area to investigate, not promised deleted lines;
+shared infrastructure and replacement code remain, and the rows overlap.
+
+| Candidate | What gets simpler for users | What can actually leave the code | Inspected footprint and cost |
+| --- | --- | --- | --- |
+| Retire Registry as a separate product | No Entries/Suggested inbox, card kinds, entity approval, or second way to organize knowledge | Card suggestion/triage, fact enrichment, auto-attachment/rematching, registry UI and MCP CRUD, card-specific chat context | 5,295 lines across `commands/registry.rs`, `RegistrySection.tsx`, `mcp/registry.rs`, plus shared DB/store/command integration. Loses structured entity lookup and filing; original facts and provenance need a portable representation first. |
+| Replace Brief, Staff, Reports, and Timeline with one Work view | One place to see scheduled work, refreshes, failures, and outputs | Separate feed/card layouts, timeline visualization, staff presentation, and automatic default-brief creation; consider retiring bespoke Brief synthesis/audio too | 2,897 lines across `HomeSections.tsx`, `HomeReportsFeed.tsx`, `TimelineSection.tsx`, `commands/brief.rs`. Scheduler, source events, receipts, requested schedules, and existing output notes stay. |
+| One chat with selectable scope | Same conversation controls, drafts, history, cancellation, and citations everywhere; All notebooks or one notebook becomes scope | Parallel Home/notebook transcript and composer/run plumbing; duplicate per-surface settings and command routes where behavior permits | `HomeView.tsx` 2,331; `ChatPanel.tsx` 2,785; `homeChatRun.ts` 250. Most code is still useful. Share view and execution contracts without nesting agent loops or assuming every provider supports tools. |
+| One retrieval backbone | Sources become searchable with less hidden preparation and fewer background stages | Challenge router index first; then section summaries and chunk re-embedding separately, retaining each only if it improves the relevant query families | `router.rs` 875; `gist.rs` 1,362 (also contains tag work); `outline_index.rs` 320. Citation text, long-document recall, exact identifiers, and large-corpus latency are gates. |
+| One way to create and keep work | Create from an action in chat or the notebook; outputs live in Notes, with a schedule option when wanted | Separate generated-report/archive/wiki navigation and overlapping creation/schedule editors | `StudioPanel.tsx` 1,375 and `Reports.tsx` 488. Keep every generator, template, and specialist renderer previously agreed; simplify how they are reached and stored. |
+
+### Recommended direction
+
+Aim for three Home destinations: **Library, Chat, Work**. Inbox, Shared,
+Built in, and Archived become Library filters. Work shows existing schedules,
+run receipts, source changes, and links to saved outputs using ordinary rows.
+Keep notebook sources and notes as the durable editing surfaces. Stop exposing
+implementation vocabulary such as Staff and commission as separate concepts.
+This is a proposal to replace twelve Home menu destinations, not a claim that
+all twelve current destinations are equally prominent or independent features.
+
+Registry is the largest product-removal candidate because it introduces an
+entire parallel knowledge model. Before retiring it, materialize every kept
+card's facts, identifiers, notes, and source links into ordinary editable
+content, preserving its original record and refusal/attachment provenance in
+a portable backup. Verify every kept record is recoverable. Never silently
+promote Suggested records into the user's notes. If structured entity lookup
+is essential, a smaller alternative is manual Entries only, with the automatic
+suggestion/triage/enrichment machinery removed; that preserves more code and
+one extra user concept, and must be counted honestly.
+
+Work consolidation can begin independently of a Registry decision. Reuse the
+existing schedule and receipt models; do not invent a task framework. Existing
+requested schedules and generated notes remain inspectable. Removing default
+Brief creation is distinct from disabling an existing schedule: existing
+schedules need an explicit, reviewable migration or continued compatibility.
+Preserve pause/cancel, failures, attribution, backups, and source-change history.
+The historical Timeline visualization need not survive for history to survive.
+
+### First retrieval ablation, actually run
+
+Command: `ALCHEMY_EVALS=1 cargo test --lib retrieval_eval::eval_router -- --nocapture`
+(with the existing shared build cache). This uses temporary fixture databases
+and the built-in embedder, with no live model calls or changes to the user's
+corpus. On October 9, the suite ran rather than skipping:
+
+- 70 dataset queries over three notebooks.
+- Routing accuracy@1: 0.79; accuracy@2: 0.97.
+- Reported recall@10: **flat 0.43; routed top-two 0.43** (rounded output).
+- Two top-two misroutes, involving the badge-system port and ERR-429 retry wait.
+- The test passed its existing routing and recall fences.
+
+This gives no measured recall advantage for the router in this fixture. It
+supports testing removal of a separate routing index; it does not establish
+large-corpus latency, equality beyond the printed precision, or performance on
+Paul's actual corpus. The existing gist and enrichment fixtures use handwritten
+model outputs, so their passing cannot establish that the production Small
+model's ongoing synthesis is worth its cost.
+
+### Acceptance tests for the larger experiment
+
+For each candidate, remove one mechanism in an isolated branch and compare the
+same tasks against the current app: import, ask across notebooks, find an exact
+identifier, answer a long-document question, save/edit/export an output, inspect
+a background failure, stop work, and recover existing data. Inspect the live
+app's flows and compare the choices needed to finish them. Measure destination
+and concept count, owned state/models and IPC/MCP routes, source lines removed
+net of replacement code, query-family recall, first-answer and retrieval
+latency, and background model calls. Each change must reduce a user decision
+or a maintained mechanism; retain attribution, portability, and recoverability.
+
+This is the revised PAUL-26 direction. The first 104-line PR remains a useful
+cleanup prerequisite, not completion of the product-simplification goal.
+
+## Review: 2026-10-09 (PAUL-26)
+
+The decisions above still govern this pass: keep Notion, every generator
+and template, the separate Personalization and Shortcuts tabs, themes,
+meta-chat, MCP, Grow, OKF, and capture. The proposals below are the original
+September candidates, not approval to reverse those decisions.
+
+The current code at `a9e5dcb3` has Home place tracing and a single notebook
+shelf. Registry appears as Entries plus Suggested. This review separates
+code that is no longer reached from capabilities whose use needs evidence.
+
+### Code cuts
+
+- **Retired automatic evidence prompt and merge branch:**
+  `build_auto_evidence_messages` has one caller, `build_evidence_messages`,
+  which always passes `None` for the prior record and immediately replaces
+  the automatic system prompt. Build the requested record directly and
+  remove the old prompt and unreachable prior-record branch. The system
+  prompt and user message sent by Save as Evidence stay identical, including
+  excerpt order and text. Keep the shared parser and the curator's separate
+  consolidation prompt: both still have live callers.
+- **Collapsed Home rail:** `SidebarRail` has no callers after the Library
+  restructure. Remove it and its two exclusive icon imports. Active Brief
+  and Staff sections keep their current controls and markup.
+
+Together these cuts remove 119 lines and add 15: **104 net source lines**,
+with no data changes or user-visible feature removal. This measures code
+reduction; it does not claim faster startup or smaller built assets.
+
+### Feature evidence
+
+Read-only snapshot of `traces/ui.jsonl`, taken October 9 in America/Los_Angeles:
+44 `home.place` records from September 28 through October 9, on four local
+calendar dates (September 28, October 7, October 8, October 9).
+
+| Home destination | Recorded transitions |
+| --- | ---: |
+| Notebooks | 31 |
+| Chat | 4 |
+| Inbox | 4 |
+| Staff | 2 |
+| Suggested | 2 |
+| Reports | 1 |
+| Brief | 0 |
+| Entries (`registry`) | 0 |
+
+These are navigation records, not people, sessions, completed reads, or
+exposure time. A restored view, Back/Forward navigation, and access through
+notes, search, or agents can bypass this trace. Four observed dates are not
+the two-week usage sample called for by this RFC. Zero records therefore
+does not justify removing Brief or Entries. The installed MCP endpoint was
+unreachable during this review, so September's 229 Registry entries are a
+historical count, not a current inventory.
+
+The maintenance footprint helps prioritize inspection, not decide removal:
+Registry has 2,954 lines in its command module and 1,928 in its UI; Brief has
+511 in its command module and shares Home surfaces. These counts include
+tests and comments and omit shared DB, model, and MCP code. Registry also
+feeds chat context, source filing, and portability: deleting only its Home
+section would leave most of its machinery. Brief uses ordinary report
+schedules and notes, so removing it would not remove the report engine.
+
+The feature decision remains open until broader usage and a current corpus
+inventory support a reversible cut. Follow-up tracking belongs to PAUL-26
+in Linear.
+
+## Original method and September evidence
 
 An ablation removes one thing and measures. Here the measurement is
 usage, and the store is the instrument: the 47 notebooks on Paul's Mac
@@ -154,14 +520,14 @@ reverting the commit — the invariant's *recoverable* clause applies to
 features too, which is why every cut here is code-only and leaves data
 (the Ledger's table, the Notion cache dir) in place.
 
-## Proposal
+## Original proposal (superseded by the reviewed decisions)
 
 Do items 1, 2, 3 and 6 now — they are a day's work and remove the most
 visible bloat (the tile wall) and the most dead code (Notion, the auto
 passes). Measure 4 and 7 before deciding. Leave 5 and 8 as written
 policy, not code changes.
 
-## Open questions for Paul
+## Original questions (answered in the reviewed decisions)
 
 - Are any of the four unused generators (PRD, PR/FAQ, RFC, Skill) or the
   ten unused templates ones you *want* to use and simply haven't?
@@ -169,3 +535,17 @@ policy, not code changes.
 - The Evidence pass: stop it, or keep it and make it visible (a "Save as
   evidence" verb on a chat turn) instead of automatic?
 - Notion: gone, or is a token-bearing fetch something you plan to use?
+
+### Real-library startup correction (2026-10-19)
+
+A full Registry migration can outlast the folder writer debounce. Writers now
+retain pending work until AppState is registered, then drain it. A worker guard
+releases its slot even on cancellation or unwinding. Startup also retries the
+folder projection of preserved notes for libraries migrated by the earlier
+build, recording completion per notebook only after a successful write. This
+uses the existing writer, including incoming-edit reconciliation.
+
+Validation for the correction: frontend production build, Rust formatting,
+strict all-target Clippy, and all 905 correctness tests pass (51 opt-in tests
+ignored). Regression coverage checks pre-state write retention, worker cleanup
+on unwind, failed folder-export retry, and preservation of later disk edits.

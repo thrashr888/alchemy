@@ -1,3 +1,4 @@
+import { canonicalHomeSection } from "./homeNav";
 import { coalescedRefresh } from "./coalescedRefresh";
 import { toNoteSummary } from "./noteSummary";
 import { create } from "zustand";
@@ -10,7 +11,6 @@ import {
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
-import { restoreRegistryCards } from "./registryRestore";
 import { initializeOnce } from "./startup";
 import { isWebUrl, SUPPORTED_EXTENSIONS, visibleTitle } from "./utils";
 import { applyTheme, SYSTEM_THEME, themeIsDark } from "./themes";
@@ -953,33 +953,23 @@ export const useStore = create<AppState>((rawSet, get) => {
     galleryOpen: false,
     growOpen: false,
     readerEditIntent: null,
-    registryBump: 0,
     inbox: [],
-    registryCounts: null,
     homeChatUnread: false,
-    registrySeenAt: (() => {
-      try {
-        return Number(localStorage.getItem("alchemy.registrySeenAt") ?? 0) || 0;
-      } catch {
-        return 0;
-      }
-    })(),
-    registrySignal: null,
-    desktopApps: [],
     okfBindings: {},
     galleryScope: null,
+    desktopApps: [],
     homeSection: "notebooks",
     homeScope: loadHomeScope(),
     homeChat: { threadId: null, turns: [] },
     homeRun: null,
     homeDrafts: loadHomeDrafts(),
     homeThreads: [],
+    homeChatScope: "",
+    setHomeChatScope: (id) => set({ homeChatScope: id }),
     homeChatConfig: loadHomeChatConfig(),
     homeView:
       (localStorage.getItem("homeView") as "grid" | "table") || "grid",
     homeQuery: "",
-    openCardId: null,
-    registryCreating: false,
     pendingNewNote: false,
     artifactStreamText: "",
     audioProgress: null,
@@ -1131,11 +1121,10 @@ export const useStore = create<AppState>((rawSet, get) => {
         } catch {
           /* ignore */
         }
-        // Home's section survives the reload whether or not a notebook does
-        // — coming back to the dashboard should come back to the Registry if
-        // that's where you were, with the same card open.
-        if (view?.section)
-          set({ homeSection: view.section, openCardId: view.card ?? null });
+        // Restore Home destinations, including links saved before retirement.
+        if (view?.section === "registry" && view.card) {
+          await get().handleIntegrationUrl(`alchemy://note/registry-${encodeURIComponent(view.card)}`);
+        } else if (view?.section) set({ homeSection: canonicalHomeSection(view.section) });
         // The conversation survives the relaunch with the section: coming
         // back to the Chat tab and finding it blank is the bug Paul hit.
         if (view?.section === "chat")
@@ -1519,10 +1508,6 @@ export const useStore = create<AppState>((rawSet, get) => {
           if (scope === "inbox") void get().refreshInbox();
           // Templates are app-global — refresh before the notebook gate.
           if (scope === "templates") void get().refreshTemplates();
-          // So is the Registry (it has no notebook), and its surface is Home
-          // — where currentId is null, so it must bump before that gate too.
-          if (scope === "registry")
-            set((state) => ({ registryBump: state.registryBump + 1 }));
           const current = get().currentId;
           if (!current || (notebookId && notebookId !== current)) return;
           if (scope === "sources")
@@ -1886,35 +1871,13 @@ export const useStore = create<AppState>((rawSet, get) => {
           await get().selectNotebook(nb);
           get().openInReader({ type: "source", id: tail });
         } else if (kind === "home") {
-          // Home and one of its sections. Registry takes a card id, which is
-          // the difference between "your Registry" and the card that is
-          // actually waiting on an answer.
-          const wanted = tail as HomeSection;
-          const section: HomeSection = (
-            [
-              "inbox",
-              "notebooks",
-              "registry",
-              "suggested",
-              "chat",
-              "timeline",
-              "staff",
-              "brief",
-              "reports",
-            ] as const
-          ).includes(wanted)
-            ? wanted
-            : "notebooks";
-          if (get().currentId) get().closeNotebook();
-          if (section === "chat") {
-            await get().openHomeThread(null);
-          } else {
-            set({
-              homeSection: section,
-              openCardId:
-                section === "registry" ? u.searchParams.get("card") : null,
-            });
+          const card = u.searchParams.get("card");
+          if (tail === "registry" && card) {
+            await get().handleIntegrationUrl(`alchemy://note/registry-${encodeURIComponent(card)}`);
+            return;
           }
+          if (get().currentId) get().closeNotebook();
+          get().goHomeSection(canonicalHomeSection(tail as HomeSection));
         } else if (kind === "ask") {
           // The tray item and ⌥Space reach the palette over the
           // `integrations://ask` event, which no URL could trigger — so a
@@ -2027,10 +1990,10 @@ export const useStore = create<AppState>((rawSet, get) => {
 
     goHomeShelf: (scope) => {
       writeHomeScope(scope);
-      set({ homeSection: "notebooks", openCardId: null });
+      set({ homeSection: "notebooks" });
     },
 
-    goHomeSection: (section) => set({ homeSection: section, openCardId: null }),
+    goHomeSection: (section) => set({ homeSection: canonicalHomeSection(section) }),
 
     selectNotebook: async (id) => {
       localStorage.setItem("lastNotebookId", id);
@@ -2178,7 +2141,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       // is keyed to a thread that can't change under it. Nothing is written
       // until a turn settles, so an id nobody asks into never becomes a row.
       const threadId = newThreadId();
-      set({ homeChat: { threadId, turns: [] } });
+      set({ homeChat: { threadId, turns: [] }, homeChatScope: "" });
       return threadId;
     },
 
@@ -2207,6 +2170,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         // screen and newer than what the backend handed back; keep anything
         // the fetch doesn't know about rather than blinking it away.
         set({
+          homeChatScope: [...turns].reverse().find((t) => t.role === "user")?.scope ?? "",
           homeChat: {
             threadId,
             turns: mergeLoadedTurns(turns, get().homeChat.turns),
@@ -2224,6 +2188,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       kind,
       intoThread,
       model,
+      scope,
     ) => {
       const threadId = intoThread ?? get().homeChat.threadId ?? newThreadId();
       // The conversation was deleted while this was being written.
@@ -2243,6 +2208,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         citations,
         kind,
         model,
+        scope: scope ?? "",
         createdAt: Date.now(),
       };
       if (showing())
@@ -2261,6 +2227,7 @@ export const useStore = create<AppState>((rawSet, get) => {
           citations,
           kind,
           model,
+          scope,
         );
         set((s) =>
           s.homeChat.threadId === threadId
@@ -2291,7 +2258,8 @@ export const useStore = create<AppState>((rawSet, get) => {
       // The thread id exists before the question does (openHomeThread mints
       // it), so the run is keyed to a conversation that can't change under it.
       const threadId = get().homeChat.threadId ?? newThreadId();
-      const prior = historyOf(get().homeChat.turns);
+      const scope = get().homeChatScope;
+      const prior = historyOf(get().homeChat.turns, scope);
       const previous = metaRun;
       // `metaSeq` is what makes a superseded run stay superseded: it decides
       // which run owns `homeRun`, so an outgoing run's settling never wipes
@@ -2338,7 +2306,7 @@ export const useStore = create<AppState>((rawSet, get) => {
         // Who answers is asked now, not remembered: the chat provider can
         // change between two questions. A probe that fails falls back to
         // Alchemy's own pipeline, which needs nothing from the probe.
-        const brain = opts?.allowAgent
+        const brain = opts?.allowAgent && !scope
           ? await api.homeBrain().catch(() => null)
           : null;
         if (brain?.kind === "agent" && metaSeq === seq)
@@ -2354,7 +2322,7 @@ export const useStore = create<AppState>((rawSet, get) => {
                 }
               : {},
           );
-        await get().appendHomeTurn("user", q, [], "chat", threadId);
+        await get().appendHomeTurn("user", q, [], "chat", threadId, undefined, scope);
         try {
           if (brain?.kind === "agent") {
             await askAgent(threadId, q, brain, seq, prior);
@@ -2364,12 +2332,12 @@ export const useStore = create<AppState>((rawSet, get) => {
             // No depth argument: the backend picks depth per model class
             // (deep rerank on gateways where the extra call is cheap,
             // single-pass local). The config is Home's own — Style, Length.
-            .askEverything(q, prior, undefined, get().homeChatConfig, threadId);
+            .askEverything(q, prior, undefined, get().homeChatConfig, threadId, scope);
           // A command ("add this url", "open the Japan notebook") was carried
           // out instead of answered. It lands as one quiet tool row, never
           // as a stopped partial — there was no stream to cut short.
           if (res.kind === "tool") {
-            await get().settleHomeTool(threadId, res);
+            await get().settleHomeTool(threadId, res, scope);
             return;
           }
           // Superseded runs settle as stopped: a question asked over the top
@@ -2385,6 +2353,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             res.citations,
             stopped ? "stopped" : "chat",
             threadId,
+            undefined,
+            scope,
           );
           markHomeChatUnread();
         } catch (e) {
@@ -2394,6 +2364,8 @@ export const useStore = create<AppState>((rawSet, get) => {
             [],
             "error",
             threadId,
+            undefined,
+            scope,
           );
           markHomeChatUnread();
         } finally {
@@ -2404,7 +2376,7 @@ export const useStore = create<AppState>((rawSet, get) => {
       await run;
     },
 
-    settleHomeTool: async (threadId, answer) => {
+    settleHomeTool: async (threadId, answer, scope) => {
       // Deleting this conversation is the one reply that must not be written
       // into it: the row would resurrect the thread the user just dropped.
       // The backend already removed the turns, so all that's left is what a
@@ -2426,6 +2398,8 @@ export const useStore = create<AppState>((rawSet, get) => {
         [],
         "tool",
         threadId,
+        undefined,
+        scope,
       );
       // The backend can't drive this window; it can only say where to go.
       // One nav entry, exactly as clicking the notebook would make.
@@ -2740,9 +2714,6 @@ export const useStore = create<AppState>((rawSet, get) => {
         await get().refreshNotebooks();
         return [];
       }
-      if (retired.length > 0) {
-        set((s) => ({ registryBump: s.registryBump + 1 }));
-      }
       // Leave an archived notebook if it was open.
       if (status === "archived" && get().currentId === id) {
         const active = get().notebooks.filter(
@@ -2759,40 +2730,6 @@ export const useStore = create<AppState>((rawSet, get) => {
           });
       }
       return retired;
-    },
-
-    refreshRegistrySignal: async () => {
-      try {
-        const cards = await api.listRegistry();
-        const shown = cards.filter((c) => c.origin === "auto" && c.surfaced);
-        // The sidebar's Cards count rides on this same read, so it is right
-        // from the first paint and not only after the Cards page has been
-        // visited (the page's own effect refines the per-kind split).
-        const mine = cards.filter((c) => !c.origin).length;
-        const prior = get().registryCounts;
-        set({
-          registrySignal: {
-            shown: shown.length,
-            newest: shown.reduce((m, c) => Math.max(m, c.createdAt), 0),
-          },
-          registryCounts: {
-            total: mine,
-            kinds: prior?.total === mine ? prior.kinds : [],
-          },
-        });
-      } catch {
-        // The dot is a hint; a failed read just leaves the last one.
-      }
-    },
-
-    markRegistrySeen: () => {
-      const now = Date.now();
-      set({ registrySeenAt: now });
-      try {
-        localStorage.setItem("alchemy.registrySeenAt", String(now));
-      } catch {
-        // Per-viewer convenience only.
-      }
     },
 
     openGalleryScoped: (scope) => {
@@ -2844,26 +2781,15 @@ export const useStore = create<AppState>((rawSet, get) => {
       const titles = ids.map(
         (id) => get().notebooks.find((n) => n.id === id)?.title ?? "notebook",
       );
-      const retired: RegistryCard[] = [];
-      for (const id of ids) {
-        retired.push(...(await get().setNotebookStatus(id, "archived")));
-      }
-      // Say what went with it. Archiving was reversible before; a card that
-      // leaves the registry on the same click has to be, and visibly.
+      for (const id of ids) await get().setNotebookStatus(id, "archived");
       const what =
         ids.length === 1
           ? `Archived “${titles[0]}”`
           : `Archived ${ids.length} notebooks`;
-      const tail =
-        retired.length === 0
-          ? ""
-          : ` and removed ${retired.length} registry ${retired.length === 1 ? "card" : "cards"} that only pointed there`;
-      get().pushToast("success", `${what}${tail} — click to undo`, () =>
+      get().pushToast("success", `${what} — click to undo`, () =>
         void (async () => {
           try {
             for (const id of ids) await get().setNotebookStatus(id, "");
-            await restoreRegistryCards(retired);
-            set((s) => ({ registryBump: s.registryBump + 1 }));
           } catch (e) {
             get().pushToast(
               "error",
@@ -4415,9 +4341,9 @@ async function applyNav(delta: 1 | -1): Promise<void> {
       writeHomeTagFilter(target.tag ?? null);
       if (section === "chat")
         await useStore.getState().openHomeThread(target.thread ?? null);
-      else if (section === "registry")
-        useStore.setState({ homeSection: section, openCardId: target.card ?? null });
-      else useStore.setState({ homeSection: section });
+      else if (section === "registry" && target.card)
+        await useStore.getState().handleIntegrationUrl(`alchemy://note/registry-${encodeURIComponent(target.card)}`);
+      else useStore.setState({ homeSection: canonicalHomeSection(section) });
     }
   } finally {
     navApplying = false;
@@ -4440,7 +4366,6 @@ export async function goHomePlace(place: HomePlace): Promise<void> {
       // Whatever conversation was last on screen, minting one only if there
       // has never been one — what the sidebar's Chats row does.
       const st = useStore.getState();
-      useStore.setState({ openCardId: null });
       await st.openHomeThread(st.homeChat.threadId);
     } else if (place.section === "notebooks") {
       useStore.getState().goHomeShelf(place.scope ?? "all");
@@ -4513,7 +4438,6 @@ useStore.subscribe((s, prev) => {
     s.reader === prev.reader &&
     s.homeSection === prev.homeSection &&
     s.homeChat.threadId === prev.homeChat.threadId &&
-    s.openCardId === prev.openCardId &&
     // The shelf's scope and tag row are part of where you are, not how it
     // is drawn: grid-vs-table is a preference and stays out of the stack,
     // but Archived and Shared are somewhere else entirely.
@@ -4541,7 +4465,7 @@ function recordNav(s: ReturnType<typeof useStore.getState>) {
   // open notebook must not stack entries for a screen nobody is looking at.
   const section = s.currentId ? undefined : s.homeSection;
   const thread = section === "chat" ? (s.homeChat.threadId ?? null) : undefined;
-  const card = section === "registry" ? (s.openCardId ?? null) : undefined;
+  const card = undefined;
   // The shelf's scope and tag belong to the shelf: carried on a Notebooks
   // entry the way `thread` is carried on a chat one, and absent everywhere
   // else so that two visits to the Registry don't differ by a filter that
@@ -4589,7 +4513,7 @@ if (getCurrentWebview().label === "main") {
       s.reader === prev.reader &&
       s.homeSection === prev.homeSection &&
       s.homeChat.threadId === prev.homeChat.threadId &&
-      s.openCardId === prev.openCardId
+      true
     )
       return;
     const doc = s.reader.open ? s.reader.history[s.reader.index] : undefined;
@@ -4617,7 +4541,7 @@ if (getCurrentWebview().label === "main") {
         // the conversation you were in — are as much "where you were" as a
         // notebook's center mode.
         section: s.homeSection,
-        card: s.openCardId,
+        card: null,
         chatThread: s.homeChat.threadId,
       }),
     );

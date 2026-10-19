@@ -89,7 +89,6 @@ pub(crate) fn redact_error(raw: &str, config: &AiConfig) -> String {
         .map(|p| p.api_key.as_str())
         .collect();
     secrets.push(&config.openai_api_key);
-    secrets.push(&config.notion_token);
     for secret in secrets {
         if secret.len() >= 4 {
             out = out.replace(secret, "•••");

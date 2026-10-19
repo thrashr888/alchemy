@@ -52,7 +52,7 @@ const LABELS: Record<string, string> = {
   mac: "Apple",
   feed: "Feeds",
   git: "Git",
-  notion: "Notion",
+  notion: "Notion snapshot",
   obsidian: "Obsidian",
   okf: "OpenKnowledge",
   other: "Other",

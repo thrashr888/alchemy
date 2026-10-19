@@ -59,6 +59,7 @@ pub enum Question {
     },
     /// A position on ordered, described levels (low → high). Registry card
     /// triage scores every queued card this way.
+    #[cfg(test)]
     Score {
         instructions: String,
         levels: Vec<String>,
@@ -91,9 +92,9 @@ impl Question {
 
     fn instructions(&self) -> &str {
         match self {
-            Self::Noul { instructions, .. }
-            | Self::Choice { instructions, .. }
-            | Self::Score { instructions, .. } => instructions,
+            Self::Noul { instructions, .. } | Self::Choice { instructions, .. } => instructions,
+            #[cfg(test)]
+            Self::Score { instructions, .. } => instructions,
         }
     }
 
@@ -111,6 +112,7 @@ impl Question {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone().unwrap_or_default()))
                 .collect(),
+            #[cfg(test)]
             Self::Score { levels, .. } => levels
                 .iter()
                 .enumerate()
@@ -141,6 +143,7 @@ impl Question {
                     .collect();
                 json!({"type": "choice", "instructions": instructions, "criteria": criteria})
             }
+            #[cfg(test)]
             Self::Score {
                 instructions,
                 levels,
@@ -163,6 +166,7 @@ pub enum Answer {
         probabilities: BTreeMap<String, f64>,
         confidence: f64,
     },
+    #[cfg(test)]
     Score {
         score: f64,
         probabilities: BTreeMap<u8, f64>,
@@ -211,6 +215,7 @@ impl Answers {
         }
     }
 
+    #[cfg(test)]
     pub fn score(&self, id: &str) -> Option<(f64, f64)> {
         match self.0.get(id)? {
             Answer::Score {
@@ -224,6 +229,7 @@ impl Answers {
     /// read an ordered scale as a yes/no: mass split between two levels
     /// that both mean "yes" is a confident yes, which the expectation and
     /// the four-way margin would each misreport.
+    #[cfg(test)]
     pub fn score_at_least(&self, id: &str, level: u8) -> Option<f64> {
         match self.0.get(id)? {
             Answer::Score { probabilities, .. } => Some(
@@ -613,6 +619,7 @@ impl Judge {
                     choice: pick.to_string(),
                     probabilities: distribution,
                 },
+                #[cfg(test)]
                 Question::Score { .. } => {
                     let probabilities: BTreeMap<u8, f64> = distribution
                         .iter()
@@ -652,22 +659,6 @@ impl Judge {
     /// its own hardware). That gap decides which surfaces run a gate.
     pub fn is_cloud(&self) -> bool {
         matches!(&self.backend, Backend::SystemOne { key: Some(_), .. })
-    }
-
-    /// Whether this judge's rubric Scores may act unattended. On the
-    /// 24-candidate registry triage fixture (2026-10-05), with candidates
-    /// sent twelve to a request, Jev, Clef Flash and Nimble scored 24/24
-    /// and Clef 21/24 with every confident answer right. (Sent all 24 at
-    /// once, the two 9B models had fallen to 42% and 50%: state size, not
-    /// the models.) So every decision model the skip rule trusts qualifies;
-    /// a chat model through logprobs does not — its level distributions
-    /// were never measured here. Thin fixture; the preview tool is how a
-    /// queue checks this for itself.
-    pub fn trusted_for_scores(&self) -> bool {
-        match &self.backend {
-            Backend::SystemOne { .. } => self.trusted_to_skip(),
-            Backend::Ollama { .. } => false,
-        }
     }
 
     pub fn trusted_to_skip(&self) -> bool {
@@ -973,6 +964,7 @@ fn parse_jev_answers(raw: &Value, questions: &[(&str, Question)]) -> Result<Answ
                     probabilities,
                 }
             }
+            #[cfg(test)]
             Question::Score { levels, .. } => {
                 let score = a.get("score").and_then(Value::as_f64).unwrap_or(-1.0);
                 let by_string: BTreeMap<String, f64> = a
@@ -1186,10 +1178,6 @@ mod tests {
         assert!(Judge::local_decision("http://x", "clef:latest").trusted_to_skip());
         assert!(Judge::local_decision("http://x", "tev1:4b").trusted_to_skip());
         assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_to_skip());
-        assert!(Judge::local_decision("http://x", "clef:latest").trusted_for_scores());
-        assert!(Judge::local_decision("http://x", "clef-flash:latest").trusted_for_scores());
-        assert!(!Judge::local_decision("http://x", "tev1:0.8b").trusted_for_scores());
-        assert!(!Judge::ollama("http://x", "qwen3.8:27b-mlx").trusted_for_scores());
         assert!(!Judge::ollama("http://x", "gemma4:12b-mlx").trusted_to_skip());
         assert!(!Judge::ollama("http://x", "laguna-s-2.1:latest").trusted_to_skip());
     }

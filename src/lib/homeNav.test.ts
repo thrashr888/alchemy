@@ -4,6 +4,7 @@ import {
   homePlaceById,
   homePlaceByKey,
   sameNavEntry,
+  canonicalHomeSection,
 } from "./homeNav";
 import type { NavEntry } from "./storeTypes";
 
@@ -17,10 +18,10 @@ const shelf = (over: Partial<NavEntry> = {}): NavEntry => ({
 });
 
 describe("Home's places", () => {
-  it("gives ⌘1–⌘9 to nine of the twelve, in sidebar order", () => {
+  it("keeps shortcuts for Notebooks, Chat, Work and notebook filters", () => {
     // The Inbox, Built in and the Timeline go without: the digits ran out.
     expect(HOME_PLACES.map((p) => p.key)).toEqual([
-      undefined, 1, 2, 3, undefined, 4, 5, 6, 7, 8, 9, undefined,
+      undefined, 1, 2, 3, undefined, 4, 5,
     ]);
   });
 
@@ -31,13 +32,8 @@ describe("Home's places", () => {
       "menu-home-chats",
       "menu-home-shared",
       "menu-home-builtin",
-      "menu-home-reports",
+      "menu-home-work",
       "menu-home-archived",
-      "menu-home-staff",
-      "menu-home-cards",
-      "menu-home-suggested",
-      "menu-home-brief",
-      "menu-home-timeline",
     ]);
   });
 
@@ -62,7 +58,8 @@ describe("Home's places", () => {
 
   it("looks a place up by menu id and by digit", () => {
     expect(homePlaceById("menu-home-archived")?.scope).toBe("archived");
-    expect(homePlaceByKey(6)?.section).toBe("staff");
+    expect(homePlaceByKey(4)?.section).toBe("work");
+    expect(homePlaceByKey(6)).toBeUndefined();
     expect(homePlaceById("menu-toggle-sources")).toBeUndefined();
     expect(homePlaceByKey(0)).toBeUndefined();
     expect(homePlaceById("menu-home-inbox")?.section).toBe("inbox");
@@ -122,5 +119,12 @@ describe("sameNavEntry", () => {
     expect(
       sameNavEntry({ nb: "a", mode: "reader", doc }, { nb: "a", mode: "reader", doc }),
     ).toBe(true);
+  });
+});
+
+describe("retired Home bookmarks", () => {
+  it("keeps work history reachable without restoring removed destinations", () => {
+    for (const old of ["brief", "staff", "reports", "timeline"] as const) expect(canonicalHomeSection(old)).toBe("work");
+    expect(canonicalHomeSection("registry")).toBe("notebooks");
   });
 });

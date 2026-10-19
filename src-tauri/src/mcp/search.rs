@@ -7,6 +7,9 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, ErrorData as
 struct AskEverythingReq {
     /// The question to retrieve corpus-wide passages for.
     question: String,
+    /// Limit retrieval to this notebook; omit for all notebooks.
+    #[serde(default)]
+    notebook_id: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -265,7 +268,10 @@ impl AlchemyMcp {
     )]
     async fn ask_everything(
         &self,
-        Parameters(AskEverythingReq { question }): Parameters<AskEverythingReq>,
+        Parameters(AskEverythingReq {
+            question,
+            notebook_id,
+        }): Parameters<AskEverythingReq>,
     ) -> Result<CallToolResult, McpError> {
         let question = question.trim().to_string();
         if question.is_empty() {
@@ -275,12 +281,16 @@ impl AlchemyMcp {
         // No deep rerank here: MCP agents synthesize from raw passages and
         // are better served by fast, wide retrieval they can filter. No app
         // handle either — progress steps are a palette affordance.
-        let mut passages = commands::retrieve_everything(&state, None, &question, 16, false)
-            .await
-            .map_err(internal)?;
-        // Registry parity with the palette's ask flow: matched cards ride as
-        // kind:"card" passages (empty notebookId — cards are corpus-scoped).
-        passages.extend(commands::registry_card_citations(&state, &question, 3).await);
+        let passages = commands::retrieve_everything_in(
+            &state,
+            None,
+            &question,
+            16,
+            false,
+            notebook_id.as_deref(),
+        )
+        .await
+        .map_err(internal)?;
         json_result(&passages)
     }
 }

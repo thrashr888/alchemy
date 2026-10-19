@@ -887,43 +887,23 @@ pub fn spawn_sweep(db: std::sync::Arc<Db>, ai: Ai) {
                             Ok(n) if n > 0 => {
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                             }
-                            // Tags converged. Offer registry cards once per notebook
-                            // per run (commands::registry::suggest_cards) — it reads
-                            // the gists this sweep just settled, so it comes after
-                            // them and before enrichment, same reasoning as tags:
-                            // one cheap call, and it shows up in the UI.
-                            Ok(_) => match crate::commands::suggest_cards(&db, &ai).await {
-                                Ok(n) if n > 0 => {
+                            // Chunk enrichment is the one stage that never
+                            // converges quickly — one small-model call per
+                            // chunk across the corpus — so it runs in quiet
+                            // hours only. The day's sweeps stop here, converged
+                            // on everything a person can see.
+                            Ok(_) if !crate::freshness::is_quiet_hours(crate::commands::now()) => {
+                                break
+                            }
+                            Ok(_) => match ensure_enrichment(&db, &ai).await {
+                                Ok(0) => break,
+                                Ok(_) => {
                                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                                 }
-                                // Chunk enrichment is the one stage that never
-                                // converges quickly — one small-model call per
-                                // chunk across the corpus — so it runs in quiet
-                                // hours only. The day's sweeps stop here, converged
-                                // on everything a person can see.
-                                Ok(_)
-                                    if !crate::freshness::is_quiet_hours(crate::commands::now()) =>
-                                {
-                                    break
-                                }
-                                Ok(_) => match ensure_enrichment(&db, &ai).await {
-                                    Ok(0) => break,
-                                    Ok(_) => {
-                                        tokio::time::sleep(std::time::Duration::from_millis(250))
-                                            .await;
-                                    }
-                                    Err(err) => {
-                                        crate::diagnostics::error(
-                                            "sweep",
-                                            format!("enrichment sweep failed: {err:#}"),
-                                        );
-                                        break;
-                                    }
-                                },
                                 Err(err) => {
                                     crate::diagnostics::error(
                                         "sweep",
-                                        format!("card suggestion failed: {err:#}"),
+                                        format!("enrichment sweep failed: {err:#}"),
                                     );
                                     break;
                                 }
