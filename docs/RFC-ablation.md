@@ -73,11 +73,18 @@ or global agent connector configuration.
   backup, old citation to note, note link to a source in another notebook,
   static Notion refresh/child preservation, exact-identifier search,
   scoped-turn persistence and restoration, failed manual-run receipts,
-  active-run cleanup, and schedule enable/disable. No live generation or
+  active-run cleanup, schedule enable/disable, new-chat reset to All notebooks,
+  and restart without duplicate notes or backup changes. No live generation or
   migration of the primary library was used for these checks.
 - Screenshots: [Work](screenshots/paul-26/work.png),
   [preserved note](screenshots/paul-26/preserved-note.png),
   [chat scope](screenshots/paul-26/chat-scope.png).
+
+The final ad-hoc QA bundle stalled during a synchronous read of the global
+templates folder after a Launch Services launch. The same bundle launched
+from the development session completed the checks above. This separate
+startup issue is tracked as [PAUL-210](https://linear.app/paul-thrasher/issue/PAUL-210);
+no templates or primary-library data were changed to work around it.
 
 ## Clarifications and decisions: 2026-10-11
 
